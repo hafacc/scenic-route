@@ -1,3 +1,4 @@
+import { TOGGLE_KEYS, type Toggles } from "../modes/modes";
 import { GATE_KEYS } from "../routing/cost";
 import { FACTORS, type FactorKey } from "../routing/factors";
 import { DEFAULT_SETTINGS, type Settings } from "./store";
@@ -11,7 +12,7 @@ import { DEFAULT_SETTINGS, type Settings } from "./store";
 // The merge is per FIELD rather than per document, decided by which side changed that field last —
 // so a phone that set the layer order and a laptop that moved the tree slider both keep what they
 // did, where a whole-document last-writer-wins would have thrown one of them away. Weights are
-// merged per factor for the same reason.
+// merged per factor for the same reason, and the Modes switches per switch.
 //
 // Clock skew makes this approximate: two devices whose clocks differ by a minute can order two edits
 // a few seconds apart wrongly. At settings stakes that is the right trade against the machinery
@@ -33,12 +34,14 @@ const FIELDS = [
   "hiddenFactors",
   "hiddenGates",
   ...GATE_KEYS,
+  "mode",
   "coverage",
 ] as const;
 
 type SyncedField = (typeof FIELDS)[number];
 
 const weightPath = (key: FactorKey): string => `weights.${key}`;
+const togglePath = (key: keyof Toggles): string => `toggles.${key}`;
 
 // Which side of a field to take: the one that changed it later, and the local one when neither has
 // ever changed it or the two are somehow simultaneous. Preferring local on a tie is what keeps a
@@ -79,6 +82,20 @@ export function mergeSettings(local: Settings, remote: Settings): Settings {
   }
 
   merged.weights = weights;
+
+  // One switch at a time, as the row itself sets them: a phone that barred ferries and a laptop
+  // that asked for shade both keep what they did.
+  const toggles: Toggles = { ...local.toggles };
+  for (const key of TOGGLE_KEYS) {
+    const path = togglePath(key);
+    if (later(local.updatedAt, remote.updatedAt, path) === "remote") {
+      // Widened at the assignment, as the field loop above is: each key has its own value type.
+      (toggles as Record<keyof Toggles, unknown>)[key] = remote.toggles[key];
+      stamps[path] = remote.updatedAt[path];
+    }
+  }
+  merged.toggles = toggles;
+
   merged.updatedAt = stamps;
   return merged;
 }

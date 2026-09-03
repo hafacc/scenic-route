@@ -1,15 +1,15 @@
-// The page's end of the routing worker. Every search the app runs goes through here; the page keeps
-// its graph for the maneuver list, the deck overlays and the endpoint snapping, and never searches.
-//
-// A request that a newer one overtakes is answered `stale`, which resolves to null: the caller has
-// already been superseded — its effect is cancelled — and simply drops the frame.
+// The page's end of the routing worker. A request a newer one overtakes is answered `stale`, which
+// resolves to null: the caller has already been superseded and drops the frame.
 
+import type { Plan } from "./alternatives";
 import type { RouteClock } from "./contexts";
 import type { RouteWeights } from "./cost";
 import { graphBuffer, type RoutingGraph } from "./graph";
-import type { RouterRequest, RouterResponse } from "./protocol";
+import type { PlanRequest, RouterRequest, RouterResponse } from "./protocol";
 import type { RouteResult } from "./search";
 import type { Snap } from "./snap";
+
+export type { PlanRequest };
 
 export interface RouteReply {
   result: RouteResult | null;
@@ -32,41 +32,76 @@ export interface DragRequest {
   weights: RouteWeights;
   anchor: Snap; // the endpoint being held, which the gesture's solver is rooted at
   moving: Snap; // the endpoint under the cursor
-  // Forward seconds since departure at the anchor: 0 for a dest drag, the drawn route's trip time
-  // for a start drag, which solves backward from the destination.
+  // 0 for a dest drag; for a start drag, which solves backward, the drawn route's trip time
   anchorSeconds: number;
 }
 
-interface Settle {
+// A route as the plan found it, before the plan says which are cards; the first is the max-scenic
+// one, which the map draws while the sweep is still running.
+export interface PlanCandidate {
+  index: number;
+  result: RouteResult;
+}
+
+interface RouteSettle {
+  kind: "route";
   resolve: (reply: RouteReply | null) => void;
   reject: (error: Error) => void;
 }
 
+interface PlanSettle {
+  kind: "plan";
+  resolve: (plan: Plan | null) => void;
+  reject: (error: Error) => void;
+  onCandidate: (candidate: PlanCandidate) => void;
+}
+
+type Settle = RouteSettle | PlanSettle;
+
+// The worker as this client uses it, so a test can drive the same code over a fake one.
+export interface RouterPort {
+  postMessage(request: RouterRequest): void;
+  onmessage: ((event: MessageEvent<RouterResponse>) => void) | null;
+}
+
 export class RouterClient {
-  private readonly worker: Worker;
+  private readonly port: RouterPort;
   private readonly pending = new Map<number, Settle>();
   private readonly loaded = new Set<string>();
   private nextId = 1;
 
-  constructor() {
-    this.worker = new Worker(new URL("./worker.ts", import.meta.url), {
-      type: "module",
-    });
-    this.worker.onmessage = (event: MessageEvent<RouterResponse>): void => {
+  constructor(port?: RouterPort) {
+    this.port =
+      port ??
+      (new Worker(new URL("./worker.ts", import.meta.url), {
+        type: "module",
+      }) as RouterPort);
+    this.port.onmessage = (event: MessageEvent<RouterResponse>): void => {
       const response = event.data;
-      if (response.type === "candidate" || response.type === "done") {
-        return; // phase 4's planner; nothing asks for a plan yet
-      }
       const settle = this.pending.get(response.id);
-      this.pending.delete(response.id);
       if (!settle) {
         return;
       }
+      // A candidate is one of many, so the plan stays pending until its `done` closes it.
+      if (response.type === "candidate") {
+        if (settle.kind === "plan") {
+          settle.onCandidate({
+            index: response.index,
+            result: response.result,
+          });
+        }
+        return;
+      }
+      this.pending.delete(response.id);
       if (response.type === "error") {
         settle.reject(new Error(response.message));
       } else if (response.type === "stale") {
         settle.resolve(null);
-      } else {
+      } else if (response.type === "done") {
+        if (settle.kind === "plan") {
+          settle.resolve(response.plan);
+        }
+      } else if (settle.kind === "route") {
         settle.resolve({
           result: response.result,
           changed: response.changed,
@@ -77,8 +112,7 @@ export class RouterClient {
     };
   }
 
-  // Hand the worker its own copy of a city's graph, once. The bytes are cloned rather than fetched
-  // again: the page has already downloaded them, and both decoders view their own copy in place.
+  // The bytes are cloned rather than fetched again; both decoders view their own copy in place.
   load(cityId: string, graph: RoutingGraph): void {
     if (this.loaded.has(cityId)) {
       return;
@@ -99,6 +133,18 @@ export class RouterClient {
 
   route(request: RouteRequest): Promise<RouteReply | null> {
     return this.ask((id) => ({ type: "route", id, ...request }));
+  }
+
+  // Resolves null where a newer plan overtook this one, as `route` does.
+  plan(
+    request: PlanRequest,
+    onCandidate: (candidate: PlanCandidate) => void,
+  ): Promise<Plan | null> {
+    const id = this.nextId++;
+    return new Promise<Plan | null>((resolve, reject) => {
+      this.pending.set(id, { kind: "plan", resolve, reject, onCandidate });
+      this.post({ type: "plan", id, request });
+    });
   }
 
   dragStart(which: "start" | "dest"): void {
@@ -122,20 +168,19 @@ export class RouterClient {
   ): Promise<RouteReply | null> {
     const id = this.nextId++;
     return new Promise<RouteReply | null>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { kind: "route", resolve, reject });
       this.post(build(id));
     });
   }
 
   private post(request: RouterRequest): void {
-    this.worker.postMessage(request);
+    this.port.postMessage(request);
   }
 }
 
 let client: RouterClient | null = null;
 
-// Built on first use rather than at import: the export prerenders these modules in node, where there
-// is no Worker to construct.
+// Built on first use: the export prerenders these modules in node, where there is no Worker.
 export function routerClient(): RouterClient {
   client ??= new RouterClient();
   return client;
