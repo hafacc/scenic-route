@@ -13,6 +13,7 @@
 // Layout: scripts/README.md.
 
 import { type Cursor, readUnsignedVarint } from "../tiles/varint";
+import { artifactUrl } from "./artifact-base";
 import type { RoutingGraph } from "./graph";
 
 const MAGIC = "FSCH";
@@ -477,7 +478,9 @@ export async function loadScheduleRecord(
   }
   // Only a day before the standing timetable took effect pays for the history file.
   const bytes = await cached(pastFiles, cityId, async () => {
-    const response = await fetch(`${SCHEDULE_BASE}/${cityId}-past.bin`);
+    const response = await fetch(
+      artifactUrl(`${SCHEDULE_BASE}/${cityId}-past.bin`),
+    );
     return response.ok ? new Uint8Array(await response.arrayBuffer()) : null;
   });
   if (!bytes) {
@@ -494,8 +497,8 @@ export async function loadScheduleRecord(
   return null;
 }
 
-async function fetchRecord(url: string): Promise<ScheduleRecord | null> {
-  const response = await fetch(url);
+async function fetchRecord(path: string): Promise<ScheduleRecord | null> {
+  const response = await fetch(artifactUrl(path));
   if (!response.ok) {
     return null;
   }

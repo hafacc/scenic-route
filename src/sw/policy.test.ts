@@ -11,6 +11,10 @@ test("the exported app goes in the shell store", () => {
     "index.html",
     "manifest.webmanifest",
     "_next/static/chunks/main-abc123.js",
+    // The routing worker is one more content-hashed chunk under here, fetched by a Worker rather
+    // than by the document — the one thing in the shell whose absence offline would show up as a
+    // route that never appears rather than as a page that never loads.
+    "_next/static/chunks/7kq3ldz9wcvbt.js",
     "icons/icon-512.png",
   ]) {
     expect(fileRequest(`${SCOPE}${path}`, SCOPE)).toEqual({
