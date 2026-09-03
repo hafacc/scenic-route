@@ -317,6 +317,26 @@ export const GATE_KEYS = [
 
 export type GateKey = (typeof GATE_KEYS)[number];
 
+// The factors that DISCOUNT a walked metre (a `1 - w*attr` term in `edgeMultiplier`) rather than
+// price it (`1 + w*attr`). `ferry` is in neither: it discounts a crossing's seconds, not a metre.
+export const DISCOUNT_KEYS = [
+  "tree",
+  "landmark",
+  "art",
+  "commercial",
+  "historic",
+  "shade",
+  "shelter",
+] as const;
+
+export type DiscountKey = (typeof DISCOUNT_KEYS)[number];
+
+// What a card can say a route HAS: the metre discounts, plus the boat — whose discount is on a
+// crossing's seconds rather than on a metre, and which is scenery all the same.
+export const SCENIC_KEYS = [...DISCOUNT_KEYS, "ferry"] as const;
+
+export type ScenicKey = (typeof SCENIC_KEYS)[number];
+
 export interface RouteWeights {
   tree: number;
   ferry: number;
@@ -391,7 +411,7 @@ export function shadeAttrOf(
 // the crowns over the share with no deck under them. Both are fractions of the edge's length, so this
 // is a union of coverage rather than a stack of opacities, and the `1 - shed` is the assumption that
 // the two are spread independently along the edge.
-function shelterAttrOf(
+export function shelterAttrOf(
   graph: RoutingGraph,
   edge: number,
   shed: number,

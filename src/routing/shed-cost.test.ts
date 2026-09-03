@@ -297,6 +297,36 @@ test("shelter is the deck plus the canopy over what the deck does not cover", ()
   );
 });
 
+test("a route reports the shelter it walked under", () => {
+  // The decked, leafy way is also the shorter one, so this is what the route takes at any weight.
+  const { graph, start, dest } = diamond(
+    { shed: 0.4, canopy: 0.5 },
+    { canopy: 1 },
+    0.001,
+    0.0013,
+  );
+  const result = findRoute(graph, start, dest, noPref({ shelter: 1 }));
+  expect(upperTaken(result)).toBe(true);
+
+  const tau = rainTau(JULY);
+  let sheltered = 0;
+  for (const step of result?.steps ?? []) {
+    const shed = shedOf(graph, step.edge);
+    const canopy = graph.edgeDirectCanopy[step.edge] / 255;
+    sheltered += (shed + tau * canopy * (1 - shed)) * step.lengthMeters;
+  }
+  expect(result?.factors.shelter).toBeCloseTo(
+    sheltered / walkMeters(result),
+    12,
+  );
+  // The deck is worth more than the crowns beside it, so the mean sits above the canopy alone.
+  expect(result?.factors.shelter).toBeGreaterThan(tau * 0.5);
+
+  // With no field built there is nothing overhead to report, whatever the canopy bytes say.
+  graph.sheds = null;
+  expect(findRoute(graph, start, dest, noPref())?.factors.shelter).toBe(0);
+});
+
 test("the canopy half of shelter is seasonal and the deck half is not", () => {
   const summer = diamond({ canopy: 1 }, { shed: 1 }, 0.001, 0.001, JULY).graph;
   const winter = diamond(

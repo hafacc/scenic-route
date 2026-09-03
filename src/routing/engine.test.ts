@@ -1,23 +1,22 @@
-// The engine has to answer exactly what a bare `findRoute` on the same graph does — it is the same
-// search, moved into the worker — so the oracle here is `findRoute` itself. A weaker route from the
-// worker would be invisible: the panel draws whatever comes back.
+// The oracle is `findRoute` itself, since the engine runs the same search: a weaker route out of
+// the worker would otherwise be invisible, because the panel draws whatever comes back.
 
 import { expect, test } from "bun:test";
+import { type Candidate, type Plan, planRoutes } from "./alternatives";
+import { minMultiplier } from "./cost";
 import { createDispatch } from "./dispatch";
-import { RoutingEngine } from "./engine";
+import { graphFactorMax, RoutingEngine } from "./engine";
 import { buildGraph, snapAtNode, weights } from "./ferry.fixture";
 import { clearEdgePathCache } from "./graph";
 import type { RouterRequest, RouterResponse } from "./protocol";
 import { findRoute, type RouteResult } from "./search";
 
-// A city id a real `City` exists for, because the engine reads the pier wait and the shade bins off
-// one. Every weight vector below leaves the three route-time fields switched off, so no artifact is
-// ever fetched and nothing in the test depends on which city this is.
+// A real `City` must exist for this id: the engine reads the pier wait and the shade bins off one.
+// Every weight vector below leaves the route-time fields off, so no artifact is ever fetched.
 const CITY = "nyc";
 const CLOCK = { tick: 0, dateMs: Date.UTC(2026, 5, 21, 16, 0, 0) };
 
-// A grid with two ways round: the direct middle street, and a leafier detour that a high tree weight
-// makes cheaper. Walking edges only, so ferries are moot either way.
+// Two ways round: the direct middle street, and a leafier detour a high tree weight makes cheaper.
 const graph = buildGraph(
   [
     { lat: 40.75, lng: -73.99 }, // 0 start
@@ -35,8 +34,7 @@ const graph = buildGraph(
 const start = snapAtNode(graph, 0, 0);
 const dest = snapAtNode(graph, 3, 1);
 
-// The two paths above swap over somewhere in here, so the sweep crosses a breakpoint rather than
-// asking the same question five times.
+// The two paths swap over inside this range, so the sweep crosses a breakpoint.
 const TREE_WEIGHTS = [0, 0.25, 0.5, 0.75, 1];
 
 function signature(result: RouteResult | null): string {
@@ -77,8 +75,7 @@ test("the cached route is findRoute, and reports when the path moved", async () 
       seen.push(signature(cached.result));
     }
   }
-  // Both paths are reported, and neither is reported twice in a row: that is what stops the panel
-  // redrawing an identical route on every slider nudge.
+  // Neither path is reported twice in a row: that is what stops the panel redrawing on a nudge.
   expect(seen.length).toBeGreaterThan(1);
   expect(new Set(seen).size).toBe(seen.length);
 });
@@ -93,8 +90,6 @@ test("a drag frame answers the moved endpoint", async () => {
     signature(findRoute(graph, start, moved, routeWeights)),
   );
 });
-
-// The protocol handler, driven as messages in and messages out with a fake postMessage.
 
 function fakeWorker(): {
   receive: (request: RouterRequest) => Promise<void>;
@@ -180,18 +175,69 @@ test("a drag coalesces to the frame the cursor is on", async () => {
   expect(solved.type === "result" && solved.result?.dest.edge).toBe(1);
 });
 
-test("the planner is not answered yet", async () => {
-  const worker = fakeWorker();
-  await worker.receive({
+// Strong enough that the detour wins at full weight and the street at zero: a breakpoint to find.
+const PLAN_WEIGHTS = weights(1, 0, false);
+
+function planMessage(id: number): RouterRequest {
+  return {
     type: "plan",
-    id: 4,
-    request: { cityId: CITY, clock: CLOCK, start, dest },
-    weights: [weights(0.8, 0, false)],
-    toggles: {},
+    id,
+    request: { cityId: CITY, clock: CLOCK, start, dest, weights: PLAN_WEIGHTS },
+  };
+}
+
+// The same plan over a bare `findRoute`: the oracle for both the stream and the finished set.
+function expectedPlan(): { plan: Plan; candidates: Candidate[] } {
+  const candidates: Candidate[] = [];
+  clearEdgePathCache();
+  const plan = planRoutes({
+    weights: PLAN_WEIGHTS,
+    search: (candidate) => findRoute(graph, start, dest, candidate),
+    minMultiplier: (candidate) => minMultiplier(graph, candidate),
+    factorMax: graphFactorMax(graph),
+    onCandidate: (candidate) => candidates.push(candidate),
   });
-  expect(worker.sent).toEqual([
-    { type: "error", id: 4, message: "the route planner is not built yet" },
-  ]);
+  clearEdgePathCache();
+  return { plan, candidates };
+}
+
+test("a plan streams its routes and closes with the planned set", async () => {
+  const { plan, candidates } = expectedPlan();
+  const worker = fakeWorker();
+  await worker.receive(planMessage(4));
+
+  const streamed = worker.sent.slice(0, -1);
+  expect(streamed.map((response) => response.type)).toEqual(
+    candidates.map(() => "candidate"),
+  );
+  expect(streamed).toEqual(
+    candidates.map((candidate, index) => ({
+      type: "candidate",
+      id: 4,
+      index,
+      result: candidate.result,
+    })),
+  );
+  // The max-scenic route is drawn first, before the sweep that finds the alternatives to it.
+  expect(signature(candidates[0].result)).toBe(
+    signature(findRoute(graph, start, dest, PLAN_WEIGHTS)),
+  );
+  expect(worker.sent.at(-1)).toEqual({ type: "done", id: 4, plan });
+});
+
+test("only the newest of several queued plans is planned", async () => {
+  const worker = fakeWorker();
+  const inFlight = [
+    worker.receive(planMessage(1)),
+    worker.receive(planMessage(2)),
+  ];
+  await Promise.all(inFlight);
+  expect(worker.sent[0]).toEqual({ type: "stale", id: 1 });
+  // Nothing of the superseded plan ran: every message after it belongs to the newer one.
+  expect(worker.sent.slice(1).every((response) => response.id === 2)).toBe(
+    true,
+  );
+  expect(worker.sent.at(-1)?.type).toBe("done");
 });
 
 test("a request for a city with no graph is an error, not a crash", async () => {

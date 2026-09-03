@@ -1,10 +1,13 @@
 import { expect, test } from "bun:test";
+import { DEFAULT_MODE, DEFAULT_TOGGLES } from "../modes/modes";
 import type { OverlayId } from "../overlays/registry";
 import {
   mergeOrder,
   orderedOverlays,
   type Settings,
+  settings,
   settingsFrom,
+  updateSettings,
 } from "./store";
 
 // The registry is what changes under a stored order — a release adds a layer, a release removes one —
@@ -103,6 +106,8 @@ test("a reader with neither gets the defaults, and nothing is written", () => {
   expect(settings.allowFerries).toBe(true);
   expect(settings.allowSheds).toBe(true);
   expect(settings.hiddenFactors).toEqual([]);
+  expect(settings.mode).toBe(DEFAULT_MODE.id);
+  expect(settings.toggles).toEqual(DEFAULT_TOGGLES);
   expect(migrated).toBe(false);
 });
 
@@ -196,4 +201,48 @@ test("a gate hidden under its old name stays hidden after the rename", () => {
     () => null,
   );
   expect(both.settings.hiddenGates).toEqual(["allowCrossings", "allowFerries"]);
+});
+
+test("a mode this build does not offer opens the default one", () => {
+  const stored = (mode: unknown): string =>
+    settingsFrom({ weights: {}, mode } as Partial<Settings>, () => null)
+      .settings.mode;
+  expect(stored("rain")).toBe("rain");
+  expect(stored("cartographer")).toBe(DEFAULT_MODE.id);
+  expect(stored(7)).toBe(DEFAULT_MODE.id);
+  expect(stored(undefined)).toBe(DEFAULT_MODE.id);
+});
+
+test("a switch a newer build wrote costs its own position, not the other two", () => {
+  const { settings } = settingsFrom(
+    {
+      weights: {},
+      toggles: { sun: "moonlight", hills: "none", ferries: false },
+    } as unknown as Partial<Settings>,
+    () => null,
+  );
+  expect(settings.toggles).toEqual({
+    sun: DEFAULT_TOGGLES.sun,
+    hills: "none",
+    ferries: false,
+  });
+});
+
+test("toggles that are not an object at all read as the defaults", () => {
+  const { settings } = settingsFrom(
+    { weights: {}, toggles: ["sun"] } as unknown as Partial<Settings>,
+    () => null,
+  );
+  expect(settings.toggles).toEqual(DEFAULT_TOGGLES);
+});
+
+// The row sets one switch at a time. Stamping all three together made a phone that barred ferries
+// and a laptop that asked for shade last-writer-wins over the whole set.
+test("a switch is stamped on its own, not with the other two", () => {
+  const before = settings().toggles;
+  updateSettings({ toggles: { ...before, ferries: !before.ferries } }, 1234);
+  const { updatedAt } = settings();
+  expect(updatedAt["toggles.ferries"]).toBe(1234);
+  expect(updatedAt["toggles.sun"]).toBeUndefined();
+  expect(updatedAt.toggles).toBeUndefined();
 });

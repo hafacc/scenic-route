@@ -1,14 +1,15 @@
-// The worker's message loop, kept apart from the worker file so it can be driven in a test with a
-// fake `post`. Requests are handled one at a time in arrival order, because a search reads fields a
-// context rebuild replaces.
+// One request at a time in arrival order, because a search reads fields a context rebuild replaces.
 //
 // A route or drag frame that a newer one has already superseded is answered `stale` without being
 // run. That is what keeps a drag solving only the position the cursor is at now: the page posts a
 // frame per animation frame, and searching the ones already overtaken would just push the live one
-// further behind.
+// further behind. A plan is coalesced the same way, against other plans; it is also one synchronous
+// unit, so a drag frame never interleaves with the searches it is made of.
 
+import { planRoutes } from "./alternatives";
 import { setArtifactBase } from "./artifact-base";
-import type { RoutingEngine } from "./engine";
+import { minMultiplier } from "./cost";
+import { graphFactorMax, type RoutingEngine } from "./engine";
 import { decodeCityGraph } from "./graph";
 import type { RouterRequest, RouterResponse } from "./protocol";
 
@@ -16,11 +17,26 @@ export interface Dispatch {
   receive(request: RouterRequest): Promise<void>;
 }
 
-// Whether a newer request of this kind makes an older one pointless: both draw the one live route.
-function drawsTheRoute(
-  request: RouterRequest,
-): request is Extract<RouterRequest, { type: "route" | "drag:move" }> {
-  return request.type === "route" || request.type === "drag:move";
+type Coalesced = "route" | "plan";
+type Coalescing = Extract<
+  RouterRequest,
+  { type: "route" | "drag:move" | "plan" }
+>;
+
+// Which answer a request competes for, or null where it competes for none: two requests of the same
+// kind draw the same thing, so a newer one makes an older one pointless.
+function coalesced(request: RouterRequest): Coalesced | null {
+  if (request.type === "route" || request.type === "drag:move") {
+    return "route";
+  } else if (request.type === "plan") {
+    return "plan";
+  } else {
+    return null;
+  }
+}
+
+function coalescing(request: RouterRequest): request is Coalescing {
+  return coalesced(request) !== null;
 }
 
 export function createDispatch(
@@ -48,13 +64,37 @@ export function createDispatch(
       case "drag:end":
         engine.dragEnd();
         return;
-      case "plan":
-        post({
-          type: "error",
-          id: request.id,
-          message: "the route planner is not built yet",
-        });
+      case "plan": {
+        const { cityId, clock, start, dest, weights } = request.request;
+        try {
+          await engine.prepare(cityId, clock, weights);
+          // The context fetches above are the one place a newer plan can overtake this one.
+          if (queue.some((queued) => coalesced(queued) === "plan")) {
+            post({ type: "stale", id: request.id });
+            return;
+          }
+          let index = 0;
+          const plan = planRoutes({
+            weights,
+            search: (candidate) => engine.search(start, dest, candidate),
+            minMultiplier: (candidate) =>
+              minMultiplier(engine.graph, candidate),
+            factorMax: graphFactorMax(engine.graph),
+            onCandidate: ({ result }) => {
+              post({ type: "candidate", id: request.id, index, result });
+              index += 1;
+            },
+          });
+          post({ type: "done", id: request.id, plan });
+        } catch (error) {
+          post({
+            type: "error",
+            id: request.id,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
         return;
+      }
       default: {
         try {
           const sync = await engine.prepare(
@@ -63,7 +103,7 @@ export function createDispatch(
             request.weights,
           );
           // The context fetches above are the one place a newer frame can overtake this one.
-          if (queue.some(drawsTheRoute)) {
+          if (queue.some((queued) => coalesced(queued) === "route")) {
             post({ type: "stale", id: request.id });
             return;
           }
@@ -111,7 +151,10 @@ export function createDispatch(
         if (!request) {
           break;
         }
-        if (drawsTheRoute(request) && queue.some(drawsTheRoute)) {
+        if (
+          coalescing(request) &&
+          queue.some((queued) => coalesced(queued) === coalesced(request))
+        ) {
           post({ type: "stale", id: request.id });
         } else {
           await handle(request);
