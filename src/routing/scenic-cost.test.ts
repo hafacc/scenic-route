@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   edgeMultiplier,
   effSeconds,
+  MAX_BRIDGE_WEIGHT,
   MAX_HISTORIC_WEIGHT,
   minMultiplier,
   type RouteWeights,
@@ -30,6 +31,7 @@ const noScenic = (over: Partial<RouteWeights> = {}): RouteWeights => ({
   commercial: 0,
   industrial: 0,
   historic: 0,
+  bridge: 0,
   shade: 0,
   shelter: 0,
   allowFerries: false,
@@ -53,6 +55,7 @@ interface EdgeSpec {
   commercial?: number;
   industrial?: number;
   historic?: number;
+  bridge?: number;
 }
 
 function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
@@ -77,6 +80,7 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
   const edgeCommercial = new Uint8Array(edgeCount);
   const edgeIndustrial = new Uint8Array(edgeCount);
   const edgeHistoric = new Uint8Array(edgeCount);
+  const edgeBridge = new Uint8Array(edgeCount);
   const edgeKindSide = new Uint8Array(edgeCount);
   const edgeDurationSeconds = new Float32Array(edgeCount);
   const edgeNameId = new Uint16Array(edgeCount).fill(NAME_NONE);
@@ -91,6 +95,7 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
   let maxCommercial = 0;
   let maxIndustrial = 0;
   let maxHistoric = 0;
+  let maxBridge = 0;
   for (let edge = 0; edge < edgeCount; edge++) {
     const spec = edges[edge];
     edgeNodeA[edge] = spec.a;
@@ -109,12 +114,14 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
     edgeCommercial[edge] = byte(spec.commercial);
     edgeIndustrial[edge] = byte(spec.industrial);
     edgeHistoric[edge] = byte(spec.historic);
+    edgeBridge[edge] = byte(spec.bridge);
     maxCover = Math.max(maxCover, edgeCover[edge]);
     maxLandmark = Math.max(maxLandmark, edgeLandmark[edge]);
     maxArt = Math.max(maxArt, edgeArt[edge]);
     maxCommercial = Math.max(maxCommercial, edgeCommercial[edge]);
     maxIndustrial = Math.max(maxIndustrial, edgeIndustrial[edge]);
     maxHistoric = Math.max(maxHistoric, edgeHistoric[edge]);
+    maxBridge = Math.max(maxBridge, edgeBridge[edge]);
     adjacency[spec.a].push(edge);
     adjacency[spec.b].push(edge);
   }
@@ -159,11 +166,13 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
     edgeCommercial,
     edgeIndustrial,
     edgeHistoric,
+    edgeBridge,
     maxLandmark: maxLandmark / 255,
     maxArt: maxArt / 255,
     maxCommercial: maxCommercial / 255,
     maxIndustrial: maxIndustrial / 255,
     maxHistoric: maxHistoric / 255,
+    maxBridge: maxBridge / 255,
     shade: null,
     edgeDurationSeconds,
     ferryEdges: new Uint32Array(0),
@@ -519,4 +528,52 @@ test("a highway weight steers the route away from a shorter nuisance path", () =
   expect(
     upperTaken(findRoute(graph, start, dest, noScenic({ highway: 1 }))),
   ).toBe(false);
+});
+
+test("edgeMultiplier prices a bridge over water as a discount of its own", () => {
+  // A span that is both over water and rich in landmarks — the two are independent facts about the
+  // same metre, so they multiply.
+  const { graph } = diamond({ landmark: 0.4, bridge: 0.8 }, {});
+  const weights = noScenic({ landmark: 0.5, bridge: 0.3 });
+  const edge = 1; // the upper 0->1 edge, which carries both
+
+  expect(edgeMultiplier(graph, edge, weights)).toBeCloseTo(
+    (1 - 0.5 * (graph.edgeLandmark[edge] / 255)) *
+      (1 - 0.3 * (graph.edgeBridge[edge] / 255)),
+    12,
+  );
+  // A discount enters the heuristic's lower bound; the penalties do not.
+  expect(minMultiplier(graph, weights)).toBeCloseTo(
+    (1 - 0.3 * graph.maxBridge) * (1 - 0.5 * graph.maxLandmark),
+    12,
+  );
+});
+
+test("a strong bridge weight takes the span rather than the shorter way round", () => {
+  const { graph, start, dest } = diamond(
+    { bridge: 0.9 },
+    {},
+    0.0028, // upper bows far out — the longer path, and the one over water
+    0.0002, // lower stays near the straight line — the shorter path
+  );
+
+  expect(upperTaken(findRoute(graph, start, dest, noScenic()))).toBe(false);
+  expect(
+    upperTaken(findRoute(graph, start, dest, noScenic({ bridge: 1 }))),
+  ).toBe(true);
+});
+
+test("the bridge discount keeps a positive floor at the top of its slider", () => {
+  // As the historic case: a mid-span edge saturates the byte, so at w = 1 the graph's own floor is
+  // what the A* heuristic scales straight-line distance by, and it has to stay positive.
+  const { graph } = diamond({ bridge: 1 }, { bridge: 1 });
+  const full = noScenic({ bridge: MAX_BRIDGE_WEIGHT });
+
+  expect(graph.maxBridge).toBeLessThan(1);
+  expect(minMultiplier(graph, full)).toBeGreaterThan(0);
+  for (let edge = 0; edge < graph.edgeCount; edge++) {
+    expect(edgeMultiplier(graph, edge, full)).toBeGreaterThanOrEqual(
+      minMultiplier(graph, full) - 1e-12,
+    );
+  }
 });

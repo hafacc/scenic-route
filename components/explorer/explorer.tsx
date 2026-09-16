@@ -9,6 +9,7 @@ import {
 } from "../../src/overlays/registry";
 import {
   DEFAULT_ART_WEIGHT,
+  DEFAULT_BRIDGE_WEIGHT,
   DEFAULT_COMMERCIAL_WEIGHT,
   DEFAULT_FERRY_WEIGHT,
   DEFAULT_HIGHWAY_WEIGHT,
@@ -72,6 +73,7 @@ function storedWeights(): RouteWeights {
       MAX_INDUSTRIAL_WEIGHT,
     ),
     historic: read("historic", DEFAULT_HISTORIC_WEIGHT, 0, 1),
+    bridge: read("bridge", DEFAULT_BRIDGE_WEIGHT, 0, 1),
     shade: read(
       "shade",
       DEFAULT_SHADE_WEIGHT,
@@ -132,6 +134,9 @@ export default function Explorer() {
   const [historicWeight, setHistoricWeight] = useState<number>(
     DEFAULT_HISTORIC_WEIGHT,
   );
+  const [bridgeWeight, setBridgeWeight] = useState<number>(
+    DEFAULT_BRIDGE_WEIGHT,
+  );
   // −1 = prefer shade, +1 = prefer sun, 0 = off; the shell follows the clock while this is set.
   const [shadeWeight, setShadeWeight] = useState<number>(DEFAULT_SHADE_WEIGHT);
   // Rain shelter (decks plus canopy) and the scaffolding gate. Both read the same per-edge shed
@@ -158,6 +163,7 @@ export default function Explorer() {
       commercial: commercialWeight,
       industrial: industrialWeight,
       historic: historicWeight,
+      bridge: bridgeWeight,
       shade: shadeWeight,
       shelter: shelterWeight,
       transit: transitWeight,
@@ -178,6 +184,7 @@ export default function Explorer() {
       commercialWeight,
       industrialWeight,
       historicWeight,
+      bridgeWeight,
       shadeWeight,
       shelterWeight,
       allowFerries,
@@ -256,6 +263,11 @@ export default function Explorer() {
     persistWeight("historic", weight);
   }, []);
 
+  const handleBridgeWeight = useCallback((weight: number) => {
+    setBridgeWeight(weight);
+    persistWeight("bridge", weight);
+  }, []);
+
   const handleShadeWeight = useCallback((weight: number) => {
     setShadeWeight(weight);
     persistWeight("shade", weight);
@@ -297,6 +309,7 @@ export default function Explorer() {
         commercial: handleCommercialWeight,
         industrial: handleIndustrialWeight,
         historic: handleHistoricWeight,
+        bridge: handleBridgeWeight,
         shade: handleShadeWeight,
         shelter: handleShelterWeight,
         transit: handleTransitWeight,
@@ -314,6 +327,7 @@ export default function Explorer() {
       handleCommercialWeight,
       handleIndustrialWeight,
       handleHistoricWeight,
+      handleBridgeWeight,
       handleShadeWeight,
       handleShelterWeight,
     ],
@@ -339,6 +353,7 @@ export default function Explorer() {
     setCommercialWeight(route.weights.commercial);
     setIndustrialWeight(route.weights.industrial);
     setHistoricWeight(route.weights.historic);
+    setBridgeWeight(route.weights.bridge);
     setShadeWeight(route.weights.shade);
     setShelterWeight(route.weights.shelter);
     setTransitWeight(route.weights.transit);

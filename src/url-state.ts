@@ -16,6 +16,7 @@ import {
 } from "./modes/modes";
 import {
   DEFAULT_ART_WEIGHT,
+  DEFAULT_BRIDGE_WEIGHT,
   DEFAULT_COMMERCIAL_WEIGHT,
   DEFAULT_FERRY_WEIGHT,
   DEFAULT_HIGHWAY_WEIGHT,
@@ -28,6 +29,7 @@ import {
   DEFAULT_TRANSIT_WEIGHT,
   DEFAULT_TREE_WEIGHT,
   MAX_ART_WEIGHT,
+  MAX_BRIDGE_WEIGHT,
   MAX_COMMERCIAL_WEIGHT,
   MAX_FERRY_WEIGHT,
   MAX_HIGHWAY_WEIGHT,
@@ -96,6 +98,7 @@ export const DEFAULT_WEIGHTS: RouteWeights = {
   commercial: DEFAULT_COMMERCIAL_WEIGHT,
   industrial: DEFAULT_INDUSTRIAL_WEIGHT,
   historic: DEFAULT_HISTORIC_WEIGHT,
+  bridge: DEFAULT_BRIDGE_WEIGHT,
   shade: DEFAULT_SHADE_WEIGHT,
   shelter: DEFAULT_SHELTER_WEIGHT,
   transit: DEFAULT_TRANSIT_WEIGHT,
@@ -171,6 +174,7 @@ const WEIGHT_PARAMS: readonly WeightParam[] = [
     max: MAX_INDUSTRIAL_WEIGHT,
   },
   { key: "historic", field: "historic", min: 0, max: MAX_HISTORIC_WEIGHT },
+  { key: "bridge", field: "bridge", min: 0, max: MAX_BRIDGE_WEIGHT },
   {
     key: "shade",
     field: "shade",

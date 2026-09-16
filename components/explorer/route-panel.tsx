@@ -88,6 +88,7 @@ interface RoutePanelProps {
   commercialWeight: number;
   industrialWeight: number;
   historicWeight: number;
+  bridgeWeight: number;
   shadeWeight: number; // signed: −1 = prefer shade, +1 = prefer sun, 0 = off
   // The per-edge sun/shade fractions did not load. Not a capability: every city bakes them, and the
   // artifact is refetched on every clock tick, so this says the network dropped one — not that the
@@ -110,6 +111,7 @@ interface RoutePanelProps {
   onCommercialWeight: (weight: number) => void;
   onIndustrialWeight: (weight: number) => void;
   onHistoricWeight: (weight: number) => void;
+  onBridgeWeight: (weight: number) => void;
   onShadeWeight: (weight: number) => void;
   onShelterWeight: (weight: number) => void;
   onGate: (key: GateKey, on: boolean) => void;
@@ -199,6 +201,7 @@ export default function RoutePanel({
   commercialWeight,
   industrialWeight,
   historicWeight,
+  bridgeWeight,
   shadeWeight,
   shadeDataLost,
   shelterWeight,
@@ -218,6 +221,7 @@ export default function RoutePanel({
   onCommercialWeight,
   onIndustrialWeight,
   onHistoricWeight,
+  onBridgeWeight,
   onShadeWeight,
   onShelterWeight,
   onGate,
@@ -304,6 +308,11 @@ export default function RoutePanel({
       weight: historicWeight,
       onChange: onHistoricWeight,
       available: graphAvailable.historic,
+    },
+    bridge: {
+      weight: bridgeWeight,
+      onChange: onBridgeWeight,
+      available: graphAvailable.bridge,
     },
     highway: { weight: highwayWeight, onChange: onHighwayWeight },
     industrial: {

@@ -112,8 +112,9 @@ const SHADE_CODE: [&str; 6] = [
 /// no scope is a function of, and the one edit that leaves a stale pyramid standing. Nothing but
 /// that test reads it, since the epoch these belong to is every file the plan carries.
 #[cfg(test)]
-const OUTSIDE_SHADE: [&str; 26] = [
+const OUTSIDE_SHADE: [&str; 27] = [
     "association.rs",
+    "bridge.rs",
     "build.rs",
     "canopy.rs",
     "caster_chunks.rs",
@@ -976,6 +977,8 @@ impl<'a> Stamps<'a> {
             .canopy
             .as_ref()
             .map(|layer| self.plan.data.join("canopy").join(&layer.file));
+        // Committed rather than planned, and every city carries one: the bridge column reads it.
+        let land_file = self.plan.data.join("land").join(&city.field.land.file);
         let buildings = planned.source(&self.plan.data, Source::Buildings);
         let mut shade = Vec::new();
         if let Some(params) = &planned.shade
@@ -1029,6 +1032,7 @@ impl<'a> Stamps<'a> {
                 "graph-historic",
                 planned.source(&self.plan.data, Source::Historic).as_ref(),
             )?,
+            bridge: self.graph_column(&base, "graph-bridge", Some(&land_file))?,
             canopy: self.graph_column(&base, "graph-canopy", canopy_file.as_ref())?,
             commercial: hex(&commercial_key.finalize()),
             relief: hex(&relief.finalize()),
@@ -1070,6 +1074,7 @@ impl<'a> Stamps<'a> {
             // Nothing but this line makes a re-ingested district file rerun the pass: the cache is
             // asked what to recompute only once the STAMP has said the pass is stale at all.
             &keys.historic,
+            &keys.bridge,
         ] {
             field(&mut digest, key.as_bytes());
         }
@@ -1824,6 +1829,7 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
                 commercial: lines.get(&city.id).map(Path::to_path_buf),
                 industrial: planned.source(&plan.data, Source::Industrial),
                 historic: planned.source(&plan.data, Source::Historic),
+                land: Some(plan.data.join("land").join(&city.field.land.file)),
                 out: plan.routing.join(format!("{}.bin", city.id)),
                 // Written for the record — public/routing/<city>.stranded.bin is a documented
                 // artifact — while the re-chunk below reads the same ids straight out of memory.

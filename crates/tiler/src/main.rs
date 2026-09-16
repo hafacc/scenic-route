@@ -13,6 +13,7 @@
 
 mod association;
 mod binfmt;
+mod bridge;
 mod build;
 mod canopy;
 mod caster_chunks;
@@ -189,6 +190,7 @@ fn run() -> Fallible<()> {
                 commercial: None,
                 industrial: None,
                 historic: None,
+                land: None,
                 out,
                 stranded_out: None,
                 buildings: None,

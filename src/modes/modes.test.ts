@@ -83,14 +83,20 @@ test("each mode spends what the table says it spends", () => {
   const weights = Object.fromEntries(
     MODES.map((mode) => [mode.id, spent(neutral(mode))]),
   );
-  expect(weights.naturalist).toEqual({ tree: 1, industrial: 5, transit: 3 });
+  expect(weights.naturalist).toEqual({
+    tree: 1,
+    bridge: 1,
+    industrial: 5,
+    transit: 3,
+  });
   // Rain is the one mode that does not price a ride: a train is shelter, waiting included.
-  expect(weights.rain).toEqual({ shelter: 1 });
+  expect(weights.rain).toEqual({ shelter: 1, bridge: 1 });
   // Historic is the one mode that asks for the boat: a harbour crossing is a way of seeing the city.
   expect(weights.historic).toEqual({
     landmark: 1,
     art: 0.9,
     historic: 1,
+    bridge: 1,
     ferry: 0.1,
     industrial: 5,
     transit: 3,
@@ -100,6 +106,7 @@ test("each mode spends what the table says it spends", () => {
     art: 0.75,
     historic: 0.5,
     commercial: 1,
+    bridge: 1,
     industrial: 5,
     transit: 3,
   });
@@ -172,7 +179,7 @@ test("a factor this place cannot answer is dropped, and the rest are not", () =>
     { ...DEFAULT_TOGGLES, hills: "none" },
     withoutIndustry,
   );
-  expect(spent(weights)).toEqual({ tree: 1, transit: 3 });
+  expect(spent(weights)).toEqual({ tree: 1, bridge: 1, transit: 3 });
   expect(weights.hill).toBe(0); // the toggle is off the table too, not just the mode's weights
 });
 
@@ -186,6 +193,7 @@ test("a graph with nothing baked answers only the factors every city bakes", () 
     landmark: false,
     art: false,
     historic: false,
+    bridge: false,
     industrial: false,
     hill: false,
     commercial: false,
@@ -196,6 +204,7 @@ test("a graph with nothing baked answers only the factors every city bakes", () 
     maxLandmark: 0.4,
     maxArt: 0,
     maxHistoric: 0.9,
+    maxBridge: 0.8,
     maxIndustrial: 0.5,
     maxCommercial: 0,
     maxRelief: 0.2,
@@ -204,6 +213,7 @@ test("a graph with nothing baked answers only the factors every city bakes", () 
   });
   expect(loaded.landmark).toBe(true);
   expect(loaded.art).toBe(false);
+  expect(loaded.bridge).toBe(true);
   expect(loaded.hill).toBe(true);
   expect(loaded.commercial).toBe(false);
   expect(loaded.ferry).toBe(true);

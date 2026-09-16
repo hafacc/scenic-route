@@ -15,10 +15,16 @@ import {
   MdWaterDrop,
   MdWbSunny,
 } from "react-icons/md";
-import { PiBoatFill, PiTrainSimpleFill, PiTreeEvergreenFill } from "react-icons/pi";
+import {
+  PiBoatFill,
+  PiBridgeFill,
+  PiTrainSimpleFill,
+  PiTreeEvergreenFill,
+} from "react-icons/pi";
 import type { OverlayId } from "../overlays/registry";
 import {
   MAX_ART_WEIGHT,
+  MAX_BRIDGE_WEIGHT,
   MAX_COMMERCIAL_WEIGHT,
   MAX_FERRY_WEIGHT,
   MAX_HIGHWAY_WEIGHT,
@@ -195,6 +201,16 @@ export const FACTORS: readonly Factor[] = [
     tint: "text-violet-600 dark:text-violet-400",
     color: "#6d28d9",
     overlay: "commercial",
+  },
+  {
+    key: "bridge",
+    label: "Cross bridges",
+    Icon: PiBridgeFill,
+    max: MAX_BRIDGE_WEIGHT,
+    // Cyan, beside the ferries' blue: the nearest idea on the list, and deliberately not the same
+    // colour, since only one of the two is a walk.
+    tint: "text-cyan-600 dark:text-cyan-400",
+    color: "#0891b2",
   },
   {
     key: "transit",

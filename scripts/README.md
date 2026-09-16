@@ -1242,8 +1242,8 @@ sort, the ferries appended onto the finished walking node set, the ordinals over
 leaves — is inherently sequential, and is a function of the streets, the paths, the OSM sidewalks,
 the ferries and the alley flag alone. What comes after is not: the landmark, art, highway and
 commercial fan-outs, the relief bytes, the direct canopy, the industrial frontage, the historic
-share and the per-bin SHDE bake are each one byte per edge over an edge list that was final before
-any of them ran. So the
+share, the over-water share of a deck and the per-bin SHDE bake are each one byte per edge over an
+edge list that was final before any of them ran. So the
 base is cached as one entry, each column as another, and the pass lays the blob out of whichever it
 actually had to compute. Measured here on New York: 17 s of topology, 0.6 s for the four scenic
 bakes, 140 s for the direct canopy, 2.4 s for the industrial frontage and around 25 minutes for the
@@ -1565,8 +1565,9 @@ own magic. After the 40-byte header, `count` polygons, each:
 
 Filled even-odd, so a multipolygon's inner rings punch holes; the polygons are filled one at
 a time, so two overlapping polygons do not cancel each other out. The land mask is needed at
-ingest (the population the cover distribution is taken over) and at tile time (the clip that keeps
-canopy from bleeding over water), so it is committed rather than fused into anything.
+ingest (the population the cover distribution is taken over), at tile time (the clip that keeps
+canopy from bleeding over water) and in the graph pass (the share of a bridge deck that is over
+water, GRPH byte 38), so it is committed rather than fused into anything.
 
 ### `data/canopy/<id>.bin` — the measured LiDAR canopy, magic `CNPY` (v2)
 
@@ -3383,7 +3384,8 @@ can view them as typed arrays without copying):
 
 | 36 | u8 | **industrial frontage**, 0–254 (a penalty attribute; 0 for a ferry and for an edge on a bridge or tunnel deck): the share of the edge's length running past industrial land, each side of the walk counted for half, so both sides reads twice one side. Baked from `INDL` by `crates/tiler/src/industrial.rs`; 0 across a city with no industrial source, which is what drops that city's slider |
 | 37 | u8 | **historic district**, 0–254 (a discount attribute; 0 for a ferry): the share of the edge's length falling inside a designated historic district, tested underfoot rather than probed sideways. Baked from `HDST` by `crates/tiler/src/historic.rs`; 0 across a city with no district source, which is what drops that city's slider. It took the first of byte 36's three reserved zeros **without a version bump** — an older v10 graph reads it back as 0 everywhere, which gates the slider off rather than mispricing anything |
-| 38 | u8[2] | reserved, zero. The record grew to 40 for byte 36 and the next per-edge attribute rides here without a v11 |
+| 38 | u8 | **bridge over water**, 0–254 (a discount attribute; 0 for a ferry): the share of the edge's length that crosses open water on a bridge deck. The graph's structure flag (byte 23 bit 0) says "bridge or tunnel deck" and no more, so the deck's polyline is tested against the city's `LAND` mask and this is the share NOT over land — which is what leaves a tunnel, and a viaduct over a rail yard, reading 0. Baked by `crates/tiler/src/bridge.rs`; it took the second of byte 36's three reserved zeros **without a version bump**, on the same terms byte 37 did |
+| 39 | u8 | reserved, zero. The record grew to 40 for byte 36 and the next per-edge attribute rides here without a v12 |
 
 The record is 40 bytes, a multiple of the 4-byte boundary every section starts on, so the name
 table that follows it needs no padding.

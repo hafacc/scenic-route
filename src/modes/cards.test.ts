@@ -225,11 +225,12 @@ describe("ferrySummaries", () => {
 describe("chips", () => {
   test("only the mode's own discounts, never its penalties", () => {
     // Naturalist prefers trees and avoids industry; the penalty is not a chip.
-    expect(chipFactors(NATURALIST, ALL_FACTORS)).toEqual(["tree"]);
+    expect(chipFactors(NATURALIST, ALL_FACTORS)).toEqual(["tree", "bridge"]);
     expect(chipFactors(HISTORIC, ALL_FACTORS)).toEqual([
       "landmark",
       "art",
       "historic",
+      "bridge",
       "ferry",
     ]);
   });
@@ -239,6 +240,7 @@ describe("chips", () => {
     expect(chipFactors(HISTORIC, withoutArt)).toEqual([
       "landmark",
       "historic",
+      "bridge",
       "ferry",
     ]);
   });
@@ -252,6 +254,7 @@ describe("chips", () => {
       "landmark",
       "art",
       "historic",
+      "bridge",
     ]);
   });
 });
