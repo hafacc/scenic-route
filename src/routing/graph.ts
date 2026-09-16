@@ -1,14 +1,14 @@
 // The client's view of the routing graph baked by the graph pass. Layout: scripts/README.md
-// (magic GRPH, v11 — the sidewalk graph with inert ferry and transit edges). Fixed sections are
-// viewed in place over the fetched buffer; the strided edge records are copied once into parallel
-// typed arrays so the search loop touches only flat arrays.
+// (magic GRPH, v12 — the sidewalk graph with inert ferry and transit edges, laid out by column).
+// Every column is viewed in place over the fetched buffer through the header's section directory,
+// so decoding copies nothing and both threads hold one set of bytes each.
 
 import { cityById } from "../cities";
 import type { FerryTimetable } from "./ferry-schedule";
 import type { ShadeField } from "./shade";
 import type { ShedField } from "./sheds";
 import type { TransitTimetable } from "./transit-schedule";
-import { bakeWalkSeconds, type WalkSeconds } from "./walk-speed";
+import type { WalkSeconds } from "./walk-speed";
 
 // A no-geometry edge (a crossing, a link, or a straight ferry) stores this sentinel in its geometry
 // offset; its polyline is the straight line between its two node coordinates.
@@ -19,7 +19,6 @@ const KIND_MASK = 0x7;
 const SIDE_SHIFT = 3;
 const SIDE_MASK = 0x7;
 const KIND_CROSSING = 1;
-const KIND_FERRY = 4;
 // The three transit kinds: the walk in and out of a station, the step onto a pattern's platform
 // (whose wait the timetable answers at route time, so it bakes no duration), and one platform to the
 // next. All three are DIRECTED — see `transitForward`.
@@ -164,7 +163,8 @@ export interface RoutingGraph extends GraphIdentity {
   edgeSourceId: Uint32Array; // the CSCL physicalid or OSM way id; NO_SOURCE_ID for a crossing, link or ferry
   edgeOrdinal: Uint8Array; // which edge of the several one source segment becomes; both feed `edgeDurableKey`
   // 1 where every edge on the node is a crossing, i.e. a traffic island: a walker standing there is
-  // mid-roadway, part way through one crossing rather than at the start of another.
+  // mid-roadway, part way through one crossing rather than at the start of another. Baked by the
+  // tiler, whose rule is `markMidRoadwayNodes` below.
   nodeMidRoadway: Uint8Array;
   maxCover: number; // the greatest per-edge cover in the graph, 0..1; sets the cost clip floor
 
@@ -196,9 +196,10 @@ export interface RoutingGraph extends GraphIdentity {
   // 0 for a ferry and for a city with no DEM.
   edgeAscent: Uint8Array;
   edgeDescent: Uint8Array;
-  // Every edge's walking seconds both ways round, taken from the two bytes above as the graph is
-  // decoded: the relax loop reads them rather than running Tobler's exponential four times an edge.
-  // Null on a hand-built fixture, which bakes it on first use (./walk-speed).
+  // Every edge's walking seconds both ways round, taken from the two bytes above: the relax loop
+  // reads them rather than running Tobler's exponential four times an edge. Baked by the thread that
+  // searches, so it is null on the page and on a hand-built fixture, which fall back per edge
+  // (./walk-speed).
   walkSeconds: WalkSeconds | null;
   // The largest total grade present, as a fraction of 35% — up to 2, since the two bytes clamp
   // separately. NOT a heuristic bound — hill is a penalty, whose minimum factor is 1, so it never
@@ -230,14 +231,13 @@ export interface RoutingGraph extends GraphIdentity {
   // no record covers, and every ferry then costs the baked `edgeDurationSeconds` below instead.
   ferries: FerryTimetable | null;
 
-  edgeHalfOffsetDm: Uint8Array; // decimetres to a sidewalk; 0 for crossings/links/paths/ferries
-  // A ferry edge's crossing-plus-average-wait seconds, the whole timetable flattened to one number;
-  // 0 for every other kind. What a ferry costs when `ferries` is null.
-  edgeDurationSeconds: Float32Array;
+  // A ferry edge's crossing-plus-average-wait seconds, the whole timetable flattened to one number,
+  // and the walk or ride seconds of a transit edge; 0 for every walking kind. What a ferry costs
+  // when `ferries` is null.
+  edgeDurationSeconds: Uint16Array;
   ferryEdges: Uint32Array; // ids of the ferry edges, for the A* ferry-credit heuristic
-  // The transit topology baked into the graph (GRPH v11): the ids of every access, board and ride
-  // edge, and the board subset on its own, which is what the A* transit credit and the mode gating
-  // read.
+  // The transit topology baked into the graph: the ids of every access, board and ride edge, and
+  // the board subset on its own, which is what the A* transit credit and the mode gating read.
   transitEdges: Uint32Array;
   boardEdges: Uint32Array;
   // Every route the city's transit topology carries, in the order the side table lists them, which
@@ -287,16 +287,35 @@ export interface TransitRoute {
 }
 
 const MAGIC = "GRPH";
-// Exported so a fixture cannot drift from them: a test writing its own header must write these.
-export const FORMAT_VERSION = 11;
-// v11 grew the header to 80 for the transit side table's offset at byte 64. Exported for the same
-// reason the two above are: a fixture writing its own header must write this one.
-export const HEADER_BYTES = 80;
-// v10 grew the record by 4: byte 36 the industrial attribute, then 37 the historic one and 38 the
-// bridge one, each taking a reserved zero without a version bump. A graph written before one of
-// those bakes reads its byte back as 0 on every edge, so its max is 0 and its slider gates itself
-// off; byte 39 is the one zero still reserved.
-export const EDGE_RECORD_BYTES = 40;
+// Exported so a fixture cannot drift from it: a test writing its own header must write this.
+export const FORMAT_VERSION = 12;
+// 64 fixed bytes then a 48-entry (u32 offset, u32 byteLength, u32 column tag) section directory, of
+// which v12 fills 35. Checked at decode, which is what binds a fixture's own copy of the figure to
+// this one.
+const HEADER_BYTES = 640;
+const DIRECTORY_AT = 64;
+const DIRECTORY_ENTRY_BYTES = 12;
+
+// The column a directory entry holds, as FNV-1a 32 over the name this file calls it by. A section is
+// found by its POSITION in the directory, so two same-sized columns written in the other order would
+// each be read as the other and misprice every route silently; the tag is what makes that a throw.
+function columnTag(name: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < name.length; index += 1) {
+    hash ^= name.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+const HAS_TUNNELS_FLAG = 0x1; // header byte 58
+
+// What `column` below needs of a typed-array constructor: build one empty, or view one in place.
+interface ColumnKind<Column> {
+  new (length: number): Column;
+  new (buffer: ArrayBuffer, byteOffset: number, length: number): Column;
+  readonly BYTES_PER_ELEMENT: number;
+}
+
 // relative, so both pick up the deploy basePath
 // Written by the same pass as the graph itself, and named after it: one directory holds
 // every city's, so a shared name would describe whichever built last.
@@ -306,10 +325,6 @@ const versionUrl = (cityId: string): string => `routing/${cityId}.version.json`;
 // first half away before the second half asked for it. New York's longest bench trip is 13 km of
 // pavement at some 30 m an edge.
 const PATH_CACHE_LIMIT = 4096;
-
-function fourByteAlign(offset: number): number {
-  return (offset + 3) & ~3;
-}
 
 // `identity` is what these bytes hash to and what their key space hashes to, neither of which the
 // bytes themselves can carry — a file cannot hold its own FNV, and walking 600k keys to recover the
@@ -326,177 +341,172 @@ export function decodeGraph(
   if (magic !== MAGIC || version !== FORMAT_VERSION) {
     throw new Error(`not a v${FORMAT_VERSION} routing graph`);
   }
+  // The one thing the directory cannot say about itself: a writer that put it anywhere else says so
+  // here, rather than handing back columns read off the wrong offsets.
+  if (view.getUint16(6, true) !== HEADER_BYTES) {
+    throw new Error(
+      `a v${FORMAT_VERSION} routing graph's header is ${HEADER_BYTES} bytes`,
+    );
+  }
 
   const nodeCount = view.getUint32(8, true);
   const edgeCount = view.getUint32(12, true);
   const originLng = view.getFloat64(16, true);
   const originLat = view.getFloat64(24, true);
   const scale = view.getFloat64(32, true);
-  const nameTableOffset = view.getUint32(44, true);
-  const geometryOffset = view.getUint32(52, true);
-  const geometryLength = view.getUint32(56, true);
-  const ferryNameTableOffset = view.getUint32(60, true);
-  const transitTableOffset = view.getUint32(64, true);
+  const sectionCount = view.getUint32(44, true);
 
-  // Fixed sections run back to back after the header, each starting 4-byte aligned. They are
-  // viewed in place; the quantized coordinates, components, and CSR need no copy.
-  let offset = HEADER_BYTES;
-  const nodeQx = new Int32Array(buffer, offset, nodeCount);
-  offset += nodeCount * 4;
-  const nodeQy = new Int32Array(buffer, offset, nodeCount);
-  offset += nodeCount * 4;
-  const nodeComponent = new Uint16Array(buffer, offset, nodeCount);
-  offset = fourByteAlign(offset + nodeCount * 2);
-  const csr = new Uint32Array(buffer, offset, nodeCount + 1);
-  offset += (nodeCount + 1) * 4;
-  const adjacency = new Uint32Array(buffer, offset, 2 * edgeCount);
-  offset += 2 * edgeCount * 4;
+  // Sections are taken in the order the directory lists them, which is the order the writer appends
+  // them in — one cursor rather than 35 index constants that could drift from it. Each entry names
+  // the column it holds, so a writer that wrote them in another order is caught rather than read.
+  let nextSection = 0;
+  const section = (name: string): { offset: number; byteLength: number } => {
+    const index = nextSection;
+    nextSection += 1;
+    if (index >= sectionCount) {
+      return { offset: 0, byteLength: 0 };
+    } else {
+      const at = DIRECTORY_AT + DIRECTORY_ENTRY_BYTES * index;
+      const offset = view.getUint32(at, true);
+      const tag = view.getUint32(at + 8, true);
+      if (offset !== 0 && tag !== columnTag(name)) {
+        throw new Error(`section ${index} of this graph is not ${name}`);
+      }
+      return { offset, byteLength: view.getUint32(at + 4, true) };
+    }
+  };
+  // One column, viewed in place. A section the file does not carry — a column baked after this
+  // graph was written — reads as the zeros that graph behaved as if it held.
+  const column = <Column>(
+    kind: ColumnKind<Column>,
+    count: number,
+    name: string,
+  ): Column => {
+    const { offset, byteLength } = section(name);
+    if (offset === 0) {
+      return new kind(count);
+    } else if (byteLength !== count * kind.BYTES_PER_ELEMENT) {
+      throw new Error(`${name}: ${byteLength} bytes is not ${count} elements`);
+    } else {
+      return new kind(buffer, offset, count);
+    }
+  };
+  // One of the three edge-id lists, whose length only the directory records.
+  const idList = (name: string): Uint32Array => {
+    const { offset, byteLength } = section(name);
+    if (offset === 0) {
+      return new Uint32Array(0);
+    } else if (byteLength % 4 !== 0) {
+      throw new Error(`${name}: ${byteLength} bytes is not whole edge ids`);
+    } else {
+      return new Uint32Array(buffer, offset, byteLength / 4);
+    }
+  };
 
-  const edgeNodeA = new Uint32Array(edgeCount);
-  const edgeNodeB = new Uint32Array(edgeCount);
-  const edgeLength = new Float32Array(edgeCount);
-  const edgeGeomOffset = new Uint32Array(edgeCount);
-  const edgeGeomCount = new Uint16Array(edgeCount);
-  const edgeCover = new Uint8Array(edgeCount);
-  const edgeNameId = new Uint16Array(edgeCount);
-  const edgeKindSide = new Uint8Array(edgeCount);
-  const edgeHalfOffsetDm = new Uint8Array(edgeCount);
-  const edgeDurationSeconds = new Float32Array(edgeCount);
-  const edgeFlags = new Uint8Array(edgeCount);
-  const edgeLandmark = new Uint8Array(edgeCount);
-  const edgeArt = new Uint8Array(edgeCount);
-  const edgeHighway = new Uint8Array(edgeCount);
-  const edgeCommercial = new Uint8Array(edgeCount);
-  const edgeIndustrial = new Uint8Array(edgeCount);
-  const edgeHistoric = new Uint8Array(edgeCount);
-  const edgeBridge = new Uint8Array(edgeCount);
-  const edgeDirectCanopy = new Uint8Array(edgeCount);
-  const edgeSourceId = new Uint32Array(edgeCount);
-  const edgeOrdinal = new Uint8Array(edgeCount);
-  const edgeAscent = new Uint8Array(edgeCount);
-  const edgeDescent = new Uint8Array(edgeCount);
-  const ferryEdges: number[] = [];
-  const transitEdges: number[] = [];
-  const boardEdges: number[] = [];
-  let maxCoverByte = 0;
-  let maxLandmarkByte = 0;
-  let maxArtByte = 0;
-  let maxCommercialByte = 0;
-  let maxIndustrialByte = 0;
-  let maxHistoricByte = 0;
-  let maxBridgeByte = 0;
-  let maxDirectCanopyByte = 0;
-  let maxReliefByte = 0;
-  let hasTunnels = false;
+  const nodeQx = column(Int32Array, nodeCount, "nodeQx");
+  const nodeQy = column(Int32Array, nodeCount, "nodeQy");
+  const nodeComponent = column(Uint16Array, nodeCount, "nodeComponent");
+  const nodeMidRoadway = column(Uint8Array, nodeCount, "nodeMidRoadway");
+  const csr = column(Uint32Array, nodeCount + 1, "csr");
+  const adjacency = column(Uint32Array, 2 * edgeCount, "adjacency");
+  const edgeNodeA = column(Uint32Array, edgeCount, "edgeNodeA");
+  const edgeNodeB = column(Uint32Array, edgeCount, "edgeNodeB");
+  const edgeLength = column(Float32Array, edgeCount, "edgeLength");
+  const edgeGeomOffset = column(Uint32Array, edgeCount, "edgeGeomOffset");
+  const edgeGeomCount = column(Uint16Array, edgeCount, "edgeGeomCount");
+  const edgeNameId = column(Uint16Array, edgeCount, "edgeNameId");
+  const edgeDurationSeconds = column(
+    Uint16Array,
+    edgeCount,
+    "edgeDurationSeconds",
+  );
+  const edgeKindSide = column(Uint8Array, edgeCount, "edgeKindSide");
+  const edgeFlags = column(Uint8Array, edgeCount, "edgeFlags");
+  const edgeCover = column(Uint8Array, edgeCount, "edgeCover");
+  const edgeLandmark = column(Uint8Array, edgeCount, "edgeLandmark");
+  const edgeArt = column(Uint8Array, edgeCount, "edgeArt");
+  const edgeHighway = column(Uint8Array, edgeCount, "edgeHighway");
+  const edgeCommercial = column(Uint8Array, edgeCount, "edgeCommercial");
+  const edgeDirectCanopy = column(Uint8Array, edgeCount, "edgeDirectCanopy");
+  const edgeIndustrial = column(Uint8Array, edgeCount, "edgeIndustrial");
+  const edgeHistoric = column(Uint8Array, edgeCount, "edgeHistoric");
+  const edgeBridge = column(Uint8Array, edgeCount, "edgeBridge");
+  const edgeAscent = column(Uint8Array, edgeCount, "edgeAscent");
+  const edgeDescent = column(Uint8Array, edgeCount, "edgeDescent");
+  const edgeSourceId = column(Uint32Array, edgeCount, "edgeSourceId");
+  const edgeOrdinal = column(Uint8Array, edgeCount, "edgeOrdinal");
+  const ferryEdges = idList("ferryEdges");
+  const transitEdges = idList("transitEdges");
+  const boardEdges = idList("boardEdges");
+  const nameTable = section("names");
+  const geometrySection = section("geometry");
+  const ferryTable = section("ferryEndpoints");
+  const transitTable = section("transitTables");
+
+  // The maxima and the tunnel flag come baked: reading them off the columns is a pass over every
+  // edge, on both threads, for eight bytes the writer already knew.
+  const maxCover = bytes[48] / 255;
+  const maxLandmark = bytes[49] / 255;
+  const maxArt = bytes[50] / 255;
+  const maxCommercial = bytes[51] / 255;
+  const maxDirectCanopy = bytes[52] / 255;
+  const maxIndustrial = bytes[53] / 255;
+  const maxHistoric = bytes[54] / 255;
+  const maxBridge = bytes[55] / 255;
+  const maxRelief = view.getUint16(56, true) / 255;
+  const hasTunnels = (bytes[58] & HAS_TUNNELS_FLAG) !== 0;
+
+  // The three per-metre floors stay derived rather than baked: they are f64 arithmetic over a few
+  // thousand edges, and a figure in the file would go stale the moment a duration moved.
   let minFerrySecPerMetre = Number.POSITIVE_INFINITY;
+  for (const edge of ferryEdges) {
+    const length = edgeLength[edge];
+    if (length > 0) {
+      minFerrySecPerMetre = Math.min(
+        minFerrySecPerMetre,
+        edgeDurationSeconds[edge] / length,
+      );
+    }
+  }
   let minRideSecPerMetre = Number.POSITIVE_INFINITY;
   let minAccessSecPerMetre = Number.POSITIVE_INFINITY;
-  for (let edge = 0; edge < edgeCount; edge++) {
-    const record = offset + edge * EDGE_RECORD_BYTES;
-    edgeNodeA[edge] = view.getUint32(record, true);
-    edgeNodeB[edge] = view.getUint32(record + 4, true);
-    edgeLength[edge] = view.getFloat32(record + 8, true);
-    edgeGeomOffset[edge] = view.getUint32(record + 12, true);
-    edgeGeomCount[edge] = view.getUint16(record + 16, true);
-    edgeNameId[edge] = view.getUint16(record + 18, true);
-    const kindSide = bytes[record + 22];
-    edgeKindSide[edge] = kindSide;
-    edgeFlags[edge] = bytes[record + 23];
-    hasTunnels ||= (edgeFlags[edge] & TUNNEL_FLAG) !== 0;
-    const kind = kindSide & KIND_MASK;
-    if (kind === KIND_FERRY) {
-      // A ferry carries no cover and no half-offset; bytes 20-21 are a u16 crossing-plus-wait
-      // duration. Cover stays 0 so it never lifts maxCover (the cost heuristic's floor).
-      const duration = view.getUint16(record + 20, true);
-      edgeDurationSeconds[edge] = duration;
-      ferryEdges.push(edge);
-      const length = edgeLength[edge];
-      if (length > 0) {
-        minFerrySecPerMetre = Math.min(minFerrySecPerMetre, duration / length);
-      }
-    } else if (
-      kind === KIND_ACCESS ||
-      kind === KIND_BOARD ||
-      kind === KIND_RIDE
-    ) {
-      // The transit kinds carry their seconds in the same two bytes, and leave cover at 0 for the
-      // same reason. A board edge's is 0: its wait comes from the timetable, not from the graph.
-      const duration = view.getUint16(record + 20, true);
-      edgeDurationSeconds[edge] = duration;
-      transitEdges.push(edge);
-      const length = edgeLength[edge];
-      if (kind === KIND_BOARD) {
-        boardEdges.push(edge);
-      } else if (length > 0 && kind === KIND_RIDE) {
-        minRideSecPerMetre = Math.min(minRideSecPerMetre, duration / length);
-      } else if (length > 0) {
-        minAccessSecPerMetre = Math.min(
-          minAccessSecPerMetre,
-          duration / length,
-        );
-      }
-    } else {
-      edgeCover[edge] = bytes[record + 20];
-      edgeHalfOffsetDm[edge] = bytes[record + 21];
-      maxCoverByte = Math.max(maxCoverByte, edgeCover[edge]);
+  for (const edge of transitEdges) {
+    const length = edgeLength[edge];
+    const kind = edgeKindSide[edge] & KIND_MASK;
+    if (length <= 0) {
+      continue;
     }
-    // The attribute bytes are their own record slots, so a ferry's duration in bytes 20-21 does not
-    // collide; a ferry carries 0 in all of them, so it never lifts a discount's max.
-    edgeLandmark[edge] = bytes[record + 24];
-    edgeArt[edge] = bytes[record + 25];
-    edgeHighway[edge] = bytes[record + 26];
-    edgeCommercial[edge] = bytes[record + 27];
-    edgeDirectCanopy[edge] = bytes[record + 28];
-    edgeSourceId[edge] = view.getUint32(record + 29, true);
-    edgeOrdinal[edge] = bytes[record + 33];
-    edgeAscent[edge] = bytes[record + 34];
-    edgeDescent[edge] = bytes[record + 35];
-    edgeIndustrial[edge] = bytes[record + 36];
-    edgeHistoric[edge] = bytes[record + 37];
-    edgeBridge[edge] = bytes[record + 38];
-    maxReliefByte = Math.max(
-      maxReliefByte,
-      edgeAscent[edge] + edgeDescent[edge],
-    );
-    maxLandmarkByte = Math.max(maxLandmarkByte, edgeLandmark[edge]);
-    maxArtByte = Math.max(maxArtByte, edgeArt[edge]);
-    maxCommercialByte = Math.max(maxCommercialByte, edgeCommercial[edge]);
-    maxIndustrialByte = Math.max(maxIndustrialByte, edgeIndustrial[edge]);
-    maxHistoricByte = Math.max(maxHistoricByte, edgeHistoric[edge]);
-    maxBridgeByte = Math.max(maxBridgeByte, edgeBridge[edge]);
-    maxDirectCanopyByte = Math.max(maxDirectCanopyByte, edgeDirectCanopy[edge]);
+    if (kind === KIND_RIDE) {
+      minRideSecPerMetre = Math.min(
+        minRideSecPerMetre,
+        edgeDurationSeconds[edge] / length,
+      );
+    } else if (kind === KIND_ACCESS) {
+      minAccessSecPerMetre = Math.min(
+        minAccessSecPerMetre,
+        edgeDurationSeconds[edge] / length,
+      );
+    }
   }
-  const maxRelief = maxReliefByte / 255;
-  const maxCover = maxCoverByte / 255;
-  const maxLandmark = maxLandmarkByte / 255;
-  const maxArt = maxArtByte / 255;
-  const maxCommercial = maxCommercialByte / 255;
-  const maxIndustrial = maxIndustrialByte / 255;
-  const maxHistoric = maxHistoricByte / 255;
-  const maxBridge = maxBridgeByte / 255;
-  const maxDirectCanopy = maxDirectCanopyByte / 255;
 
-  const names = decodeNames(buffer, nameTableOffset);
-  const geometry = new Uint8Array(buffer, geometryOffset, geometryLength);
+  const names: string[] =
+    nameTable.offset === 0 ? [] : decodeNames(buffer, nameTable.offset);
+  const geometry = new Uint8Array(
+    buffer,
+    geometrySection.offset,
+    geometrySection.byteLength,
+  );
   const ferryEndpointNames = decodeFerryEndpointNames(
     buffer,
-    ferryNameTableOffset,
+    ferryTable.offset,
     names,
   );
-
   const { transitRoutes, transitLaneOf, transitStopOf, transitRouteOf } =
-    decodeTransitTables(buffer, transitTableOffset, names);
+    decodeTransitTables(buffer, transitTable.offset, names);
   const nodePlatform = new Uint8Array(nodeCount);
   for (const edge of boardEdges) {
     nodePlatform[edgeNodeB[edge]] = 1;
   }
-
-  const nodeMidRoadway = markMidRoadwayNodes(
-    nodeCount,
-    csr,
-    adjacency,
-    edgeKindSide,
-  );
 
   return {
     ...identity,
@@ -539,15 +549,14 @@ export function decodeGraph(
     maxDirectCanopy,
     edgeAscent,
     edgeDescent,
-    walkSeconds: bakeWalkSeconds({ edgeLength, edgeAscent, edgeDescent }),
+    walkSeconds: null, // baked by the thread that searches, in RoutingEngine.load
     maxRelief,
     shade: null, // populated lazily once the SHDE artifact loads, keyed on the departure instant
     sheds: null, // populated lazily once the SHED artifact loads, keyed on the picked day
     ferries: null, // populated lazily once the FSCH artifact loads, keyed on the departure day
     transit: null, // and this once the TSCH artifact loads, keyed on the same day
-    edgeHalfOffsetDm,
     edgeDurationSeconds,
-    ferryEdges: Uint32Array.from(ferryEdges),
+    ferryEdges,
     minFerrySecPerMetre,
     minRideSecPerMetre,
     minAccessSecPerMetre,
@@ -556,8 +565,8 @@ export function decodeGraph(
     names,
     geometry,
     ferryEndpointNames,
-    transitEdges: Uint32Array.from(transitEdges),
-    boardEdges: Uint32Array.from(boardEdges),
+    transitEdges,
+    boardEdges,
     transitRoutes,
     transitLaneOf,
     transitStopOf,

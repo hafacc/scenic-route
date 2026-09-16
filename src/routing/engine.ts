@@ -19,6 +19,7 @@ import {
   type SearchReuse,
 } from "./search";
 import { haversineMeters, type Snap } from "./snap";
+import { bakeWalkSeconds } from "./walk-speed";
 
 // The greatest each scored factor reaches anywhere on this graph, which is what a card's lead over
 // the others is measured against. Only the discounts are scored, so the penalties are left out and
@@ -59,6 +60,10 @@ export class RoutingEngine {
 
   load(cityId: string, graph: RoutingGraph): void {
     if (!this.graphs.has(cityId)) {
+      // The bake belongs to the thread that searches: the relax loop reads these doubles millions of
+      // times a plan, and the page — which decodes the same bytes — walks a handful of edges a route
+      // and would spend 10 MB a city on them for nothing.
+      graph.walkSeconds = bakeWalkSeconds(graph);
       this.graphs.set(cityId, { graph, contexts: new RouteContexts() });
     }
   }

@@ -1,31 +1,34 @@
 // The GRPH decoder over a file written by hand, which is the only way to ask whether it reads the
-// layout the Rust writer lays down rather than the one it happens to write itself. v11's question is
-// the transit topology: the three new kinds, their seconds where a walking edge keeps its cover, and
-// the two side tables that say which lane a board edge departs against and which route it runs.
+// layout the Rust writer lays down rather than the one it happens to write itself. v12's question is
+// the section directory: every column viewed in place at the offset the header names, the baked
+// maxima and id lists read off the header rather than off a pass over the edges, and a column the
+// file leaves out read as the zeros a graph written before that bake carried.
 
 import { describe, expect, test } from "bun:test";
 import {
   clearEdgePathCache,
   decodeGraph,
-  EDGE_RECORD_BYTES,
+  edgeDurableKey,
   edgeKind,
   FORMAT_VERSION,
-  HEADER_BYTES,
   isTransitEdge,
   isTunnel,
   laneOf,
   markMidRoadwayNodes,
-  NO_GEOMETRY,
   NO_SOURCE_ID,
   routeOf,
   TUNNEL_FLAG,
 } from "./graph";
+import {
+  encodeGraph,
+  type GraphSection,
+  NAME_NONE,
+} from "./graph-bytes.fixture";
 import { buildSnapIndex, snapCandidates } from "./snap";
 
 const SCALE = 1e-6;
 const ORIGIN_LNG = -74;
 const ORIGIN_LAT = 40.7;
-const NAME_NONE = 0xffff;
 const LANE_ONE = 0xdeadbeef;
 const LANE_TWO = 0x0001_2345;
 
@@ -49,15 +52,25 @@ interface EdgeSpec {
   b: number;
   kind: number;
   cover: number; // a walking edge's own byte
-  seconds: number; // a ferry's or a transit edge's, in bytes 20-21
+  seconds: number; // a ferry's or a transit edge's duration
   geometry: boolean;
-  bridge?: number; // record byte 38, the over-water share of a deck
-  tunnel?: boolean; // record byte 23 bit 4
+  bridge?: number; // the over-water share of a deck
+  tunnel?: boolean; // the flags byte's bit 4
+  source?: [number, number]; // the source id and the ordinal within it
 }
 
 const EDGES: readonly EdgeSpec[] = [
   // The sidewalk carries a bridge byte: it is the walk that crosses the water here.
-  { a: 0, b: 1, kind: 0, cover: 100, seconds: 0, geometry: true, bridge: 200 },
+  {
+    a: 0,
+    b: 1,
+    kind: 0,
+    cover: 100,
+    seconds: 0,
+    geometry: true,
+    bridge: 200,
+    source: [4_242, 3],
+  },
   { a: 0, b: 1, kind: 4, cover: 0, seconds: 600, geometry: false }, // ferry
   { a: 2, b: 0, kind: 5, cover: 0, seconds: 90, geometry: false }, // access, underground
   { a: 3, b: 1, kind: 5, cover: 0, seconds: 30, geometry: false }, // access, surface
@@ -68,7 +81,16 @@ const EDGES: readonly EdgeSpec[] = [
   { a: 5, b: 3, kind: 5, cover: 0, seconds: 30, geometry: false }, // alight
   // A walking edge under the ground, appended last so every id above is where it was. It carries no
   // bridge share: a tunnel is the opposite of the thing that byte measures.
-  { a: 6, b: 7, kind: 0, cover: 0, seconds: 0, geometry: false, tunnel: true },
+  {
+    a: 6,
+    b: 7,
+    kind: 0,
+    cover: 0,
+    seconds: 0,
+    geometry: false,
+    tunnel: true,
+    source: [9_001, 0],
+  },
 ];
 
 const TUNNEL_EDGE = 9;
@@ -80,171 +102,68 @@ const BOARD_TABLE: readonly [number, number, number][] = [
 const RIDE_TABLE: readonly [number, number][] = [[6, 0]];
 const NAMES = ["Broadway", "A", "Eighth Avenue Express", "gtfs:A"];
 
-function writeVarint(out: number[], value: number): void {
-  let rest = (value << 1) ^ (value >> 31);
-  do {
-    const byte = rest & 0x7f;
-    rest >>>= 7;
-    out.push(rest === 0 ? byte : byte | 0x80);
-  } while (rest !== 0);
-}
-
-// The blob as `assemble` lays it out: sections back to back from the header, each 4-byte aligned,
-// then the geometry, the ferry side table and the transit tables.
-// `bakedBridge` false stands in for a graph written before that column existed: byte 38 zero on
-// every edge, which is what the decoder's gate has to read. `bakedTunnel` false does the same for the
-// flags byte's tunnel bit.
+// The blob as `assemble` lays it out. `bakedBridge` false stands in for a graph written before that
+// column existed: the section is simply absent, which is what the decoder's gate has to read as
+// zeros. `bakedTunnel` false does the same for the flags byte's tunnel bit, which came without a
+// section of its own.
 function graphBytes(
   withTransit: boolean,
   bakedBridge = true,
   bakedTunnel = true,
+  swap?: readonly [GraphSection, GraphSection],
 ): ArrayBuffer {
-  const nodeCount = NODES.length;
-  const edgeCount = EDGES.length;
-  const align4 = (offset: number): number => (offset + 3) & ~3;
-
-  const geometry: number[] = [];
-  const geometryOffsets = new Map<number, number>();
-  for (const [edge, spec] of EDGES.entries()) {
-    if (!spec.geometry) {
-      continue;
-    }
-    geometryOffsets.set(edge, geometry.length);
-    let previousX = 0;
-    let previousY = 0;
-    for (const node of [spec.a, spec.b]) {
-      writeVarint(geometry, NODES[node][0] - previousX);
-      writeVarint(geometry, NODES[node][1] - previousY);
-      [previousX, previousY] = NODES[node];
-    }
-  }
-
-  const nameBlob = new TextEncoder().encode(NAMES.join(""));
-  const nameTableBytes = 4 + 4 * (NAMES.length + 1) + nameBlob.length;
-
-  const nodeLngAt = HEADER_BYTES;
-  const nodeLatAt = nodeLngAt + 4 * nodeCount;
-  const componentAt = nodeLatAt + 4 * nodeCount;
-  const csrAt = componentAt + 2 * nodeCount + (nodeCount % 2 === 1 ? 2 : 0);
-  const adjacencyAt = csrAt + 4 * (nodeCount + 1);
-  const edgesAt = adjacencyAt + 8 * edgeCount;
-  const nameAt = align4(edgesAt + EDGE_RECORD_BYTES * edgeCount);
-  const geometryAt = align4(nameAt + nameTableBytes);
-  const ferryAt = align4(geometryAt + geometry.length);
-  const transitAt = ferryAt + 4;
-  const routeBytes = withTransit ? 12 : 0;
-  const total =
-    transitAt +
-    12 +
-    routeBytes +
-    12 * (withTransit ? BOARD_TABLE.length : 0) +
-    8 * (withTransit ? RIDE_TABLE.length : 0);
-
-  const buffer = new ArrayBuffer(total);
-  const bytes = new Uint8Array(buffer);
-  const view = new DataView(buffer);
-  bytes.set(new TextEncoder().encode("GRPH"));
-  view.setUint16(4, FORMAT_VERSION, true);
-  view.setUint16(6, HEADER_BYTES, true);
-  view.setUint32(8, nodeCount, true);
-  view.setUint32(12, edgeCount, true);
-  view.setFloat64(16, ORIGIN_LNG, true);
-  view.setFloat64(24, ORIGIN_LAT, true);
-  view.setFloat64(32, SCALE, true);
-  view.setUint32(40, 1, true);
-  view.setUint32(44, nameAt, true);
-  view.setUint32(48, nameTableBytes, true);
-  view.setUint32(52, geometryAt, true);
-  view.setUint32(56, geometry.length, true);
-  view.setUint32(60, ferryAt, true);
-  view.setUint32(64, withTransit ? transitAt : 0, true);
-
-  for (const [node, [x, y]] of NODES.entries()) {
-    view.setInt32(nodeLngAt + 4 * node, x, true);
-    view.setInt32(nodeLatAt + 4 * node, y, true);
-  }
-
-  const incident: number[][] = NODES.map(() => []);
-  for (const [edge, spec] of EDGES.entries()) {
-    incident[spec.a].push(edge);
-    incident[spec.b].push(edge);
-  }
-  let cursor = 0;
-  for (const [node, edges] of incident.entries()) {
-    view.setUint32(csrAt + 4 * node, cursor, true);
-    for (const edge of edges) {
-      view.setUint32(adjacencyAt + 4 * cursor, edge, true);
-      cursor += 1;
-    }
-  }
-  view.setUint32(csrAt + 4 * nodeCount, cursor, true);
-
-  for (const [edge, spec] of EDGES.entries()) {
-    const record = edgesAt + EDGE_RECORD_BYTES * edge;
-    view.setUint32(record, spec.a, true);
-    view.setUint32(record + 4, spec.b, true);
-    view.setFloat32(record + 8, 100, true);
-    const geometryOffset = geometryOffsets.get(edge);
-    view.setUint32(record + 12, geometryOffset ?? NO_GEOMETRY, true);
-    view.setUint16(record + 16, geometryOffset === undefined ? 0 : 2, true);
-    view.setUint16(record + 18, NAME_NONE, true);
-    view.setUint16(record + 20, spec.seconds, true);
-    if (spec.cover !== 0) {
-      bytes[record + 20] = spec.cover;
-      bytes[record + 21] = 0;
-    }
-    bytes[record + 22] = spec.kind;
-    bytes[record + 23] = bakedTunnel && spec.tunnel ? TUNNEL_FLAG : 0;
-    view.setUint32(record + 29, NO_SOURCE_ID, true);
-    bytes[record + 38] = bakedBridge ? (spec.bridge ?? 0) : 0;
-  }
-
-  view.setUint32(nameAt, NAMES.length, true);
-  let nameCursor = 0;
-  for (const [index, name] of NAMES.entries()) {
-    view.setUint32(nameAt + 4 + 4 * index, nameCursor, true);
-    nameCursor += name.length;
-  }
-  view.setUint32(nameAt + 4 + 4 * NAMES.length, nameCursor, true);
-  bytes.set(nameBlob, nameAt + 4 + 4 * (NAMES.length + 1));
-  bytes.set(Uint8Array.from(geometry), geometryAt);
-  view.setUint32(ferryAt, 0, true); // no ferry endpoint names; the edge itself is still a ferry
-
-  let at = transitAt;
-  view.setUint32(at, withTransit ? 1 : 0, true);
-  at += 4;
-  if (withTransit) {
-    bytes.set([0x00, 0x39, 0xa6, 0xff, 0xff, 0xff], at);
-    view.setUint16(at + 6, 1, true); // "A"
-    view.setUint16(at + 8, 2, true); // "Eighth Avenue Express"
-    view.setUint16(at + 10, 3, true); // "gtfs:A"
-    at += 12;
-  }
-  view.setUint32(at, withTransit ? BOARD_TABLE.length : 0, true);
-  at += 4;
-  if (withTransit) {
-    for (const [edge, lane, route] of BOARD_TABLE) {
-      view.setUint32(at, edge, true);
-      view.setUint32(at + 4, lane, true);
-      view.setUint16(at + 8, route, true);
-      at += 12;
-    }
-  }
-  view.setUint32(at, withTransit ? RIDE_TABLE.length : 0, true);
-  at += 4;
-  if (withTransit) {
-    for (const [edge, route] of RIDE_TABLE) {
-      view.setUint32(at, edge, true);
-      view.setUint16(at + 4, route, true);
-      at += 8;
-    }
-  }
-  return buffer;
+  return encodeGraph({
+    originLng: ORIGIN_LNG,
+    originLat: ORIGIN_LAT,
+    scale: SCALE,
+    nodes: NODES.map(([qx, qy]) => ({ qx, qy })),
+    edges: EDGES.map((spec) => ({
+      a: spec.a,
+      b: spec.b,
+      kind: spec.kind,
+      length: 100,
+      geometry: spec.geometry
+        ? ([NODES[spec.a], NODES[spec.b]] as const)
+        : undefined,
+      nameId: NAME_NONE,
+      durationSeconds: spec.seconds,
+      cover: spec.cover,
+      bridge: spec.bridge,
+      flags: bakedTunnel && spec.tunnel ? TUNNEL_FLAG : 0,
+      sourceId: spec.source?.[0] ?? NO_SOURCE_ID,
+      ordinal: spec.source?.[1] ?? 0,
+    })),
+    names: NAMES,
+    transitRoutes: withTransit
+      ? [
+          {
+            color: [0x00, 0x39, 0xa6],
+            textColor: [0xff, 0xff, 0xff],
+            shortName: 1, // "A"
+            longName: 2, // "Eighth Avenue Express"
+            id: 3, // "gtfs:A"
+          },
+        ]
+      : [],
+    board: withTransit
+      ? BOARD_TABLE.map(([edge, lane, route]) => ({
+          edge,
+          lane,
+          route,
+          stop: 0,
+        }))
+      : [],
+    ride: withTransit
+      ? RIDE_TABLE.map(([edge, route]) => ({ edge, route }))
+      : [],
+    omit: bakedBridge ? [] : ["edgeBridge"],
+    swap,
+  });
 }
 
 const identity = { hash: "0", keyHash: "0" };
 
-describe("the v11 graph decoder", () => {
+describe("the v12 graph decoder", () => {
   const graph = decodeGraph(graphBytes(true), identity);
 
   test("reads every edge kind the format has", () => {
@@ -277,8 +196,8 @@ describe("the v11 graph decoder", () => {
     expect([...graph.edgeDurationSeconds]).toEqual([
       0, 600, 90, 30, 0, 30, 300, 0, 30, 0,
     ]);
-    // The one walking edge is the only thing that may set the cover ceiling: a duration in bytes
-    // 20-21 read as a cover would put maxCover at 1 and collapse the cost model's clip floor.
+    // The one walking edge is the only thing that may set the cover ceiling: a duration read as a
+    // cover would put maxCover at 1 and collapse the cost model's clip floor.
     expect(graph.edgeCover[0]).toBe(100);
     expect(graph.maxCover).toBeCloseTo(100 / 255, 10);
     expect(graph.edgeCover[6]).toBe(0);
@@ -321,6 +240,45 @@ describe("the v11 graph decoder", () => {
     expect(routeOf(graph, 0)).toBeNull();
   });
 
+  test("puts every section on an 8-byte boundary the directory names", () => {
+    const buffer = graphBytes(true);
+    const view = new DataView(buffer);
+    const sections = view.getUint32(44, true);
+    expect(sections).toBe(35);
+    expect(view.getUint16(6, true)).toBe(640);
+    expect(view.getUint16(4, true)).toBe(FORMAT_VERSION);
+    for (let index = 0; index < sections; index++) {
+      const offset = view.getUint32(64 + 12 * index, true);
+      const byteLength = view.getUint32(64 + 12 * index + 4, true);
+      expect(offset % 8).toBe(0);
+      expect(offset + byteLength).toBeLessThanOrEqual(buffer.byteLength);
+    }
+  });
+
+  test("refuses a file whose columns are not where the directory says", () => {
+    // Two u8 columns of the same length, written in the other order: every byte of the file is a
+    // byte the reader would accept, and the only thing that says they have traded places is the tag
+    // each directory entry carries. Read positionally, this city's shade would be priced off its
+    // landmarks.
+    expect(() =>
+      decodeGraph(
+        graphBytes(true, true, true, ["edgeCover", "edgeLandmark"]),
+        identity,
+      ),
+    ).toThrow(/edgeCover/);
+  });
+
+  test("reads a column the file leaves out as the zeros it never wrote", () => {
+    // The directory entry stays in place, zeroed, so every later section is still where it was: a
+    // column baked after this graph was written costs it nothing but that column.
+    const older = decodeGraph(graphBytes(true, false), identity);
+    expect(older.maxBridge).toBe(0);
+    expect([...older.edgeBridge]).toEqual(EDGES.map(() => 0));
+    expect(older.edgeBridge.length).toBe(EDGES.length);
+    expect([...older.edgeCover]).toEqual([...graph.edgeCover]);
+    expect([...older.transitEdges]).toEqual([...graph.transitEdges]);
+  });
+
   test("never snaps a walker onto a platform", () => {
     clearEdgePathCache(); // the polyline cache keys on the edge id alone, across graphs
     const index = buildSnapIndex(graph);
@@ -344,6 +302,14 @@ describe("the v11 graph decoder", () => {
     expect([...markMidRoadwayNodes(4, csr, adjacency, kinds)]).toEqual([
       1, 1, 1, 0,
     ]);
+  });
+
+  test("names an edge durably, which is what places the sheds", () => {
+    // The shed artifact names a deck by (source id, side, ordinal) and the page is the thread that
+    // draws it, so both threads decode these two columns — under v12 there is only one decode.
+    expect(edgeDurableKey(graph, 0)).toBe(4_242 * 2048 + 3);
+    expect(edgeDurableKey(graph, TUNNEL_EDGE)).toBe(9_001 * 2048);
+    expect(edgeDurableKey(graph, 1)).toBe(-1); // a ferry has no source segment
   });
 
   test("a city with no transit source decodes to no transit at all", () => {

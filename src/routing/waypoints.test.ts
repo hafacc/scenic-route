@@ -163,7 +163,7 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
     shade: null,
     sheds: null,
     ferries: null,
-    edgeDurationSeconds: new Float32Array(edgeCount),
+    edgeDurationSeconds: new Uint16Array(edgeCount),
     ferryEdges: new Uint32Array(0),
     minFerrySecPerMetre: Number.POSITIVE_INFINITY,
     edgeFlags: new Uint8Array(edgeCount),

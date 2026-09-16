@@ -121,17 +121,40 @@ export function maxSpeedFactor(graph: RoutingGraph): number {
   return best;
 }
 
-// Every edge's walking seconds, both ways round, taken once as the graph is decoded. The relax loop
-// would otherwise spend four exponentials on every edge it looks at, for a figure that depends on
-// nothing but the edge's length and its two relief bytes.
+// One edge's walking seconds, in the given direction: its length over the speed the two relief bytes
+// give it. Everything that turns a length into seconds goes through here or through the bake below,
+// which fills its arrays from this very function — so a graph that carries the bake and one that
+// does not answer with the same bits, and a route's ETA cannot disagree with what it cost.
+export function edgeWalkSeconds(
+  graph: RoutingGraph,
+  edge: number,
+  forward: boolean,
+): number {
+  const baked = graph.walkSeconds;
+  if (baked) {
+    return forward ? baked.forward[edge] : baked.backward[edge];
+  }
+  const ascent = edgeAscentGrade(graph, edge);
+  const descent = edgeDescentGrade(graph, edge);
+  return (
+    graph.edgeLength[edge] /
+    (WALK_METERS_PER_SECOND *
+      (forward ? speedFactor(ascent, descent) : speedFactor(descent, ascent)))
+  );
+}
+
 // Doubles rather than floats: a route's ETA is a sum of hundreds of these, and the cost model's own
 // bounds are compared at the last bits, so the 5 MB a New York graph saves by halving them is not
-// worth a route that turns on rounding. 10 MB a city, once per decoded graph.
+// worth a route that turns on rounding. 10 MB a city, which is why only a graph that will be
+// SEARCHED carries it — the page reads a handful of these per route and computes them as it goes.
 export interface WalkSeconds {
   forward: Float64Array; // walking the stored a -> b direction
   backward: Float64Array;
 }
 
+// Every edge's walking seconds, both ways round, taken once as the graph is decoded. The relax loop
+// would otherwise spend four exponentials on every edge it looks at, for a figure that depends on
+// nothing but the edge's length and its two relief bytes.
 export function bakeWalkSeconds(graph: {
   edgeLength: Float32Array;
   edgeAscent: Uint8Array;
@@ -152,18 +175,9 @@ export function bakeWalkSeconds(graph: {
   return { forward, backward };
 }
 
-// A graph's baked seconds, taken at decode and held on the graph itself. Absent on a hand-built
-// fixture, and on one whose relief bytes were written after it was built, so the first walked edge
-// costed bakes it.
-export function walkSecondsOf(graph: RoutingGraph): WalkSeconds {
-  const baked = graph.walkSeconds ?? bakeWalkSeconds(graph);
-  graph.walkSeconds = baked;
-  return baked;
-}
-
-// The baked seconds for ONE metre of an edge, walked in the given direction. What the two end edges
-// of a route are charged per metre of the partial they walk: the interior is charged the baked whole,
-// so pricing the ends off the same figure is what keeps a route's arithmetic self-consistent — a
+// The seconds for ONE metre of an edge, walked in the given direction. What the two end edges of a
+// route are charged per metre of the partial they walk: the interior is charged the whole, so
+// pricing the ends off the same figure is what keeps a route's arithmetic self-consistent — a
 // partial priced off `walkSpeedOn` instead differs in the last bits, and a tie between two ways into
 // the destination edge then turns on float noise.
 export function walkSecondsPerMeter(
@@ -172,10 +186,5 @@ export function walkSecondsPerMeter(
   forward: boolean,
 ): number {
   const length = graph.edgeLength[edge];
-  if (length === 0) {
-    return 0;
-  } else {
-    const baked = walkSecondsOf(graph);
-    return (forward ? baked.forward[edge] : baked.backward[edge]) / length;
-  }
+  return length === 0 ? 0 : edgeWalkSeconds(graph, edge, forward) / length;
 }

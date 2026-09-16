@@ -165,7 +165,7 @@ function buildGraph(
     edgeDescent: new Uint8Array(edgeCount),
     maxRelief: 0,
     shade: null,
-    edgeDurationSeconds: new Float32Array(edgeCount),
+    edgeDurationSeconds: new Uint16Array(edgeCount),
     ferryEdges: new Uint32Array(0),
     names: [],
     geometry: new Uint8Array(0),

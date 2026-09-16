@@ -59,7 +59,7 @@ function makeResult(graph: RoutingGraph, specs: ReadonlyArray<EdgeSpec>) {
   const edgeNodeB = new Uint32Array(edgeCount);
   const edgeGeomOffset = new Uint32Array(edgeCount).fill(NO_GEOMETRY);
   const edgeGeomCount = new Uint16Array(edgeCount);
-  const edgeDurationSeconds = new Float32Array(edgeCount);
+  const edgeDurationSeconds = new Uint16Array(edgeCount);
   // buildRuns runs the ETA clock forward over the steps to pick each ferry's sailing, so the fixture
   // owes it the fields rawSeconds reads: the kind byte, the length, and the island flags.
   const edgeLength = new Float32Array(edgeCount);
@@ -120,7 +120,7 @@ function makeResult(graph: RoutingGraph, specs: ReadonlyArray<EdgeSpec>) {
     edgeNodeB: Uint32Array;
     edgeGeomOffset: Uint32Array;
     edgeGeomCount: Uint16Array;
-    edgeDurationSeconds: Float32Array;
+    edgeDurationSeconds: Uint16Array;
     edgeLength: Float32Array;
     edgeAscent: Uint8Array;
     edgeDescent: Uint8Array;
