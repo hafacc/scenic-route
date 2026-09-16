@@ -138,28 +138,38 @@ export async function shedWindow(): Promise<string> {
   );
 }
 
-async function loadDeployedGraph(): Promise<RoutingGraph> {
+// The graph the day's new sheds are placed against, or null when the site is not serving one this
+// checkout can use yet, which is the deploy being a day behind rather than anything wrong here.
+export async function loadDeployedGraph(): Promise<RoutingGraph | null> {
   const local = process.env.SHED_GRAPH;
   if (local !== undefined) {
     console.error(`  graph: ${local}`);
+    // A named file is a graph an operator chose, so one that will not read is the wrong file handed
+    // over rather than a deploy still in flight, and nothing waiting will fix it.
     return loadGraphBytes(await readFile(local));
   }
   console.error(`  graph: ${GRAPH_URL}`);
   const response = await fetch(GRAPH_URL);
   if (!response.ok) {
-    throw new Error(
-      `${GRAPH_URL}: ${response.status} ${response.statusText} — the site has to have been deployed once`,
+    console.error(
+      `  ${GRAPH_URL}: ${response.status} ${response.statusText}, so the site is serving no graph` +
+        " at all; leaving the artifact alone. This run will pick the day up once a deploy has put" +
+        " one there.",
     );
+    return null;
   }
   try {
     return loadGraphBytes(new Uint8Array(await response.arrayBuffer()));
   } catch (error) {
     // A new shed's durable keys are the ones the client will resolve, so they have to be read off the
-    // graph it is running. One this checkout cannot read is one it cannot place against.
-    throw new Error(
-      `${GRAPH_URL} is not a graph this checkout can read (${String(error)}).` +
-        " Deploy the site before running the shed job, so the two agree on the graph.",
+    // graph it is running. One this checkout cannot read is a deploy behind the push that changed the
+    // format, and the deploy is what ends it.
+    console.error(
+      `  ${GRAPH_URL} is not a graph this checkout can read (${String(error)});` +
+        " leaving the artifact alone. Deploy the site, and this run will pick the day up once it" +
+        " serves a graph this checkout can read.",
     );
+    return null;
   }
 }
 
@@ -271,8 +281,13 @@ export async function updateSheds(): Promise<void> {
   // It SKIPS rather than fails. The daily job runs the two timetables after this and commits all
   // three, and between a push that moves the graph and the deploy that serves it, failing here took
   // the timetables down with it — a day of no republished departures to save a day of no new sheds.
-  // The artifact is left exactly as it was, which is what it must be until the deploy lands.
+  // The artifact is left exactly as it was, which is what it must be until the deploy lands. A site
+  // serving a graph in a format this checkout cannot read at all is the same day-early state seen one
+  // step earlier, so loadDeployedGraph hands back nothing and the run ends here the same way.
   const graph = await loadDeployedGraph();
+  if (graph === null) {
+    return;
+  }
   const mismatch = shedGraphMismatch(artifact, graph.keyHash);
   if (mismatch !== null) {
     console.error(

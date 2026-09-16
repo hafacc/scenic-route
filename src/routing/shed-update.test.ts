@@ -46,7 +46,11 @@ import {
   startFold,
   TRUNCATION_NEIGHBOURS,
 } from "../../scripts/shed-permits";
-import { reconcileSheds, standingOn } from "../../scripts/update-sheds";
+import {
+  loadDeployedGraph,
+  reconcileSheds,
+  standingOn,
+} from "../../scripts/update-sheds";
 
 const DAY_MS = 86_400_000;
 const START_MS = Date.UTC(2020, 0, 1);
@@ -454,4 +458,32 @@ test("an artifact is only extended against the graph it names", () => {
   const other = shedGraphMismatch(artifact, "0123456789abcdef");
   expect(other).toContain(GRAPH_HASH);
   expect(other).toContain("0123456789abcdef");
+});
+
+test("a deployed graph this checkout cannot read skips the day", async () => {
+  // The daily job commits the two timetables alongside the artifact, so a site that has not caught up
+  // with a graph format change must cost a day of sheds and not a day of departures.
+  const originalFetch = globalThis.fetch;
+  const originalError = console.error;
+  const logged: string[] = [];
+  console.error = (...parts: unknown[]) => {
+    logged.push(parts.map(String).join(" "));
+  };
+  try {
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(new Uint8Array([1, 2, 3, 4])),
+      )) as typeof fetch;
+    expect(await loadDeployedGraph()).toBeNull();
+    globalThis.fetch = (() =>
+      Promise.resolve(new Response(null, { status: 404 }))) as typeof fetch;
+    expect(await loadDeployedGraph()).toBeNull();
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+  }
+  expect(logged[1]).toContain("not a graph this checkout can read");
+  expect(logged[1]).toContain("leaving the artifact alone");
+  expect(logged[3]).toContain("404");
+  expect(logged[3]).toContain("leaving the artifact alone");
 });
