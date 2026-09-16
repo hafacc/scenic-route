@@ -3,12 +3,15 @@ import {
   edgeMultiplier,
   effSeconds,
   FERRY_FLOOR,
+  ferryCredit,
+  heuristicFloor,
   WALK_METERS_PER_SECOND,
+  walkSecondsCoeff,
 } from "./cost";
 import { buildGraph, snapAtNode, weights } from "./ferry.fixture";
 import { clearEdgePathCache, otherEnd, type RoutingGraph } from "./graph";
 import { findRoute, type RouteResult } from "./search";
-import type { Snap } from "./snap";
+import { haversineMeters, type Snap } from "./snap";
 
 // The reference optimum: a plain Dijkstra (heuristic identically 0, no early exit) over effective
 // seconds, using exactly findRoute's virtual-source and virtual-goal partial-edge semantics.
@@ -175,6 +178,57 @@ const graphC = buildGraph(
 const walkEdgeC0 = 0; // walking edge 0 -> 1
 const walkEdgeC3 = 2; // walking edge 2 -> 3
 
+// Fixture D — a three-hop ferry line: one boat calling at four piers in a row, which the graph draws
+// as three edges rather than one. Riding all three saves more than the best two of them do, so a
+// credit bounded to the two largest shortcuts claims a cheaper remainder than any route can deliver.
+// The walk round by land is there so both snaps have pavement to sit on, and is far too long to take.
+const graphD = buildGraph(
+  [
+    { lat: 40.6, lng: -74.1 }, // 0 the first pier, where the walk starts
+    { lat: 40.6, lng: -74.04 }, // 1
+    { lat: 40.6, lng: -73.98 }, // 2
+    { lat: 40.6, lng: -73.92 }, // 3 the last pier, where it ends
+    { lat: 40.483, lng: -74.01 }, // 4 the long way round, by land
+  ],
+  [
+    { a: 0, b: 1, ferry: true, cover: 0, durationSeconds: 900 },
+    { a: 1, b: 2, ferry: true, cover: 0, durationSeconds: 900 },
+    { a: 2, b: 3, ferry: true, cover: 0, durationSeconds: 900 },
+    { a: 0, b: 4, ferry: false, cover: 0, durationSeconds: 0 },
+    { a: 4, b: 3, ferry: false, cover: 0, durationSeconds: 0 },
+  ],
+);
+const walkEdgeD0 = 3; // walking edge 0 -> 4, for a snap at node 0
+const walkEdgeD3 = 4; // walking edge 4 -> 3, for a snap at node 3
+
+// Fixture E — the same line with a fourth hop, and the first one sailing the wrong way: the boat
+// leaves the start westward, and the three hops after it carry the walker back east past the start
+// to a dest that was a short straight line from it all along. Three hops of saving are left ahead
+// after the first, which is more than the two largest, so the two-largest credit leaves the far
+// pier's estimate above the cost of walking round — and A* stops at the walk without ever riding.
+const graphE = buildGraph(
+  [
+    { lat: 40.6, lng: -74.0 }, // 0 the start, and the pier it sails from
+    { lat: 40.6, lng: -74.16 }, // 1 the far pier, west of everything
+    { lat: 40.6, lng: -74.1 }, // 2
+    { lat: 40.6, lng: -74.04 }, // 3
+    { lat: 40.6, lng: -73.98 }, // 4 the dest pier, back east of the start
+    { lat: 40.5156, lng: -73.99 }, // 5 the long way round, by land
+  ],
+  [
+    // The first hop is as slow as walking its span would be, so its own shortcut is nothing and the
+    // two largest in the graph are both among the three that follow.
+    { a: 0, b: 1, ferry: true, cover: 0, durationSeconds: 10391 },
+    { a: 1, b: 2, ferry: true, cover: 0, durationSeconds: 900 },
+    { a: 2, b: 3, ferry: true, cover: 0, durationSeconds: 900 },
+    { a: 3, b: 4, ferry: true, cover: 0, durationSeconds: 900 },
+    { a: 0, b: 5, ferry: false, cover: 0, durationSeconds: 0 },
+    { a: 5, b: 4, ferry: false, cover: 0, durationSeconds: 0 },
+  ],
+);
+const walkEdgeE0 = 4; // walking edge 0 -> 5, for a snap at node 0
+const walkEdgeE4 = 5; // walking edge 5 -> 4, for a snap at node 4
+
 const TREE_WEIGHTS = [0, 0.4, 1];
 const FERRY_WEIGHTS = [0, 0.4, 1];
 const ALLOW = [true, false];
@@ -204,6 +258,18 @@ const scenarios: Scenario[] = [
     graph: graphB,
     start: snapAtNode(graphB, 0, walkEdgeB0),
     dest: snapAtNode(graphB, 3, walkEdgeB3),
+  },
+  {
+    name: "D: three-hop line, 0 -> 3",
+    graph: graphD,
+    start: snapAtNode(graphD, 0, walkEdgeD0),
+    dest: snapAtNode(graphD, 3, walkEdgeD3),
+  },
+  {
+    name: "E: four-hop line out and back, 0 -> 4",
+    graph: graphE,
+    start: snapAtNode(graphE, 0, walkEdgeE0),
+    dest: snapAtNode(graphE, 4, walkEdgeE4),
   },
 ];
 
@@ -246,8 +312,8 @@ test("A* effective cost matches the Dijkstra oracle across the weight matrix", (
       }
     }
   }
-  // 3 scenarios x 3 tree x 3 ferry x 2 allow.
-  expect(combinations).toBe(54);
+  // 5 scenarios x 3 tree x 3 ferry x 2 allow.
+  expect(combinations).toBe(90);
 });
 
 test("the sole crossing is optimal, and barring it leaves no route", () => {
@@ -373,4 +439,98 @@ test("barred ferries are never boarded and the walk is ferry-weight-independent"
       expect(signature).toBe(baseline);
     }
   }
+});
+
+// What every node's trip to `goal` really costs, by plain Dijkstra out of it: the graph is
+// undirected here, so the distances out of the goal are the costs into it.
+function costsTo(
+  graph: RoutingGraph,
+  goal: number,
+  routeWeights: ReturnType<typeof weights>,
+): Float64Array {
+  const distance = new Float64Array(graph.nodeCount).fill(
+    Number.POSITIVE_INFINITY,
+  );
+  const settled = new Uint8Array(graph.nodeCount);
+  distance[goal] = 0;
+  for (;;) {
+    let node = -1;
+    let nodeDistance = Number.POSITIVE_INFINITY;
+    for (let candidate = 0; candidate < graph.nodeCount; candidate++) {
+      if (!settled[candidate] && distance[candidate] < nodeDistance) {
+        nodeDistance = distance[candidate];
+        node = candidate;
+      }
+    }
+    if (node === -1) {
+      return distance;
+    }
+    settled[node] = 1;
+    for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
+      const edge = graph.adjacency[slot];
+      const neighbour = otherEnd(graph, edge, node);
+      const relaxed = distance[node] + effSeconds(graph, edge, routeWeights);
+      if (relaxed < distance[neighbour]) {
+        distance[neighbour] = relaxed;
+      }
+    }
+  }
+}
+
+// The A* estimate at `node`, built the way findRoute builds it: the walking bound on the straight
+// line, less the ferry credit — the only credit a graph with no rail on it has — and never below
+// what the floor alone bounds the same line by.
+function estimateTo(
+  graph: RoutingGraph,
+  node: number,
+  goal: number,
+  routeWeights: ReturnType<typeof weights>,
+): number {
+  const meters = haversineMeters(
+    graph.originLat + graph.nodeQy[node] * graph.scale,
+    graph.originLng + graph.nodeQx[node] * graph.scale,
+    graph.originLat + graph.nodeQy[goal] * graph.scale,
+    graph.originLng + graph.nodeQx[goal] * graph.scale,
+  );
+  return Math.max(
+    0,
+    walkSecondsCoeff(graph, routeWeights) * meters -
+      ferryCredit(graph, routeWeights),
+    heuristicFloor(graph, routeWeights) * meters,
+  );
+}
+
+test("the estimate to a pier never beats the cost of getting there", () => {
+  const lines: { name: string; graph: RoutingGraph; goal: number }[] = [
+    { name: "D", graph: graphD, goal: 3 },
+    { name: "E", graph: graphE, goal: 4 },
+  ];
+  for (const { name, graph, goal } of lines) {
+    for (const treeWeight of TREE_WEIGHTS) {
+      for (const ferryWeight of FERRY_WEIGHTS) {
+        const routeWeights = weights(treeWeight, ferryWeight, true);
+        const truth = costsTo(graph, goal, routeWeights);
+        for (let node = 0; node < graph.nodeCount; node++) {
+          const label = `${name} node ${node} tw=${treeWeight} fw=${ferryWeight}`;
+          expect(
+            estimateTo(graph, node, goal, routeWeights),
+            label,
+          ).toBeLessThanOrEqual(truth[node] + 1e-6);
+        }
+      }
+    }
+  }
+});
+
+test("the four-hop line is ridden rather than walked round", () => {
+  const result = findRoute(
+    graphE,
+    snapAtNode(graphE, 0, walkEdgeE0),
+    snapAtNode(graphE, 4, walkEdgeE4),
+    weights(0, 0, true),
+  );
+  const ferrySteps = (result?.steps ?? []).filter(
+    (step) => step.kind === "ferry",
+  );
+  expect(ferrySteps).toHaveLength(4);
 });
