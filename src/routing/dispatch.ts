@@ -3,8 +3,9 @@
 // A route or drag frame that a newer one has already superseded is answered `stale` without being
 // run. That is what keeps a drag solving only the position the cursor is at now: the page posts a
 // frame per animation frame, and searching the ones already overtaken would just push the live one
-// further behind. A plan is coalesced the same way, against other plans; it is also one synchronous
-// unit, so a drag frame never interleaves with the searches it is made of. A waypoint plan
+// further behind. A plan is coalesced the same way, against other plans and against the route and
+// drag frames that replace the walk it is planning; it is also one synchronous unit, so a drag frame
+// never interleaves with the searches it is made of. A waypoint plan
 // coalesces against other waypoint plans, which is what keeps card-flipping from queueing one per
 // card.
 
@@ -49,12 +50,35 @@ function coalescing(request: RouterRequest): request is Coalescing {
   return coalesced(request) !== null;
 }
 
+// Long enough that a plan pays a handful of them rather than one per search, short enough that a
+// reader who flips a mode does not wait out the plan they have already replaced.
+const BREATH_MILLIS = 25;
+
+// Hand the event loop a turn, so the messages that arrived while the last stretch of searching ran
+// are delivered before the next one starts. A task rather than a microtask: a microtask queue is
+// drained before any message event, so awaiting one would let nothing in.
+function breathe(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 export function createDispatch(
   engine: RoutingEngine,
   post: (response: RouterResponse) => void,
 ): Dispatch {
   const queue: RouterRequest[] = [];
   let running = false;
+
+  // A newer plan retires the one running, and so does a route or a drag frame: the reader has moved
+  // an endpoint, and a plan of the walk they have left is a second or more of searching nobody is
+  // waiting for — while the frame they ARE watching sits behind it.
+  function planOvertaken(): boolean {
+    return queue.some((queued) => {
+      const answer = coalesced(queued);
+      return answer === "plan" || answer === "route";
+    });
+  }
 
   async function handle(request: RouterRequest): Promise<void> {
     switch (request.type) {
@@ -89,12 +113,13 @@ export function createDispatch(
         try {
           await engine.prepare(cityId, clock, weights);
           // The context fetches above are the one place a newer plan can overtake this one.
-          if (queue.some((queued) => coalesced(queued) === "plan")) {
+          if (planOvertaken()) {
             post({ type: "stale", id: request.id });
             return;
           }
           let previewed = false;
-          const plan = planRoutes({
+          let breathed = performance.now();
+          const plan = await planRoutes({
             weights,
             search: (candidate) => engine.search(start, dest, candidate),
             minMultiplier: (candidate) =>
@@ -106,7 +131,19 @@ export function createDispatch(
                 post({ type: "preview", id: request.id, result });
               }
             },
+            superseded: async () => {
+              if (performance.now() - breathed < BREATH_MILLIS) {
+                return false;
+              }
+              await breathe();
+              breathed = performance.now();
+              return planOvertaken();
+            },
           });
+          if (plan.superseded) {
+            post({ type: "stale", id: request.id });
+            return;
+          }
           post({ type: "done", id: request.id, plan });
         } catch (error) {
           post({ type: "error", id: request.id, message: describe(error) });
@@ -178,6 +215,16 @@ export function createDispatch(
     }
   }
 
+  // The oldest request that is not a set of pins, and the pins only when nothing else is waiting.
+  // A waypoint plan is a dynamic program over every intersection of a route and can outlast the
+  // search that produced it, and nothing is drawn while it runs — where a route, a plan or a drag
+  // frame is what the reader is waiting to see. Order inside each of those two groups is untouched,
+  // so a load still precedes everything queued behind it.
+  function takeNext(): RouterRequest | undefined {
+    const drawn = queue.findIndex((queued) => queued.type !== "waypoints");
+    return queue.splice(drawn === -1 ? 0 : drawn, 1)[0];
+  }
+
   async function pump(): Promise<void> {
     if (running) {
       return; // the running pump drains everything queued behind it, including this
@@ -185,7 +232,7 @@ export function createDispatch(
     running = true;
     try {
       while (queue.length > 0) {
-        const request = queue.shift();
+        const request = takeNext();
         if (!request) {
           break;
         }
