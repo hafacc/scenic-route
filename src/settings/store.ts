@@ -51,6 +51,9 @@ export interface Settings {
   // Which mode the Modes page opens in, and where its three switches are left.
   mode: ModeId;
   toggles: Toggles;
+  // Per mode, the overlays the reader has switched OFF in its layer list. Absent or empty means the
+  // mode draws everything it comes with; the mode still WALKS by its own weights either way.
+  modeLayers: Partial<Record<ModeId, readonly OverlayId[]>>;
   // The gates taken out of the panel's header. Same bargain as a hidden factor: the gate keeps
   // gating, so a hidden one that is CLOSED is counted alongside them.
   hiddenGates: readonly GateKey[];
@@ -76,6 +79,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hiddenGates: [],
   mode: DEFAULT_MODE.id,
   toggles: DEFAULT_TOGGLES,
+  modeLayers: {},
   coverage: DEFAULT_COVERAGE,
   updatedAt: {},
 };
@@ -187,6 +191,24 @@ function storedToggles(value: unknown): Toggles {
   }
 }
 
+// Per mode, and per id within a mode: a mode this build does not offer, or an overlay it does not
+// know, is dropped without costing the rest of the map.
+function storedModeLayers(
+  value: unknown,
+): Partial<Record<ModeId, readonly OverlayId[]>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  } else {
+    const layers: Partial<Record<ModeId, readonly OverlayId[]>> = {};
+    for (const [id, hidden] of Object.entries(value)) {
+      if (isModeId(id)) {
+        layers[id] = overlayIds(hidden);
+      }
+    }
+    return layers;
+  }
+}
+
 function stamps(value: unknown): Record<string, number> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return {};
@@ -270,6 +292,7 @@ export function settingsFrom(
       hiddenGates: gateKeys(stored.hiddenGates),
       mode: storedMode(stored.mode),
       toggles: storedToggles(stored.toggles),
+      modeLayers: storedModeLayers(stored.modeLayers),
       coverage: COVERAGE.some(({ id }) => id === stored.coverage)
         ? (stored.coverage as string)
         : DEFAULT_COVERAGE,
@@ -384,6 +407,15 @@ function stamped(patch: Partial<Settings>, at: number): Record<string, number> {
       for (const [key, state] of Object.entries(value as object)) {
         if (state !== current.toggles[key as keyof Toggles]) {
           marks[`toggles.${key}`] = at;
+        }
+      }
+    } else if (field === "modeLayers") {
+      // Per mode, by the list's contents: the caller writes the whole map back with one mode's
+      // list replaced, and every list in it is a fresh array.
+      for (const [id, hidden] of Object.entries(value as object)) {
+        const before = current.modeLayers[id as ModeId] ?? [];
+        if ((hidden as readonly OverlayId[]).join() !== before.join()) {
+          marks[`modeLayers.${id}`] = at;
         }
       }
     } else {

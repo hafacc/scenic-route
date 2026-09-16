@@ -314,6 +314,46 @@ test("the two-ferry route boards both ferries when they are allowed", () => {
   expect(ferrySteps).toHaveLength(2);
 });
 
+test("each boat boarded is a leg of its own, timed at the crossing", () => {
+  const result = findRoute(
+    graphB,
+    snapAtNode(graphB, 0, walkEdgeB0),
+    snapAtNode(graphB, 3, walkEdgeB3),
+    weights(1, 0.4, true),
+  );
+  const ferrySteps = (result?.steps ?? []).filter(
+    (step) => step.kind === "ferry",
+  );
+  // The fixture carries no timetable, so a crossing costs the graph's baked figure and nothing is
+  // waited for; two boats with a walk between them are two legs all the same.
+  expect(result?.ferries).toEqual(
+    ferrySteps.map((step) => ({
+      route: null,
+      waitSeconds: 0,
+      crossingSeconds: graphB.edgeDurationSeconds[step.edge],
+    })),
+  );
+});
+
+// The boat is scenery in a mode that asks for it, and what a card says it got is the crossing: the
+// wait on the pier is time on a pier.
+test("the ferry chip is the crossing's share of the trip", () => {
+  const result = findRoute(
+    graphB,
+    snapAtNode(graphB, 0, walkEdgeB0),
+    snapAtNode(graphB, 3, walkEdgeB3),
+    weights(1, 0.4, true),
+  ) as RouteResult;
+  const crossing = result.ferries.reduce(
+    (total, boat) => total + boat.crossingSeconds,
+    0,
+  );
+  expect(crossing).toBeGreaterThan(0);
+  expect(result.factorSeconds.ferry).toBeCloseTo(crossing, 6);
+  expect(result.factors.ferry).toBeCloseTo(crossing / result.travelSeconds, 6);
+  expect(result.factors.ferry).toBeLessThan(1);
+});
+
 test("barred ferries are never boarded and the walk is ferry-weight-independent", () => {
   for (const scenario of scenarios) {
     let baseline: string | null = null;

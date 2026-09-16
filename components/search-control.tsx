@@ -137,11 +137,9 @@ interface SearchPanelProps {
   onClear: () => void;
 }
 
-// What is up while the panel is open, and only then: the words in the box, the answer they got, and
-// which row the arrows are standing on. None of it is any use to a closed panel — words left behind
-// would fire a debounced search off the next thing to move the map, pulling the index back in after
-// the app has released it, and an answer left behind would reopen on "Still loading" for a query
-// nobody is typing any more — so it is held where closing the panel takes it away.
+// The panel's own chrome — the heading, the handoff to directions and the close — around the box
+// itself. Its lifecycle is the reason it is a component: opening and closing it is what makes the
+// words typed into it, and the answer they got, go away with it.
 function SearchPanel({
   city,
   pinned,
@@ -153,17 +151,6 @@ function SearchPanel({
   onDirections,
   onClear,
 }: SearchPanelProps) {
-  const [draft, setDraft] = useState<string | null>(null);
-  const [answer, setAnswer] = useState<Answer | null>(null);
-  const [activeIndex, setActiveIndex] = useState<number>(-1);
-  const [listOpen, setListOpen] = useState<boolean>(false);
-  const input = useRef<HTMLInputElement | null>(null);
-  const listId = useId();
-
-  useEffect(() => {
-    input.current?.focus();
-  }, []);
-
   // Escape closes the panel wherever the focus sits, matching the toolbar's menus.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -174,6 +161,96 @@ function SearchPanel({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onOpenChange]);
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <p className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-wide text-brand-600 dark:text-brand-400">
+          Find a place
+        </p>
+        <div className="flex shrink-0 items-center gap-1">
+          {/* The same handoff the directions control performs, offered where the reader already
+            is. Disabled until something is pinned, rather than hidden, so the close button
+            does not move under a finger already going for it. */}
+          <button
+            type="button"
+            onClick={onDirections}
+            disabled={!pinned}
+            aria-label="Walking directions to this place"
+            title="Walking directions to this place"
+            className="-m-1 grid h-8 w-8 place-items-center rounded-full text-slate-400 hover:bg-slate-100 disabled:pointer-events-none disabled:opacity-40 dark:hover:bg-slate-700"
+          >
+            <MdDirectionsWalk className="h-4 w-4" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            aria-label="Close search"
+            className="-m-1 grid h-8 w-8 place-items-center rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+          >
+            <FiX />
+          </button>
+        </div>
+      </div>
+      <PlaceSearch
+        city={city}
+        centre={centre}
+        label={label}
+        placeholder="Search for a place"
+        autoFocus
+        className="mt-3"
+        onSelect={(result) => {
+          onLabelChange(result.displayName);
+          onSelect(result);
+        }}
+        onClear={() => {
+          onLabelChange(null);
+          onClear();
+        }}
+      />
+    </>
+  );
+}
+
+interface PlaceSearchProps {
+  city: City;
+  centre: () => LatLng | null;
+  label: string | null; // the committed pick, which the caller owns and the box shows
+  placeholder: string;
+  autoFocus: boolean; // a box that opens on demand takes the caret; one that is always there does not
+  className?: string;
+  onSelect: (result: GeocodeResult) => void;
+  onClear: () => void;
+}
+
+// The box and the answers it gets: the words being typed, what the index said about them, and which
+// row the arrows are standing on. All of it is this component's, and none of it outlives it — words
+// left behind would fire a debounced search off the next thing to move the map, pulling the index
+// back in after the app has released it, and an answer left behind would sit on "Still loading" for
+// a query nobody is typing any more.
+export function PlaceSearch({
+  city,
+  centre,
+  label,
+  placeholder,
+  autoFocus,
+  className,
+  onSelect,
+  onClear,
+}: PlaceSearchProps) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [answer, setAnswer] = useState<Answer | null>(null);
+  const [activeIndex, setActiveIndex] = useState<number>(-1);
+  const [listOpen, setListOpen] = useState<boolean>(false);
+  const input = useRef<HTMLInputElement | null>(null);
+  const listId = useId();
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on mount only, whatever the flag says later
+  useEffect(() => {
+    if (autoFocus) {
+      input.current?.focus();
+    }
+  }, []);
 
   // Debounced off the draft alone; an answer to words that have since been typed over is dropped, so
   // a slow one can never overwrite a newer one. An index that has not arrived answers null, which is
@@ -219,12 +296,11 @@ function SearchPanel({
   const value = draft ?? label ?? "";
   const results = answer?.results ?? null;
 
-  // Unlike the route fields, picking a result leaves the panel standing: the map has just moved, and
+  // Unlike the route fields, picking a result leaves the box standing: the map has just moved, and
   // the reader may well want to look up the next place. The blur is what drops the phone keyboard so
   // they can see where they landed.
   const select = (result: GeocodeResult): void => {
     setDraft(null);
-    onLabelChange(result.displayName);
     setListOpen(false);
     setActiveIndex(-1);
     input.current?.blur();
@@ -236,7 +312,6 @@ function SearchPanel({
   const clear = (): void => {
     onClear();
     setDraft(null);
-    onLabelChange(null);
     setAnswer(null);
     setActiveIndex(-1);
     setListOpen(false);
@@ -267,36 +342,7 @@ function SearchPanel({
 
   return (
     <>
-      <div className="flex items-center justify-between gap-2">
-        <p className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-wide text-brand-600 dark:text-brand-400">
-          Find a place
-        </p>
-        <div className="flex shrink-0 items-center gap-1">
-          {/* The same handoff the directions control performs, offered where the reader already
-            is. Disabled until something is pinned, rather than hidden, so the close button
-            does not move under a finger already going for it. */}
-          <button
-            type="button"
-            onClick={onDirections}
-            disabled={!pinned}
-            aria-label="Walking directions to this place"
-            title="Walking directions to this place"
-            className="-m-1 grid h-8 w-8 place-items-center rounded-full text-slate-400 hover:bg-slate-100 disabled:pointer-events-none disabled:opacity-40 dark:hover:bg-slate-700"
-          >
-            <MdDirectionsWalk className="h-4 w-4" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            aria-label="Close search"
-            className="-m-1 grid h-8 w-8 place-items-center rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
-          >
-            <FiX />
-          </button>
-        </div>
-      </div>
-
-      <div className="relative mt-3 shrink-0">
+      <div className={`relative shrink-0 ${className ?? ""}`}>
         <span className="pointer-events-none absolute inset-y-0 left-3 grid place-items-center">
           <FiSearch className={ICON_ON} aria-hidden="true" />
         </span>
@@ -309,8 +355,8 @@ function SearchPanel({
           // the next thing to type is a new search, not an edit of that name.
           onFocus={(event) => event.currentTarget.select()}
           onKeyDown={handleKeyDown}
-          placeholder="Search for a place"
-          aria-label="Search for a place"
+          placeholder={placeholder}
+          aria-label={placeholder}
           autoComplete="off"
           role="combobox"
           aria-expanded={notice !== null || rows.length > 0}

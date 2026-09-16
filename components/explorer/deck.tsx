@@ -6,18 +6,22 @@ import {
   useCallback,
   useEffect,
 } from "react";
+import { ferrySummaries } from "../../src/modes/cards";
 import type { OverlayId } from "../../src/overlays/registry";
+import { MODES_PAGE } from "../../src/pages";
 import { getPinnedTime } from "../../src/route-time/store";
 import type { RouteWeights } from "../../src/routing/cost";
 import type { FactorKey, GateKey } from "../../src/routing/factors";
 import { encodeRoute, encodeView, shareUrl } from "../../src/url-state";
 import GoogleMapsButton from "../google-maps-button";
 import type { ShellDeck } from "../map-shell";
+import RouteToggle from "../route-toggle";
 import SettingsDialog from "../settings-dialog";
+import Toolbar from "../toolbar";
 import UrlSync from "../url-sync";
 import { useSettings } from "../use-settings";
+import LayersControl from "./layers-control";
 import RoutePanel from "./route-panel";
-import Toolbar from "./toolbar";
 
 interface ControlsProps {
   shell: ShellDeck;
@@ -34,9 +38,8 @@ interface PanelsProps {
   onGate: (key: GateKey, on: boolean) => void;
 }
 
-// The top of Explorer: the toolbar with its layers menu, and the writer that mirrors the route into
-// the URL. The layer set is pruned here rather than where it is held, because the city that prunes
-// it is the shell's.
+// The layer set is pruned here rather than where it is held, because the city that prunes it is
+// the shell's.
 export function ExplorerControls({
   shell,
   weights,
@@ -47,8 +50,7 @@ export function ExplorerControls({
   const settings = useSettings();
   const { city } = shell;
 
-  // Switching city swaps the whole layer set, so anything the new city does not offer goes off rather
-  // than staying lit with no data behind it.
+  // Switching city swaps the whole layer set: anything the new city does not offer goes off.
   useEffect(() => {
     setActiveOverlays((current) => {
       const kept = new Set(
@@ -102,11 +104,23 @@ export function ExplorerControls({
         auth={shell.auth}
         pinCount={shell.pinCount}
         city={city}
-        activeOverlays={activeOverlays}
-        routing={shell.routingOpen}
         refreshingClaims={shell.refreshingClaims}
-        onToggleOverlay={onToggleOverlay}
-        onToggleRouting={shell.onToggleRouting}
+        otherPage={MODES_PAGE}
+        clock
+        controls={
+          <>
+            <RouteToggle
+              active={shell.routingOpen}
+              onToggle={shell.onToggleRouting}
+            />
+            <LayersControl
+              city={city}
+              active={activeOverlays}
+              onToggle={onToggleOverlay}
+              onSettings={(section) => shell.onSettings(section ?? "")}
+            />
+          </>
+        }
         onSignIn={shell.onSignIn}
         onSignOut={shell.onSignOut}
         onRefreshClaims={shell.onRefreshClaims}
@@ -123,14 +137,22 @@ export function ExplorerControls({
         start={shell.manualStart}
         dest={shell.dest}
         pin={shell.searchPin}
-        weights={weights}
+        encode={(clock) =>
+          encodeRoute({
+            start: shell.manualStart,
+            dest: shell.dest,
+            pin: shell.searchPin,
+            weights,
+            customHour: clock.hour,
+            customDay: clock.day,
+          })
+        }
         enabled={shell.hashApplied}
       />
     </>
   );
 }
 
-// The bottom of Explorer: the route panel, and the settings dialog its rows link into.
 export function ExplorerPanels({
   shell,
   weights,
@@ -138,9 +160,6 @@ export function ExplorerPanels({
   onGate,
 }: PanelsProps) {
   const { city, routeState } = shell;
-  const routeResult = routeState.kind === "ready" ? routeState.result : null;
-  // The graph the result was actually computed against, not whichever one state last landed on.
-  const resultGraph = routeState.kind === "ready" ? routeState.graph : null;
 
   return (
     <>
@@ -148,11 +167,9 @@ export function ExplorerPanels({
         <RoutePanel
           city={city}
           exportAction={
-            resultGraph && routeResult && shell.exportOrigin && shell.dest ? (
+            routeState.kind === "ready" && shell.exportOrigin && shell.dest ? (
               <GoogleMapsButton
-                graph={resultGraph}
-                route={routeResult}
-                weights={weights}
+                plan={shell.waypointPlan}
                 start={shell.exportOrigin}
                 dest={shell.dest}
               />
@@ -179,6 +196,7 @@ export function ExplorerPanels({
               ? {
                   walkMeters: routeState.result.walkMeters,
                   travelSeconds: routeState.result.travelSeconds,
+                  ferries: ferrySummaries(routeState.result.ferries),
                   factors: routeState.result.factors,
                 }
               : null
@@ -190,7 +208,8 @@ export function ExplorerPanels({
           artWeight={weights.art}
           highwayWeight={weights.highway}
           hillWeight={weights.hill}
-          capabilities={shell.capabilities}
+          graphAvailable={shell.graphAvailable}
+          shedFeed={shell.shedFeed}
           commercialWeight={weights.commercial}
           industrialWeight={weights.industrial}
           historicWeight={weights.historic}

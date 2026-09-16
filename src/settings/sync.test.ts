@@ -108,6 +108,21 @@ test("the mode and the toggles reach the other device", () => {
   expect(merged.toggles.sun).toBe("sun"); // this one set that switch later
 });
 
+test("two devices hiding a layer in two modes both keep theirs", () => {
+  const local = settings({
+    modeLayers: { historic: ["legacy"] },
+    updatedAt: { "modeLayers.historic": 500 },
+  });
+  const remote = settings({
+    modeLayers: { historic: [], naturalist: ["canopy"] },
+    updatedAt: { "modeLayers.naturalist": 700 },
+  });
+  expect(mergeSettings(local, remote).modeLayers).toEqual({
+    historic: ["legacy"],
+    naturalist: ["canopy"],
+  });
+});
+
 // The row sets one switch at a time, so stamping all three together made two devices moving two
 // different switches last-writer-wins over the whole set.
 test("two devices moving two different switches both keep theirs", () => {

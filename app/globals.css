@@ -23,10 +23,11 @@
   }
 }
 
+/* No transition: Leaflet moves a marker by rewriting this element's transform, so an animated one
+   slides the pin across the map instead of replacing it where the tap landed. */
 .scenic-saved-pin,
 .scenic-search-pin {
   filter: drop-shadow(0 4px 6px rgb(0 0 0 / 0.25));
-  transition: transform 160ms ease;
 }
 /* The search pin is not in this one: nothing happens when it is clicked, so it must not lift under
    the cursor as though something would. */
@@ -43,7 +44,7 @@
   position: absolute;
   inset: 8px;
   border-radius: 9999px;
-  background-color: #10b981;
+  background-color: var(--color-brand-500);
   border: 2px solid #ffffff;
   box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
 }
@@ -51,7 +52,11 @@
   position: absolute;
   inset: 0;
   border-radius: 9999px;
-  background-color: rgb(16 185 129 / 0.45);
+  background-color: color-mix(
+    in oklab,
+    var(--color-brand-500) 45%,
+    transparent
+  );
   animation: scenic-pulse 1.8s ease-out infinite;
 }
 @keyframes scenic-pulse {
@@ -149,7 +154,50 @@
   flex-shrink: 0;
 }
 
-/* While a route field has armed map-pick, the whole map reads as a target. */
+/* The number a route card and its line share, drawn on the line at its midpoint. */
+/* A plan is being replaced: the list it will replace dims, and this slides along its top edge. The
+   sweep has no measurable progress, so the bar says only that something is running. */
+.scenic-progress {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 9999px;
+}
+.scenic-progress::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  width: 40%;
+  border-radius: 9999px;
+  background-color: var(--color-brand-600);
+  animation: scenic-progress 1.2s ease-in-out infinite;
+}
+@keyframes scenic-progress {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+.scenic-route-badge {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  border: 2px solid #ffffff;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+}
+
+/* While a tap will set a point — an armed field, or a search a tap answers — the map reads as a target. */
 .leaflet-container.scenic-picking,
 .leaflet-container.scenic-picking .leaflet-grab,
 .leaflet-container.scenic-picking .leaflet-interactive {

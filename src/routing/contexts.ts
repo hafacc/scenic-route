@@ -78,25 +78,42 @@ export class RouteContexts {
       this.shedKey = "";
     }
 
-    // Barred, every ferry edge is skipped before its cost is asked for. A failed fetch falls back to
-    // the graph's baked crossing-plus-average-wait figure.
+    const ferryRebuilt = await this.syncFerries(graph, city, clock, weights);
+
+    return { rebuilt: rebuilt || ferryRebuilt, shadeRebuilt, shadeLost };
+  }
+
+  // The timetable on its own, which is the one field the PAGE reads: `buildDirections` names the
+  // sailing a ferry leg catches. Everything a search costs against is built in the worker, on its
+  // own copy — building it here too would run the same fetch and the same pass over every edge a
+  // second time, on the thread that draws.
+  //
+  // Barred, every ferry edge is skipped before its cost is asked for. A failed fetch falls back to
+  // the graph's baked crossing-plus-average-wait figure.
+  async syncFerries(
+    graph: RoutingGraph,
+    city: City,
+    clock: RouteClock,
+    weights: RouteWeights,
+  ): Promise<boolean> {
     if (weights.allowFerries && graph.ferryEdges.length > 0) {
       const key = `${city.id}:${clock.tick}`;
       if (this.ferryKey !== key) {
         this.ferryKey = key;
-        rebuilt = true;
         try {
-          await computeFerrySchedule(graph, city.id, date);
+          await computeFerrySchedule(graph, city.id, new Date(clock.dateMs));
         } catch (error) {
           console.error("ferry timetable unavailable:", error);
           graph.ferries = null;
         }
+        return true;
+      } else {
+        return false;
       }
     } else {
       graph.ferries = null;
       this.ferryKey = "";
+      return false;
     }
-
-    return { rebuilt, shadeRebuilt, shadeLost };
   }
 }

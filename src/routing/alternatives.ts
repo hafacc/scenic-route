@@ -32,11 +32,6 @@ const COLOR_MARGIN = 0.15;
 const SAMPLE_METERS = 20;
 const METERS_PER_DEGREE_LAT = 111_320;
 
-export interface Candidate {
-  weights: RouteWeights;
-  result: RouteResult;
-}
-
 export interface PlannedRoute {
   result: RouteResult;
   // Absolute, not a share: weight times the seconds spent on the attribute, summed over the mode's
@@ -58,7 +53,7 @@ export interface PlanInput {
   search: (weights: RouteWeights) => RouteResult | null;
   minMultiplier: (weights: RouteWeights) => number;
   factorMax?: Partial<Record<FactorKey, number>>; // graph max per factor; missing reads as 1
-  onCandidate?: (candidate: Candidate) => void; // per distinct route as it is found, R_max first
+  onCandidate?: (result: RouteResult) => void; // per distinct route as it is found, R_max first
 }
 
 // Most scenic first, most direct last — the end the owner cares about is the one read first. One
@@ -539,7 +534,7 @@ export function planRoutes(input: PlanInput): Plan {
     pool.push(pooled);
     bySignature.set(signature, pooled);
     byWeights.set(key, pooled);
-    onCandidate?.({ weights: candidate, result });
+    onCandidate?.(result);
     return pooled;
   };
 

@@ -1,14 +1,7 @@
 "use client";
 
 import L from "leaflet";
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { Fragment, useEffect, useMemo, useRef } from "react";
 import {
   AttributionControl,
   MapContainer,
@@ -31,7 +24,7 @@ import installTilePrune from "../src/tiles/prune";
 import type { Camera } from "../src/url-state";
 import Basemap from "./basemap";
 import { savedIcon, searchIcon, userIcon } from "./map-icons";
-import RouteLayer from "./route-layer";
+import RouteLayer, { type RouteLine } from "./route-layer";
 import { useMapTheme } from "./use-map-theme";
 
 // Every grid layer on the map inherits this, so it goes in once here rather than in each layer.
@@ -42,12 +35,6 @@ export interface MapTarget {
   lng: number;
   zoom?: number;
 }
-
-// How a map tap becomes a point. "immediate" is a field the user armed from the panel: they asked to
-// place a point, so the tap commits and the zoom gestures stay out of the way. "deferred" is the
-// panel's auto-armed destination, which nobody asked for — it must not cost the user their double-tap
-// zoom, so it waits out the double-tap window before committing.
-export type PickMode = "off" | "immediate" | "deferred";
 
 // A place found in the search panel and left on the map. One at a time, and no route of its own.
 export interface SearchPin {
@@ -66,10 +53,17 @@ interface MapViewProps {
   activeOverlays: ReadonlySet<OverlayId>;
   routeResult: RouteResult | null;
   routeGraph: RoutingGraph | null; // the graph routeResult's edge indices point into
+  // Every route a deck is offering at once, drawn together; empty leaves routeResult the only line.
+  routeLines: readonly RouteLine[] | undefined;
+  onSelectLine: ((index: number) => void) | undefined;
+  onHoverLine: ((index: number | null) => void) | undefined;
   routeDest: { lat: number; lng: number } | null;
   routeStart: { lat: number; lng: number } | null;
   searchPin: SearchPin | null;
-  pickMode: PickMode;
+  // The colour the dropped pins wear, from the deck that has an accent; null keeps the app's green.
+  markerColor: string | null;
+  // A field has armed the next tap to set its point. Nothing else makes a tap place anything.
+  picking: boolean;
   dragging: boolean; // an endpoint marker is being dragged; the route reframe goes zoom-out-only
   initialCamera: Camera | null; // a shared link's camera, applied once; null leaves the map alone
   preframedDest: { lat: number; lng: number } | null; // a dest whose framing the link already chose
@@ -99,21 +93,26 @@ const draftIcon = L.divIcon({
 
 // A map click sets the armed field's location. Mounted only while a field has armed pick mode, so
 // ordinary browsing never intercepts clicks; pin markers stop propagation, so they still select.
-// Leaflet fires click for each half of a double click, so dblclick — which lands after both — is what
-// drops a deferred pick the halves scheduled, leaving the double click as a plain zoom.
+// react-leaflet freezes MapContainer's className at mount, so the crosshair is set on the live
+// container instead of being handed down as a prop.
+function PickCursor({ picking }: { picking: boolean }) {
+  const map = useMap();
+  useEffect(() => {
+    const container = map.getContainer();
+    container.classList.toggle("scenic-picking", picking);
+    return () => container.classList.remove("scenic-picking");
+  }, [map, picking]);
+  return null;
+}
+
 function PickCatcher({
   onMapPick,
-  onCancelPick,
 }: {
   onMapPick: (lat: number, lng: number) => void;
-  onCancelPick: () => void;
 }) {
   useMapEvents({
     click: (event) => {
       onMapPick(event.latlng.lat, event.latlng.lng);
-    },
-    dblclick: () => {
-      onCancelPick();
     },
   });
   return null;
@@ -148,17 +147,11 @@ const ZOOM_PX_PER_LEVEL = 128; // matching MapLibre's quick zoom
 function DoubleTapZoom({
   following,
   picking,
-  onCancelPick,
 }: {
   following: boolean;
   picking: boolean;
-  onCancelPick: () => void;
 }) {
   const map = useMap();
-  // Through a ref rather than a dep: re-running the effect between the two taps would wipe lastTap,
-  // and the second tap would read as a fresh first one.
-  const cancelPickRef = useRef(onCancelPick);
-  cancelPickRef.current = onCancelPick;
   useEffect(() => {
     const container = map.getContainer();
     const internals = map as unknown as MapZoomInternals;
@@ -240,7 +233,6 @@ function DoubleTapZoom({
             // tap keeps its synthesised click, which the pick flow runs on.
             event.preventDefault();
           }
-          cancelPickRef.current(); // the first tap was half of a zoom, not a point
           // while following, anchor on the centre so the zoom can't drift off the user
           const at = following
             ? map.getSize().divideBy(2)
@@ -520,10 +512,14 @@ export default function MapView({
   activeOverlays,
   routeResult,
   routeGraph,
+  routeLines,
+  onSelectLine,
+  onHoverLine,
   routeDest,
   routeStart,
   searchPin,
-  pickMode,
+  markerColor,
+  picking,
   dragging,
   initialCamera,
   preframedDest,
@@ -534,43 +530,13 @@ export default function MapView({
   onEndpointDrag,
   onPinSelect,
 }: MapViewProps) {
-  const picking = pickMode !== "off";
-  // A deferred pick's point, held until the double-tap window passes. The pin is drawn from it right
-  // away — the wait is only to keep a first tap from becoming a destination, not to withhold feedback.
-  const [pendingDest, setPendingDest] = useState<{
-    lat: number;
-    lng: number;
-  } | null>(null);
-  const cancelPendingPick = useCallback(() => setPendingDest(null), []);
   // Rebuilt only when the theme flips, and handed to the marker as a new icon so it repaints in
   // place: an icon built once at import keeps its old gradient until something remounts the marker.
   const theme = useMapTheme();
-  const searchMarker = useMemo(() => searchIcon(theme), [theme]);
-
-  // The wait itself, and the ways it can end without committing: the arm state changing out from under
-  // it (the panel closing, a field arming explicitly, the commit landing) and unmount.
-  useEffect(() => {
-    if (pickMode !== "deferred") {
-      setPendingDest(null);
-      return;
-    } else if (!pendingDest) {
-      return;
-    } else {
-      const timer = window.setTimeout(() => {
-        setPendingDest(null);
-        onMapPick(pendingDest.lat, pendingDest.lng);
-      }, DOUBLE_TAP_MS);
-      return () => window.clearTimeout(timer);
-    }
-  }, [pickMode, pendingDest, onMapPick]);
-
-  const handlePick = (lat: number, lng: number) => {
-    if (pickMode === "deferred") {
-      setPendingDest({ lat, lng });
-    } else {
-      onMapPick(lat, lng);
-    }
-  };
+  const searchMarker = useMemo(
+    () => searchIcon(theme, markerColor),
+    [theme, markerColor],
+  );
 
   const markers = useMemo(
     () =>
@@ -600,7 +566,7 @@ export default function MapView({
     <MapContainer
       center={[city.center.lat, city.center.lng]}
       zoom={CITY_ZOOM}
-      className={picking ? "h-dvh w-full scenic-picking" : "h-dvh w-full"}
+      className="h-dvh w-full"
       zoomControl={false}
       bounceAtZoomLimits={false}
       attributionControl={false}
@@ -624,6 +590,10 @@ export default function MapView({
       <RouteLayer
         result={routeResult}
         graph={routeGraph}
+        markerColor={markerColor}
+        lines={routeLines}
+        onSelectLine={onSelectLine}
+        onHoverLine={onHoverLine}
         dest={routeDest}
         start={routeStart}
         dragging={dragging}
@@ -632,15 +602,9 @@ export default function MapView({
         onEndpointDragMove={onEndpointDragMove}
         onEndpointDrag={onEndpointDrag}
       />
-      {picking ? (
-        <PickCatcher onMapPick={handlePick} onCancelPick={cancelPendingPick} />
-      ) : null}
-      {/* a deferred pick doesn't block the zoom: it gets cancelled by the gesture instead */}
-      <DoubleTapZoom
-        following={following}
-        picking={pickMode === "immediate"}
-        onCancelPick={cancelPendingPick}
-      />
+      <PickCursor picking={picking} />
+      {picking ? <PickCatcher onMapPick={onMapPick} /> : null}
+      <DoubleTapZoom following={following} picking={picking} />
       {markers}
       {userLocation ? (
         <Marker
@@ -658,15 +622,6 @@ export default function MapView({
         <Marker
           position={[searchPin.lat, searchPin.lng]}
           icon={searchMarker}
-          interactive={false}
-        />
-      ) : null}
-      {pendingDest ? (
-        // Non-interactive, unlike the committed destination: a draggable marker under the first tap
-        // would take the second tap's touch and its click, leaving the double tap undetectable.
-        <Marker
-          position={[pendingDest.lat, pendingDest.lng]}
-          icon={savedIcon}
           interactive={false}
         />
       ) : null}

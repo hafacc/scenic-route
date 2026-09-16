@@ -12,7 +12,17 @@ import { currentTheme } from "../src/theme/current";
 import CanvasGrid from "../src/tiles/canvas-grid";
 import { KEEP_BUFFER, tileRatio } from "../src/tiles/raster";
 import { repeatable } from "../src/tiles/repaint";
-import { savedIcon, startIcon } from "./map-icons";
+import { destIcon, startIcon } from "./map-icons";
+
+export interface RouteLine {
+  result: RouteResult;
+  color: string;
+  label: string; // the card number, worn by the line and by the card; empty draws no badge
+  selected: boolean;
+  // This line answers the plan being replaced: it stays drawn, in the unselected style, until the
+  // new one lands.
+  dimmed?: boolean;
+}
 
 interface RouteLayerProps {
   result: RouteResult | null;
@@ -21,7 +31,14 @@ interface RouteLayerProps {
   // through New York's edges for as long as the two disagreed — which is the whole span of a city
   // switch, since the result lands before the new fetch does.
   graph: RoutingGraph | null;
+  // Every route on offer; empty leaves `result` as the only line, which is Explorer's map.
+  lines?: readonly RouteLine[];
+  onSelectLine?: (index: number) => void;
+  // The line under the pointer, drawn as the chosen one is while it is; null on the way out.
+  onHoverLine?: (index: number | null) => void;
   dest: { lat: number; lng: number } | null; // the tapped/searched destination
+  // The colour the destination teardrop wears, from a deck with an accent; null keeps the green one.
+  markerColor: string | null;
   start: { lat: number; lng: number } | null; // the snapped start, for the dot
   dragging: boolean; // an endpoint is being dragged; reframe zooms out only, never in
   // A destination that arrived from a shared link alongside its own camera, so the shared framing is
@@ -55,10 +72,17 @@ const WIDTH_PER_ZOOM = 1.3;
 const MIN_WIDTH = 2.5;
 const CASING_EXTRA = 3; // white halo, ~1.5 px each side
 
-const ROUTE_COLOR = "#334155"; // slate-700: a neutral route that reads over any overlay colour
+export const ROUTE_COLOR = "#334155"; // slate-700: a neutral route that reads over any overlay colour
 const CASING_COLOR = "#ffffff";
 const CONNECTOR_COLOR = "#94a3b8"; // slate-400
 const CONNECTOR_MIN_METERS = 15; // draw the dashed tapped->snapped link only past this gap
+// An unselected alternative: narrower and washed out, but not gone.
+const ALT_WIDTH = 0.7;
+const ALT_ALPHA = 0.55;
+// A stroke has to be painted to receive a tap, hence the near-zero opacity.
+const TAP_WIDTH = 18;
+const TAP_OPACITY = 0.01;
+const TAP_VERTICES = 400;
 
 const EARTH_RADIUS_METERS = 6_371_000;
 
@@ -150,11 +174,18 @@ function buildDrawSteps(graph: RoutingGraph, result: RouteResult): DrawStep[] {
   return draw;
 }
 
-class RouteGrid extends CanvasGrid {
-  private drawSteps: DrawStep[] = [];
+interface DrawBand {
+  steps: DrawStep[];
+  color: string;
+  width: number; // multiple of the zoom-derived width
+  alpha: number;
+}
 
-  setDrawSteps(steps: DrawStep[]): void {
-    this.drawSteps = steps;
+class RouteGrid extends CanvasGrid {
+  private bands: DrawBand[] = [];
+
+  setBands(bands: DrawBand[]): void {
+    this.bands = bands;
     this.redraw();
   }
 
@@ -164,7 +195,7 @@ class RouteGrid extends CanvasGrid {
     tile.width = TILE_SIZE * ratio;
     tile.height = TILE_SIZE * ratio;
     const context = tile.getContext("2d");
-    if (context && this.drawSteps.length > 0) {
+    if (context && this.bands.length > 0) {
       this.watch(
         tile,
         repeatable(context, ratio, (target) => {
@@ -175,72 +206,121 @@ class RouteGrid extends CanvasGrid {
     return tile;
   }
 
-  // Casing across every step first, then the coloured lines, so the round joins meet seamlessly
-  // rather than each step's casing overpainting its neighbour's fill. Ferry legs collect into their
-  // own path and stroke blue over the same shared casing, so a walk<->ferry junction stays clean.
+  // Casing across every step of a band first, then the coloured lines, so the round joins meet
+  // seamlessly rather than each step's casing overpainting its neighbour's fill. Bands paint in
+  // order, so the selected line — last — lies over the rest.
   private draw(context: CanvasRenderingContext2D, coords: L.Coords): void {
     const map = this._map;
     const originX = coords.x * TILE_SIZE;
     const originY = coords.y * TILE_SIZE;
-    const width = Math.max(
+    const base = Math.max(
       MIN_WIDTH,
       WIDTH_AT_Z16 * WIDTH_PER_ZOOM ** (coords.z - 16),
     );
-    const walkPath = new Path2D();
-    const ferryPath = new Path2D();
     let longest = 0;
-    for (const step of this.drawSteps) {
-      longest = Math.max(longest, step.lngs.length);
+    for (const band of this.bands) {
+      for (const step of band.steps) {
+        longest = Math.max(longest, step.lngs.length);
+      }
     }
     const xs = new Float64Array(longest);
     const ys = new Float64Array(longest);
 
-    for (const step of this.drawSteps) {
-      const count = step.lngs.length;
-      const margin = width;
-      let low = Number.POSITIVE_INFINITY;
-      let left = Number.POSITIVE_INFINITY;
-      let high = Number.NEGATIVE_INFINITY;
-      let right = Number.NEGATIVE_INFINITY;
-      for (let vertex = 0; vertex < count; vertex++) {
-        const point = map.project(
-          L.latLng(step.lats[vertex], step.lngs[vertex]),
-          coords.z,
-        );
-        xs[vertex] = point.x - originX;
-        ys[vertex] = point.y - originY;
-        left = Math.min(left, xs[vertex]);
-        right = Math.max(right, xs[vertex]);
-        low = Math.min(low, ys[vertex]);
-        high = Math.max(high, ys[vertex]);
+    for (const band of this.bands) {
+      const width = base * band.width;
+      const walkPath = new Path2D();
+      const ferryPath = new Path2D();
+      for (const step of band.steps) {
+        const count = step.lngs.length;
+        const margin = width;
+        let low = Number.POSITIVE_INFINITY;
+        let left = Number.POSITIVE_INFINITY;
+        let high = Number.NEGATIVE_INFINITY;
+        let right = Number.NEGATIVE_INFINITY;
+        for (let vertex = 0; vertex < count; vertex++) {
+          const point = map.project(
+            L.latLng(step.lats[vertex], step.lngs[vertex]),
+            coords.z,
+          );
+          xs[vertex] = point.x - originX;
+          ys[vertex] = point.y - originY;
+          left = Math.min(left, xs[vertex]);
+          right = Math.max(right, xs[vertex]);
+          low = Math.min(low, ys[vertex]);
+          high = Math.max(high, ys[vertex]);
+        }
+        const overlaps =
+          right >= -margin &&
+          left <= TILE_SIZE + margin &&
+          high >= -margin &&
+          low <= TILE_SIZE + margin;
+        if (!overlaps) {
+          continue;
+        }
+        const path = step.ferry ? ferryPath : walkPath;
+        path.moveTo(xs[0], ys[0]);
+        for (let vertex = 1; vertex < count; vertex++) {
+          path.lineTo(xs[vertex], ys[vertex]);
+        }
       }
-      const overlaps =
-        right >= -margin &&
-        left <= TILE_SIZE + margin &&
-        high >= -margin &&
-        low <= TILE_SIZE + margin;
-      if (!overlaps) {
-        continue;
-      }
-      const path = step.ferry ? ferryPath : walkPath;
-      path.moveTo(xs[0], ys[0]);
-      for (let vertex = 1; vertex < count; vertex++) {
-        path.lineTo(xs[vertex], ys[vertex]);
-      }
-    }
 
-    context.lineCap = "round";
-    context.lineJoin = "round";
-    context.lineWidth = width + CASING_EXTRA;
-    context.strokeStyle = CASING_COLOR;
-    context.stroke(walkPath);
-    context.stroke(ferryPath);
-    context.lineWidth = width;
-    context.strokeStyle = ROUTE_COLOR;
-    context.stroke(walkPath);
-    context.strokeStyle = FERRY_COLOR[currentTheme()];
-    context.stroke(ferryPath);
+      context.globalAlpha = band.alpha;
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.lineWidth = width + CASING_EXTRA;
+      context.strokeStyle = CASING_COLOR;
+      context.stroke(walkPath);
+      context.stroke(ferryPath);
+      context.lineWidth = width;
+      context.strokeStyle = band.color;
+      context.stroke(walkPath);
+      context.strokeStyle = FERRY_COLOR[currentTheme()];
+      context.stroke(ferryPath);
+      context.globalAlpha = 1;
+    }
   }
+}
+
+// The vertex nearest halfway along, so the badge lands on the route rather than between two bends.
+function midpointOf(result: RouteResult): { lat: number; lng: number } {
+  const { lats, lngs } = result.path;
+  const middle = Math.floor(lats.length / 2);
+  return { lat: lats[middle], lng: lngs[middle] };
+}
+
+// Thinned to a few hundred vertices: this is hit-testing, not drawing, and a route carries thousands.
+function tapPositions(result: RouteResult): [number, number][] {
+  const { lats, lngs } = result.path;
+  const stride = Math.max(1, Math.ceil(lats.length / TAP_VERTICES));
+  const positions: [number, number][] = [];
+  for (let vertex = 0; vertex < lats.length; vertex += stride) {
+    positions.push([lats[vertex], lngs[vertex]]);
+  }
+  const last = lats.length - 1;
+  if (last >= 0) {
+    positions.push([lats[last], lngs[last]]);
+  }
+  return positions;
+}
+
+// What a route's geometry decides for the marks laid over it, worked out once per route.
+interface RouteMark {
+  positions: [number, number][];
+  badge: { lat: number; lng: number };
+  icon: L.DivIcon;
+  color: string;
+  label: string;
+  dimmed: boolean;
+}
+
+function badgeIcon(line: RouteLine): L.DivIcon {
+  const opacity = line.dimmed ? ALT_ALPHA : 1;
+  return L.divIcon({
+    className: "",
+    html: `<span class="scenic-route-badge" style="background:${line.color};opacity:${opacity}">${line.label}</span>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  });
 }
 
 function routeBounds(result: RouteResult): L.LatLngBounds {
@@ -255,6 +335,10 @@ function routeBounds(result: RouteResult): L.LatLngBounds {
 export default function RouteLayer({
   result,
   graph,
+  markerColor,
+  lines,
+  onSelectLine,
+  onHoverLine,
   dest,
   start,
   dragging,
@@ -265,6 +349,7 @@ export default function RouteLayer({
 }: RouteLayerProps) {
   const map = useMap();
   const gridRef = useRef<RouteGrid | null>(null);
+  const dropped = useMemo(() => destIcon(markerColor), [markerColor]);
   // The dest object last framed by the camera; a slider recompute keeps its identity, a new
   // destination replaces it, so only the latter re-frames.
   const framedDest = useRef<{ lat: number; lng: number } | null>(preframedDest);
@@ -288,14 +373,77 @@ export default function RouteLayer({
     };
   }, [map]);
 
-  const drawSteps = useMemo(
-    () => (graph && result ? buildDrawSteps(graph, result) : []),
-    [graph, result],
-  );
+  // Both caches are kept against the route itself: tapping a card hands this layer a new `lines`
+  // array of the same routes, and re-decoding thousands of vertices — and minting new Leaflet icons
+  // — to move a highlight is the whole cost of the gesture. A result belongs to one graph, so the
+  // graph is not part of the key. Written during render, but only ever with what the route says.
+  const marks = useRef(new WeakMap<RouteResult, RouteMark>());
+  const markFor = (line: RouteLine): RouteMark => {
+    const cached = marks.current.get(line.result);
+    if (
+      cached &&
+      cached.color === line.color &&
+      cached.label === line.label &&
+      cached.dimmed === (line.dimmed ?? false)
+    ) {
+      return cached;
+    }
+    const fresh: RouteMark = {
+      positions: tapPositions(line.result),
+      badge: midpointOf(line.result),
+      icon: badgeIcon(line),
+      color: line.color,
+      label: line.label,
+      dimmed: line.dimmed ?? false,
+    };
+    marks.current.set(line.result, fresh);
+    return fresh;
+  };
+  const drawSteps = useRef(new WeakMap<RouteResult, DrawStep[]>());
+  const stepsFor = (
+    routeGraph: RoutingGraph,
+    route: RouteResult,
+  ): DrawStep[] => {
+    const cached = drawSteps.current.get(route);
+    if (cached) {
+      return cached;
+    }
+    const fresh = buildDrawSteps(routeGraph, route);
+    drawSteps.current.set(route, fresh);
+    return fresh;
+  };
+
+  // The deck's own lines when it has them, otherwise the single route.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: stepsFor reads only its arguments
+  const bands = useMemo(() => {
+    if (!graph) {
+      return [];
+    } else if (lines && lines.length > 0) {
+      return [...lines]
+        .sort((left, right) => Number(left.selected) - Number(right.selected))
+        .map((line) => ({
+          steps: stepsFor(graph, line.result),
+          color: line.color,
+          width: line.selected && !line.dimmed ? 1 : ALT_WIDTH,
+          alpha: line.selected && !line.dimmed ? 1 : ALT_ALPHA,
+        }));
+    } else if (result) {
+      return [
+        {
+          steps: stepsFor(graph, result),
+          color: ROUTE_COLOR,
+          width: 1,
+          alpha: 1,
+        },
+      ];
+    } else {
+      return [];
+    }
+  }, [graph, result, lines]);
 
   useEffect(() => {
-    gridRef.current?.setDrawSteps(drawSteps);
-  }, [drawSteps]);
+    gridRef.current?.setBands(bands);
+  }, [bands]);
 
   // Frame a fresh destination once its route lands; slider recomputes leave the camera alone. While an
   // endpoint is dragged we leave the camera to the marker's own autoPan (below) — any programmatic
@@ -345,6 +493,42 @@ export default function RouteLayer({
 
   return (
     <>
+      {lines?.map((line, index) =>
+        line.selected ? null : (
+          <Polyline
+            // biome-ignore lint/suspicious/noArrayIndexKey: the deck's order IS a line's identity
+            key={index}
+            positions={markFor(line).positions}
+            interactive
+            pathOptions={{
+              color: line.color,
+              weight: TAP_WIDTH,
+              opacity: TAP_OPACITY,
+            }}
+            eventHandlers={{
+              click: () => onSelectLine?.(index),
+              mouseover: () => onHoverLine?.(index),
+              mouseout: () => onHoverLine?.(null),
+            }}
+          />
+        ),
+      )}
+      {lines?.map((line, index) => {
+        if (line.label === "") {
+          return null; // a chosen route is the only one drawn, and a badge would number a set of one
+        }
+        const { badge, icon } = markFor(line);
+        return (
+          <Marker
+            // biome-ignore lint/suspicious/noArrayIndexKey: the deck's order IS a line's identity
+            key={`badge-${index}`}
+            position={[badge.lat, badge.lng]}
+            icon={icon}
+            zIndexOffset={line.selected ? 900 : 800}
+            eventHandlers={{ click: () => onSelectLine?.(index) }}
+          />
+        );
+      })}
       {start ? (
         <Marker
           position={[start.lat, start.lng]}
@@ -370,7 +554,7 @@ export default function RouteLayer({
       {dest ? (
         <Marker
           position={[dest.lat, dest.lng]}
-          icon={savedIcon}
+          icon={dropped}
           draggable
           autoPan
           autoPanPadding={DRAG_AUTOPAN_PADDING}

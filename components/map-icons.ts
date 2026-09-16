@@ -61,14 +61,31 @@ function shaded(hex: string, scale: number): string {
 // Built per theme rather than once at import, because the green is a light/dark pair like every
 // other colour on this map (src/overlays/colors.ts) and the marker is handed a fresh icon when the
 // theme flips.
-export function searchIcon(theme: ThemeName): L.DivIcon {
-  const green = SEARCH_PIN_COLOR[theme];
+export function searchIcon(theme: ThemeName, accent?: string | null): L.DivIcon {
+  const green = accent ?? SEARCH_PIN_COLOR[theme];
   return L.divIcon({
     className: "scenic-search-pin",
-    html: teardropSvg("scenicSearchPinGrad", green, shaded(green, 0.8)),
+    html: teardropSvg(`scenicSearchPinGrad-${green.slice(1)}`, green, shaded(green, 0.8)),
     iconSize: [30, 40],
     iconAnchor: [15, 39],
   });
+}
+
+// The point a route ends at, or the pin a tap drops. Green by default, and in the deck's own accent
+// where it has one, so a mode's colour reaches the marks on the map and not only its chrome.
+export function destIcon(accent: string | null): L.DivIcon {
+  if (accent === null) {
+    return savedIcon;
+  } else {
+    return L.divIcon({
+      className: "scenic-saved-pin",
+      html: teardropSvg(`scenicDestGrad-${accent.slice(1)}`, accent, shaded(accent, 0.8)),
+      iconSize: [30, 40],
+      iconAnchor: [15, 39],
+      popupAnchor: [0, -34],
+      tooltipAnchor: [0, -34],
+    });
+  }
 }
 
 // The route start: a static dot (no pulse ring — it's a fixed endpoint, not the live location).

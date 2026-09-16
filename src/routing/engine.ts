@@ -45,10 +45,6 @@ export class RoutingEngine {
   private dragWhich: "start" | "dest" = "dest";
   private dragSolver: RouteSolver | null = null;
 
-  loaded(cityId: string): boolean {
-    return this.graphs.has(cityId);
-  }
-
   load(cityId: string, graph: RoutingGraph): void {
     if (!this.graphs.has(cityId)) {
       this.graphs.set(cityId, { graph, contexts: new RouteContexts() });

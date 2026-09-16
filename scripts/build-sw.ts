@@ -10,6 +10,7 @@
 import { execFileSync } from "node:child_process";
 import { access, readdir, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { APP_PAGES, SHELL_EXTRAS } from "../src/pages";
 import manifest from "../src/tree-cover/manifest.json";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -22,14 +23,8 @@ const OUT = join(ROOT, "out");
 // content-hashed and already minimal, and picking through it by extension is how a precache ends up
 // missing the one chunk that a cold offline start needs.
 //
-// Explorer's page is a FILE next to the root one, not a directory index: the app's data paths are
-// relative to the document, so a page one directory down would fetch its data from `/explorer/`.
-const SHELL_FILES = [
-  "index.html",
-  "404.html",
-  "manifest.webmanifest",
-  "explorer.html",
-];
+// The pages themselves are src/pages.ts, which the worker's own policy reads too.
+const SHELL_FILES = [...APP_PAGES.map((page) => page.file), ...SHELL_EXTRAS];
 const SHELL_DIRS = ["_next/static", "icons"];
 
 function exists(path: string): Promise<boolean> {

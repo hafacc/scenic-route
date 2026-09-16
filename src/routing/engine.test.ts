@@ -2,7 +2,7 @@
 // the worker would otherwise be invisible, because the panel draws whatever comes back.
 
 import { expect, test } from "bun:test";
-import { type Candidate, type Plan, planRoutes } from "./alternatives";
+import { type Plan, planRoutes } from "./alternatives";
 import { minMultiplier } from "./cost";
 import { createDispatch } from "./dispatch";
 import { graphFactorMax, RoutingEngine } from "./engine";
@@ -187,39 +187,37 @@ function planMessage(id: number): RouterRequest {
 }
 
 // The same plan over a bare `findRoute`: the oracle for both the stream and the finished set.
-function expectedPlan(): { plan: Plan; candidates: Candidate[] } {
-  const candidates: Candidate[] = [];
+function expectedPlan(): { plan: Plan; candidates: RouteResult[] } {
+  const candidates: RouteResult[] = [];
   clearEdgePathCache();
   const plan = planRoutes({
     weights: PLAN_WEIGHTS,
     search: (candidate) => findRoute(graph, start, dest, candidate),
     minMultiplier: (candidate) => minMultiplier(graph, candidate),
     factorMax: graphFactorMax(graph),
-    onCandidate: (candidate) => candidates.push(candidate),
+    onCandidate: (result) => candidates.push(result),
   });
   clearEdgePathCache();
   return { plan, candidates };
 }
 
-test("a plan streams its routes and closes with the planned set", async () => {
+test("a plan previews its max-scenic route and closes with the planned set", async () => {
   const { plan, candidates } = expectedPlan();
   const worker = fakeWorker();
   await worker.receive(planMessage(4));
 
-  const streamed = worker.sent.slice(0, -1);
-  expect(streamed.map((response) => response.type)).toEqual(
-    candidates.map(() => "candidate"),
-  );
-  expect(streamed).toEqual(
-    candidates.map((candidate, index) => ({
-      type: "candidate",
-      id: 4,
-      index,
-      result: candidate.result,
-    })),
-  );
-  // The max-scenic route is drawn first, before the sweep that finds the alternatives to it.
-  expect(signature(candidates[0].result)).toBe(
+  // One preview, whatever the sweep searched: the map draws the max-scenic route while the rest is
+  // still being found, and the alternatives ride back with the plan that settles which are cards.
+  expect(worker.sent.map((response) => response.type)).toEqual([
+    "preview",
+    "done",
+  ]);
+  expect(worker.sent[0]).toEqual({
+    type: "preview",
+    id: 4,
+    result: candidates[0],
+  });
+  expect(signature(candidates[0])).toBe(
     signature(findRoute(graph, start, dest, PLAN_WEIGHTS)),
   );
   expect(worker.sent.at(-1)).toEqual({ type: "done", id: 4, plan });
@@ -244,4 +242,29 @@ test("a request for a city with no graph is an error, not a crash", async () => 
   const worker = fakeWorker();
   await worker.receive({ ...routeMessage(9), cityId: "sf" });
   expect(worker.sent.map((response) => response.type)).toEqual(["error"]);
+});
+
+// The load is the one request the page cannot see fail any other way. A worker that could not decode
+// the bytes — out of memory on a phone — used to say nothing at all, and everything queued behind it
+// waited on a city it had never loaded.
+test("a graph the worker cannot decode is reported, and so is what queued behind it", async () => {
+  const sent: RouterResponse[] = [];
+  const dispatch = createDispatch(new RoutingEngine(), (response) =>
+    sent.push(response),
+  );
+  await Promise.all([
+    dispatch.receive({
+      type: "load",
+      id: 1,
+      cityId: CITY,
+      buffer: new ArrayBuffer(16),
+      identity: { hash: "", keyHash: "" },
+      base: "https://example.invalid/",
+    }),
+    dispatch.receive(routeMessage(2)),
+  ]);
+  expect(sent.map((response) => [response.type, response.id])).toEqual([
+    ["error", 1],
+    ["error", 2],
+  ]);
 });

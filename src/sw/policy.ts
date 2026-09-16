@@ -6,6 +6,8 @@
 // comes out as "the city you are looking at, on the day you picked" without the worker knowing which
 // city or which day that is.
 
+import { APP_PAGES, MODES_PAGE, SHELL_EXTRAS } from "../pages";
+
 // Where a cached response lives. The split is not tidiness: the routing graph is the one artifact a
 // walk in progress cannot do without, and a long scrub through the clock filling the overlay store
 // must never be able to evict it.
@@ -77,24 +79,21 @@ export function coversACity(
 // is the exact opposite of what should happen.
 const KEPT_DIRS = ["routing/", "addresses/", "search/"];
 
-// The exported app itself, as against the data it reads. Explorer's document is a file beside the
-// root one, not a directory index: the app's data paths are relative to the document.
-const EXPLORER_PAGE = "explorer.html";
+// The exported app itself, as against the data it reads: every page's own path and the file it is
+// served from, plus what surrounds them (src/pages.ts, which the precache is built from too).
 const SHELL_FILES = [
-  "",
-  "index.html",
-  "404.html",
-  "manifest.webmanifest",
-  "explorer",
-  EXPLORER_PAGE,
+  ...APP_PAGES.flatMap((page) => [page.path, page.file]),
+  ...SHELL_EXTRAS,
 ];
 const SHELL_DIRS = ["_next/", "icons/"];
 
-// Every path but Explorer's is the root document, 404 included: it is the app's own not-found page.
+// A path that names a page is served that page's document; everything else is the root one, 404
+// included, since that is the app's own not-found page.
 export function pageFor(path: string): string {
-  return path === "explorer" || path === EXPLORER_PAGE
-    ? EXPLORER_PAGE
-    : "index.html";
+  const page = APP_PAGES.find(
+    (entry) => entry.path === path || entry.file === path,
+  );
+  return page ? page.file : MODES_PAGE.file;
 }
 
 // One request, as the worker files it: the path relative to the worker's scope, and the store it

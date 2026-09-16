@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
+  FiCompass,
   FiCrosshair,
   FiDownload,
   FiInbox,
@@ -15,29 +16,29 @@ import {
   FiSliders,
   FiUser,
 } from "react-icons/fi";
-import { CITIES, type City } from "../../src/cities";
-import type { OverlayId } from "../../src/overlays/registry";
-import CityDialog from "../city-dialog";
-import ClockControl from "../clock-control";
-import FeedbackDialog from "../feedback-dialog";
-import FeedbackInbox from "../feedback-inbox";
-import InstallDialog from "../install-dialog";
-import type { AuthState } from "../map-shell";
-import RouteToggle from "../route-toggle";
-import ShareControl from "../share-control";
-import ThemeToggle from "../theme-toggle";
-import { useInstall } from "../use-install";
-import LayersControl from "./layers-control";
+import { CITIES, type City } from "../src/cities";
+import type { AppPage } from "../src/pages";
+import CityDialog from "./city-dialog";
+import ClockControl from "./clock-control";
+import FeedbackDialog from "./feedback-dialog";
+import FeedbackInbox from "./feedback-inbox";
+import InstallDialog from "./install-dialog";
+import type { AuthState } from "./map-shell";
+import ShareControl from "./share-control";
+import ThemeToggle from "./theme-toggle";
+import { useInstall } from "./use-install";
 
 interface ToolbarProps {
   auth: AuthState;
   pinCount: number;
   city: City;
-  activeOverlays: ReadonlySet<OverlayId>;
-  routing: boolean;
   refreshingClaims: boolean;
-  onToggleOverlay: (id: OverlayId) => void;
-  onToggleRouting: () => void;
+  // The deck's own buttons, left of the clock; Modes has none.
+  controls: ReactNode;
+  // Modes routes at now and says so by having no clock; Explorer scrubs one.
+  clock: boolean;
+  // The other deck, as a menu row. Each page links to the other, and neither knows the other's URL.
+  otherPage: AppPage;
   onSignIn: () => void;
   onSignOut: () => void | Promise<void>;
   onRefreshClaims: () => void | Promise<void>;
@@ -67,11 +68,10 @@ export default function Toolbar({
   auth,
   pinCount,
   city,
-  activeOverlays,
-  routing,
   refreshingClaims,
-  onToggleOverlay,
-  onToggleRouting,
+  controls,
+  clock,
+  otherPage,
   onSignIn,
   onSignOut,
   onRefreshClaims,
@@ -85,6 +85,9 @@ export default function Toolbar({
   composeShareUrl,
 }: ToolbarProps) {
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
+  // The hash the other page is opened with, read when the menu opens: it carries the places, the
+  // mode and the camera, and it moves under a render as the reader routes.
+  const [menuHash, setMenuHash] = useState<string>("");
   const [cityDialogOpen, setCityDialogOpen] = useState<boolean>(false);
   const [installHelpOpen, setInstallHelpOpen] = useState<boolean>(false);
   const [feedbackOpen, setFeedbackOpen] = useState<boolean>(false);
@@ -138,20 +141,17 @@ export default function Toolbar({
         <FeedbackDialog onClose={() => setFeedbackOpen(false)} />
       ) : null}
       {inboxOpen ? <FeedbackInbox onClose={() => setInboxOpen(false)} /> : null}
-      <RouteToggle active={routing} onToggle={onToggleRouting} />
-      <LayersControl
-        city={city}
-        active={activeOverlays}
-        onToggle={onToggleOverlay}
-        onSettings={onSettings}
-      />
-      <ClockControl />
+      {controls}
+      {clock ? <ClockControl /> : null}
       <ShareControl composeUrl={composeShareUrl} />
       <ThemeToggle />
       <div ref={menuRef} className="relative">
         <button
           type="button"
-          onClick={() => setMenuOpen((open) => !open)}
+          onClick={() => {
+            setMenuHash(window.location.hash);
+            setMenuOpen((open) => !open);
+          }}
           aria-haspopup="menu"
           aria-expanded={menuOpen}
           aria-label={signedIn ? "Account menu" : "Menu"}
@@ -268,6 +268,14 @@ export default function Toolbar({
                 </span>
               </button>
             ) : null}
+            <a
+              role="menuitem"
+              href={`${otherPage.href}${menuHash}`}
+              className={`${MENU_ITEM} ${MENU_DIVIDER}`}
+            >
+              <FiCompass />
+              {otherPage.label}
+            </a>
             {/* Chromium hands the page its own install flow and this runs it; every other browser
                 keeps it in a menu of its own, and the dialog says where. Gone once the app is
                 already running from the home screen, where there is nothing left to add. */}

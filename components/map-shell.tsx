@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import {
+  type CSSProperties,
   type ReactNode,
   useCallback,
   useEffect,
@@ -41,6 +42,11 @@ import {
   reverseGeocode,
   searchAddress,
 } from "../src/geocode";
+import {
+  cityFactors,
+  type FactorAvailability,
+  graphFactors,
+} from "../src/modes/modes";
 import { OVERLAYS, type OverlayId } from "../src/overlays/registry";
 import type { Pin, PinDraft } from "../src/pin";
 import {
@@ -49,7 +55,7 @@ import {
   setCustomHour,
   subscribeRouteTime,
 } from "../src/route-time/store";
-import { RouteContexts } from "../src/routing/contexts";
+import { type RouteClock, RouteContexts } from "../src/routing/contexts";
 import type { RouteWeights } from "../src/routing/cost";
 import { buildDirections, type Maneuver } from "../src/routing/directions";
 import { loadGraph, type RoutingGraph } from "../src/routing/graph";
@@ -57,7 +63,13 @@ import { type NavProgress, navProgress } from "../src/routing/nav-progress";
 import { loadPois, type PoiSet, passedPois } from "../src/routing/pois";
 import { routerClient } from "../src/routing/router-client";
 import type { RouteResult } from "../src/routing/search";
-import { buildSnapIndex, type SnapIndex, snapPair } from "../src/routing/snap";
+import {
+  buildSnapIndex,
+  type Snap,
+  type SnapIndex,
+  snapPair,
+} from "../src/routing/snap";
+import type { WaypointPlan } from "../src/routing/waypoints";
 import {
   awaitNameIndex,
   prefetchNameIndex,
@@ -84,8 +96,9 @@ import { CityProvider } from "./city-context";
 import FollowToggle from "./follow-toggle";
 import LayerLegend from "./layer-legend";
 import type { DestPrefill } from "./location-field";
-import type { MapTarget, PickMode, SearchPin } from "./map";
+import type { MapTarget, SearchPin } from "./map";
 import PinEditor from "./pin-editor";
+import type { RouteLine } from "./route-layer";
 import SearchControl from "./search-control";
 import SignInDialog from "./sign-in-dialog";
 import { useHashFlag, useHashSection } from "./use-hash-flag";
@@ -141,7 +154,14 @@ function loadRouting(
     return pending;
   }
   const request = loadGraph(cityId)
-    .then((graph) => ({ graph, index: buildSnapIndex(graph) }))
+    .then((graph) => {
+      // Handed to the worker here rather than at the first route: it decodes its own copy of the
+      // bytes while this thread builds the snap index, so the first search waits for neither.
+      void routerClient()
+        .load(cityId, graph)
+        .catch(() => {}); // the route effect awaits the same promise and reports it
+      return { graph, index: buildSnapIndex(graph) };
+    })
     .catch((error: unknown) => {
       routingPromises.delete(cityId); // a failed load must not be memoized
       throw error;
@@ -188,27 +208,26 @@ type Editing =
   | { mode: "edit"; pin: Pin }
   | null;
 
-// An endpoint as the shell holds it: a point plus whatever name it has been given.
 export interface Endpoint extends LatLng {
   label: string | null;
 }
 
-// Which controls this city's own graph can answer. Read off the graph rather than authored per city,
-// so it cannot drift from what the sliders cost against.
-export interface Capabilities {
-  relief: boolean;
-  ferries: boolean;
-  commercial: boolean;
-  industrial: boolean;
-  historic: boolean;
-  landmarks: boolean;
-  art: boolean;
-  sheds: boolean;
+// The `brand` ramp Tailwind resolves every accent class through, rederived from one hex so a deck
+// hands over a colour rather than six. Mixed in oklab, which keeps each hue's own lightness curve;
+// the percentages are where emerald's own stops sit against emerald-600.
+function accentVars(hex: string): CSSProperties {
+  return {
+    "--color-brand-50": `color-mix(in oklab, ${hex} 8%, white)`,
+    "--color-brand-100": `color-mix(in oklab, ${hex} 18%, white)`,
+    "--color-brand-400": `color-mix(in oklab, ${hex} 62%, white)`,
+    "--color-brand-500": `color-mix(in oklab, ${hex} 82%, white)`,
+    "--color-brand-600": hex,
+    "--color-brand-700": `color-mix(in oklab, ${hex} 82%, black)`,
+  } as CSSProperties;
 }
 
-// Everything a deck — Explorer's controls, and Modes' — renders from. The shell owns all of it: the
-// city, the endpoints, the route and the clock are the same question whichever deck is asking, and
-// the deck adds only its own way of putting the question (weights, or a mode).
+// Everything a deck renders from. The shell owns all of it; the deck adds only its own way of
+// putting the question, weights or a mode.
 export interface ShellDeck {
   city: City;
   auth: AuthState;
@@ -223,8 +242,7 @@ export interface ShellDeck {
   logHereDisabled: boolean;
   logHereBusy: boolean;
   logHereHint: string | null;
-  // The settings dialog is deep-linked from the hash, so which section is open is the shell's, even
-  // though the dialog itself is a deck's to render.
+  // Deep-linked from the hash, so it is the shell's even though the dialog is a deck's to render.
   settingsSection: string | null;
   onSettings: (section: string | null) => void;
   syncingAs: string | null;
@@ -235,6 +253,8 @@ export interface ShellDeck {
 
   routingOpen: boolean;
   onToggleRouting: () => void;
+  // An endpoint marker is under the finger. A deck that does not solve live says so with it.
+  dragging: boolean;
   manualStart: Endpoint | null;
   dest: Endpoint | null;
   searchPin: SearchPin | null;
@@ -242,9 +262,23 @@ export interface ShellDeck {
   hasLiveLocation: boolean;
   // What the reader asked for rather than what we snapped it to, for the Google Maps export.
   exportOrigin: LatLng | null;
+  // The pins that export hands over, planned in the worker for whichever route is THE one; null
+  // until they land, which is the whole of the button's disabled state.
+  waypointPlan: WaypointPlan | null;
   pickTarget: "start" | "dest" | null;
   routeState: RouteState;
-  capabilities: Capabilities;
+  // What a deck reads its factor maxima off, and what a route's edge numbers index into.
+  graph: RoutingGraph | null;
+  // What the GRAPH says can be routed on, all of it false until the graph lands: a control for data
+  // that may not be there is a control that might move nothing. `available` is the same question
+  // answered with the city's authored list while the graph is still coming, which is what a mode
+  // builds its weights from.
+  graphAvailable: FactorAvailability;
+  // A sidewalk-shed feed, which is fetched apart from the graph and so is not one of the above.
+  shedFeed: boolean;
+  // What this city can be routed on, and the weights the deck's own answer to it came out as.
+  available: FactorAvailability;
+  weights: RouteWeights;
   shadeDataLost: boolean;
   directions: Maneuver[] | null;
   progress: NavProgress | null;
@@ -259,34 +293,112 @@ export interface ShellDeck {
   onSwap: () => void;
   onArmStart: () => void;
   onArmDest: () => void;
+  // The place search, for a deck that runs the box itself rather than letting the shell float one.
+  onSearchSelect: (result: GeocodeResult) => void;
+  onSearchClear: () => void;
+  onSearchDirections: () => void; // the found place becomes the destination
 }
 
-// What a deck renders, in the two places the shell's own chrome divides: `controls` are its buttons
-// at the top, under the floating layer keys; `panels` are its bottom card and dialogs, over them and
-// over the search. Two slots rather than one because the shell's own chrome sits between them, and
-// none of it carries a z-index that would sort it out on its own.
+// Two slots rather than one because the shell's own chrome sits between them and nothing carries a
+// z-index that would sort it out: `controls` are the deck's top buttons, `panels` its bottom card.
 export interface Deck {
   controls: ReactNode;
   panels: ReactNode;
 }
 
-interface MapShellProps {
-  // The cost context the deck is asking for a route with.
+// How a deck turns one snapped pair into the route on screen. Null means a newer request overtook
+// this one, as the worker itself answers.
+export interface SolveRequest {
+  city: City;
+  clock: RouteClock;
   weights: RouteWeights;
-  // What is drawn over the basemap. The shell mounts them and keys them; choosing them is the deck's.
-  activeOverlays: ReadonlySet<OverlayId>;
-  // The link at load, handed to the deck for its own keys — Explorer's weights, Modes' mode — which
-  // it applies in the same commit as the shell's, and which answers with the keys both shells share.
-  // Called once, so its identity has to be stable.
+  start: Snap;
+  dest: Snap;
+  // The graph the endpoints were snapped against, rather than whichever one state last landed on.
+  graph: RoutingGraph;
+}
+
+export interface SolveReply {
+  result: RouteResult | null;
+  changed: boolean; // false where the path is the drawn one, so the map is left alone
+  // Whether this search's own sun/shade field was (re)built, and whether its artifact failed with
+  // it. The search runs where the field is, so only its answer knows.
+  shadeRebuilt?: boolean;
+  shadeLost?: boolean;
+}
+
+// What a deck's weights and layer set are an answer about. Both are the shell's own state, so a
+// deck that decides either from them hands in a function rather than a value it would have to
+// mirror.
+export interface RoutingContext {
+  city: City;
+  available: FactorAvailability;
+}
+
+interface MapShellProps {
+  weights: RouteWeights | ((context: RoutingContext) => RouteWeights);
+  // The shell mounts and keys them; choosing them is the deck's.
+  activeOverlays:
+    | ReadonlySet<OverlayId>
+    | ((context: RoutingContext) => ReadonlySet<OverlayId>);
+  // The link at load, for the deck's own keys, applied in the same commit as the shell's. Called
+  // once, so its identity has to be stable.
   onLink: (params: URLSearchParams) => PlaceUrlState;
   deck: (shell: ShellDeck) => Deck;
+  // The search itself, when the deck runs its own. Absent asks the worker for one route.
+  solve?: (request: SolveRequest) => Promise<SolveReply | null>;
+  // Which route to treat as THE one when the deck offers several; it carries its own graph for
+  // the reason `RouteState` does.
+  chosen?: { result: RouteResult; graph: RoutingGraph } | null;
+  // Every route on offer, drawn together with the selected one over the rest.
+  lines?: readonly RouteLine[];
+  onSelectLine?: (index: number) => void;
+  // Which line the pointer is over, for a deck that draws it the way the chosen one is drawn.
+  onHoverLine?: (index: number | null) => void;
+  // Modes floats the overlay keys under the follow button on a phone, its card being the whole
+  // bottom there; a wide screen has room for them where they have always been.
+  legends?: "bottom-left" | "top-left" | "top-left-on-phone";
+  // Whether the shell floats its own search button and panel. A deck that puts the box in its own
+  // card takes the machinery off `ShellDeck` instead, so the two never share the panel slot.
+  ownSearch?: boolean;
+  // The deck's card is the page rather than a panel that opens, so the routing state never closes.
+  alwaysRouting?: boolean;
+  // The app's accent, as one hex: Modes follows the active mode, and everything wearing a `brand`
+  // class follows it. Absent leaves the theme's own.
+  accent?: string | ((context: RoutingContext) => string);
+  // A tap armed from the deck's search box answers that box — drops the pin, names it — rather than
+  // setting the destination, for as long as the deck is asking where to go rather than routing there.
+  tapSearch?: boolean;
+  // Whether an endpoint drag re-solves each frame. A deck that plans a whole set of routes replans
+  // once on the drop instead, since a sweep cannot keep up with a finger.
+  liveDrag?: boolean;
+  // The layer key, where the deck draws its own; absent gets the shared one.
+  legend?: (context: RoutingContext) => ReactNode;
+  // The instant to route at, for a deck that holds one. Absent follows the wall clock, re-costing
+  // the route every minute; a deck that hands one in is asking for the opposite — the search reruns
+  // when this changes and at no other time, so the answer on screen stays the answer to the question
+  // that was asked. Its identity is the trigger, so it has to be state rather than a fresh object.
+  clock?: RouteClock | null;
 }
 
 export default function MapShell({
-  weights,
-  activeOverlays,
+  weights: weightsProp,
+  activeOverlays: overlaysProp,
   onLink,
   deck,
+  solve,
+  chosen,
+  lines,
+  onSelectLine,
+  onHoverLine,
+  legends = "bottom-left",
+  ownSearch = true,
+  alwaysRouting = false,
+  accent: accentProp,
+  tapSearch = false,
+  liveDrag = true,
+  legend,
+  clock: clockProp = null,
 }: MapShellProps) {
   const [auth, setAuth] = useState<AuthState>({ kind: "loading" });
   const [pins, setPins] = useState<Pin[]>([]);
@@ -326,7 +438,8 @@ export default function MapShell({
       setBanner("Map background unavailable — check your connection.");
     }
   }, []);
-  const [routingOpen, setRoutingOpen] = useState<boolean>(false);
+  const [routingWanted, setRoutingOpen] = useState<boolean>(false);
+  const routingOpen = alwaysRouting || routingWanted;
   // Search and directions are one panel slot, so the app holds both flags: opening either closes the
   // other, and neither is restored when the other goes.
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
@@ -358,6 +471,37 @@ export default function MapShell({
   const [routeTimeTick, setRouteTimeTick] = useState<number>(0);
   // The decoded graph, kept so directions can be rebuilt from a route without a re-fetch.
   const [routingGraph, setRoutingGraph] = useState<RoutingGraph | null>(null);
+  // What the graph can be routed on, which is what a mode builds its weights from. Until it lands
+  // the city's authored layer list is the same fact, and all there is.
+  const available: FactorAvailability = useMemo(
+    () => (routingGraph ? graphFactors(routingGraph) : cityFactors(city)),
+    [routingGraph, city],
+  );
+  const weights: RouteWeights = useMemo(
+    () =>
+      typeof weightsProp === "function"
+        ? weightsProp({ city, available })
+        : weightsProp,
+    [weightsProp, city, available],
+  );
+  const activeOverlays: ReadonlySet<OverlayId> = useMemo(
+    () =>
+      typeof overlaysProp === "function"
+        ? overlaysProp({ city, available })
+        : overlaysProp,
+    [overlaysProp, city, available],
+  );
+  const accentHex: string | null = useMemo(() => {
+    const hex =
+      typeof accentProp === "function"
+        ? accentProp({ city, available })
+        : accentProp;
+    return hex ?? null;
+  }, [accentProp, city, available]);
+  const accent: CSSProperties | undefined = useMemo(
+    () => (accentHex === null ? undefined : accentVars(accentHex)),
+    [accentHex],
+  );
   // The landmark and public-art points, loaded once directions are in use, so the turn-by-turn can
   // name the ones the route passes.
   const [poiSets, setPoiSets] = useState<{
@@ -427,22 +571,19 @@ export default function MapShell({
   const [searchPin, setSearchPin] = useState<SearchPin | null>(null);
   // The live camera, tracked for the share link without re-rendering on every pan.
   const cameraRef = useRef<Camera | null>(null);
+  // Through a ref rather than a dependency of the search effect: a deck that plans rebuilds this
+  // callback whenever its plan changes, and depending on it would search again on its own answer.
+  const solveRef = useRef<MapShellProps["solve"]>(solve);
+  solveRef.current = solve;
 
-  // Defaults to destination-pick when the routing panel is open with no destination; arming a field
-  // from the panel overrides which end the next tap sets.
-  const effectivePickTarget: "start" | "dest" | null =
-    pickTarget ?? (routingOpen && dest === null ? "dest" : null);
-  // Only a field armed from the panel commits on the tap itself; the default is deferred, so opening
-  // the panel never costs the user a double-tap zoom.
-  const pickMode: PickMode =
-    pickTarget !== null
-      ? "immediate"
-      : effectivePickTarget !== null
-        ? "deferred"
-        : "off";
+  // The armed tap answers the search box instead of the destination: the deck is still asking where
+  // to go, and an answer there is a place found, not a walk begun. A start armed by hand still sets
+  // the start — that end is not what the box is about.
+  const tapFindsPlace =
+    tapSearch && pickTarget === "dest" && dest === null && destPrefill === null;
 
-  // The four weights that decide whether the clock matters, read out one by one: the deck hands in a
-  // fresh object whenever any weight moves, and depending on that would resubscribe on every drag.
+  // Read out one by one: the deck hands in a fresh weights object whenever any weight moves, and
+  // depending on the object itself would resubscribe on every drag.
   const {
     shade: shadeWeight,
     shelter: shelterWeight,
@@ -694,8 +835,7 @@ export default function MapShell({
   // cannot leave it wrong.
   setActiveCity(city);
 
-  // Switching city drops the landmark and art points so the new city's are fetched instead of the
-  // old city's names surviving the move.
+  // Dropped on a switch, so the old city's names cannot survive the move.
   useEffect(() => {
     setPoiSets(null);
     // The graph says which controls this city can answer, so holding the old one leaves sliders lit
@@ -791,31 +931,26 @@ export default function MapShell({
   // reason — changing city has to recompute the route, not silently repoint the labels.
   const routeCity = city;
 
-  // Which controls this city can actually answer, read off its own loaded graph rather than
-  // authored per city — the graph is the thing the sliders cost against, so it is the only source
-  // that cannot drift from them. Everything reads false until the graph lands, which is the honest
-  // answer while nothing is known; the panel is not routing yet either.
-  //
+  // The wall clock as the router reads it, remade each minute the store ticks. A deck holding its
+  // own departure instant takes its place, and the tick then moves nothing that is routed. The page
+  // and the worker are handed this same instant, so they build their fields for it and catch the
+  // same boat.
+  const liveClock = useMemo<RouteClock>(
+    () => ({ tick: routeTimeTick, dateMs: getResolvedDate().getTime() }),
+    [routeTimeTick],
+  );
+  const routeClock = clockProp ?? liveClock;
+
+  // Which sliders this city can actually answer, from the same reading of the graph the modes make.
+  // Everything reads false until the graph lands, which is the honest answer while nothing is known;
+  // the panel is not routing yet either.
+  const graphAvailable: FactorAvailability = useMemo(
+    () => graphFactors(routingGraph),
+    [routingGraph],
+  );
   // The scaffolding gate is the exception: sheds are fetched separately from the graph, so it asks
   // the city's overlay list, where a city with no shed feed omits the layer.
-  const capabilities: Capabilities = useMemo(
-    () => ({
-      relief: (routingGraph?.maxRelief ?? 0) > 0,
-      ferries: (routingGraph?.ferryEdges.length ?? 0) > 0,
-      commercial: (routingGraph?.maxCommercial ?? 0) > 0,
-      // Gated like relief above, and for the same reason: a city with no industrial source bakes
-      // every edge 0, and the slider would sit there moving nothing. The max is computed for this
-      // and nothing else — a penalty's minimum factor is 1, so it never enters the A* lower bound.
-      industrial: (routingGraph?.maxIndustrial ?? 0) > 0,
-      // A city with no designated districts bakes every edge 0, exactly as above — the difference is
-      // that this max is a discount's, so it also sets that factor's term in the A* lower bound.
-      historic: (routingGraph?.maxHistoric ?? 0) > 0,
-      landmarks: (routingGraph?.maxLandmark ?? 0) > 0,
-      art: (routingGraph?.maxArt ?? 0) > 0,
-      sheds: city.overlays.includes("scaffolding"),
-    }),
-    [routingGraph, city],
-  );
+  const shedFeed = city.overlays.includes("scaffolding");
 
   // Live recompute: whenever a resolvable start and a destination both exist, (re)find the route,
   // keyed on the endpoints and the tree weight and rAF-coalesced so a slider drag computes at most
@@ -832,6 +967,11 @@ export default function MapShell({
       start: { lat: resolvedStart.lat, lng: resolvedStart.lng },
       dest: { lat: dest.lat, lng: dest.lng },
     };
+    // A deck that replans on the drop draws nothing new while the marker moves: the plan on screen
+    // is held, and the drop's own recompute is what replaces it.
+    if (draggingRef.current && !liveDrag) {
+      return;
+    }
     const previous = routedForRef.current;
     const isNewTarget =
       !previous ||
@@ -862,23 +1002,18 @@ export default function MapShell({
             setRoutingGraph((current) => (current === graph ? current : graph));
             routedForRef.current = request;
             const client = routerClient();
-            client.load(routeCity.id, graph);
-            // The clock is resolved once and threaded through both sides, so the page and the worker
-            // build their fields for the same instant and catch the same boat.
-            const clock = {
-              tick: routeTimeTick,
-              dateMs: getResolvedDate().getTime(),
-            };
-            const contexts = (contextsRef.current ??= new RouteContexts());
-            const sync = await contexts.sync(graph, routeCity, clock, weights);
+            // Waited on: a graph the worker could not decode has to reach the panel as an error,
+            // not as a request queued behind a city that never loaded.
+            await client.load(routeCity.id, graph);
             if (cancelled) {
               return;
             }
-            // Only when this pass actually rebuilt the field: a clock scrub starts a fetch per tick, and
-            // a slow failure landing after a later tick has already succeeded would otherwise grey out a
-            // slider whose data is loaded and being used.
-            if (sync.shadeRebuilt) {
-              setShadeDataLost(sync.shadeLost);
+            const contexts = (contextsRef.current ??= new RouteContexts());
+            // The timetable alone: the page reads it to name a ferry leg, and the worker builds
+            // every field a search is costed against on its own copy of the graph.
+            await contexts.syncFerries(graph, routeCity, routeClock, weights);
+            if (cancelled) {
+              return;
             }
             const pair = snapPair(graph, index, request.start, request.dest);
             if (!pair.ok) {
@@ -898,25 +1033,46 @@ export default function MapShell({
             // Mid-drag the worker reuses a per-gesture solver rooted at the held endpoint for an
             // approximate route each frame; the drop recomputes exactly. A start-drag solves backward
             // from the dest, so it anchors the sun at the drawn route's arrival time.
-            const reply = await (draggingRef.current
-              ? client.dragMove({
-                  cityId: routeCity.id,
-                  clock,
-                  weights,
-                  anchor: which === "dest" ? pair.start : pair.dest,
-                  moving: which === "dest" ? pair.dest : pair.start,
-                  anchorSeconds: lastTravelSecondsRef.current ?? 0,
-                })
-              : client.route({
-                  cityId: routeCity.id,
-                  clock,
-                  weights,
-                  start: pair.start,
-                  dest: pair.dest,
-                }));
+            const solveOne = solveRef.current;
+            // The graph goes to the deck's own solver, which runs on this thread; the worker has
+            // its own copy of it and is sent the endpoints alone.
+            let reply: SolveReply | null;
+            if (draggingRef.current) {
+              reply = await client.dragMove({
+                cityId: routeCity.id,
+                clock: routeClock,
+                weights,
+                anchor: which === "dest" ? pair.start : pair.dest,
+                moving: which === "dest" ? pair.dest : pair.start,
+                anchorSeconds: lastTravelSecondsRef.current ?? 0,
+              });
+            } else if (solveOne) {
+              reply = await solveOne({
+                city: routeCity,
+                clock: routeClock,
+                weights,
+                start: pair.start,
+                dest: pair.dest,
+                graph,
+              });
+            } else {
+              reply = await client.route({
+                cityId: routeCity.id,
+                clock: routeClock,
+                weights,
+                start: pair.start,
+                dest: pair.dest,
+              });
+            }
             // Null means a newer frame overtook this one in the worker; it will answer instead.
             if (cancelled || !reply) {
               return;
+            }
+            // Only when this pass actually rebuilt the field: a clock scrub starts a fetch per tick, and
+            // a slow failure landing after a later tick has already succeeded would otherwise grey out a
+            // slider whose data is loaded and being used.
+            if (reply.shadeRebuilt) {
+              setShadeDataLost(reply.shadeLost ?? false);
             }
             // Identical to the drawn route (a slider move that didn't cross a breakpoint): leave it —
             // but always apply when nothing is drawn yet, or an unchanged result would strand the
@@ -962,9 +1118,10 @@ export default function MapShell({
     resolvedStart,
     dest,
     weights,
-    routeTimeTick,
+    routeClock,
     routeRefreshNonce,
     routeCity,
+    liveDrag,
   ]);
 
   // A new destination collapses any open maneuver list; keyed on the coordinates so a reverse-geocode
@@ -1096,6 +1253,23 @@ export default function MapShell({
     [forgetDestQuery],
   );
 
+  // A place marked on the map without a name yet: the pin lands at once and the reverse geocode
+  // replaces "Dropped pin" when it arrives, which is what the search box then reads.
+  const dropSearchPin = useCallback((lat: number, lng: number) => {
+    setSearchPin({ lat, lng, label: "Dropped pin" });
+    reverseGeocode(lat, lng)
+      .then((place) => {
+        if (place) {
+          setSearchPin((pin) =>
+            pin && pin.lat === lat && pin.lng === lng
+              ? { ...pin, label: place.displayName }
+              : pin,
+          );
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Asking for directions pins where you are. Until a destination exists the start tracks the live
   // position and reads "My location", which is right for a start you have not committed to — but once
   // it is one end of a route, following would move it under you as you walk, and it would go into a
@@ -1117,7 +1291,7 @@ export default function MapShell({
   // the prior label (a reverse geocode would spam the network) until the drag settles.
   const handleEndpointDragMove = useCallback(
     (which: "start" | "dest", lat: number, lng: number) => {
-      if (!draggingRef.current) {
+      if (!draggingRef.current && liveDrag) {
         routerClient().dragStart(which);
       }
       draggingRef.current = true;
@@ -1134,7 +1308,7 @@ export default function MapShell({
         setDest((previous) => ({ lat, lng, label: previous?.label ?? null }));
       }
     },
-    [handleDisengageFollow],
+    [handleDisengageFollow, liveDrag],
   );
 
   // Drop of a dragged endpoint: settle that end, discard the approximate solver, and reverse-geocode
@@ -1147,11 +1321,13 @@ export default function MapShell({
       handleDisengageFollow();
       applyPick(which, lat, lng);
       const client = routerClient();
-      client.dragEnd();
+      if (liveDrag) {
+        client.dragEnd();
+      }
       client.reset();
       setRouteRefreshNonce((nonce) => nonce + 1);
     },
-    [applyPick, handleDisengageFollow],
+    [applyPick, handleDisengageFollow, liveDrag],
   );
 
   // One-shot init from the URL hash, layered over the persisted preferences: a key in the link wins, a
@@ -1173,19 +1349,7 @@ export default function MapShell({
     if (route.pin) {
       // Carried as a bare point, like `from` and `to`, and named back the same way they are. The
       // point is the index's own coordinates, so the lookup lands on the very row the sharer picked.
-      const { lat, lng } = route.pin;
-      setSearchPin({ lat, lng, label: "Dropped pin" });
-      reverseGeocode(lat, lng)
-        .then((place) => {
-          if (place) {
-            setSearchPin((pin) =>
-              pin && pin.lat === lat && pin.lng === lng
-                ? { ...pin, label: place.displayName }
-                : pin,
-            );
-          }
-        })
-        .catch(() => {});
+      dropSearchPin(route.pin.lat, route.pin.lng);
     }
     if (route.dest) {
       applyPick("dest", route.dest.lat, route.dest.lng);
@@ -1226,7 +1390,7 @@ export default function MapShell({
     }
     hashAppliedRef.current = true;
     setHashApplied(true);
-  }, [applyPick, onLink]);
+  }, [applyPick, dropSearchPin, onLink]);
 
   // A destination named in words rather than as a point: the `q` key of a shared link, or the text
   // Android's share sheet hands the installed app. Both land here because both say the same thing,
@@ -1346,17 +1510,22 @@ export default function MapShell({
 
   const camera = useCallback((): Camera | null => cameraRef.current, []);
 
-  // A map tap sets the effective pick target's location; with nothing armed and a destination already
-  // set, it does nothing.
+  // A map tap sets the armed field's location, and nothing at all when no field is armed: the map is
+  // a map first, and a tap that placed a point unasked was one nobody could undo.
   const handleMapPick = useCallback(
     (lat: number, lng: number) => {
-      if (!effectivePickTarget) {
+      if (pickTarget === null) {
         return;
+      } else if (tapFindsPlace) {
+        // The same answer a suggestion gives, so a tap never opens directions of its own accord.
+        dropSearchPin(lat, lng);
+        setPickTarget(null);
+      } else {
+        applyPick(pickTarget, lat, lng);
+        setPickTarget(null);
       }
-      applyPick(effectivePickTarget, lat, lng);
-      setPickTarget(null);
     },
-    [effectivePickTarget, applyPick],
+    [pickTarget, tapFindsPlace, dropSearchPin, applyPick],
   );
 
   const handleLogHere = useCallback(async () => {
@@ -1440,6 +1609,13 @@ export default function MapShell({
     },
     [handleDestSelect],
   );
+
+  // Asking for directions to the place the box has found, for a deck whose card holds the box.
+  const handleSearchDirections = useCallback(() => {
+    if (searchPin) {
+      routeToSearchPin(searchPin);
+    }
+  }, [searchPin, routeToSearchPin]);
 
   // Reads the current values rather than toggling inside an updater: an updater must be pure, and
   // these branches are side effects. React invokes updaters twice in development to find exactly
@@ -1588,9 +1764,12 @@ export default function MapShell({
     };
   }, [routingOpen, poiSets, city.id]);
 
-  const routeResult = routeState.kind === "ready" ? routeState.result : null;
+  // A deck offering several routes says which is THE route; otherwise the last search's.
+  const routeResult =
+    chosen?.result ?? (routeState.kind === "ready" ? routeState.result : null);
   // The graph the result was actually computed against, not whichever one state last landed on.
-  const resultGraph = routeState.kind === "ready" ? routeState.graph : null;
+  const resultGraph =
+    chosen?.graph ?? (routeState.kind === "ready" ? routeState.graph : null);
   const directions = useMemo(() => {
     if (!resultGraph || !routeResult) {
       return null;
@@ -1626,6 +1805,43 @@ export default function MapShell({
     : routableLocation
       ? { lat: routableLocation.lat, lng: routableLocation.lng }
       : null;
+
+  // The pins the Google Maps export hands over, asked of the worker as soon as a route is drawn:
+  // they are priced against the shade and shed fields, which only the worker builds, and planning
+  // them costs about as much as the search did — far too much for the click that opens the tab.
+  // Held with the route they describe, so the button is never handed a plan about another one.
+  const [waypointPlan, setWaypointPlan] = useState<{
+    route: RouteResult;
+    plan: WaypointPlan;
+  } | null>(null);
+  useEffect(() => {
+    // Mid-drag the route is replaced every frame, and one plan of a long walk would hold up the
+    // frames behind it; the drop re-runs this.
+    if (!routeResult || dragging) {
+      return;
+    }
+    let cancelled = false;
+    routerClient()
+      .waypoints({
+        cityId: routeCity.id,
+        clock: routeClock,
+        weights,
+        steps: routeResult.steps,
+      })
+      .then(
+        (plan) => {
+          if (!cancelled && plan) {
+            setWaypointPlan({ route: routeResult, plan });
+          }
+        },
+        (error: unknown) => {
+          console.error("waypoint planning failed:", error);
+        },
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [routeResult, dragging, routeCity, routeClock, weights]);
 
   // Start marker position: the snapped route start, else the manual start, else — while the routing
   // panel is open — the live location, so the start sits pre-dropped and draggable atop the location
@@ -1666,15 +1882,22 @@ export default function MapShell({
     hashApplied,
     routingOpen,
     onToggleRouting: handleToggleRouting,
+    dragging,
     manualStart,
     dest,
     searchPin,
     destPrefill,
     hasLiveLocation: routableLocation !== null,
     exportOrigin,
-    pickTarget: effectivePickTarget,
+    waypointPlan:
+      waypointPlan?.route === routeResult ? waypointPlan.plan : null,
+    pickTarget,
     routeState,
-    capabilities,
+    graph: routingGraph,
+    graphAvailable,
+    shedFeed,
+    available,
+    weights,
     shadeDataLost,
     directions,
     progress,
@@ -1689,13 +1912,16 @@ export default function MapShell({
     onSwap: handleSwapEndpoints,
     onArmStart: handleArmStart,
     onArmDest: handleArmDest,
+    onSearchSelect: handleSearchSelect,
+    onSearchClear: handleSearchPinRemove,
+    onSearchDirections: handleSearchDirections,
   };
 
   const { controls, panels } = deck(shell);
 
   return (
     <CityProvider value={city}>
-      <main className="relative h-dvh w-full overflow-hidden">
+      <main className="relative h-dvh w-full overflow-hidden" style={accent}>
         <MapView
           city={city}
           pins={pins}
@@ -1706,10 +1932,14 @@ export default function MapShell({
           activeOverlays={activeOverlays}
           routeResult={routeResult}
           routeGraph={resultGraph}
+          routeLines={lines}
+          onSelectLine={onSelectLine}
+          onHoverLine={onHoverLine}
           routeDest={routeDest}
           routeStart={routeStart}
           searchPin={searchPin}
-          pickMode={pickMode}
+          markerColor={accentHex}
+          picking={pickTarget !== null}
           onMapPick={handleMapPick}
           dragging={dragging}
           initialCamera={initialCamera}
@@ -1724,10 +1954,28 @@ export default function MapShell({
         {controls}
         <FollowToggle active={followLive} onToggle={handleToggleFollow} />
         {/* the active overlays' floating keys; bottom-left keeps them clear of the toolbar, follow
-          toggle, attribution, and the centered route and search panels */}
-        <div className="pointer-events-none absolute bottom-3 left-3 z-[1000] max-w-[70vw]">
+          toggle, and the centered route and search panels — and top-left, under the follow button,
+          where the deck's own card owns the bottom of the screen. Modes takes the third: the card
+          is the whole bottom of a phone but only the right-hand corner of a wide screen. */}
+        <div
+          className={`pointer-events-none absolute max-w-[70vw] ${
+            legends === "bottom-left"
+              ? "z-[1000] bottom-3 left-3"
+              : // Clear of the banner, which sits at top-16 and is two lines deep on a phone, and
+                // under the toolbar's own layer, whose menu drops through this row.
+                `z-[900] left-3 ${banner ? "top-36" : "top-16"} ${
+                  legends === "top-left-on-phone"
+                    ? "md:top-auto md:bottom-3 md:z-[1000]"
+                    : ""
+                }`
+          }`}
+        >
           <div className="pointer-events-auto space-y-2">
-            <LayerLegend active={activeOverlays} city={city} />
+            {legend ? (
+              legend({ city, available })
+            ) : (
+              <LayerLegend active={activeOverlays} city={city} />
+            )}
             {OVERLAYS.filter((overlay) => activeOverlays.has(overlay.id)).map(
               (overlay) =>
                 overlay.legend ? (
@@ -1750,16 +1998,18 @@ export default function MapShell({
             </button>
           </div>
         ) : null}
-        <SearchControl
-          city={city}
-          open={searchOpen}
-          pinned={searchPin !== null}
-          centre={mapCentre}
-          onOpenChange={handleSearchOpen}
-          onSelect={handleSearchSelect}
-          onDirections={handleToggleRouting}
-          onClear={handleSearchPinRemove}
-        />
+        {ownSearch ? (
+          <SearchControl
+            city={city}
+            open={searchOpen}
+            pinned={searchPin !== null}
+            centre={mapCentre}
+            onOpenChange={handleSearchOpen}
+            onSelect={handleSearchSelect}
+            onDirections={handleToggleRouting}
+            onClear={handleSearchPinRemove}
+          />
+        ) : null}
         {panels}
         {editing ? (
           <PinEditor
