@@ -11,7 +11,7 @@
         "east": -73.69948815566987
       },
       "trees": 898100,
-      "updated": "2026-08-29",
+      "updated": "2026-09-15",
       "attribution": "NYC Parks Forestry (ForMS) via NYC Open Data",
       "sourceUrl": "https://data.cityofnewyork.us/d/hn5i-inap",
       "field": {
@@ -38,7 +38,7 @@
           "sha256": "16c31e1005d1cb484130db017ae0d2407f138d67df25d4e158caea3c97585c62",
           "squareKm": 172.6,
           "measuredHeights": 496604,
-          "updated": "2026-08-29",
+          "updated": "2026-09-15",
           "attribution": "Tree canopy © NYC OTI / NYC Parks (2017 LiDAR)",
           "sourceUrl": "https://services3.arcgis.com/xJHn8F2NTtwCMFtX/arcgis/rest/services/TreeCanopy2017_Simplified_1ft/FeatureServer/0",
           "heightAttribution": "Canopy heights © Ma et al. 2023 (CC BY 4.0)",
@@ -146,7 +146,7 @@
             "p99": 0.993
           }
         },
-        "updated": "2026-08-29",
+        "updated": "2026-09-15",
         "attribution": "path & tree data © OpenStreetMap contributors",
         "sourceUrl": "https://www.openstreetmap.org/copyright"
       },
@@ -182,7 +182,7 @@
             "p99": 0.98
           }
         },
-        "updated": "2026-08-29",
+        "updated": "2026-09-15",
         "attribution": "NYC DoITT Street Centerline (CSCL) via NYC Open Data",
         "sourceUrl": "https://data.cityofnewyork.us/d/inkn-q76z"
       },
@@ -193,7 +193,7 @@
         "segments": 50376,
         "vertices": 323682,
         "bytes": 2941492,
-        "sha256": "779690d205685b55029316cd7a195e371a834b606d588ed666e1dacdb550394c",
+        "sha256": "7a8b36df5b4b08f42175623629c01a5cdd09d2229014d6a57d977836428031f1",
         "km": 2759.7,
         "density": {
           "min": 0,
@@ -217,7 +217,7 @@
             "p99": 1
           }
         },
-        "updated": "2026-08-29",
+        "updated": "2026-09-15",
         "attribution": "OpenStreetMap contributors",
         "sourceUrl": "https://www.openstreetmap.org/copyright"
       }
@@ -232,7 +232,7 @@
         "east": -122.11396170101138
       },
       "trees": 298771,
-      "updated": "2026-08-30",
+      "updated": "2026-09-15",
       "attribution": "SF Public Works street trees via DataSF; Oakland Public Tree Inventory; City of Berkeley street trees (Arborwell survey), frozen copy",
       "sourceUrl": "https://data.sfgov.org/d/tkzw-k3nq",
       "field": {
@@ -259,7 +259,7 @@
           "sha256": "21a88636f3098166b705d2317f63065bd7b600004e9cfe60fa0d54f0e6c13b4e",
           "squareKm": 64.4,
           "measuredHeights": 574188,
-          "updated": "2026-08-30",
+          "updated": "2026-09-15",
           "attribution": "Urban tree canopy © SF Planning (2013 Urban Forest Plan); Canopy © EBRPD / CAL FIRE / Tukman Geospatial (ALCC 1 m LiDAR)",
           "sourceUrl": "https://data.sfgov.org/d/ni2e-vpbg",
           "heightAttribution": "Elevation © USGS 3DEP / NASA WERK (CC0); Canopy heights © EBRPD / CAL FIRE / Tukman Geospatial (ALCC 1 m LiDAR CHM)",
@@ -367,7 +367,7 @@
             "p99": 0.968
           }
         },
-        "updated": "2026-08-30",
+        "updated": "2026-09-15",
         "attribution": "path & tree data © OpenStreetMap contributors",
         "sourceUrl": "https://www.openstreetmap.org/copyright"
       },
@@ -403,7 +403,7 @@
             "p99": 0.849
           }
         },
-        "updated": "2026-08-30",
+        "updated": "2026-09-15",
         "attribution": "SF basemap street centrelines via DataSF; Alameda County Street Centerlines via Alameda County GIS",
         "sourceUrl": "https://data.sfgov.org/d/3psu-pn9h"
       },
@@ -414,7 +414,7 @@
         "segments": 24426,
         "vertices": 177856,
         "bytes": 1517166,
-        "sha256": "c9615ae31d9e67c7e7bc979a7bb825f6f6670eebc3362ebfffb24da6e8379c3b",
+        "sha256": "191963da1a914d58c9f1797c79035271f58985d8beeabe9077f141adbfc8f45d",
         "km": 1451.6,
         "density": {
           "min": 0,
@@ -438,7 +438,7 @@
             "p99": 0.997
           }
         },
-        "updated": "2026-08-30",
+        "updated": "2026-09-15",
         "attribution": "OpenStreetMap contributors",
         "sourceUrl": "https://www.openstreetmap.org/copyright"
       }

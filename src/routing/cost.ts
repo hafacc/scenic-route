@@ -25,9 +25,13 @@
 // shaded for as long as the sun has not slid its shadow off the sidewalk, whether or not the toggle
 // bars scaffolding — a deck you were told to avoid is still overhead. Barring it adds a flat per-metre
 // penalty on the decked share, which only raises the multiplier, so the heuristic still bounds it.
+// A tunnel asserts both outright: sheltered to the byte ceiling every other attribute is clamped to,
+// and in full shade at every instant. That is more shelter than a deck and a crown together reach, so
+// `maxShelter` lifts the bound to it — on a graph that has a tunnel, and not on one that does not.
 
 import {
   edgeKind,
+  isTunnel,
   laneOf,
   type RoutingGraph,
   stopIndexOf,
@@ -334,6 +338,11 @@ export const DEFAULT_SHADE_WEIGHT = 0;
 export const MAX_SHELTER_WEIGHT = 1;
 export const DEFAULT_SHELTER_WEIGHT = 0;
 
+// What a tunnel shelters, as a share of a walked metre. The byte ceiling every baked discount
+// attribute is clamped to rather than a flat 1, so the shelter factor keeps a positive floor and no
+// metre of the network is ever free — the invariant at the top of this file.
+export const TUNNEL_SHELTER = 254 / 255;
+
 // What a metre under a deck costs while scaffolding is barred, as a multiple of walking it. Dodging
 // scaffolding means crossing the street, and you cannot cross mid-block, so the real detour is
 // corner-cross-back: up to about a block (~160 m) to miss maybe 40 m of deck. That breaks even near
@@ -387,6 +396,36 @@ export type DiscountKey = (typeof DISCOUNT_KEYS)[number];
 export const SCENIC_KEYS = [...DISCOUNT_KEYS, "ferry"] as const;
 
 export type ScenicKey = (typeof SCENIC_KEYS)[number];
+
+// The factors that PRICE what they touch (a `1 + w*attr` term, or the penalty on a train's seconds)
+// rather than discount it. None can make a second cheaper, so the A* lower bound never sees one.
+export const PENALTY_KEYS = [
+  "highway",
+  "hill",
+  "industrial",
+  "transit",
+] as const;
+
+export type PenaltyKey = (typeof PENALTY_KEYS)[number];
+
+// Every weight that is a number, which is every axis a slider can move: RouteWeights without the
+// gates and the planner's own flag.
+export type WeightKey = Exclude<keyof RouteWeights, GateKey | InternalFlag>;
+
+// All of them, in one list, so the route cache's axes and the heuristic's floor are read off the
+// same place the panel is.
+export const WEIGHT_KEYS = [...SCENIC_KEYS, ...PENALTY_KEYS] as const;
+
+type Listed = (typeof WEIGHT_KEYS)[number];
+
+// The compiler's own check that the lists above are exactly the numeric weights: a factor added to
+// RouteWeights and not to one of them — or listed twice over — leaves a key here, which fails the
+// constraint. Adding `bridge` touched thirteen files, and the two it MISSED were silent.
+type NoStrays<Key extends never> = Key;
+
+export type WeightListsAreComplete = NoStrays<
+  Exclude<WeightKey, Listed> | Exclude<Listed, WeightKey>
+>;
 
 export interface RouteWeights {
   tree: number;
@@ -449,6 +488,8 @@ export function edgeShedShade(
 // rest keeps what was baked — and since both are length fractions of the same edge the two mix rather
 // than stack. That mix is `1 - (1 - bakedShade)(1 - shed)` written on the signed attribute, which reads
 // -intensity where an edge is fully shaded. 0 when no artifact is loaded or the sun is down.
+//
+// A tunnel is that same full shade, whatever the sky is doing and whatever covers the street above.
 export function shadeAttrOf(
   graph: RoutingGraph,
   edge: number,
@@ -457,6 +498,8 @@ export function shadeAttrOf(
 ): number {
   if (!graph.shade) {
     return 0;
+  } else if (graph.hasTunnels && isTunnel(graph, edge)) {
+    return -graph.shade.intensityAt(elapsedSeconds);
   } else if (shed === 0) {
     return graph.shade.attrAt(edge, elapsedSeconds);
   } else {
@@ -471,12 +514,17 @@ export function shadeAttrOf(
 // the crowns over the share with no deck under them. Both are fractions of the edge's length, so this
 // is a union of coverage rather than a stack of opacities, and the `1 - shed` is the assumption that
 // the two are spread independently along the edge.
+//
+// A tunnel is the byte ceiling of it, and is so in a city with no shed feed: the roof is the ground
+// above.
 export function shelterAttrOf(
   graph: RoutingGraph,
   edge: number,
   shed: number,
 ): number {
-  if (!graph.sheds) {
+  if (graph.hasTunnels && isTunnel(graph, edge)) {
+    return TUNNEL_SHELTER;
+  } else if (!graph.sheds) {
     return 0;
   } else {
     const canopy =
@@ -485,14 +533,18 @@ export function shelterAttrOf(
   }
 }
 
-// The most shelter an edge can offer: fully decked, or crowns over whatever a deck does not cover.
-// Both inputs sit under their byte ceilings, so this stays < 1 and the factor's floor positive.
+// The most shelter an edge can offer: a tunnel outright, else fully decked, or crowns over whatever a
+// deck does not cover. A deck, a crown and a tunnel all sit under the same byte ceiling, so this
+// stays < 1 and the shelter factor's floor stays positive at every weight.
 export function maxShelter(graph: RoutingGraph): number {
+  const tunnel = graph.hasTunnels ? TUNNEL_SHELTER : 0;
   if (!graph.sheds) {
-    return 0;
+    return tunnel;
   } else {
     const { maxCoverage, rainTau } = graph.sheds;
-    return maxCoverage + rainTau * graph.maxDirectCanopy * (1 - maxCoverage);
+    const decked =
+      maxCoverage + rainTau * graph.maxDirectCanopy * (1 - maxCoverage);
+    return Math.max(tunnel, decked);
   }
 }
 
@@ -566,20 +618,40 @@ export function minMultiplier(
   graph: RoutingGraph,
   weights: RouteWeights,
 ): number {
-  return (
-    (1 - weights.tree * graph.maxCover) *
-    (1 - weights.landmark * graph.maxLandmark) *
-    (1 - weights.art * graph.maxArt) *
-    (1 - weights.commercial * graph.maxCommercial) *
-    (1 - weights.historic * graph.maxHistoric) *
-    (1 - weights.bridge * graph.maxBridge) *
-    // The shade factor's per-edge floor: whichever sign of attr the weight discounts, at the field's
-    // max magnitude over every edge and elapsed time. Positive because |shade| <= 1 and maxAbs < 1.
-    // Compositing a deck in cannot leave that range: it mixes the baked attribute toward -intensity,
-    // and the field's intensity is bounded by the same maxAbs.
-    (1 - Math.abs(weights.shade) * (graph.shade ? graph.shade.maxAbs : 0)) *
-    (1 - weights.shelter * maxShelter(graph))
-  );
+  let product = 1;
+  for (const key of DISCOUNT_KEYS) {
+    // Shade's weight is the signed one: whichever sign of attr it discounts, its floor is at the
+    // field's greatest magnitude over every edge and elapsed time. Positive because |shade| <= 1 and
+    // maxAbs < 1. Compositing a deck in cannot leave that range: it mixes the baked attribute toward
+    // -intensity, and the field's intensity is bounded by the same maxAbs. A tunnel reads exactly
+    // -intensity, so it is inside it too.
+    product *= 1 - Math.abs(weights[key]) * discountMax(graph, key);
+  }
+  return product;
+}
+
+// The greatest this discount's attribute reaches anywhere on the graph: what the bound above clips
+// against, and what a card's lead over the other routes is measured against. The switch is the list:
+// a discount added without a maximum here does not compile.
+export function discountMax(graph: RoutingGraph, key: DiscountKey): number {
+  switch (key) {
+    case "tree":
+      return graph.maxCover;
+    case "landmark":
+      return graph.maxLandmark;
+    case "art":
+      return graph.maxArt;
+    case "commercial":
+      return graph.maxCommercial;
+    case "historic":
+      return graph.maxHistoric;
+    case "bridge":
+      return graph.maxBridge;
+    case "shade":
+      return graph.shade ? graph.shade.maxAbs : 0;
+    case "shelter":
+      return maxShelter(graph);
+  }
 }
 
 // The wait this edge owes, charged where a walker steps off the kerb and nowhere else. A divided

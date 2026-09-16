@@ -27,6 +27,9 @@ export const ROAD_TYPES: readonly RoadType[] = [1, 3, 4, 5, 6, 7, 10];
 export const FLAG_VEHICULAR_ONLY = 1 << 0; // drawn, never routed
 export const FLAG_NON_VEHICULAR = 1 << 1; // a dedicated ped/bike deck, offset 0
 export const FLAG_STRUCTURE = 1 << 2; // a bridge or tunnel deck
+// PATH and SWLK records only, which share this encoder: OSM says the way runs in a tunnel or under
+// cover. A STRT record spends bit 3 on its left sidewalk and says tunnel with road type 4.
+export const FLAG_TUNNEL = 1 << 3;
 
 export interface Segment {
   physicalId: number; // the city's own durable id for the row (CSCL physicalid, SF cnn)

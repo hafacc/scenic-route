@@ -12,11 +12,13 @@ import {
   FORMAT_VERSION,
   HEADER_BYTES,
   isTransitEdge,
+  isTunnel,
   laneOf,
   markMidRoadwayNodes,
   NO_GEOMETRY,
   NO_SOURCE_ID,
   routeOf,
+  TUNNEL_FLAG,
 } from "./graph";
 import { buildSnapIndex, snapCandidates } from "./snap";
 
@@ -36,6 +38,10 @@ const NODES: readonly [number, number][] = [
   [1_990, 10], // 3 station B
   [10, 10], // 4 platform A, where its station stands
   [1_990, 10], // 5 platform B
+  // The two ends of a footway under the ground, set well away from the rest so the snap index has
+  // nothing to weigh it against.
+  [0, 5_000], // 6
+  [200, 5_000], // 7
 ];
 
 interface EdgeSpec {
@@ -46,6 +52,7 @@ interface EdgeSpec {
   seconds: number; // a ferry's or a transit edge's, in bytes 20-21
   geometry: boolean;
   bridge?: number; // record byte 38, the over-water share of a deck
+  tunnel?: boolean; // record byte 23 bit 4
 }
 
 const EDGES: readonly EdgeSpec[] = [
@@ -59,7 +66,12 @@ const EDGES: readonly EdgeSpec[] = [
   { a: 4, b: 5, kind: 7, cover: 0, seconds: 300, geometry: false }, // ride
   { a: 3, b: 5, kind: 6, cover: 0, seconds: 0, geometry: false }, // board, the other end
   { a: 5, b: 3, kind: 5, cover: 0, seconds: 30, geometry: false }, // alight
+  // A walking edge under the ground, appended last so every id above is where it was. It carries no
+  // bridge share: a tunnel is the opposite of the thing that byte measures.
+  { a: 6, b: 7, kind: 0, cover: 0, seconds: 0, geometry: false, tunnel: true },
 ];
+
+const TUNNEL_EDGE = 9;
 
 const BOARD_TABLE: readonly [number, number, number][] = [
   [4, LANE_ONE, 0],
@@ -80,8 +92,13 @@ function writeVarint(out: number[], value: number): void {
 // The blob as `assemble` lays it out: sections back to back from the header, each 4-byte aligned,
 // then the geometry, the ferry side table and the transit tables.
 // `bakedBridge` false stands in for a graph written before that column existed: byte 38 zero on
-// every edge, which is what the decoder's gate has to read.
-function graphBytes(withTransit: boolean, bakedBridge = true): ArrayBuffer {
+// every edge, which is what the decoder's gate has to read. `bakedTunnel` false does the same for the
+// flags byte's tunnel bit.
+function graphBytes(
+  withTransit: boolean,
+  bakedBridge = true,
+  bakedTunnel = true,
+): ArrayBuffer {
   const nodeCount = NODES.length;
   const edgeCount = EDGES.length;
   const align4 = (offset: number): number => (offset + 3) & ~3;
@@ -177,6 +194,7 @@ function graphBytes(withTransit: boolean, bakedBridge = true): ArrayBuffer {
       bytes[record + 21] = 0;
     }
     bytes[record + 22] = spec.kind;
+    bytes[record + 23] = bakedTunnel && spec.tunnel ? TUNNEL_FLAG : 0;
     view.setUint32(record + 29, NO_SOURCE_ID, true);
     bytes[record + 38] = bakedBridge ? (spec.bridge ?? 0) : 0;
   }
@@ -240,6 +258,7 @@ describe("the v11 graph decoder", () => {
       "ride",
       "board",
       "access",
+      "sidewalk",
     ]);
   });
 
@@ -256,7 +275,7 @@ describe("the v11 graph decoder", () => {
 
   test("reads a transit edge's seconds where a walking edge keeps its cover", () => {
     expect([...graph.edgeDurationSeconds]).toEqual([
-      0, 600, 90, 30, 0, 30, 300, 0, 30,
+      0, 600, 90, 30, 0, 30, 300, 0, 30, 0,
     ]);
     // The one walking edge is the only thing that may set the cover ceiling: a duration in bytes
     // 20-21 read as a cover would put maxCover at 1 and collapse the cost model's clip floor.
@@ -271,6 +290,21 @@ describe("the v11 graph decoder", () => {
     // The bake's own gate: a graph with the byte unwritten reads 0 everywhere, so the factor's max
     // is 0 and its slider takes itself off the panel rather than mispricing anything.
     expect(decodeGraph(graphBytes(true, false), identity).maxBridge).toBe(0);
+  });
+
+  test("reads the tunnel bit, which a graph written before it existed reads as 0", () => {
+    expect(isTunnel(graph, TUNNEL_EDGE)).toBe(true);
+    expect(graph.hasTunnels).toBe(true);
+    expect(graph.edgeBridge[TUNNEL_EDGE]).toBe(0); // under the water is not over it
+
+    expect(
+      EDGES.every((_, edge) => edge === TUNNEL_EDGE || !isTunnel(graph, edge)),
+    ).toBe(true);
+    // The byte predates the bit, so an older graph simply has it clear, and the flag that lifts the
+    // shelter bound stays down with it.
+    const preTunnel = decodeGraph(graphBytes(true, true, false), identity);
+    expect(isTunnel(preTunnel, TUNNEL_EDGE)).toBe(false);
+    expect(preTunnel.hasTunnels).toBe(false);
   });
 
   test("says which lane a board edge departs against and which route it runs", () => {

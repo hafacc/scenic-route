@@ -8,30 +8,23 @@
 // point, which is still valid because only the active slider moved. It reports whether the path
 // changed so the caller can skip redrawing an identical route.
 
-import { GATE_KEYS, INTERNAL_FLAGS, type RouteWeights } from "./cost";
+import {
+  GATE_KEYS,
+  INTERNAL_FLAGS,
+  type RouteWeights,
+  WEIGHT_KEYS,
+  type WeightKey,
+} from "./cost";
 import type { RoutingGraph } from "./graph";
 import { findRoute, type RouteResult } from "./search";
 import type { Snap } from "./snap";
 
-// The numeric weights that a slider can move; the gates are discrete
-// contexts, not axes. Every slider has to be here: `sameWeights` reads this list, so one left out is
-// a slider whose moves the cache cannot see, and it answers them with the previous route.
-const AXES = [
-  "tree",
-  "ferry",
-  "landmark",
-  "art",
-  "highway",
-  "hill",
-  "commercial",
-  "industrial",
-  "historic",
-  "bridge",
-  "shade",
-  "shelter",
-  "transit",
-] as const;
-type Axis = (typeof AXES)[number];
+// The numeric weights that a slider can move; the gates are discrete contexts, not axes. Read off
+// the cost model's own list rather than written out again: `sameWeights` reads this, so a slider
+// left out of it is one whose moves the cache cannot see, and it answers them with the previous
+// route.
+const AXES = WEIGHT_KEYS;
+type Axis = WeightKey;
 
 // Weights are quantized to this many decimals before caching, so slider values equal in intent match
 // despite float drift (0.01 has no exact binary form).
@@ -43,25 +36,11 @@ function quantize(weight: number): number {
 }
 
 function quantizeWeights(weights: RouteWeights): RouteWeights {
-  return {
-    tree: quantize(weights.tree),
-    ferry: quantize(weights.ferry),
-    landmark: quantize(weights.landmark),
-    art: quantize(weights.art),
-    highway: quantize(weights.highway),
-    hill: quantize(weights.hill),
-    commercial: quantize(weights.commercial),
-    industrial: quantize(weights.industrial),
-    historic: quantize(weights.historic),
-    bridge: quantize(weights.bridge),
-    shade: quantize(weights.shade),
-    shelter: quantize(weights.shelter),
-    transit: quantize(weights.transit),
-    allowFerries: weights.allowFerries,
-    allowTransit: weights.allowTransit,
-    allowSheds: weights.allowSheds,
-    allowCrossings: weights.allowCrossings,
-  };
+  const quantized = { ...weights };
+  for (const axis of AXES) {
+    quantized[axis] = quantize(weights[axis]);
+  }
+  return quantized;
 }
 
 // A switch that changed is not a bracketable axis and, more importantly, is not the same route. Read

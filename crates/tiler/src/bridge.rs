@@ -1,12 +1,11 @@
 //! The per-edge bridge byte (GRPH record byte 38): the share of a walk that crosses open water on a
 //! bridge deck.
 //!
-//! The graph's structure flag (`GRPH_STRUCTURE`) says an edge is on a bridge OR TUNNEL deck and
-//! nothing finer, and that is not by itself the thing worth walking: a tunnel runs under the ground,
-//! and a viaduct over a rail yard or an expressway runs over it. What separates the crossing of a
-//! river from either is what lies beneath the deck, so the deck's own polyline is tested against the
-//! city's land mask — the same LAND outlines the overlays are clipped to — and the byte is the share
-//! of its length that is NOT over land. Everything off a deck reads 0, so a street that merely runs
+//! Being on a deck is not by itself the thing worth walking: a viaduct over a rail yard or an
+//! expressway is one too, and a tunnel is under one rather than on it. What separates the crossing
+//! of a river from those is what lies beneath the deck, so a deck's own polyline is tested against
+//! the city's land mask — the same LAND outlines the overlays are clipped to — and the byte is the
+//! share of its length that is NOT over land. Everything off a deck reads 0, so a street that merely runs
 //! along a shore is priced by what it is rather than by where it is.
 //!
 //! Measured with `geometry::contained_fraction`, as the historic-district byte is: both are asking
@@ -37,14 +36,14 @@ pub struct Bridge {
 /// here reads as the open water it is — the middle of a long span is exactly that case.
 fn fractions(
     edge_polys: &[Vec<Coord>],
-    on_structure: &[bool],
+    on_bridge: &[bool],
     set: &PolygonSet,
     grid: &PolygonGrid,
     meters_per_degree_lng: f64,
 ) -> Vec<f64> {
     edge_polys
         .par_iter()
-        .zip(on_structure)
+        .zip(on_bridge)
         .map_init(Vec::new, |candidates, (poly, deck)| {
             if !deck || poly.len() < 2 {
                 0.0
@@ -55,11 +54,13 @@ fn fractions(
         .collect()
 }
 
-/// The bridge byte of every edge. `reference_lat` is the graph origin's latitude, the one east-west
-/// scale the whole city is measured at, as the other per-edge bakes use.
+/// The bridge byte of every edge. `on_bridge` is the caller's own reading of which edges are on a
+/// bridge deck — a tunnel is on a deck too, and is not one of them. `reference_lat` is the graph
+/// origin's latitude, the one east-west scale the whole city is measured at, as the other per-edge
+/// bakes use.
 pub fn bridge(
     edge_polys: &[Vec<Coord>],
-    on_structure: &[bool],
+    on_bridge: &[bool],
     lengths: &[f32],
     land: &Path,
     reference_lat: f64,
@@ -70,7 +71,7 @@ pub fn bridge(
     drop(polygons);
     let grid = PolygonGrid::new(&set);
     let meters_per_degree_lng = METERS_PER_DEGREE_LAT * reference_lat.to_radians().cos();
-    let fractions = fractions(edge_polys, on_structure, &set, &grid, meters_per_degree_lng);
+    let fractions = fractions(edge_polys, on_bridge, &set, &grid, meters_per_degree_lng);
     Ok(column(&fractions, lengths, count))
 }
 

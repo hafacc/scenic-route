@@ -5,7 +5,7 @@
 
 import { cityById } from "../cities";
 import { type ContextSync, type RouteClock, RouteContexts } from "./contexts";
-import { maxShelter, type RouteWeights } from "./cost";
+import { DISCOUNT_KEYS, discountMax, type RouteWeights } from "./cost";
 import type { FactorKey } from "./factors";
 import type { RoutingGraph } from "./graph";
 import { type CachedRoute, RouteCache } from "./route-cache";
@@ -23,16 +23,11 @@ import type { Snap } from "./snap";
 export function graphFactorMax(
   graph: RoutingGraph,
 ): Partial<Record<FactorKey, number>> {
-  return {
-    tree: graph.maxCover,
-    landmark: graph.maxLandmark,
-    art: graph.maxArt,
-    commercial: graph.maxCommercial,
-    historic: graph.maxHistoric,
-    bridge: graph.maxBridge,
-    shade: graph.shade ? graph.shade.maxAbs : 0,
-    shelter: maxShelter(graph),
-  };
+  const maxima: Partial<Record<FactorKey, number>> = {};
+  for (const key of DISCOUNT_KEYS) {
+    maxima[key] = discountMax(graph, key);
+  }
+  return maxima;
 }
 
 export class RoutingEngine {

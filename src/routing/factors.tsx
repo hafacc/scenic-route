@@ -130,9 +130,9 @@ export const FACTORS: readonly Factor[] = [
     label: "Prefer shelter",
     Icon: MdWaterDrop,
     max: MAX_SHELTER_WEIGHT,
-    // Shelter is priced from the sidewalk-shed decks and the canopy over what they do not cover, so
-    // a city with no shed feed has nothing to shelter under: `shelterAttrOf` returns 0 for every
-    // edge of it (src/routing/cost.ts).
+    // Shelter is priced from the sidewalk-shed decks and the canopy over what they do not cover, plus
+    // any tunnel, which is sheltered whole; a city with no shed feed and nothing underground has
+    // nothing to shelter under at all (src/routing/cost.ts).
     overlay: "scaffolding",
     tint: "text-sky-600 dark:text-sky-400",
     color: "#0284c7",

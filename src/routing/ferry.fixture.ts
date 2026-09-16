@@ -5,11 +5,12 @@
 // between them — is a statement about the graph rather than about any city's geometry. So it is
 // built here, and both the cost tests (src/routing/ferry-cost.test.ts) and the sole-crossing tests
 // (src/routing/sole-crossing.test.ts) read it, which is what keeps the two asking about the same
-// object.
+// object. The tunnel tests (src/routing/tunnel-cost.test.ts) build their own line of pavement with
+// the same builder; the graph below is a ferry's, the builder is anyone's.
 
 import type { RouteWeights } from "./cost";
 import type { RoutingGraph } from "./graph";
-import { NO_GEOMETRY } from "./graph";
+import { NO_GEOMETRY, TUNNEL_FLAG } from "./graph";
 import { haversineMeters, type Snap } from "./snap";
 
 export const SCALE = 1e-6;
@@ -55,6 +56,7 @@ export interface EdgeSpec {
   ferry: boolean;
   cover: number; // 0..1, walking edges only
   durationSeconds: number; // ferry edges only
+  tunnel?: boolean; // walking edges only: sets the flags-byte tunnel bit the tiler writes
 }
 
 // Build a synthetic routing graph from nodes and edges. Every edge is a straight line, so its
@@ -77,12 +79,14 @@ export function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
   const edgeLength = new Float32Array(edgeCount);
   const edgeCover = new Uint8Array(edgeCount);
   const edgeKindSide = new Uint8Array(edgeCount);
+  const edgeFlags = new Uint8Array(edgeCount);
   const edgeDurationSeconds = new Float32Array(edgeCount);
   const edgeNameId = new Uint16Array(edgeCount).fill(NAME_NONE);
   const edgeGeomOffset = new Uint32Array(edgeCount).fill(NO_GEOMETRY);
   const edgeGeomCount = new Uint16Array(edgeCount);
   const ferryEdges: number[] = [];
   const adjacency: number[][] = Array.from({ length: nodeCount }, () => []);
+  let hasTunnels = false;
   let maxCoverByte = 0;
   for (let edge = 0; edge < edgeCount; edge++) {
     const spec = edges[edge];
@@ -103,6 +107,10 @@ export function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
       const coverByte = Math.round(spec.cover * 255);
       edgeCover[edge] = coverByte;
       maxCoverByte = Math.max(maxCoverByte, coverByte);
+      if (spec.tunnel) {
+        edgeFlags[edge] = TUNNEL_FLAG;
+        hasTunnels = true;
+      }
     }
     adjacency[spec.a].push(edge);
     adjacency[spec.b].push(edge);
@@ -138,6 +146,8 @@ export function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
     edgeCover,
     edgeNameId,
     edgeKindSide,
+    edgeFlags,
+    hasTunnels,
     maxCover: maxCoverByte / 255,
     edgeLandmark: new Uint8Array(edgeCount),
     edgeArt: new Uint8Array(edgeCount),
