@@ -21,6 +21,7 @@ import * as SunCalc from "suncalc";
 import { activeCity, type City } from "../cities";
 import { canopyTau } from "../shade/phenology";
 import { declinationOf, hourAngleOf, seasonBand } from "../shade/sun";
+import { artifactUrl } from "./artifact-base";
 import type { RoutingGraph } from "./graph";
 
 const MAGIC = "SHDB";
@@ -206,7 +207,7 @@ export function loadShadeBins(
   if (cached) {
     return cached;
   }
-  const url = binsUrl(cityId);
+  const url = artifactUrl(binsUrl(cityId));
   const promise = fetch(url)
     .then(async (response) => {
       if (!response.ok) {
@@ -276,7 +277,7 @@ export function loadShadeBin(
     binCache.set(key, cached);
     return cached;
   }
-  const url = binUrl(cityId, index);
+  const url = artifactUrl(binUrl(cityId, index));
   const promise = fetch(url)
     .then(async (response) => {
       if (!response.ok) {

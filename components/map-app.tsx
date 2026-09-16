@@ -48,6 +48,7 @@ import {
   setCustomHour,
   subscribeRouteTime,
 } from "../src/route-time/store";
+import { RouteContexts } from "../src/routing/contexts";
 import {
   DEFAULT_ART_WEIGHT,
   DEFAULT_COMMERCIAL_WEIGHT,
@@ -71,18 +72,11 @@ import {
 } from "../src/routing/cost";
 import { buildDirections } from "../src/routing/directions";
 import type { FactorKey, GateKey } from "../src/routing/factors";
-import { computeFerrySchedule } from "../src/routing/ferry-schedule";
 import { loadGraph, type RoutingGraph } from "../src/routing/graph";
 import { navProgress } from "../src/routing/nav-progress";
 import { loadPois, type PoiSet, passedPois } from "../src/routing/pois";
-import { RouteCache } from "../src/routing/route-cache";
-import {
-  type RouteResult,
-  RouteSolver,
-  reverseResult,
-} from "../src/routing/search";
-import { computeEdgeShade } from "../src/routing/shade";
-import { computeEdgeSheds, setShedSun, shedDay } from "../src/routing/sheds";
+import { routerClient } from "../src/routing/router-client";
+import type { RouteResult } from "../src/routing/search";
 import { buildSnapIndex, type SnapIndex, snapPair } from "../src/routing/snap";
 import {
   awaitNameIndex,
@@ -378,7 +372,7 @@ export default function MapApp() {
   );
   // The signed sun/shade preference (−1 = prefer shade, +1 = prefer sun, 0 = off). `routeTimeTick` fires
   // as the resolved time (the global clock) moves, so the route re-costs against the sun's new
-  // position; `shadeContextRef` records which tick the route cache was built against.
+  // position.
   const [shadeWeight, setShadeWeight] = useState<number>(DEFAULT_SHADE_WEIGHT);
   // Whether the last attempt to build the sun/shade field failed. The graph is fetched once and its
   // own maxima gate the other sliders (`capabilities`); this artifact is refetched every time the
@@ -386,20 +380,14 @@ export default function MapApp() {
   // there moving nothing, which is what this is for.
   const [shadeDataLost, setShadeDataLost] = useState<boolean>(false);
   const [routeTimeTick, setRouteTimeTick] = useState<number>(0);
-  const shadeContextRef = useRef<string>("");
   // Rain shelter (decks plus canopy) and the scaffolding gate. Both read the same per-edge shed
-  // coverage, which only changes with the picked DAY — `shedDayRef` records the day the graph's field
-  // was built for, so a clock tick re-aims its sun rather than rebuilding it.
+  // coverage, which only changes with the picked DAY, so a clock tick re-aims its sun rather than
+  // rebuilding it.
   const [shelterWeight, setShelterWeight] = useState<number>(
     DEFAULT_SHELTER_WEIGHT,
   );
   const [allowSheds, setAllowSheds] = useState<boolean>(true);
   const [allowCrossings, setAllowCrossings] = useState<boolean>(false);
-  const shedDayRef = useRef<string>("");
-  // Which (city, clock tick) the graph's ferry timetable was resolved for. The DAY picks the services
-  // that run, but the sailing you catch moves with the clock inside that day, so this rebuilds on
-  // every tick rather than only when the date changes.
-  const ferryContextRef = useRef<string>("");
   // The decoded graph, kept so directions can be rebuilt from a route without a re-fetch.
   const [routingGraph, setRoutingGraph] = useState<RoutingGraph | null>(null);
   // The landmark and public-art points, loaded once directions are in use, so the turn-by-turn can
@@ -426,16 +414,15 @@ export default function MapApp() {
     start: { lat: number; lng: number };
     dest: { lat: number; lng: number };
   } | null>(null);
-  // Caches routes across slider weights for the current endpoints, so most drags reuse a computed
-  // path and identical paths never redraw the map.
-  const routeCacheRef = useRef<RouteCache | null>(null);
-  routeCacheRef.current ??= new RouteCache();
+  // The page's own copy of the three route-time fields. Every search runs in the worker, which keeps
+  // its own; these are for the two readers on this side — the maneuver list, which needs the ferry
+  // timetable to name a sailing, and the Google Maps export, which prices the route against all three.
+  const contextsRef = useRef<RouteContexts | null>(null);
+  contextsRef.current ??= new RouteContexts();
   // True while an endpoint marker is mid-drag, so the live recompute holds the drawn route instead of
   // flashing a loading state on every frame.
   const draggingRef = useRef<boolean>(false);
   const dragWhichRef = useRef<"start" | "dest">("dest"); // which endpoint the active drag moves
-  // The per-gesture incremental solver, rooted at the held endpoint and reused across a drag's frames.
-  const dragSolverRef = useRef<RouteSolver | null>(null);
   // Reactive mirror of draggingRef, so the map's reframe can switch to zoom-out-only during a drag.
   const [dragging, setDragging] = useState<boolean>(false);
   // Bumped on drop to re-run the route effect for the exact recompute, since a start drop leaves the
@@ -671,8 +658,7 @@ export default function MapApp() {
       setPickTarget(null);
       setRouteState({ kind: "idle" });
       routedForRef.current = null;
-      routeCacheRef.current = null;
-      dragSolverRef.current = null;
+      routerClient().reset();
     }
   }, [city, dest, manualStart]);
 
@@ -968,175 +954,82 @@ export default function MapApp() {
       if (isNewTarget && !draggingRef.current && !isDropRefresh) {
         setRouteState({ kind: "loading" });
       }
-      loadRouting(routeCity.id).then(
-        async ({ graph, index }) => {
-          if (cancelled) {
-            return;
-          }
-          // Replaced whenever the identity changes, not kept forever once set. `loadRouting` hands
-          // back one stable graph PER CITY, so `current ?? graph` held New York's for the whole
-          // session: switching to San Francisco left the hill slider greyed out (this graph is what
-          // says which layers a city has) and built San Francisco's turn-by-turn directions against
-          // New York's edges. The identity check keeps the re-render, which is what `??` was for.
-          setRoutingGraph((current) => (current === graph ? current : graph));
-          routedForRef.current = request;
-          // Keep the shade routing context current. loadRouting hands back one stable graph, so the
-          // per-edge attrs are recomputed only when the sun position (a clock tick) moves — a start/dest
-          // change alone reuses the attrs already on it. A tick drops both the weight-bracket cache and
-          // any in-flight drag solver they were built against. A missing or mismatched SHDE artifact is
-          // not fatal: routing drops the sun/shade bias for this time rather than failing. When shade is
-          // off, clear the field and the context so it costs nothing.
-          if (weights.shade !== 0) {
-            // Keyed by city as well as by tick: the field is built onto ONE city's graph, so a
-            // switch with the clock stopped left the guard saying "already built" about the other
-            // city's graph and the new one's shade silently dead. Same reason the ferry context is.
-            const context = `${routeCity.id}:${routeTimeTick}`;
-            if (shadeContextRef.current !== context) {
-              routeCacheRef.current = null;
-              dragSolverRef.current = null;
-              shadeContextRef.current = context;
-              let lost = false;
-              try {
-                await computeEdgeShade(graph, getResolvedDate(), routeCity);
-              } catch (error) {
-                // A missing or malformed SHDE artifact is not fatal — routing just drops the sun/shade
-                // bias for this time. Surface it so a stale local bake (the usual cause) is visible in
-                // the console, and grey the slider so the reader is not left adjusting a control that
-                // moves nothing.
-                console.error("shade routing disabled:", error);
-                graph.shade = null;
-                lost = true;
-              }
-              if (cancelled) {
-                return;
-              }
-              // Below the guard, not inside the try: a clock scrub starts a fetch per tick, and a
-              // slow failure landing after a later tick has already succeeded would otherwise grey
-              // out a slider whose data is loaded and being used.
-              setShadeDataLost(lost);
+      loadRouting(routeCity.id)
+        .then(
+          async ({ graph, index }) => {
+            if (cancelled) {
+              return;
             }
-          } else {
-            graph.shade = null;
-            shadeContextRef.current = "";
-          }
-          // The standing sheds, whose set moves only with the picked DAY. They feed the shade composite
-          // as well as the shelter factor and the scaffolding gate, so the field is kept current while any of
-          // the three is live. A failed fetch is not fatal either: computeEdgeSheds seeds the canopy half
-          // of shelter first, so the slider keeps working on trees alone.
-          if (
-            weights.shade !== 0 ||
-            weights.shelter !== 0 ||
-            !weights.allowSheds
-          ) {
-            const day = shedDay(getResolvedDate());
-            const context = `${routeCity.id}:${day}`;
-            if (shedDayRef.current !== context) {
-              routeCacheRef.current = null;
-              dragSolverRef.current = null;
-              shedDayRef.current = context;
-              try {
-                await computeEdgeSheds(graph, getResolvedDate());
-              } catch (error) {
-                console.error("scaffolding routing disabled:", error);
-              }
-              if (cancelled) {
-                return;
-              }
+            // Replaced whenever the identity changes, not kept forever once set. `loadRouting` hands
+            // back one stable graph PER CITY, so `current ?? graph` held New York's for the whole
+            // session: switching to San Francisco left the hill slider greyed out (this graph is what
+            // says which layers a city has) and built San Francisco's turn-by-turn directions against
+            // New York's edges. The identity check keeps the re-render, which is what `??` was for.
+            setRoutingGraph((current) => (current === graph ? current : graph));
+            routedForRef.current = request;
+            const client = routerClient();
+            client.load(routeCity.id, graph);
+            // The clock is resolved once and threaded through both sides, so the page and the worker
+            // build their fields for the same instant and catch the same boat.
+            const clock = {
+              tick: routeTimeTick,
+              dateMs: getResolvedDate().getTime(),
+            };
+            const contexts = (contextsRef.current ??= new RouteContexts());
+            const sync = await contexts.sync(graph, routeCity, clock, weights);
+            if (cancelled) {
+              return;
             }
-            // The standing set moves with the day but the sun moves with the clock, so the field's
-            // schedule is re-aimed on every tick rather than rebuilt; setShedSun carries why.
-            if (graph.sheds) {
-              setShedSun(graph.sheds, getResolvedDate());
+            // Only when this pass actually rebuilt the field: a clock scrub starts a fetch per tick, and
+            // a slow failure landing after a later tick has already succeeded would otherwise grey out a
+            // slider whose data is loaded and being used.
+            if (sync.shadeRebuilt) {
+              setShadeDataLost(sync.shadeLost);
             }
-          } else {
-            graph.sheds = null;
-            shedDayRef.current = "";
-          }
-          // The ferry timetable for the departure instant. Only worth fetching while ferries are
-          // allowed and this city has any to sail; barred, every ferry edge is skipped before its cost
-          // is ever asked for, and a city with no ferry edges has no timetable to fetch. A failed
-          // fetch is not fatal — the graph's baked crossing-plus-average-wait figure is what routing
-          // used before this artifact existed, so it simply falls back to that.
-          if (weights.allowFerries && graph.ferryEdges.length > 0) {
-            const context = `${routeCity.id}:${routeTimeTick}`;
-            if (ferryContextRef.current !== context) {
-              routeCacheRef.current = null;
-              dragSolverRef.current = null;
-              ferryContextRef.current = context;
-              try {
-                await computeFerrySchedule(
-                  graph,
-                  routeCity.id,
-                  getResolvedDate(),
-                );
-              } catch (error) {
-                console.error("ferry timetable unavailable:", error);
-                graph.ferries = null;
-              }
-              if (cancelled) {
-                return;
-              }
-            }
-          } else {
-            graph.ferries = null;
-            ferryContextRef.current = "";
-          }
-          const pair = snapPair(graph, index, request.start, request.dest);
-          if (!pair.ok) {
-            const offending =
-              pair.reason === "startTooFar"
-                ? request.start
-                : pair.reason === "destTooFar"
-                  ? request.dest
-                  : null;
-            setRouteState({
-              kind: "error",
-              message: messageFor(pair.reason, routeCity, offending),
-            });
-          } else if (draggingRef.current) {
-            // Mid-drag: reuse a per-gesture solver rooted at the held endpoint for an approximate
-            // route each frame; the drop recomputes exactly. Start-drags solve from the dest and flip.
-            const which = dragWhichRef.current;
-            // A start-drag solves backward from the dest, so it anchors the sun at the drawn route's
-            // arrival time and counts it backward; a dest-drag solves forward from the true start.
-            const solver = (dragSolverRef.current ??=
-              which === "dest"
-                ? new RouteSolver(graph, pair.start, weights)
-                : new RouteSolver(
-                    graph,
-                    pair.dest,
-                    weights,
-                    lastTravelSecondsRef.current ?? 0,
-                    -1,
-                  ));
-            const moving = which === "dest" ? pair.dest : pair.start;
-            const solved = solver.solveApprox(moving);
-            const result =
-              which === "start" && solved
-                ? reverseResult(graph, solved)
-                : solved;
-            if (result) {
-              setRouteState({ kind: "ready", result, graph });
-            } else {
+            const pair = snapPair(graph, index, request.start, request.dest);
+            if (!pair.ok) {
+              const offending =
+                pair.reason === "startTooFar"
+                  ? request.start
+                  : pair.reason === "destTooFar"
+                    ? request.dest
+                    : null;
               setRouteState({
                 kind: "error",
-                message: messageFor("disconnected", routeCity, null),
+                message: messageFor(pair.reason, routeCity, offending),
               });
+              return;
             }
-          } else {
-            const cache = (routeCacheRef.current ??= new RouteCache());
-            const { result, changed } = cache.route(
-              graph,
-              pair.start,
-              pair.dest,
-              weights,
-            );
+            const which = dragWhichRef.current;
+            // Mid-drag the worker reuses a per-gesture solver rooted at the held endpoint for an
+            // approximate route each frame; the drop recomputes exactly. A start-drag solves backward
+            // from the dest, so it anchors the sun at the drawn route's arrival time.
+            const reply = await (draggingRef.current
+              ? client.dragMove({
+                  cityId: routeCity.id,
+                  clock,
+                  weights,
+                  anchor: which === "dest" ? pair.start : pair.dest,
+                  moving: which === "dest" ? pair.dest : pair.start,
+                  anchorSeconds: lastTravelSecondsRef.current ?? 0,
+                })
+              : client.route({
+                  cityId: routeCity.id,
+                  clock,
+                  weights,
+                  start: pair.start,
+                  dest: pair.dest,
+                }));
+            // Null means a newer frame overtook this one in the worker; it will answer instead.
+            if (cancelled || !reply) {
+              return;
+            }
             // Identical to the drawn route (a slider move that didn't cross a breakpoint): leave it —
             // but always apply when nothing is drawn yet, or an unchanged result would strand the
-            // loading state. A drop resets the cache first, so its exact route reads as changed anyway.
-            if (changed || !hasReadyRouteRef.current) {
-              if (result) {
-                setRouteState({ kind: "ready", result, graph });
+            // loading state. A drop resets the brackets first, so its exact route reads as changed anyway.
+            if (reply.changed || !hasReadyRouteRef.current) {
+              if (reply.result) {
+                setRouteState({ kind: "ready", result: reply.result, graph });
               } else {
                 setRouteState({
                   kind: "error",
@@ -1144,17 +1037,28 @@ export default function MapApp() {
                 });
               }
             }
-          }
-        },
-        () => {
+          },
+          () => {
+            if (!cancelled) {
+              setRouteState({
+                kind: "error",
+                message:
+                  "Couldn't load the routing data. Check your connection.",
+              });
+            }
+          },
+        )
+        .catch((error: unknown) => {
+          // The worker refusing a request: not a network failure, but the panel has one way to say a
+          // route could not be found, so the console carries what actually happened.
+          console.error("routing failed:", error);
           if (!cancelled) {
             setRouteState({
               kind: "error",
               message: "Couldn't load the routing data. Check your connection.",
             });
           }
-        },
-      );
+        });
     });
     return () => {
       cancelled = true;
@@ -1420,6 +1324,9 @@ export default function MapApp() {
   // the prior label (a reverse geocode would spam the network) until the drag settles.
   const handleEndpointDragMove = useCallback(
     (which: "start" | "dest", lat: number, lng: number) => {
+      if (!draggingRef.current) {
+        routerClient().dragStart(which);
+      }
       draggingRef.current = true;
       dragWhichRef.current = which;
       setDragging(true);
@@ -1443,11 +1350,12 @@ export default function MapApp() {
   const handleEndpointDrag = useCallback(
     (which: "start" | "dest", lat: number, lng: number) => {
       draggingRef.current = false;
-      dragSolverRef.current = null;
       setDragging(false);
       handleDisengageFollow();
       applyPick(which, lat, lng);
-      routeCacheRef.current = new RouteCache();
+      const client = routerClient();
+      client.dragEnd();
+      client.reset();
       setRouteRefreshNonce((nonce) => nonce + 1);
     },
     [applyPick, handleDisengageFollow],

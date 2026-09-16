@@ -50,12 +50,12 @@
     "update-search-index": "bun run scripts/search-index.ts"
   },
   "dependencies": {
-    "firebase": "^12.16.0",
+    "firebase": "^12.18.0",
     "leaflet": "^1.9.4",
     "next": "^16.2.10",
     "next-themes": "^0.4.6",
     "protomaps-leaflet": "^5.1.0",
-    "react": "^19.2.7",
+    "react": "^19.2.8",
     "react-dom": "^19.2.7",
     "react-icons": "^5.7.0",
     "react-leaflet": "^5.0.0",
@@ -64,16 +64,16 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.3",
     "@duckdb/node-api": "^1.5.5-r.4",
-    "@tailwindcss/postcss": "^4.3.2",
-    "@types/leaflet": "^1.9.21",
-    "@types/node": "^26.1.1",
-    "@types/react": "^19.2.17",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/leaflet": "^1.9.22",
+    "@types/node": "^26.4.0",
+    "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.3",
     "firebase-admin": "^14.1.0",
     "lerc": "^4.2.0",
     "p-retry": "^8.0.0",
     "polygon-clipping": "^0.15.7",
-    "tailwindcss": "^4.3.2",
+    "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3"
   }
 }

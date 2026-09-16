@@ -4,8 +4,10 @@
 // every query is "today" pays for, and why a span names its edge by the graph's durable key rather
 // than by its position, resolved per query. DESIGN.md, "Sidewalk sheds", is why any of that is so.
 
+import { activeCity, type City } from "../cities";
 import { rainTau } from "../shade/phenology";
 import { type Cursor, readUnsignedVarint, readVarint } from "../tiles/varint";
+import { artifactUrl } from "./artifact-base";
 import { durableKey, edgePath, NO_SOURCE_ID, type RoutingGraph } from "./graph";
 import {
   SCHEDULE_BUCKETS,
@@ -481,12 +483,18 @@ function edgeBearing(graph: RoutingGraph, edge: number): number {
 // Point a field's sun schedule at a departure instant. Its own function because which sheds stand
 // moves with the DAY while the sun moves with the clock: an hour-slider step has to re-aim the sun,
 // and rebuilding the coverage and the bearings for it would cost ~10 ms of work that did not change.
-export function setShedSun(field: ShedField, date: Date): void {
+export function setShedSun(
+  field: ShedField,
+  date: Date,
+  // Threaded rather than read off the active city, which the worker never sets: there it is
+  // whichever city happens to be first, and the sun would be aimed over that one.
+  forCity: City = activeCity(),
+): void {
   for (let bucket = 0; bucket < SCHEDULE_BUCKETS; bucket++) {
     const when = new Date(
       date.getTime() + bucket * SCHEDULE_STEP_SECONDS * 1000,
     );
-    const sun = sunAt(when);
+    const sun = sunAt(when, forCity.center);
     field.translate[bucket] =
       DECK_HEIGHT_METERS /
       Math.tan(Math.max(sun.elevation, MIN_ELEVATION_DEG) * DEGREES);
@@ -499,6 +507,7 @@ export function shedField(
   graph: RoutingGraph,
   decks: ReadonlyMap<number, EdgeDeck>,
   date: Date,
+  forCity: City = activeCity(),
 ): ShedField {
   const covered = new Uint8Array(graph.edgeCount);
   const depth = new Float32Array(graph.edgeCount);
@@ -522,7 +531,7 @@ export function shedField(
     rainTau: rainTau(date),
     maxCoverage: maxByte / 255,
   };
-  setShedSun(field, date);
+  setShedSun(field, date, forCity);
   return field;
 }
 
@@ -568,8 +577,9 @@ export function shedShade(
 export async function computeEdgeSheds(
   graph: RoutingGraph,
   date: Date,
+  forCity: City = activeCity(),
 ): Promise<void> {
-  graph.sheds = shedField(graph, new Map(), date);
+  graph.sheds = shedField(graph, new Map(), date, forCity);
   const history = await loadSheds();
   if (!sameGraph(graph, history)) {
     throw new Error(
@@ -581,12 +591,14 @@ export async function computeEdgeSheds(
     graph,
     shedCoverage(graph, history, shedDay(date)),
     date,
+    forCity,
   );
 }
 
 let historyPromise: Promise<ShedHistory> | null = null;
 
-async function fetchBuffer(url: string): Promise<ArrayBuffer> {
+async function fetchBuffer(path: string): Promise<ArrayBuffer> {
+  const url = artifactUrl(path);
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`${url}: ${response.status} ${response.statusText}`);

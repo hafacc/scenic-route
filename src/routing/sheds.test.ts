@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import { encodeSheds, graphHashOf } from "../../scripts/shed-encode";
+import { cityById } from "../cities";
 import {
   clearEdgePathCache,
   NO_GEOMETRY,
@@ -689,6 +690,22 @@ test("re-aiming the sun moves the shade without rebuilding the coverage", () => 
     expectedShare(noon, 90),
     6,
   );
+});
+
+// The worker never sets the active city, so a field built there aimed New York's sun over every
+// city's sheds until the city travelled with the date.
+test("the sun is aimed over the city the field was built for", () => {
+  const sanFrancisco = cityById("sf");
+  const newYork = cityById("nyc");
+  if (!sanFrancisco || !newYork) {
+    throw new Error("the two cities this test is about are gone");
+  }
+  const noon = new Date(Date.UTC(2026, 6, 15, 19));
+  const field = twoStreets(noon);
+  setShedSun(field, noon, sanFrancisco);
+  const west = shedShade(field, NORTH_SOUTH, 0);
+  setShedSun(field, noon, newYork);
+  expect(shedShade(field, NORTH_SOUTH, 0)).not.toBeCloseTo(west, 3);
 });
 
 // The hash both of the artifact's graph figures are built on. Recomputed from the graph's own bytes
