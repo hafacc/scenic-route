@@ -33,6 +33,7 @@ import {
   edgeName,
   edgePath,
   edgeSideLabel,
+  isStayAboard,
   laneOf,
   otherEnd,
   type RoutingGraph,
@@ -436,7 +437,13 @@ function reconstruct(
           departureSeconds: departure?.departure ?? null,
         };
         rides.push(leg);
-      } else if (step.kind === "ride" && leg) {
+      } else if (
+        step.kind === "ride" &&
+        leg &&
+        !isStayAboard(graph, step.edge)
+      ) {
+        // Staying aboard between two stops is internal to the boarding: no stop of its own and no
+        // seconds, the rides either side of it carrying the whole journey.
         leg.stops += 1;
         leg.rideSeconds += seconds;
       } else if (step.kind === "access" && leg) {

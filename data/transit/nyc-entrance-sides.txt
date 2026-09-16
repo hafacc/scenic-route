@@ -1,0 +1,24 @@
+# Which platform an entrance actually serves, where the geometric rule gets it wrong.
+#
+# scripts/transit.ts puts a stair on the platform to the RIGHT of its direction of travel, which is
+# how New York's railway runs, measuring the offset from the route's drawn track. Where the track
+# doubles back through a station, or where the drawn shape is not the rails the platform is on, that
+# sign still comes out backwards. Each line here overrides one entrance:
+#
+#   <gtfs parent stop id> <longitude> <latitude> <N|S|both>
+#
+# the coordinates exactly as the MTA's "Subway Entrances and Exits: 2024" dataset publishes them
+# (an entrance the MTA moves stops matching and falls back to the rule). N is the northbound
+# platform (GTFS direction 0), S the southbound (direction 1), both an entrance that reaches
+# either. Only a station in nyc-no-crossover.txt is split in two, so only those lines matter.
+#
+# Seeded 2026-09-15 from OpenStreetMap's own sign text: 2,078 railway=subway_entrance nodes in the
+# New York bbox, 1,031 of them carrying the sign's wording in `description` ("2,5 trains to
+# Manhattan"), matched to the MTA entrance within 15 m and read against the north/south direction
+# labels of the MTA Stations dataset (data.ny.gov 39hk-dx4f). Of the 325 entrances at no-crossover
+# stations the signs decide, 9 fall inside the rule's ambiguous band and are served both ways
+# whatever the sign says; of the remaining 316 the rule agrees with the sign on 314 (99%) and is
+# corrected below on 2. The 340-odd entrances no sign covers are unverifiable.
+
+F05 -73.8201774 40.7089519 N  # Briarwood, on the Van Wyck curve
+A46 -73.9531971 40.6804282 N  # Nostrand Av

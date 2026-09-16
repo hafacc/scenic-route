@@ -43,6 +43,13 @@ import {
   ROUTE_SHORT_NAME,
   SIDEWALK_COVER,
   snapAtNode,
+  THREE_STOP_EAST,
+  THREE_STOP_EAST_SIDEWALK,
+  THREE_STOP_MIDDLE,
+  THREE_STOP_ROUTE_SHORT_NAME,
+  THREE_STOP_WEST,
+  THREE_STOP_WEST_SIDEWALK,
+  threeStopGraph,
   transitGraph,
   transitWeights,
   UNSCHEDULED_LANE,
@@ -418,7 +425,8 @@ test("the maneuvers name the line, where it is bound and both stations", () => {
     (maneuver) => maneuver.kind === "transit" || maneuver.kind === "station",
   );
   expect(transit.map((maneuver) => maneuver.text)).toEqual([
-    `Enter ${WEST_STATION}`,
+    // The door names the street it stands on, which here is the fixture's one unsided pavement.
+    `Enter ${WEST_STATION} by the stair on Main Street`,
     `Take the ${ROUTE_SHORT_NAME} at 8:00 AM toward ${EAST_STATION} (1 stop)`,
     `Get off at ${EAST_STATION}`,
     // A kerbside stop is left rather than exited: the east end of this line is one.
@@ -495,4 +503,42 @@ test("the floor stays under a board edge that spans a transfer complex", () => {
     (BOARDING_SECONDS * transitMultiplier(strong)) / length,
     9,
   );
+});
+
+// A ride PAST a station, on the three-stop line: the rider boards at the west end, stays aboard
+// through the middle stop and gets off at the east one. The stay-aboard step between the two rides
+// is the graph's business — it is one boarding, of two stops, and the station it passes is no
+// maneuver, no stop and no second.
+test("a ride through a station is one leg of two stops", () => {
+  const graph = threeStopGraph();
+  const route = findRoute(
+    graph,
+    snapAtNode(graph, 0, THREE_STOP_WEST_SIDEWALK),
+    snapAtNode(graph, 2, THREE_STOP_EAST_SIDEWALK),
+    transitWeights(),
+  ) as RouteResult;
+
+  expect(route.rides).toHaveLength(1);
+  const [leg] = route.rides;
+  expect(leg.boardStation).toBe(THREE_STOP_WEST);
+  expect(leg.alightStation).toBe(THREE_STOP_EAST);
+  expect(leg.stops).toBe(2);
+  expect(leg.rideSeconds).toBe(2 * RIDE_SECONDS);
+
+  const maneuvers = buildDirections(graph, route).filter(
+    (maneuver) => maneuver.kind === "transit" || maneuver.kind === "station",
+  );
+  expect(maneuvers.map((maneuver) => maneuver.text)).toEqual([
+    `Enter ${THREE_STOP_WEST} by the stair on Main Street`,
+    `Take the ${THREE_STOP_ROUTE_SHORT_NAME} at 8:04 AM toward ${THREE_STOP_EAST} (2 stops)`,
+    `Get off at ${THREE_STOP_EAST}`,
+    `Exit ${THREE_STOP_EAST} by the stair on Main Street`,
+  ]);
+  expect(
+    maneuvers.every((maneuver) => !maneuver.text.includes(THREE_STOP_MIDDLE)),
+  ).toBe(true);
+  // The ride's span is the two rides' own, the step between them covering no ground.
+  const [, ride] = maneuvers;
+  expect(ride.durationSeconds).toBe(2 * RIDE_SECONDS);
+  expect(ride.stops).toBe(2);
 });

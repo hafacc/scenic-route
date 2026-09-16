@@ -106,6 +106,50 @@ const SHADE_CODE: [&str; 6] = [
     "manifest.rs",
 ];
 
+/// What the graph pass's TOPOLOGY is a function of: graph.rs, and everything it reads through. The
+/// base entry is keyed on this rather than on the whole crate, and every column of the graph cache
+/// folds the base, so it is what decides whether the two dearest of them — the relief bytes behind
+/// the DEM resample and the per-edge shade bake — come back off the disk. An edit to a module the
+/// graph never calls used to cost both: 400 MB of GeoTIFF decoded single-threaded and twenty-odd
+/// minutes of ray casting, five and a half hours of wall clock between them on New York.
+const GRAPH_CODE: [&str; 22] = [
+    "graph.rs",
+    "association.rs",
+    "binfmt.rs",
+    "bridge.rs",
+    "conflate.rs",
+    "corners.rs",
+    "crown.rs",
+    "dem.rs",
+    "direct_canopy.rs",
+    "geometry.rs",
+    "graph_cache.rs",
+    "heights.rs",
+    "historic.rs",
+    "industrial.rs",
+    "invariants.rs",
+    "manifest.rs",
+    "raster.rs",
+    "relief.rs",
+    "sampling.rs",
+    "scenic.rs",
+    "shade.rs",
+    "sidewalks.rs",
+];
+
+/// And what the relief column alone is: the ascent and descent bytes, and the resample of the DEM
+/// they are read off. Narrower than the graph's scope above, which the entry also folds through the
+/// base — it is stated so that the resample's own dependencies are written down where the cost is.
+const RELIEF_CODE: [&str; 7] = [
+    "relief.rs",
+    "dem.rs",
+    "binfmt.rs",
+    "geometry.rs",
+    "heights.rs",
+    "manifest.rs",
+    "raster.rs",
+];
+
 /// The rest of the crate. No other pass names its own modules yet, so these reach every stamp
 /// through the whole-crate epoch and this list decides nothing — it exists so that the two together
 /// are the directory, which a test asserts. A module added to neither would otherwise be a module
@@ -722,6 +766,10 @@ struct Stamps<'a> {
     /// The shade pass's own scope, which is what keeps an edit to the graph from re-rendering
     /// twenty minutes of pyramid.
     shade_code: String,
+    /// The graph topology's own scope, and the relief column's, which between them keep an edit the
+    /// graph never reads from re-baking the DEM and the per-edge shade.
+    graph_code: String,
+    relief_code: String,
     manifest_oid: String,
     /// Each input hashed once: the commercial pass, the shade pass and the graph all read the same
     /// buildings, and `data/` is 168 MB.
@@ -733,6 +781,8 @@ impl<'a> Stamps<'a> {
         Ok(Stamps {
             code: plan.code_epoch(),
             shade_code: plan.code_scope(&SHADE_CODE)?,
+            graph_code: plan.code_scope(&GRAPH_CODE)?,
+            relief_code: plan.code_scope(&RELIEF_CODE)?,
             plan,
             manifest_oid: input_oid(&plan.manifest)?,
             oids: HashMap::new(),
@@ -934,6 +984,12 @@ impl<'a> Stamps<'a> {
     /// graph later must reach these keys without anyone remembering to add it, and every one of them
     /// is genuinely read by `graph::run`. The commercial lines are pass 2's output rather than a
     /// committed source, so that pass's whole stamp stands in for them.
+    ///
+    /// Three of the keys name their own modules instead of the whole crate: the base, the relief
+    /// column and each sun bin's shade. The rest of the columns are seconds to bake and stay on the
+    /// epoch; those three are hours, and an edit to a module the graph never calls is no reason to
+    /// spend them. What they cannot dodge is an edit to the graph itself, which moves the base and
+    /// with it every column over it — the merge by position is what that pays for.
     fn graph_keys(
         &mut self,
         city: &City,
@@ -941,7 +997,7 @@ impl<'a> Stamps<'a> {
         commercial: &str,
         bakes_shade: bool,
     ) -> Fallible<graph_cache::Keys> {
-        let mut digest = self.open("graph-base");
+        let mut digest = self.scoped("graph-base", &self.graph_code);
         field(&mut digest, city.id.as_bytes());
         field(
             &mut digest,
@@ -985,7 +1041,7 @@ impl<'a> Stamps<'a> {
             && bakes_shade
         {
             for bucket in &params.buckets {
-                let mut digest = self.open("graph-shade");
+                let mut digest = self.scoped("graph-shade", &self.shade_code);
                 field(&mut digest, base.as_bytes());
                 field(&mut digest, &params.max_zoom.to_le_bytes());
                 field(&mut digest, &params.max_shadow_meters.to_le_bytes());
@@ -999,7 +1055,7 @@ impl<'a> Stamps<'a> {
             }
         }
 
-        let mut relief = self.open("graph-relief");
+        let mut relief = self.scoped("graph-relief", &self.relief_code);
         field(&mut relief, base.as_bytes());
         dem_identity(&mut relief, &planned.elevation)?;
         let mut commercial_key = self.open("graph-commercial");
@@ -2963,6 +3019,38 @@ mod tests {
         assert_eq!(after.buckets, before.buckets);
     }
 
+    /// And what the graph's own scope is for. The pass still reruns — its stamp is the epoch's, so
+    /// any tiler is a new one — but it reruns onto a cache that still holds the two entries worth
+    /// hours: the relief bytes, whose bake is where the DEM is decoded, and every sun bin's shade.
+    #[test]
+    fn an_edit_the_graph_never_reads_keeps_the_dem_and_the_shade_bakes() {
+        let mut plan = stamping_plan("stamps-graph-scope");
+        let before = stamped_passes(&plan);
+        edited(&mut plan, "densities.rs");
+        let after = stamped_passes(&plan);
+
+        assert_ne!(after.graph, before.graph, "the pass runs again");
+        assert_eq!(after.keys.base, before.keys.base, "onto the same topology");
+        assert_eq!(
+            after.keys.relief, before.keys.relief,
+            "and reads no GeoTIFF to do it"
+        );
+        assert_eq!(after.keys.shade, before.keys.shade, "nor casts a ray");
+    }
+
+    /// The other direction, which is the one that has to hold for the cache to be sound at all.
+    #[test]
+    fn an_edit_the_relief_bake_reads_rebakes_it() {
+        let mut plan = stamping_plan("stamps-relief-scope");
+        let before = stamped_passes(&plan);
+        edited(&mut plan, "dem.rs");
+        let after = stamped_passes(&plan);
+
+        assert_ne!(after.keys.relief, before.keys.relief);
+        // The graph reads the DEM through its own module list too, so the whole base moves with it.
+        assert_ne!(after.keys.base, before.keys.base);
+    }
+
     /// What the token hash buys: a comment and a reformat are not a new tiler, and the epoch they
     /// used to move is folded into nearly every pass. Doc comments are counted on purpose.
     #[test]
@@ -3248,16 +3336,12 @@ mod tests {
         }
     }
 
-    /// SHADE_CODE has to be CLOSED under what those modules import, not merely a list someone
-    /// believed was closed. It is the one scope narrower than the whole crate, so a module that
-    /// slipped into it unnamed — `crown.rs` reaching for the DEM to sample terrain under a canopy,
-    /// say — would be a module the pyramid is a function of and its stamp cannot see, and the
-    /// pyramid would stand stale with nothing to catch it.
-    #[test]
-    fn the_shade_scope_is_closed_under_its_own_imports() {
+    /// Every module reachable from the given heads through `crate::` paths, sorted: what a scope
+    /// declaring those heads has to name, and nothing wider.
+    fn closure_of(heads: &[&str]) -> Vec<String> {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut reached: Vec<String> = vec![SHADE_CODE[0].to_owned()];
-        let mut pending = vec![SHADE_CODE[0].to_owned()];
+        let mut reached: Vec<String> = heads.iter().map(|head| (*head).to_owned()).collect();
+        let mut pending = reached.clone();
         while let Some(module) = pending.pop() {
             let body = fs::read_to_string(src.join(&module)).expect("a module of the crate");
             let mut named = Vec::new();
@@ -3276,10 +3360,32 @@ mod tests {
             }
         }
         reached.sort();
-        let mut declared: Vec<String> = SHADE_CODE.iter().map(|m| (*m).to_owned()).collect();
-        declared.sort();
+        reached
+    }
 
-        assert_eq!(reached, declared);
+    fn sorted(scope: &[&str]) -> Vec<String> {
+        let mut declared: Vec<String> = scope.iter().map(|module| (*module).to_owned()).collect();
+        declared.sort();
+        declared
+    }
+
+    /// A scope has to be CLOSED under what its modules import, not merely a list someone believed
+    /// was closed. These are the scopes narrower than the whole crate, so a module that slipped into
+    /// one unnamed — `crown.rs` reaching for the DEM to sample terrain under a canopy, say — would
+    /// be a module the artifact is a function of and its key cannot see, and the artifact would
+    /// stand stale with nothing to catch it.
+    #[test]
+    fn the_shade_scope_is_closed_under_its_own_imports() {
+        assert_eq!(closure_of(&[SHADE_CODE[0]]), sorted(&SHADE_CODE));
+    }
+
+    #[test]
+    fn the_graph_and_relief_scopes_are_closed_under_their_own_imports() {
+        assert_eq!(closure_of(&[GRAPH_CODE[0]]), sorted(&GRAPH_CODE));
+        assert_eq!(
+            closure_of(&[RELIEF_CODE[0], RELIEF_CODE[1]]),
+            sorted(&RELIEF_CODE)
+        );
     }
 
     /// The second chunks pass is stamped on what the graph STRANDED rather than on the graph's own

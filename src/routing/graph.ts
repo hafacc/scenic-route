@@ -8,7 +8,7 @@ import type { FerryTimetable } from "./ferry-schedule";
 import type { ShadeField } from "./shade";
 import type { ShedField } from "./sheds";
 import type { TransitTimetable } from "./transit-schedule";
-import type { WalkSeconds } from "./walk-speed";
+import { WALK_METERS_PER_SECOND, type WalkSeconds } from "./walk-speed";
 
 // A no-geometry edge (a crossing, a link, or a straight ferry) stores this sentinel in its geometry
 // offset; its polyline is the straight line between its two node coordinates.
@@ -20,7 +20,7 @@ const SIDE_SHIFT = 3;
 const SIDE_MASK = 0x7;
 const KIND_CROSSING = 1;
 // The three transit kinds: the walk in and out of a station, the step onto a pattern's platform
-// (whose wait the timetable answers at route time, so it bakes no duration), and one platform to the
+// (whose wait the timetable answers at route time, so it bakes no duration), and one stop to the
 // next. All three are DIRECTED — see `transitForward`.
 const KIND_ACCESS = 5;
 const KIND_BOARD = 6;
@@ -30,6 +30,15 @@ const GEOMETRY_RIGHT_FLAG = 0x4;
 // flags byte bit 4 marks an edge running through a tunnel. No format bump came with it: the byte was
 // already there, so a graph written before the bit reads it as 0 and behaves as it always did.
 export const TUNNEL_FLAG = 0x10;
+// The top three flag bits belong to an ACCESS edge alone, where none of the walking bits apply: the
+// door's own direction and kind. An older graph reads them as 0, which is a two-way stair.
+export const EXIT_ONLY_FLAG = 0x20;
+export const ENTRY_ONLY_FLAG = 0x40;
+export const ELEVATOR_FLAG = 0x80;
+// The one flag bit a RIDE edge carries: this ride is the free step from a stop's arrival node onto
+// its boarding node, which is a rider staying on the train. It borrows the entry-only door's bit,
+// since a ride carries no door bit and no walking one; the kind is what tells the two apart.
+export const STAY_ABOARD_FLAG = 0x40;
 
 // An edge with no durable identity — a crossing, a link or a ferry, none of which comes from a
 // source segment. Its source-id slot carries this sentinel.
@@ -107,6 +116,14 @@ export type EdgeKind =
   | "board"
   | "ride";
 export type SideLabel = "north" | "east" | "south" | "west" | null;
+
+// Where a station door stands: the street the pavement it was cut into carries, and which side of
+// that street that pavement lies on. A door on a corner is on the street its own kerb belongs to,
+// which the step a route happens to arrive along need not be.
+export interface DoorStreet {
+  street: string;
+  side: SideLabel;
+}
 
 const EDGE_KINDS: readonly EdgeKind[] = [
   "sidewalk",
@@ -264,9 +281,13 @@ export interface RoutingGraph extends GraphIdentity {
   transitLaneOf: Map<number, number>;
   transitStopOf: Map<number, number>;
   transitRouteOf: Map<number, number>;
-  // 1 for a node a board edge lands on, which is a pattern's own platform rather than a place anyone
-  // walks. It is what tells an alight edge from the walk out of a station: both are access edges,
-  // and only one of them may be walked backwards. Derived from the board edges, not stored.
+  // Per street door, the street it opens onto and which side of that street it stands on, as the
+  // tiler read them off the pavement it cut the door into. `doorStreet` reads it.
+  transitDoorStreet: Map<number, DoorStreet>;
+  // 1 for a node of a pattern's own platform — the one its board edge lands on and the one its ride
+  // lands on — rather than a place anyone walks. It is what tells an alight edge from the walk out of
+  // a station: both are access edges, and only one of them may be walked backwards. Derived from the
+  // board and ride edges, not stored.
   nodePlatform: Uint8Array;
 
   // The departure date's rail timetable, filled from the TSCH artifact by computeTransitSchedule:
@@ -501,11 +522,27 @@ export function decodeGraph(
     ferryTable.offset,
     names,
   );
-  const { transitRoutes, transitLaneOf, transitStopOf, transitRouteOf } =
-    decodeTransitTables(buffer, transitTable.offset, names);
+  const {
+    transitRoutes,
+    transitLaneOf,
+    transitStopOf,
+    transitRouteOf,
+    transitDoorStreet,
+  } = decodeTransitTables(
+    buffer,
+    transitTable.offset,
+    transitTable.byteLength,
+    names,
+  );
   const nodePlatform = new Uint8Array(nodeCount);
   for (const edge of boardEdges) {
     nodePlatform[edgeNodeB[edge]] = 1;
+  }
+  for (const edge of transitEdges) {
+    if ((edgeKindSide[edge] & KIND_MASK) === KIND_RIDE) {
+      nodePlatform[edgeNodeA[edge]] = 1;
+      nodePlatform[edgeNodeB[edge]] = 1;
+    }
   }
 
   return {
@@ -571,6 +608,7 @@ export function decodeGraph(
     transitLaneOf,
     transitStopOf,
     transitRouteOf,
+    transitDoorStreet,
     nodePlatform,
   };
 }
@@ -622,23 +660,35 @@ function decodeFerryEndpointNames(
 // The transit side tables (the byte-64 offset, 4-aligned after the ferry table): a u32 count and a
 // 12-byte record per route (RGB, text RGB, three u16 name ids), then a u32 count and a 12-byte
 // record per board edge (edge id, lane id, route index, stop index), then a u32 count and an 8-byte
-// record per ride edge (edge id, route index, pad). All are empty for a city with no transit source.
+// record per ride edge (edge id, route index, pad), then a u32 count and an 8-byte record per street
+// door (edge id, street name id, side, pad). All are empty for a city with no transit source, and
+// the doors are absent altogether from a graph written before the tiler recorded them — which is
+// why the table's own length, not the buffer's, is where the reading stops.
 function decodeTransitTables(
   buffer: ArrayBuffer,
   tableOffset: number,
+  tableBytes: number,
   names: string[],
 ): {
   transitRoutes: TransitRoute[];
   transitLaneOf: Map<number, number>;
   transitStopOf: Map<number, number>;
   transitRouteOf: Map<number, number>;
+  transitDoorStreet: Map<number, DoorStreet>;
 } {
   const transitRoutes: TransitRoute[] = [];
   const transitLaneOf = new Map<number, number>();
   const transitStopOf = new Map<number, number>();
   const transitRouteOf = new Map<number, number>();
+  const transitDoorStreet = new Map<number, DoorStreet>();
   if (tableOffset === 0 || tableOffset + 4 > buffer.byteLength) {
-    return { transitRoutes, transitLaneOf, transitStopOf, transitRouteOf };
+    return {
+      transitRoutes,
+      transitLaneOf,
+      transitStopOf,
+      transitRouteOf,
+      transitDoorStreet,
+    };
   }
   const view = new DataView(buffer);
   const bytes = new Uint8Array(buffer);
@@ -673,7 +723,25 @@ function decodeTransitTables(
     transitRouteOf.set(view.getUint32(at, true), view.getUint16(at + 4, true));
     at += 8;
   }
-  return { transitRoutes, transitLaneOf, transitStopOf, transitRouteOf };
+  const end = tableOffset + tableBytes;
+  if (at + 4 <= end) {
+    const doorCount = view.getUint32(at, true);
+    at += 4;
+    for (let index = 0; index < doorCount && at + 8 <= end; index++) {
+      transitDoorStreet.set(view.getUint32(at, true), {
+        street: names[view.getUint16(at + 4, true)] ?? "",
+        side: SIDE_LABELS[bytes[at + 6] & SIDE_MASK],
+      });
+      at += 8;
+    }
+  }
+  return {
+    transitRoutes,
+    transitLaneOf,
+    transitStopOf,
+    transitRouteOf,
+    transitDoorStreet,
+  };
 }
 
 // The lane the daily timetable answers this board edge against — a (route, direction, stop pattern),
@@ -707,11 +775,15 @@ export function isTransitEdge(graph: RoutingGraph, edge: number): boolean {
 }
 
 // May this edge be entered at `fromNode`? The topology is directed — you board a platform from its
-// station, ride to the next platform, and alight back to a station — but the graph stores every edge
-// undirected, so each of those has a reverse the search must refuse. Riding backwards is the obvious
-// one; the quiet one is stepping onto a platform through an alight edge, which would put a walker on
-// a train with no wait at all. The walk between a station and the pavement is the one transit edge
-// that goes both ways, since a station is entered and left. Every walking edge is traversable.
+// station's ENTRY node, ride to the next stop's ARRIVAL node, and alight onto that station's EXIT
+// node — but the graph stores every edge undirected, so each of those has a reverse the search must
+// refuse. Riding backwards is the obvious one; the quiet one is stepping onto a platform through an
+// alight edge, which would put a walker on a train with no wait at all. Every door is one-way too:
+// in to the entry node, out of the exit one, which is what keeps a station from being a walkable
+// underpass — the only edge back from an exit to its entry is the change of train, and it runs that
+// way alone. The stay-aboard edge runs one way for the same reason, arrival onto boarding, so a
+// board and an alight at one stop cannot be strung together either. Every walking edge is
+// traversable.
 export function transitForward(
   graph: RoutingGraph,
   edge: number,
@@ -722,14 +794,19 @@ export function transitForward(
     return fromNode === graph.edgeNodeA[edge];
   } else if (kind === "access" && graph.nodePlatform[graph.edgeNodeA[edge]]) {
     return fromNode === graph.edgeNodeA[edge]; // an alight: off the platform only
+  } else if (kind === "access" && isExitOnlyDoor(graph, edge)) {
+    return fromNode === graph.edgeNodeA[edge]; // a way out: out of the station, never into it
+  } else if (kind === "access" && isEntryOnlyDoor(graph, edge)) {
+    return fromNode !== graph.edgeNodeA[edge];
   } else {
     return true;
   }
 }
 
-// What a station is called, asked of the station node itself. Only the walk out to the pavement
-// carries the name — an alight edge is unnamed and a board edge is named for its line — so the named
-// access edge leaving this node is the one to read. Null for any other node.
+// What a station is called, asked of either of a station side's two nodes. The doors carry the name
+// and the change of train between the two carries it as well — an alight edge is unnamed and a board
+// edge is named for its line — so the named access edge leaving this node is the one to read. Null
+// for any other node, a platform and a pavement node included: no named access edge leaves either.
 export function stationName(graph: RoutingGraph, node: number): string | null {
   for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
     const edge = graph.adjacency[slot];
@@ -749,15 +826,52 @@ export function stationName(graph: RoutingGraph, node: number): string | null {
 // only trace of it left: what a rider is told to do differs — you go to a tram stop and you enter a
 // station — so the distinction has to survive somehow.
 const SURFACE_ACCESS_SECONDS = 30;
+const UNDERGROUND_ACCESS_SECONDS = 90;
 
-// Is this access edge the walk to a stop standing in the street rather than into a station?
+// Is this access edge the walk to a stop standing in the street rather than into a station? The
+// baked seconds are the stair plus the walk out to this particular door, and the edge's length is
+// that walk, so taking it back off leaves the one of the two figures above that the tiler started
+// from — read at the midpoint, which no rounding of either can cross.
 export function isSurfaceStop(graph: RoutingGraph, edge: number): boolean {
-  return graph.edgeDurationSeconds[edge] <= SURFACE_ACCESS_SECONDS;
+  const stair =
+    graph.edgeDurationSeconds[edge] -
+    graph.edgeLength[edge] / WALK_METERS_PER_SECOND;
+  return stair < (SURFACE_ACCESS_SECONDS + UNDERGROUND_ACCESS_SECONDS) / 2;
+}
+
+// True when this ride is the free step from a stop's arrival node onto its boarding node — a rider
+// staying on the train rather than getting off. It is internal to one boarding: it costs nothing, it
+// covers no ground, and it is no stop of the ride it sits inside.
+export function isStayAboard(graph: RoutingGraph, edge: number): boolean {
+  return (
+    edgeKind(graph, edge) === "ride" &&
+    (graph.edgeFlags[edge] & STAY_ABOARD_FLAG) !== 0
+  );
+}
+
+// The arrival node beside a boarding node: the far end of the stay-aboard edge that runs into it.
+// The alight hangs off that one, never off the node a board lands on.
+function platformArrival(graph: RoutingGraph, boardingNode: number): number {
+  for (
+    let slot = graph.csr[boardingNode];
+    slot < graph.csr[boardingNode + 1];
+    slot++
+  ) {
+    const edge = graph.adjacency[slot];
+    if (isStayAboard(graph, edge) && graph.edgeNodeB[edge] === boardingNode) {
+      return graph.edgeNodeA[edge];
+    }
+  }
+  return boardingNode;
 }
 
 // The last station a pattern calls at, ridden from this platform: the ride chain followed to its
 // end. This is what a rider is told a train is bound FOR, which the graph never writes down — it is
-// simply where the line the walker is standing on runs out.
+// simply where the line the walker is standing on runs out. The last platform's alight edge is what
+// names it, that edge climbing to the station's exit node.
+//
+// The chain alternates, a ride onto the next stop's arrival node and a stay-aboard onto its boarding
+// node, so it runs out at a boarding node and the alight is one step back from there.
 export function patternTerminus(
   graph: RoutingGraph,
   platformNode: number,
@@ -778,10 +892,14 @@ export function patternTerminus(
     }
     node = next;
   }
-  for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
+  const arrival = platformArrival(graph, node);
+  for (let slot = graph.csr[arrival]; slot < graph.csr[arrival + 1]; slot++) {
     const edge = graph.adjacency[slot];
     // The platform's alight edge, whose node b is the station it climbs back up to.
-    if (edgeKind(graph, edge) === "access" && graph.edgeNodeA[edge] === node) {
+    if (
+      edgeKind(graph, edge) === "access" &&
+      graph.edgeNodeA[edge] === arrival
+    ) {
       station = stationName(graph, graph.edgeNodeB[edge]);
     }
   }
@@ -809,6 +927,44 @@ export function edgeGeometryRight(graph: RoutingGraph, edge: number): boolean {
 // True when this edge runs through a tunnel (flags bit 4): roofed, and out of the sun.
 export function isTunnel(graph: RoutingGraph, edge: number): boolean {
   return (graph.edgeFlags[edge] & TUNNEL_FLAG) !== 0;
+}
+
+// The three door bits, each asked of an access edge: the station's own way in and out. A walking
+// edge carries other things in these bits, so every one of them is a question about a door first.
+// A door out of the station only — the gate at the top of a stair a rider cannot come back down.
+export function isExitOnlyDoor(graph: RoutingGraph, edge: number): boolean {
+  return (
+    edgeKind(graph, edge) === "access" &&
+    (graph.edgeFlags[edge] & EXIT_ONLY_FLAG) !== 0
+  );
+}
+
+// A door into the station only, which is the same fixture the other way round.
+export function isEntryOnlyDoor(graph: RoutingGraph, edge: number): boolean {
+  return (
+    edgeKind(graph, edge) === "access" &&
+    (graph.edgeFlags[edge] & ENTRY_ONLY_FLAG) !== 0
+  );
+}
+
+// A lift rather than a stair: the one door kind whose baked seconds differ, and the one the
+// directions and their icon name differently.
+export function isElevatorDoor(graph: RoutingGraph, edge: number): boolean {
+  return (
+    edgeKind(graph, edge) === "access" &&
+    (graph.edgeFlags[edge] & ELEVATOR_FLAG) !== 0
+  );
+}
+
+// The street this door opens onto, or null where the tiler recorded none — the pavement it was cut
+// into has no name, or the edge is not a door at all. The alternative, naming the door by whichever
+// step the route reaches it along, calls a door on a corner by the cross street and a door reached
+// across a crossing by nothing.
+export function doorStreet(
+  graph: RoutingGraph,
+  edge: number,
+): DoorStreet | null {
+  return graph.transitDoorStreet.get(edge) ?? null;
 }
 
 // Keyed by city: switching city loads a different graph, and coming back must not refetch the first.

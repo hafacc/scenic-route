@@ -547,3 +547,67 @@ export async function fetchNuisanceLines(
   }
   return lines;
 }
+
+// One OSM way into a rail station: a `railway=subway_entrance` or `railway=train_station_entrance`
+// node, with the text a mapper wrote on it and what the tags say a rider goes down. No tag ties a
+// node to a station — `station_name` is the closest thing and only some nodes carry it — so which
+// station this is a way into is the caller's to work out.
+export interface OsmStationEntrance extends Coord {
+  stationName?: string; // `station_name`, the station the mapper named
+  name?: string; // the corner or plaza the door stands on, not the station
+  ref?: string; // the agency's own letter for the door, "A1", "B3"
+  access?: string; // `access`, "no" or "private" on a door a rider may not walk through
+  elevator: boolean;
+  escalator: boolean;
+  ramp: boolean;
+}
+
+function trimmed(value: string | undefined): string | undefined {
+  const text = value?.trim();
+  return text === undefined || text === "" ? undefined : text;
+}
+
+// The published ways into a subway station. A lift is tagged three different ways depending on when
+// the node was surveyed (`highway=elevator`, `elevator=yes`, `entrance=elevator`) and all three
+// mean the same door; `conveying` is OSM's word for a moving stair. Nothing else about the descent
+// is tagged, so a node carrying none of them is a stair.
+export async function fetchStationEntrances(
+  south: number,
+  west: number,
+  north: number,
+  east: number,
+): Promise<OsmStationEntrance[]> {
+  const box = `${south},${west},${north},${east}`;
+  const query =
+    `[out:json][timeout:${QUERY_TIMEOUT_SECONDS}];(` +
+    `node["railway"="subway_entrance"](${box});` +
+    `node["railway"="train_station_entrance"](${box});` +
+    `);out;`;
+  const elements = await overpassQuery("overpass-station-entrances", query);
+  const entrances: OsmStationEntrance[] = [];
+  for (const element of elements) {
+    if (
+      element.type !== "node" ||
+      element.lat === undefined ||
+      element.lon === undefined
+    ) {
+      continue;
+    }
+    const tags = element.tags ?? {};
+    entrances.push({
+      lat: element.lat,
+      lng: element.lon,
+      stationName: trimmed(tags.station_name),
+      name: trimmed(tags.name),
+      ref: trimmed(tags.ref),
+      access: trimmed(tags.access),
+      elevator:
+        tags.highway === "elevator" ||
+        tags.elevator === "yes" ||
+        tags.entrance === "elevator",
+      escalator: tags.conveying === "yes" || tags.escalator === "yes",
+      ramp: tags.ramp === "yes" || tags.highway === "ramp",
+    });
+  }
+  return entrances;
+}

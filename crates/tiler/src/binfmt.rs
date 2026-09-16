@@ -15,7 +15,7 @@ pub const STREET_FORMAT: u16 = 6; // v6 adds the per-side sidewalk bits to the r
 pub const PATH_FORMAT: u16 = 1; // OSM pedestrian/park ways: STRT's layout, magic "PATH"
 pub const SIDEWALK_FORMAT: u16 = 1; // OSM sidewalk/crossing/traffic-island ways: STRT's layout, magic "SWLK"
 pub const FERRY_FORMAT: u16 = 2; // the time-independent NYC ferry graph, magic "FERR"; v2 adds a route name id
-pub const TRANSIT_FORMAT: u16 = 1; // the rail topology the router rides, magic "TRNS"
+pub const TRANSIT_FORMAT: u16 = 2; // the rail topology the router rides, magic "TRNS"; v2 adds the station entrances and the split-station flag
 pub const LANDMARK_FORMAT: u16 = 1; // scenic POI points, the shared point layout, magic "LMRK"
 pub const ART_FORMAT: u16 = 1; // public-art POI points, the shared point layout, magic "ARTW"
 pub const HIGHWAY_FORMAT: u16 = 1; // highway/elevated-rail nuisance lines, the LAND polygon layout, magic "HWAY"
@@ -753,6 +753,36 @@ pub struct TransitStation {
     pub name: String,
     pub complex: u16,
     pub surface: bool,
+    /// No free crossover: a rider who goes down the wrong stair has to come back up and cross the
+    /// street, so the graph gives the station one node per direction and each entrance reaches only
+    /// the platform it was cut for. Never set on a station that shares a transfer complex.
+    pub split: bool,
+}
+
+/// What a rider goes down, in the order the `kind` byte numbers them; `Passage` is every way in
+/// that is a corridor rather than a descent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EntranceKind {
+    Stair,
+    Escalator,
+    Elevator,
+    Ramp,
+    StationHouse,
+    Passage,
+}
+
+/// One published way into a station: where it stands, which station it belongs to, which of that
+/// station's platforms it reaches (`sides` bit d for the pattern direction d, 3 for both or
+/// unknown) and whether a rider may enter and leave by it. A station the agency publishes no
+/// entrance for carries none, and the graph falls back to entering at the station's own point.
+pub struct TransitEntrance {
+    pub lng: f64,
+    pub lat: f64,
+    pub station: u16,
+    pub sides: u8,
+    pub kind: EntranceKind,
+    pub entry: bool,
+    pub exit: bool,
 }
 
 /// One route as its feed publishes it, colours included, so the client can draw a ride in the
@@ -772,26 +802,34 @@ pub struct TransitRoute {
 pub struct TransitPattern {
     pub lane_id: u32,
     pub route_index: u16,
+    /// The GTFS `direction_id`, which at every feed here is also the platform side: a station split
+    /// in two boards this pattern from side `direction`.
+    pub direction: u8,
     pub stops: Vec<u32>,
     pub offsets: Vec<u32>,
 }
 
 pub struct Transit {
     pub stations: Vec<TransitStation>,
+    pub entrances: Vec<TransitEntrance>,
     pub routes: Vec<TransitRoute>,
     pub patterns: Vec<TransitPattern>,
 }
 
-/// TRNS v1: the rail topology the graph pass bakes into stations, platforms and rides. A 56-byte
-/// header, a station table, a route table, a pattern table, a varint pattern-stop blob (per stop a
-/// station index and the seconds since the previous stop, both plain LEB128) and a GRPH-shaped name
-/// table. `decodeTopology` in scripts/transit.ts is the reference decoder; layout:
-/// scripts/README.md.
+/// TRNS v2: the rail topology the graph pass bakes into stations, platforms and rides. A 64-byte
+/// header, a station table, an entrance table, a route table, a pattern table, a varint
+/// pattern-stop blob (per stop a station index and the seconds since the previous stop, both plain
+/// LEB128) and a GRPH-shaped name table. `decodeTopology` in scripts/transit.ts is the reference
+/// decoder; layout: scripts/README.md.
 pub fn read_transit(path: &Path) -> Fallible<Transit> {
     const STATION_BYTES: usize = 16;
+    const ENTRANCE_BYTES: usize = 16;
     const ROUTE_BYTES: usize = 12;
     const PATTERN_BYTES: usize = 16;
     const SURFACE_FLAG: u8 = 1 << 0;
+    const SPLIT_FLAG: u8 = 1 << 1;
+    const ENTRY_FLAG: u8 = 1 << 0;
+    const EXIT_FLAG: u8 = 1 << 1;
 
     let bytes = fs::read(path)?;
     check_magic(&bytes, "TRNS", TRANSIT_FORMAT, path)?;
@@ -805,6 +843,7 @@ pub fn read_transit(path: &Path) -> Fallible<Transit> {
     let scale = f64_at(&bytes, 40);
     let name_offset = u32_at(&bytes, 48) as usize;
     let total = u32_at(&bytes, 52) as usize;
+    let entrance_count = u32_at(&bytes, 56) as usize;
     if bytes.len() != total {
         return Err(format!(
             "{} is {} bytes, not the {total} its header claims",
@@ -838,10 +877,47 @@ pub fn read_transit(path: &Path) -> Fallible<Transit> {
             name: name(u32_at(&bytes, record + 8) as usize),
             complex: u16_at(&bytes, record + 12),
             surface: bytes[record + 14] & SURFACE_FLAG != 0,
+            split: bytes[record + 14] & SPLIT_FLAG != 0,
         });
     }
 
-    let route_table = station_table + station_count * STATION_BYTES;
+    let entrance_table = station_table + station_count * STATION_BYTES;
+    let mut entrances = Vec::with_capacity(entrance_count);
+    for index in 0..entrance_count {
+        let record = entrance_table + index * ENTRANCE_BYTES;
+        let station = u16_at(&bytes, record + 8);
+        if usize::from(station) >= station_count {
+            return Err(format!(
+                "{}: entrance {index} belongs to station {station} of {station_count}",
+                path.display()
+            )
+            .into());
+        }
+        let kind = match bytes[record + 11] {
+            0 => EntranceKind::Stair,
+            1 => EntranceKind::Escalator,
+            2 => EntranceKind::Elevator,
+            3 => EntranceKind::Ramp,
+            4 => EntranceKind::StationHouse,
+            5 => EntranceKind::Passage,
+            other => {
+                return Err(
+                    format!("{}: entrance {index} is of kind {other}", path.display()).into(),
+                );
+            }
+        };
+        entrances.push(TransitEntrance {
+            lng: origin_lng + f64::from(i32_at(&bytes, record)) * scale,
+            lat: origin_lat + f64::from(i32_at(&bytes, record + 4)) * scale,
+            station,
+            sides: bytes[record + 10],
+            kind,
+            entry: bytes[record + 12] & ENTRY_FLAG != 0,
+            exit: bytes[record + 12] & EXIT_FLAG != 0,
+        });
+    }
+
+    let route_table = entrance_table + entrance_count * ENTRANCE_BYTES;
     let mut routes = Vec::with_capacity(route_count);
     for index in 0..route_count {
         let record = route_table + index * ROUTE_BYTES;
@@ -890,6 +966,7 @@ pub fn read_transit(path: &Path) -> Fallible<Transit> {
         patterns.push(TransitPattern {
             lane_id: u32_at(&bytes, record),
             route_index: u16_at(&bytes, record + 4),
+            direction: bytes[record + 6],
             stops,
             offsets,
         });
@@ -897,6 +974,7 @@ pub fn read_transit(path: &Path) -> Fallible<Transit> {
 
     Ok(Transit {
         stations,
+        entrances,
         routes,
         patterns,
     })
@@ -919,16 +997,17 @@ pub fn write_varint(bytes: &mut Vec<u8>, value: u64) {
 mod tests {
     use super::*;
 
-    // TRNS as scripts/transit.ts writes it, small enough to read by eye: two stations, one route,
-    // one pattern riding both. Written here rather than committed so a layout change breaks the
-    // encoder and this decoder against each other rather than against a stale file.
+    // TRNS as scripts/transit.ts writes it, small enough to read by eye: two stations — the first
+    // split, with two entrances, one of them exit-only — one route and one pattern riding both.
+    // Written here rather than committed so a layout change breaks the encoder and this decoder
+    // against each other rather than against a stale file.
     fn transit_fixture() -> Vec<u8> {
-        const HEADER: usize = 56;
+        const HEADER: usize = 64;
         let names = ["Court Sq", "Bergen St", "G", "Crosstown", "gtfs:G"];
         let mut stations = Vec::new();
         for (index, (x, y, name_id, complex, flags)) in [
-            (1_000i32, 2_000i32, 0u32, 3u16, 0u8),
-            (4_000, 6_000, 1, 0, 1),
+            (1_000i32, 2_000i32, 0u32, 3u16, 0b10u8),
+            (4_000, 6_000, 1, 0, 0b01),
         ]
         .into_iter()
         .enumerate()
@@ -940,6 +1019,27 @@ mod tests {
             stations.extend_from_slice(&complex.to_le_bytes());
             stations.push(flags);
             stations.push(0);
+        }
+
+        // Station 0's two doors: a stair onto the northbound side, and an exit-only elevator that
+        // reaches both.
+        let mut entrances = Vec::new();
+        for (index, (x, y, station, sides, kind, flags)) in [
+            (1_100i32, 2_050i32, 0u16, 0b01u8, 0u8, 0b11u8),
+            (900, 1_950, 0, 0b11, 2, 0b10),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(entrances.len(), index * 16);
+            entrances.extend_from_slice(&x.to_le_bytes());
+            entrances.extend_from_slice(&y.to_le_bytes());
+            entrances.extend_from_slice(&station.to_le_bytes());
+            entrances.push(sides);
+            entrances.push(kind);
+            entrances.push(flags);
+            entrances.push(0);
+            entrances.extend_from_slice(&0xFFFFu16.to_le_bytes());
         }
 
         let mut routes = vec![0x11, 0x22, 0x33, 0xEE, 0xDD, 0xCC];
@@ -970,7 +1070,12 @@ mod tests {
             name_table.extend_from_slice(name.as_bytes());
         }
 
-        let name_offset = HEADER + stations.len() + routes.len() + patterns.len() + stop_blob.len();
+        let name_offset = HEADER
+            + stations.len()
+            + entrances.len()
+            + routes.len()
+            + patterns.len()
+            + stop_blob.len();
         let total = name_offset + name_table.len();
         let mut bytes = Vec::with_capacity(total);
         bytes.extend_from_slice(b"TRNS");
@@ -985,7 +1090,10 @@ mod tests {
         bytes.extend_from_slice(&1e-6f64.to_le_bytes());
         bytes.extend_from_slice(&(name_offset as u32).to_le_bytes());
         bytes.extend_from_slice(&(total as u32).to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
         bytes.extend_from_slice(&stations);
+        bytes.extend_from_slice(&entrances);
         bytes.extend_from_slice(&routes);
         bytes.extend_from_slice(&patterns);
         bytes.extend_from_slice(&stop_blob);
@@ -1009,6 +1117,18 @@ mod tests {
         assert_eq!(transit.stations[1].complex, 0);
         assert!(!transit.stations[0].surface);
         assert!(transit.stations[1].surface);
+        assert!(transit.stations[0].split);
+        assert!(!transit.stations[1].split);
+        assert_eq!(transit.entrances.len(), 2);
+        assert_eq!(transit.entrances[0].station, 0);
+        assert_eq!(transit.entrances[0].sides, 0b01);
+        assert_eq!(transit.entrances[0].kind, EntranceKind::Stair);
+        assert!(transit.entrances[0].entry && transit.entrances[0].exit);
+        assert!((transit.entrances[0].lng - -73.4989).abs() < 1e-9);
+        assert!((transit.entrances[0].lat - 40.25205).abs() < 1e-9);
+        assert_eq!(transit.entrances[1].sides, 0b11);
+        assert_eq!(transit.entrances[1].kind, EntranceKind::Elevator);
+        assert!(!transit.entrances[1].entry && transit.entrances[1].exit);
         assert!((transit.stations[1].lng - -73.496).abs() < 1e-9);
         assert!((transit.stations[1].lat - 40.256).abs() < 1e-9);
         assert_eq!(transit.routes.len(), 1);
@@ -1019,6 +1139,7 @@ mod tests {
         assert_eq!(transit.routes[0].id, "gtfs:G");
         assert_eq!(transit.patterns.len(), 1);
         assert_eq!(transit.patterns[0].lane_id, 0xDEAD_BEEF);
+        assert_eq!(transit.patterns[0].direction, 1);
         assert_eq!(transit.patterns[0].stops, vec![0, 1]);
         assert_eq!(transit.patterns[0].offsets, vec![0, 300]);
 
@@ -1045,6 +1166,32 @@ mod tests {
                     .iter()
                     .all(|station| !station.name.is_empty()),
                 "{city} names every station"
+            );
+            for entrance in &transit.entrances {
+                assert!(
+                    usize::from(entrance.station) < transit.stations.len(),
+                    "{city} entrance names a station"
+                );
+                assert!(
+                    entrance.sides & 0b11 != 0,
+                    "{city} entrance reaches a platform"
+                );
+                assert!(
+                    entrance.entry || entrance.exit,
+                    "{city} entrance is a way in or a way out"
+                );
+            }
+            let mut complex_size: std::collections::HashMap<u16, usize> = Default::default();
+            for station in &transit.stations {
+                if station.complex != 0 {
+                    *complex_size.entry(station.complex).or_default() += 1;
+                }
+            }
+            assert!(
+                transit.stations.iter().all(|station| {
+                    !station.split || complex_size.get(&station.complex).copied().unwrap_or(0) <= 1
+                }),
+                "{city} splits no station that shares a transfer complex"
             );
             for pattern in &transit.patterns {
                 assert!(pattern.stops.len() >= 2, "{city} pattern rides somewhere");

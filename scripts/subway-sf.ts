@@ -40,6 +40,7 @@ import {
   type TransitStation,
   transferComplexes,
 } from "./subway-format";
+import { muniStationName } from "./transit";
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const SUBWAY_DIR = join(DATA_DIR, "subway");
@@ -235,10 +236,14 @@ function bartRoutes(feed: GtfsFeed): FeedRoute[] {
 // location_type 2, which never appear in stop_times and so never reach this). Muni publishes no
 // parent_station at all, which the same code path handles by a stop standing in for itself — the
 // kerb-to-kerb pairs it leaves behind are what the name merge below folds.
+//
+// `displayName` is how a feed that names a stop for the platform it is turns that into the place a
+// marker is labelled with; a feed whose stop_name is already the station's, as BART's is, has none.
 function feedStations(
   feed: GtfsFeed,
   routeOfTrip: ReadonlyMap<string, number>,
   complexes: ReadonlyMap<string, number>,
+  displayName: (feedName: string) => string = (feedName) => feedName,
 ): TransitStation[] {
   const stopRow = new Map(feed.stops.map((stop) => [stop.stop_id, stop]));
   const masks = new Map<string, number>();
@@ -264,7 +269,7 @@ function feedStations(
     stations.push({
       lat,
       lng,
-      name: row.stop_name?.trim() ?? "",
+      name: displayName(row.stop_name?.trim() ?? ""),
       routeMask,
       complex: complexes.get(stationId) ?? 0,
     });
@@ -370,6 +375,7 @@ async function ingestSubwaySf(cityId: string): Promise<void> {
       muni,
       tripRouteIndex(muni, muniFeedRoutes, indexOf),
       muniComplexes,
+      muniStationName,
     ),
     ...feedStations(
       bart,

@@ -130,6 +130,9 @@ export interface GraphSpec {
     stop: number;
   }[];
   ride?: readonly { edge: number; route: number }[];
+  // Per street door the street it opens onto: a name id and a side label, as the tiler reads them
+  // off the walking edge the door was cut into.
+  doors?: readonly { edge: number; street: number; side: number }[];
   // Sections to leave out of the file, standing in for a graph written before that column was
   // baked. Its directory entry stays, zeroed, so every later section is still where it was.
   omit?: readonly GraphSection[];
@@ -229,8 +232,16 @@ function encodeTransitTables(spec: GraphSpec): Uint8Array {
   const routes = spec.transitRoutes ?? [];
   const board = spec.board ?? [];
   const ride = spec.ride ?? [];
+  const doors = spec.doors ?? [];
   const table = new Uint8Array(
-    4 + 12 * routes.length + 4 + 12 * board.length + 4 + 8 * ride.length,
+    4 +
+      12 * routes.length +
+      4 +
+      12 * board.length +
+      4 +
+      8 * ride.length +
+      4 +
+      8 * doors.length,
   );
   const view = new DataView(table.buffer);
   view.setUint32(0, routes.length, true);
@@ -257,6 +268,14 @@ function encodeTransitTables(spec: GraphSpec): Uint8Array {
   for (const leg of ride) {
     view.setUint32(at, leg.edge, true);
     view.setUint16(at + 4, leg.route, true);
+    at += 8;
+  }
+  view.setUint32(at, doors.length, true);
+  at += 4;
+  for (const door of doors) {
+    view.setUint32(at, door.edge, true);
+    view.setUint16(at + 4, door.street, true);
+    table[at + 6] = door.side;
     at += 8;
   }
   return table;
