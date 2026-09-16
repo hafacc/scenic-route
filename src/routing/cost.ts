@@ -38,10 +38,25 @@ import {
   transitForward,
 } from "./graph";
 import { shedShade } from "./sheds";
+import {
+  edgeGrade,
+  maxSpeedFactor,
+  WALK_METERS_PER_SECOND,
+  walkSecondsOf,
+} from "./walk-speed";
 
-// NYC DCP's Pedestrian Level of Service Study (2006) timed 8,978 Lower Manhattan pedestrians at a
-// mean of 1.30 m/s; work trips ran 1.34, over-65s 1.11.
-export const WALK_METERS_PER_SECOND = 1.3;
+// The walking-speed model lives in ./walk-speed so the graph can bake its seconds without reaching
+// back into the cost model. Re-exported because everything that prices a walk asks this module.
+export {
+  edgeAscentGrade,
+  edgeDescentGrade,
+  edgeGrade,
+  gradeSpeedFactor,
+  maxSpeedFactor,
+  WALK_METERS_PER_SECOND,
+  walkSecondsPerMeter,
+  walkSpeedOn,
+} from "./walk-speed";
 
 // What one crossing costs beyond walking its length. The same study's 50 timed walks over 18
 // signalized blocks lost 75-155 s to crosswalks against 1,490-1,850 s of walking — about 3 s a
@@ -139,11 +154,6 @@ export const MAX_HIGHWAY_WEIGHT = 3;
 // hill is a penalty, its minimum factor is 1, and `minMultiplier` never sees it.
 export const MAX_HILL_WEIGHT = 5;
 
-// The grade each relief byte's full range spans. Mirrors REFERENCE_GRADE in crates/tiler/src/relief.rs
-// — the byte carries a fraction, and this is what the fraction is a fraction OF. Change one and the
-// other is wrong, which is why the graph format version moves with it.
-const RELIEF_MAX_GRADE = 0.35;
-
 // The grade the hill slider is calibrated against: at this steepness the penalty is exactly the
 // weight, which is where the Potrero measurements above were taken. Steeper costs more than
 // proportionally and gentler costs less, because the penalty is SQUARED in the grade.
@@ -154,23 +164,6 @@ const RELIEF_MAX_GRADE = 0.35;
 // four gradual ones. Squaring breaks the tie the way a walker would: spread the climb out and it
 // costs less, concentrate it and it costs more.
 const HILL_REFERENCE_GRADE = 0.12;
-
-// The height an edge climbs, and the height it drops, over its length, walking it a -> b: real
-// grade fractions rather than the bytes' own scale.
-export function edgeAscentGrade(graph: RoutingGraph, edge: number): number {
-  return (graph.edgeAscent[edge] / 255) * RELIEF_MAX_GRADE;
-}
-
-export function edgeDescentGrade(graph: RoutingGraph, edge: number): number {
-  return (graph.edgeDescent[edge] / 255) * RELIEF_MAX_GRADE;
-}
-
-// The absolute grade of one edge: everything it climbs plus everything it drops, over its length.
-// Direction-free by construction, which is what the hill penalty wants — a route that avoids a hill
-// avoids it both ways. Reaches 70% on an edge that crests, since the two bytes clamp separately.
-export function edgeGrade(graph: RoutingGraph, edge: number): number {
-  return edgeAscentGrade(graph, edge) + edgeDescentGrade(graph, edge);
-}
 
 // Which way an edge is being walked, given the node it is entered by. The `-1` no-node default (and
 // every test that passes it) means the stored a -> b direction.
@@ -188,96 +181,6 @@ export function hillFractionOf(graph: RoutingGraph, edge: number): number {
   return Math.min(1, edgeGrade(graph, edge) / HILL_REFERENCE_GRADE);
 }
 
-// Tobler's hiking function, which is where the shape of "steep is slow" comes from: walking speed
-// falls off exponentially in the grade, and its peak sits at a gentle DESCENT rather than at flat.
-// Signed, so a downhill is no longer charged the climb's slowdown: a 5% descent is the fastest
-// walking there is (factor 1.1912) and a 10% descent is back to flat, past which dropping is slow
-// and unpleasant again.
-//
-// Normalized to 1 on the flat, so it scales the measured 1.3 m/s rather than replacing it with
-// Tobler's own 1.4.
-const TOBLER_FALLOFF = 3.5;
-const TOBLER_PEAK_GRADE = 0.05; // the descent Tobler walks fastest on
-
-export function gradeSpeedFactor(grade: number): number {
-  return Math.exp(
-    -TOBLER_FALLOFF * (Math.abs(grade + TOBLER_PEAK_GRADE) - TOBLER_PEAK_GRADE),
-  );
-}
-
-// The speed multiplier for an edge that climbs `ascent` and drops `descent` per metre of it. With
-// g = ascent + descent, the climbing run is a fraction ascent/g of the length and rises `ascent`
-// times the length, so its grade is exactly g, and the dropping run's is -g. That collapses the whole
-// edge to one effective speed: seconds = L/(V*g) * (ascent/f(g) + descent/f(-g)).
-//
-// Exact when the edge really is one constant-grade climb followed by one constant-grade drop, an
-// approximation otherwise: the bytes do not say how the height was distributed along the polyline,
-// and this reads them as the arrangement where every metre of it tips at the same |grade|.
-//
-// The result is a weighted harmonic mean of f(g) and f(-g), so it can exceed 1 only where f(-g)
-// does, i.e. on descents under 10%; `maxSpeedFactor` below is what keeps the A* bound honest.
-function speedFactor(ascent: number, descent: number): number {
-  const grade = ascent + descent;
-  if (grade === 0) {
-    return 1;
-  } else {
-    return (
-      grade /
-      (ascent / gradeSpeedFactor(grade) + descent / gradeSpeedFactor(-grade))
-    );
-  }
-}
-
-// How fast this edge is actually walked, in the given direction (the stored a -> b one by default).
-// Every place that turns a length into seconds goes through here, so the ETA and the cost cannot
-// disagree about how long a hill takes.
-export function walkSpeedOn(
-  graph: RoutingGraph,
-  edge: number,
-  forward = true,
-): number {
-  const ascent = edgeAscentGrade(graph, edge);
-  const descent = edgeDescentGrade(graph, edge);
-  return (
-    WALK_METERS_PER_SECOND *
-    (forward ? speedFactor(ascent, descent) : speedFactor(descent, ascent))
-  );
-}
-
-// The fastest any edge in the graph can be walked, as a multiple of the flat speed — the divisor the
-// A* heuristic's per-metre floor needs now that a descent can beat flat. Deliberately computed here
-// rather than baked into the graph header: a figure in the file would go silently stale the moment
-// the Tobler constants moved without a format bump.
-//
-// Memoized per graph because `solveApprox` runs this on every drag frame. The scan is cheap: an
-// edge's factor is a weighted harmonic mean of f(g) and f(-g), so it cannot exceed f(-g), which is
-// itself at most 1 once the total grade reaches twice Tobler's peak. So only gentle edges need an
-// `exp` at all, and a flat city (every byte 0) settles at exactly 1 without one.
-const DOWNHILL_GRADE_CEILING = 2 * TOBLER_PEAK_GRADE;
-const maxSpeedFactors = new WeakMap<RoutingGraph, number>();
-
-export function maxSpeedFactor(graph: RoutingGraph): number {
-  const memoized = maxSpeedFactors.get(graph);
-  if (memoized !== undefined) {
-    return memoized;
-  }
-  let best = 1;
-  for (let edge = 0; edge < graph.edgeAscent.length; edge++) {
-    const grade = edgeGrade(graph, edge);
-    if (grade === 0 || grade >= DOWNHILL_GRADE_CEILING) {
-      continue;
-    }
-    // Either direction may be walked, and the faster one is whichever puts more of the edge on the
-    // descent, so the bound reads the larger byte as the drop.
-    const ascent = Math.min(
-      edgeAscentGrade(graph, edge),
-      edgeDescentGrade(graph, edge),
-    );
-    best = Math.max(best, speedFactor(ascent, grade - ascent));
-  }
-  maxSpeedFactors.set(graph, best);
-  return best;
-}
 // Unchanged by the raised ceiling above, so no existing route moves; it now reads 17% on the slider
 // rather than 50%. It already clears the bar industrial set for its own default: 0.5 moves 64% of
 // the seeded trips for 1.6% more walking, where industrial went to 1 because 0.5 moved under half.
@@ -764,12 +667,97 @@ export function rawSeconds(
     return graph.edgeDurationSeconds[edge];
   } else {
     return (
-      graph.edgeLength[edge] /
-        walkSpeedOn(graph, edge, edgeForward(graph, edge, fromNode)) +
-      crossingWait(graph, edge, fromNode)
+      walkedSeconds(graph, edge, fromNode) + crossingWait(graph, edge, fromNode)
     );
   }
 }
+
+// The baked seconds to walk one whole edge, entered at `fromNode`. A partial walk — the two end
+// edges of a route — is not this: it is its own length over the edge's speed.
+function walkedSeconds(
+  graph: RoutingGraph,
+  edge: number,
+  fromNode: number,
+): number {
+  const baked = walkSecondsOf(graph);
+  return edgeForward(graph, edge, fromNode)
+    ? baked.forward[edge]
+    : baked.backward[edge];
+}
+
+// Both prices of one step: what the search costs it at, and what the walker's clock advances by.
+// A boat's sailing and a train's departure are timetable lookups, and the relax loop wants both
+// figures off a single one of them. Written into a record the caller owns, so the loop allocates
+// nothing per edge it relaxes.
+export interface EdgeSeconds {
+  effective: number;
+  raw: number;
+}
+
+export function edgeSeconds(
+  graph: RoutingGraph,
+  edge: number,
+  weights: RouteWeights,
+  elapsedSeconds: number,
+  fromNode: number,
+  into: EdgeSeconds,
+): void {
+  const kind = edgeKind(graph, edge);
+  if (kind === "board" || kind === "ride" || kind === "access") {
+    // The topology is directed, and the graph is not: refusing the reverse here is what stops a
+    // route riding a train backwards or stepping onto a platform through an alight edge. A step that
+    // costs Infinity is never taken, so its raw seconds go unasked for — which is what keeps an
+    // alight edge from costing a timetable lookup every time the frontier sweeps past it.
+    if (
+      !transitForward(graph, edge, fromNode) ||
+      (kind === "board" && !weights.allowTransit)
+    ) {
+      into.raw = 0;
+      into.effective = Number.POSITIVE_INFINITY;
+    } else if (kind === "access") {
+      into.raw = graph.edgeDurationSeconds[edge];
+      into.effective = into.raw; // the walk in and out of a station, priced plainly
+    } else {
+      into.raw =
+        kind === "board"
+          ? boardSeconds(graph, edge, elapsedSeconds)
+          : graph.edgeDurationSeconds[edge];
+      into.effective = into.raw * transitMultiplier(weights);
+    }
+  } else if (kind === "ferry") {
+    if (!weights.allowFerries) {
+      into.raw = 0;
+      into.effective = Number.POSITIVE_INFINITY;
+    } else {
+      const { wait, crossing } = ferrySeconds(
+        graph,
+        edge,
+        fromNode,
+        elapsedSeconds,
+      );
+      into.raw = wait + crossing;
+      // The ferry weight is a taste for BEING on a boat, so it discounts the crossing and leaves the
+      // wait at full price — otherwise a strong preference would make standing on a pier cheap, and
+      // the router would pick the later sailing. The baked figure has the two fused and is
+      // discounted whole, which is the closest it can come.
+      //
+      // The shelter preference splits the same way, and for the same reason it is the crossing that
+      // gets it: a boat has a cabin and a pier does not.
+      into.effective = wait + crossing * ferryCrossingDiscount(weights);
+    }
+  } else {
+    const walked = walkedSeconds(graph, edge, fromNode);
+    into.raw = walked + crossingWait(graph, edge, fromNode);
+    // The crossing price is added AFTER the multiplier, not multiplied by it: it is a price on
+    // crossing rather than a property of the pavement, and a strong shade preference discounting it
+    // is exactly the thing it exists to stop.
+    into.effective =
+      walked * edgeMultiplier(graph, edge, weights, elapsedSeconds) +
+      crossingPrice(graph, edge, fromNode, weights);
+  }
+}
+
+const oneEdge: EdgeSeconds = { effective: 0, raw: 0 };
 
 // Cost is effective seconds: raw time times the clipped discount. A ferry discounts by the ferry
 // weight (unusable when ferries are barred); every walked edge by the scenic multiplier above.
@@ -782,51 +770,8 @@ export function effSeconds(
   elapsedSeconds = 0,
   fromNode = -1,
 ): number {
-  const kind = edgeKind(graph, edge);
-  if (kind === "board" || kind === "ride" || kind === "access") {
-    // The topology is directed, and the graph is not: refusing the reverse here is what stops a
-    // route riding a train backwards or stepping onto a platform through an alight edge.
-    if (!transitForward(graph, edge, fromNode)) {
-      return Number.POSITIVE_INFINITY;
-    } else if (kind === "access") {
-      return graph.edgeDurationSeconds[edge]; // the walk in and out of a station, priced plainly
-    } else if (kind === "board") {
-      return weights.allowTransit
-        ? boardSeconds(graph, edge, elapsedSeconds) * transitMultiplier(weights)
-        : Number.POSITIVE_INFINITY;
-    } else {
-      return graph.edgeDurationSeconds[edge] * transitMultiplier(weights);
-    }
-  } else if (kind === "ferry") {
-    if (!weights.allowFerries) {
-      return Number.POSITIVE_INFINITY;
-    } else {
-      const { wait, crossing } = ferrySeconds(
-        graph,
-        edge,
-        fromNode,
-        elapsedSeconds,
-      );
-      // The ferry weight is a taste for BEING on a boat, so it discounts the crossing and leaves the
-      // wait at full price — otherwise a strong preference would make standing on a pier cheap, and
-      // the router would pick the later sailing. The baked figure has the two fused and is discounted
-      // whole, which is the closest it can come.
-      //
-      // The shelter preference splits the same way, and for the same reason it is the crossing that
-      // gets it: a boat has a cabin and a pier does not.
-      return wait + crossing * ferryCrossingDiscount(weights);
-    }
-  } else {
-    // The crossing price is added AFTER the multiplier, not multiplied by it: it is a price on
-    // crossing rather than a property of the pavement, and a strong shade preference discounting it
-    // is exactly the thing it exists to stop.
-    return (
-      (graph.edgeLength[edge] /
-        walkSpeedOn(graph, edge, edgeForward(graph, edge, fromNode))) *
-        edgeMultiplier(graph, edge, weights, elapsedSeconds) +
-      crossingPrice(graph, edge, fromNode, weights)
-    );
-  }
+  edgeSeconds(graph, edge, weights, elapsedSeconds, fromNode, oneEdge);
+  return oneEdge.effective;
 }
 
 // What this edge adds for being a crossing. Zero once crossings are allowed freely, and otherwise

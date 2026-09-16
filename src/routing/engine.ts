@@ -11,11 +11,14 @@ import type { RoutingGraph } from "./graph";
 import { type CachedRoute, RouteCache } from "./route-cache";
 import {
   findRoute,
+  networkMetersTo,
   type RouteResult,
   RouteSolver,
   reverseResult,
+  SearchLabels,
+  type SearchReuse,
 } from "./search";
-import type { Snap } from "./snap";
+import { haversineMeters, type Snap } from "./snap";
 
 // The greatest each scored factor reaches anywhere on this graph, which is what a card's lead over
 // the others is measured against. Only the discounts are scored, so the penalties are left out and
@@ -30,6 +33,9 @@ export function graphFactorMax(
   return maxima;
 }
 
+// How far past the straight line the network estimate is measured. See `reuseFor`.
+const NETWORK_RADIUS_MULTIPLE = 3;
+
 export class RoutingEngine {
   // Kept per city, as the page keeps its own: switching and coming back must not re-decode 600k edges.
   private readonly graphs = new Map<
@@ -37,7 +43,17 @@ export class RoutingEngine {
     { graph: RoutingGraph; contexts: RouteContexts }
   >();
   private prepared: RoutingGraph | null = null;
-  private cache = new RouteCache();
+  // The label arrays and the built routes one prepared graph's searches hand each other. A plan is
+  // sixteen searches over one graph at one departure, which is exactly the run these span.
+  private labels: SearchLabels | null = null;
+  private readonly built = new Map<string, RouteResult>();
+  // The destination the network estimate below was measured to, how far out it was measured, and the
+  // estimate itself. One backward Dijkstra serves every search to that destination: a plan's
+  // sixteen, and every slider move the reader makes afterwards.
+  private networkKey = "";
+  private networkRadius = 0;
+  private networkMeters: Float32Array | null = null;
+  private cache = this.newCache();
   private dragWhich: "start" | "dest" = "dest";
   private dragSolver: RouteSolver | null = null;
 
@@ -58,8 +74,12 @@ export class RoutingEngine {
       throw new Error(`no routing graph loaded for ${cityId}`);
     }
     const sync = await entry.contexts.sync(entry.graph, city, clock, weights);
+    // A built route is only good for the fields it was costed against, and only for the endpoints it
+    // was asked about: both are settled for the run of searches this call opens, and neither
+    // survives into the next one.
+    this.built.clear();
     if (sync.rebuilt) {
-      this.cache = new RouteCache();
+      this.cache = this.newCache();
       this.dragSolver = null;
     }
     this.prepared = entry.graph;
@@ -75,7 +95,52 @@ export class RoutingEngine {
 
   // Uncached, unlike route(): a plan calls this once per weight vector.
   search(start: Snap, dest: Snap, weights: RouteWeights): RouteResult | null {
-    return findRoute(this.graph, start, dest, weights);
+    return this.searchWith(this.graph, start, dest, weights);
+  }
+
+  private searchWith(
+    graph: RoutingGraph,
+    start: Snap,
+    dest: Snap,
+    weights: RouteWeights,
+  ): RouteResult | null {
+    return findRoute(
+      graph,
+      start,
+      dest,
+      weights,
+      this.reuseFor(graph, start, dest),
+    );
+  }
+
+  private reuseFor(graph: RoutingGraph, start: Snap, dest: Snap): SearchReuse {
+    if (this.labels?.nodeCount !== graph.nodeCount) {
+      this.labels = new SearchLabels(graph.nodeCount);
+    }
+    // Measured only as far out as a route could plausibly wander, because the backward search is a
+    // flat cost and a short trip cannot earn it back: settling the whole of New York took longer
+    // than the searches it saved on a two-kilometre walk. Three times the straight line is well
+    // past the most roundabout route anything here produces, and past it the estimate falls back to
+    // the straight line, which is a lower bound in its own right.
+    const radius =
+      NETWORK_RADIUS_MULTIPLE *
+      haversineMeters(
+        start.point.lat,
+        start.point.lng,
+        dest.point.lat,
+        dest.point.lng,
+      );
+    const key = `${graph.hash}|${dest.edge}@${dest.metersFromA}`;
+    if (this.networkKey !== key || radius > this.networkRadius) {
+      this.networkKey = key;
+      this.networkRadius = radius;
+      this.networkMeters = networkMetersTo(graph, dest, radius);
+    }
+    return {
+      labels: this.labels,
+      results: this.built,
+      networkMeters: this.networkMeters ?? undefined,
+    };
   }
 
   route(start: Snap, dest: Snap, weights: RouteWeights): CachedRoute {
@@ -83,7 +148,13 @@ export class RoutingEngine {
   }
 
   resetCache(): void {
-    this.cache = new RouteCache();
+    this.cache = this.newCache();
+  }
+
+  // Always through the engine's own search: a cache built around the bare `findRoute` still answers,
+  // but silently without the label reuse, the network estimate or the memo of what it already built.
+  private newCache(): RouteCache {
+    return new RouteCache(this.searchWith.bind(this));
   }
 
   dragStart(which: "start" | "dest"): void {

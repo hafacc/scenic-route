@@ -10,10 +10,11 @@
 
 import {
   crossingWait,
+  type EdgeSeconds,
   edgeCover,
   edgeMultiplier,
+  edgeSeconds,
   edgeShed,
-  effSeconds,
   ferryCredit,
   ferrySeconds,
   heuristicFloor,
@@ -24,7 +25,7 @@ import {
   shelterAttrOf,
   transitCredit,
   walkSecondsCoeff,
-  walkSpeedOn,
+  walkSecondsPerMeter,
 } from "./cost";
 import {
   type EdgeKind,
@@ -68,7 +69,7 @@ export function stepSeconds(
     return rawSeconds(graph, step.edge, from, elapsedSeconds);
   } else {
     return (
-      step.lengthMeters / walkSpeedOn(graph, step.edge, step.forward) +
+      step.lengthMeters * walkSecondsPerMeter(graph, step.edge, step.forward) +
       crossingWait(graph, step.edge, from)
     );
   }
@@ -261,6 +262,45 @@ function ferryLegs(
   return legs;
 }
 
+// The interior edges a settled search's parent tree holds, in route order, and the start-edge
+// endpoint the route leaves through. Walked back from the destination and reversed rather than
+// unshifted, which on a thousand-edge route is a thousand array shifts.
+interface PathWalk {
+  interior: number[];
+  seed: number; // startA or startB, whichever the route left the start edge by
+}
+
+function walkParents(
+  graph: RoutingGraph,
+  parentEdge: Int32Array,
+  bestDestNode: number,
+): PathWalk {
+  const interior: number[] = [];
+  let node = bestDestNode;
+  while (parentEdge[node] !== -1) {
+    const edge = parentEdge[node];
+    interior.push(edge);
+    node = otherEnd(graph, edge, node);
+  }
+  interior.reverse();
+  return { interior, seed: node };
+}
+
+// What distinguishes one settled route from another: the two snaps it runs between, its interior
+// edges, and the endpoint it reaches the destination edge through. Taken off the parent tree, so a
+// caller that already holds this route pays nothing to find that out.
+function pathSignature(
+  start: Snap,
+  dest: Snap,
+  walk: PathWalk | null,
+  bestDestNode: number,
+): string {
+  const ends = `${start.edge}@${start.metersFromA}>${dest.edge}@${dest.metersFromA}`;
+  return walk
+    ? `${ends}|${bestDestNode}:${walk.interior.join(",")}`
+    : `${ends}|same`;
+}
+
 // Build the oriented route from a settled search: the parent-edge tree, the dest endpoint the
 // route reaches through (bestDestNode, or -1 with bestSameEdge for a walk along the shared edge),
 // and the two snaps. Reads only the parent tree and graph geometry — no distance array needed.
@@ -271,6 +311,7 @@ function reconstruct(
   parentEdge: Int32Array,
   bestDestNode: number,
   bestSameEdge: boolean,
+  walked?: PathWalk,
 ): RouteResult {
   const startB = graph.edgeNodeB[start.edge];
   const startLength = graph.edgeLength[start.edge];
@@ -290,14 +331,8 @@ function reconstruct(
     appendPolyline(lngsOut, latsOut, lngs, lats, forward, true);
   } else {
     // Interior edges from the start-edge endpoint we depart through to the dest-edge endpoint.
-    const interior: number[] = [];
-    let node = bestDestNode;
-    while (parentEdge[node] !== -1) {
-      const edge = parentEdge[node];
-      interior.unshift(edge);
-      node = otherEnd(graph, edge, node);
-    }
-    const seed = node; // startA or startB, whichever the route left the start edge by
+    const { interior, seed } =
+      walked ?? walkParents(graph, parentEdge, bestDestNode);
 
     const startForward = seed === startB;
     const startWalked = startForward
@@ -500,19 +535,133 @@ function reconstruct(
   };
 }
 
+// What a run of searches over one prepared graph can hand the next one: the label arrays, and the
+// routes already built for the paths already found. Both are keyed to a graph and a departure — a
+// plan is exactly that, sixteen searches over one — and the engine is what holds them.
+export interface SearchReuse {
+  labels?: SearchLabels;
+  // Per node, the metres of the shortest path along the network to the destination, or Infinity for
+  // a node the backward search did not reach. See `networkMetersTo`.
+  networkMeters?: Float32Array;
+  // Path signature -> the route already built for it. A plan asks the same question at sixteen
+  // weight vectors and gets the same path back at most of them; the second one costs no stitching.
+  results?: Map<string, RouteResult>;
+}
+
+// The per-node labels one search writes. Held across searches because a fresh set is 11 MB on the
+// New York graph, and a plan allocates sixteen of them; cleared by walking only the nodes the last
+// search touched, which is what makes reuse cheaper than reallocation.
+export class SearchLabels {
+  readonly distance: Float64Array;
+  readonly elapsed: Float64Array;
+  readonly parentEdge: Int32Array;
+  readonly heuristic: Float64Array;
+  private readonly touched: number[] = [];
+
+  constructor(readonly nodeCount: number) {
+    this.distance = new Float64Array(nodeCount).fill(Number.POSITIVE_INFINITY);
+    this.elapsed = new Float64Array(nodeCount);
+    this.parentEdge = new Int32Array(nodeCount).fill(-1);
+    this.heuristic = new Float64Array(nodeCount).fill(-1);
+  }
+
+  // Every node this search gave a label to. A node is touched exactly when it is first given a
+  // finite distance, which is also the only way it can acquire a parent or a cached estimate.
+  touch(node: number): void {
+    this.touched.push(node);
+  }
+
+  reset(): void {
+    for (const node of this.touched) {
+      this.distance[node] = Number.POSITIVE_INFINITY;
+      this.elapsed[node] = 0;
+      this.parentEdge[node] = -1;
+      this.heuristic[node] = -1;
+    }
+    this.touched.length = 0;
+  }
+}
+
+// Every node's distance to `dest` in plain metres, along the network rather than through the air:
+// one backward Dijkstra from the destination over every edge at its own length, rides and crossings
+// included, ignoring direction, weights and gates.
+//
+// This is what the A* estimate measures instead of the straight line. It keeps the estimate a lower
+// bound — any path from a node to the destination is at least as long, in metres, as the shortest
+// one, which is what this holds — and it is a far tighter one wherever the network cannot go
+// straight: across a river, around a park, along a waterfront. The credit and floor arguments above
+// are untouched, since both only need "d is at most the metres of any remaining path".
+//
+// Rides and ferries are in it at their own lengths and are not gated: a table that ignored a barred
+// ferry would report a longer distance than a search that could not use it — which is still a lower
+// bound for a search that CAN, and lets one table serve every weight vector of a plan.
+//
+// `radiusMeters` bounds what it settles. Only a SETTLED node's figure is kept: past the frontier the
+// table holds Infinity and the caller falls back to the straight line, which is a lower bound in its
+// own right.
+export function networkMetersTo(
+  graph: RoutingGraph,
+  dest: Snap,
+  radiusMeters = Number.POSITIVE_INFINITY,
+): Float32Array {
+  const meters = new Float32Array(graph.nodeCount).fill(
+    Number.POSITIVE_INFINITY,
+  );
+  const destA = graph.edgeNodeA[dest.edge];
+  const destB = graph.edgeNodeB[dest.edge];
+  const settled = new Uint8Array(graph.nodeCount);
+  const heap = new NodeHeap(1024);
+  meters[destA] = dest.metersFromA;
+  meters[destB] = graph.edgeLength[dest.edge] - dest.metersFromA;
+  heap.push(meters[destA], destA);
+  heap.push(meters[destB], destB);
+  while (heap.length > 0) {
+    const key = heap.peekKey();
+    const node = heap.pop();
+    if (key > meters[node] || key > radiusMeters) {
+      continue;
+    }
+    settled[node] = 1;
+    for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
+      const edge = graph.adjacency[slot];
+      const neighbour = otherEnd(graph, edge, node);
+      const reached = key + graph.edgeLength[edge];
+      if (reached < meters[neighbour]) {
+        meters[neighbour] = reached;
+        // The stored figure, not the one just computed: the table is floats, and pushing the double
+        // would leave a key above the label it stands for, which the staleness test drops.
+        heap.push(meters[neighbour], neighbour);
+      }
+    }
+  }
+  // A node the cap stopped short of keeps the label its settled neighbour relaxed it to, which is an
+  // UPPER bound on its distance — a shorter way round is exactly what the cap left unexplored. The
+  // estimate needs a lower bound, so those fall back to the straight line.
+  for (let node = 0; node < meters.length; node += 1) {
+    if (settled[node] === 0) {
+      meters[node] = Number.POSITIVE_INFINITY;
+    }
+  }
+  return meters;
+}
+
 export function findRoute(
   graph: RoutingGraph,
   start: Snap,
   dest: Snap,
   weights: RouteWeights,
+  reuse?: SearchReuse,
 ): RouteResult | null {
   const nodeCount = graph.nodeCount;
-  const distance = new Float64Array(nodeCount).fill(Number.POSITIVE_INFINITY);
+  const labels =
+    reuse?.labels?.nodeCount === nodeCount
+      ? reuse.labels
+      : new SearchLabels(nodeCount);
+  labels.reset();
+  const { distance, parentEdge, heuristic } = labels;
   // Raw walking seconds along each node's min-cost path — the ACTUAL time elapsed, not the weighted
   // cost, so the shade field advances the sun by how long the walk really takes to get here.
-  const elapsed = new Float64Array(nodeCount);
-  const parentEdge = new Int32Array(nodeCount).fill(-1);
-  const heuristic = new Float64Array(nodeCount).fill(-1);
+  const elapsed = labels.elapsed;
 
   // The walking floor (seconds per straight-line metre), the bounded ferry credit and the floor that
   // keeps the credits from flattening the estimate all depend on the weights, so they are computed
@@ -520,14 +669,20 @@ export function findRoute(
   const walkCoeff = walkSecondsCoeff(graph, weights);
   const credit = ferryCredit(graph, weights) + transitCredit(graph, weights);
   const floor = heuristicFloor(graph, weights);
+  const network = reuse?.networkMeters;
   const heuristicOf = (node: number): number => {
     if (heuristic[node] < 0) {
-      const meters = haversineMeters(
-        graph.originLat + graph.nodeQy[node] * graph.scale,
-        graph.originLng + graph.nodeQx[node] * graph.scale,
-        dest.point.lat,
-        dest.point.lng,
-      );
+      // The network distance where the backward search reached this node, the straight line where it
+      // did not. Both are lower bounds on the metres left to walk; the first is the tighter one.
+      const alongNetwork = network?.[node] ?? Number.POSITIVE_INFINITY;
+      const meters = Number.isFinite(alongNetwork)
+        ? alongNetwork
+        : haversineMeters(
+            graph.originLat + graph.nodeQy[node] * graph.scale,
+            graph.originLng + graph.nodeQx[node] * graph.scale,
+            dest.point.lat,
+            dest.point.lng,
+          );
       heuristic[node] = Math.max(
         0,
         walkCoeff * meters - credit,
@@ -544,10 +699,10 @@ export function findRoute(
   const startA = graph.edgeNodeA[start.edge];
   const startB = graph.edgeNodeB[start.edge];
   const startMultiplier = edgeMultiplier(graph, start.edge, weights);
-  const startSpeedToA = walkSpeedOn(graph, start.edge, false);
-  const startSpeedToB = walkSpeedOn(graph, start.edge, true);
-  const startPerMeterToA = startMultiplier / startSpeedToA;
-  const startPerMeterToB = startMultiplier / startSpeedToB;
+  const startSecondsToA = walkSecondsPerMeter(graph, start.edge, false);
+  const startSecondsToB = walkSecondsPerMeter(graph, start.edge, true);
+  const startPerMeterToA = startMultiplier * startSecondsToA;
+  const startPerMeterToB = startMultiplier * startSecondsToB;
   const startLength = graph.edgeLength[start.edge];
 
   const destA = graph.edgeNodeA[dest.edge];
@@ -557,8 +712,8 @@ export function findRoute(
   // the elapsed raw seconds of the endpoint the route reaches it through. Arriving through node a
   // walks it a -> b, through node b the other way.
   const destPerMeterAt = (node: number): number =>
-    edgeMultiplier(graph, dest.edge, weights, elapsed[node]) /
-    walkSpeedOn(graph, dest.edge, node === destA);
+    edgeMultiplier(graph, dest.edge, weights, elapsed[node]) *
+    walkSecondsPerMeter(graph, dest.edge, node === destA);
 
   let bestTotal = Number.POSITIVE_INFINITY;
   let bestDestNode = -1; // the edge endpoint the winning route reaches the dest edge through
@@ -587,11 +742,15 @@ export function findRoute(
   distance[startA] = start.metersFromA * startPerMeterToA;
   distance[startB] = (startLength - start.metersFromA) * startPerMeterToB;
   // Seed the elapsed clock with the raw time to walk each half of the start edge to its node.
-  elapsed[startA] = start.metersFromA / startSpeedToA;
-  elapsed[startB] = (startLength - start.metersFromA) / startSpeedToB;
+  elapsed[startA] = start.metersFromA * startSecondsToA;
+  elapsed[startB] = (startLength - start.metersFromA) * startSecondsToB;
+  labels.touch(startA);
+  labels.touch(startB);
   heap.push(distance[startA] + heuristicOf(startA), startA);
   heap.push(distance[startB] + heuristicOf(startB), startB);
 
+  // One record for the whole search: both prices of every edge the loop relaxes are written into it.
+  const priced: EdgeSeconds = { effective: 0, raw: 0 };
   let settled = 0;
   while (heap.length > 0) {
     const key = heap.peekKey();
@@ -634,16 +793,18 @@ export function findRoute(
         continue;
       }
       const neighbour = otherEnd(graph, edge, node);
-      const relaxed =
-        distance[node] + effSeconds(graph, edge, weights, elapsed[node], node);
+      edgeSeconds(graph, edge, weights, elapsed[node], node, priced);
+      const relaxed = distance[node] + priced.effective;
       // One label per node, keyed on cost alone: a costlier path that reaches a platform EARLIER,
       // and so catches an earlier train, is discarded here. Accepted — the ferries have always been
       // costed the same way and the Dijkstra oracle shares the convention — but it is why a route
       // over a timetable is a good route rather than provably the best one.
       if (relaxed < distance[neighbour]) {
+        if (distance[neighbour] === Number.POSITIVE_INFINITY) {
+          labels.touch(neighbour);
+        }
         distance[neighbour] = relaxed;
-        elapsed[neighbour] =
-          elapsed[node] + rawSeconds(graph, edge, node, elapsed[node]);
+        elapsed[neighbour] = elapsed[node] + priced.raw;
         parentEdge[neighbour] = edge;
         heap.push(relaxed + heuristicOf(neighbour), neighbour);
       }
@@ -655,14 +816,25 @@ export function findRoute(
     return null;
   }
 
-  return reconstruct(
+  const walked = bestSameEdge
+    ? null
+    : walkParents(graph, parentEdge, bestDestNode);
+  const signature = pathSignature(start, dest, walked, bestDestNode);
+  const known = reuse?.results?.get(signature);
+  if (known) {
+    return known;
+  }
+  const result = reconstruct(
     graph,
     start,
     dest,
     parentEdge,
     bestDestNode,
     bestSameEdge,
+    walked ?? undefined,
   );
+  reuse?.results?.set(signature, result);
+  return result;
 }
 
 // An incremental A* from a fixed source that reuses its settled search across successive dests, for
@@ -728,10 +900,10 @@ export class RouteSolver {
       weights,
       Math.max(0, sunAnchorSeconds),
     );
-    const sourceSpeedToA = walkSpeedOn(graph, source.edge, false);
-    const sourceSpeedToB = walkSpeedOn(graph, source.edge, true);
-    this.sourcePerMeterToA = sourceMultiplier / sourceSpeedToA;
-    this.sourcePerMeterToB = sourceMultiplier / sourceSpeedToB;
+    const sourceSecondsToA = walkSecondsPerMeter(graph, source.edge, false);
+    const sourceSecondsToB = walkSecondsPerMeter(graph, source.edge, true);
+    this.sourcePerMeterToA = sourceMultiplier * sourceSecondsToA;
+    this.sourcePerMeterToB = sourceMultiplier * sourceSecondsToB;
     this.sourceLength = graph.edgeLength[source.edge];
 
     this.distance[this.sourceA] = source.metersFromA * this.sourcePerMeterToA;
@@ -739,9 +911,9 @@ export class RouteSolver {
       (this.sourceLength - source.metersFromA) * this.sourcePerMeterToB;
     // The elapsed clock is anchored at the source, so it is stable across dest drags — every reused
     // node's raw time from the source is the same no matter where the moving endpoint goes.
-    this.elapsed[this.sourceA] = source.metersFromA / sourceSpeedToA;
+    this.elapsed[this.sourceA] = source.metersFromA * sourceSecondsToA;
     this.elapsed[this.sourceB] =
-      (this.sourceLength - source.metersFromA) / sourceSpeedToB;
+      (this.sourceLength - source.metersFromA) * sourceSecondsToB;
     this.reached.push(this.sourceA, this.sourceB);
   }
 
@@ -761,8 +933,8 @@ export class RouteSolver {
     // The dest edge is a partial walked at the moving endpoint: cost it against the sun at that node's
     // forward wall-clock time.
     const destPerMeterAt = (node: number): number =>
-      edgeMultiplier(graph, dest.edge, this.weights, this.sunElapsed(node)) /
-      walkSpeedOn(graph, dest.edge, node === destA);
+      edgeMultiplier(graph, dest.edge, this.weights, this.sunElapsed(node)) *
+      walkSecondsPerMeter(graph, dest.edge, node === destA);
 
     let bestTotal = Number.POSITIVE_INFINITY;
     let bestDestNode = -1;
@@ -840,6 +1012,7 @@ export class RouteSolver {
       return heuristicCache[node];
     };
 
+    const priced: EdgeSeconds = { effective: 0, raw: 0 };
     // Resume the frontier toward this dest: reseed the heap from every open reached node.
     const heap = new NodeHeap(1024);
     for (const id of this.reached) {
@@ -890,17 +1063,21 @@ export class RouteSolver {
         if (this.closed[neighbour] === 1) {
           continue;
         }
-        const relaxed =
-          this.distance[node] +
-          effSeconds(graph, edge, this.weights, this.sunElapsed(node), node);
+        edgeSeconds(
+          graph,
+          edge,
+          this.weights,
+          this.sunElapsed(node),
+          node,
+          priced,
+        );
+        const relaxed = this.distance[node] + priced.effective;
         if (relaxed < this.distance[neighbour]) {
           if (this.distance[neighbour] === Number.POSITIVE_INFINITY) {
             this.reached.push(neighbour);
           }
           this.distance[neighbour] = relaxed;
-          this.elapsed[neighbour] =
-            this.elapsed[node] +
-            rawSeconds(graph, edge, node, this.sunElapsed(node));
+          this.elapsed[neighbour] = this.elapsed[node] + priced.raw;
           this.parentEdge[neighbour] = edge;
           heap.push(relaxed + heuristicOf(neighbour), neighbour);
         }
