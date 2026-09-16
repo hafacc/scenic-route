@@ -69,7 +69,7 @@ function client(): RouterClient {
 
 test("a plan resolves with the planned set, having previewed its first route", async () => {
   clearEdgePathCache();
-  const expected = planRoutes({
+  const expected = await planRoutes({
     weights: PLAN_WEIGHTS,
     search: (candidate) => findRoute(graph, start, dest, candidate),
     minMultiplier: (candidate) => minMultiplier(graph, candidate),

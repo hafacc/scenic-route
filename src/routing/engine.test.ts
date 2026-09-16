@@ -201,10 +201,13 @@ function planMessage(id: number): RouterRequest {
 }
 
 // The same plan over a bare `findRoute`: the oracle for both the stream and the finished set.
-function expectedPlan(): { plan: Plan; candidates: RouteResult[] } {
+async function expectedPlan(): Promise<{
+  plan: Plan;
+  candidates: RouteResult[];
+}> {
   const candidates: RouteResult[] = [];
   clearEdgePathCache();
-  const plan = planRoutes({
+  const plan = await planRoutes({
     weights: PLAN_WEIGHTS,
     search: (candidate) => findRoute(graph, start, dest, candidate),
     minMultiplier: (candidate) => minMultiplier(graph, candidate),
@@ -216,7 +219,7 @@ function expectedPlan(): { plan: Plan; candidates: RouteResult[] } {
 }
 
 test("a plan previews its max-scenic route and closes with the planned set", async () => {
-  const { plan, candidates } = expectedPlan();
+  const { plan, candidates } = await expectedPlan();
   const worker = fakeWorker();
   await worker.receive(planMessage(4));
 
@@ -250,6 +253,66 @@ test("only the newest of several queued plans is planned", async () => {
     true,
   );
   expect(worker.sent.at(-1)?.type).toBe("done");
+});
+
+// A plan already running when a newer one arrives. The dispatcher learns of the newer request only
+// when the plan lets the event loop run, which it does between searches and no more often than its
+// own breath — so the first search here has to outlast one.
+test("a plan a newer one overtakes stops where it is", async () => {
+  const sent: RouterResponse[] = [];
+  let searches = 0;
+  const engine = new (class extends RoutingEngine {
+    search(...args: Parameters<RoutingEngine["search"]>) {
+      searches += 1;
+      if (searches === 1) {
+        void dispatch.receive(planMessage(2));
+        const until = performance.now() + 40;
+        while (performance.now() < until) {
+          // The plan's first search, long enough that the next one asks whether it is still wanted.
+        }
+      }
+      return super.search(...args);
+    }
+  })();
+  engine.load(CITY, graph);
+  const dispatch = createDispatch(engine, (response) => sent.push(response));
+
+  await dispatch.receive(planMessage(1));
+  expect(
+    sent.filter((response) => response.id === 1).map((one) => one.type),
+  ).toEqual(["preview", "stale"]);
+  expect(sent.at(-1)).toMatchObject({ type: "done", id: 2 });
+  // The overtaken plan stopped at its second search; a whole one takes ten on this fixture.
+  expect(searches).toBeLessThan(2 + 10);
+});
+
+// The same, for the frame the reader is actually watching: a dragged endpoint retires the plan of a
+// walk they have already moved, rather than waiting out its sixteen searches behind it.
+test("a plan a drag frame overtakes stops where it is", async () => {
+  const sent: RouterResponse[] = [];
+  let searches = 0;
+  const engine = new (class extends RoutingEngine {
+    search(...args: Parameters<RoutingEngine["search"]>) {
+      searches += 1;
+      if (searches === 1) {
+        void dispatch.receive(dragMessage(2, 2, 2));
+        const until = performance.now() + 40;
+        while (performance.now() < until) {
+          // Long enough that the plan's next search asks whether it is still wanted.
+        }
+      }
+      return super.search(...args);
+    }
+  })();
+  engine.load(CITY, graph);
+  const dispatch = createDispatch(engine, (response) => sent.push(response));
+
+  await dispatch.receive(planMessage(1));
+  expect(
+    sent.filter((response) => response.id === 1).map((one) => one.type),
+  ).toEqual(["preview", "stale"]);
+  expect(sent.at(-1)).toMatchObject({ type: "result", id: 2 });
+  expect(searches).toBeLessThan(2 + 10);
 });
 
 test("a request for a city with no graph is an error, not a crash", async () => {

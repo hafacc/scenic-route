@@ -606,6 +606,33 @@ test("only the newest of several queued waypoint requests is planned", async () 
   expect(third).not.toBeNull();
 });
 
+// Pins are a dynamic program over every intersection of a route, and nothing is drawn while it
+// runs. A route request queued behind one is what the reader is waiting to see, so it goes first.
+test("a route queued behind a set of pins is searched first", async () => {
+  const { graph, route } = diamondChain([0.5, 0.5, 0.5]);
+  const worker = fakeWorker(graph);
+  const routeRequest = {
+    cityId: WORKER_CITY,
+    clock: WORKER_CLOCK,
+    weights: weightsWith({ tree: 0.8 }),
+    start: route.start,
+    dest: route.dest,
+  };
+  const asked = [
+    worker.client.route(routeRequest),
+    worker.client.waypoints(waypointsRequest(route)),
+    worker.client.route(routeRequest),
+  ];
+  await Promise.all(asked);
+  // The first route is overtaken by the second, as two routes always are; what the pins may not do
+  // is come between them.
+  expect(worker.sent.map((response) => response.type)).toEqual([
+    "stale",
+    "result",
+    "waypoints",
+  ]);
+});
+
 test("a route that rides is handed over whole, with no pins at all", () => {
   const graph = transitGraph();
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));

@@ -137,7 +137,7 @@ for (const mode of MODES) {
       `## ${mode.name}, subway ${transitOn ? "on" : "off"} (${fields})`,
     );
     console.log(
-      "trip                            | searches | ms    | sets seen/all | cards | card times (min) | km per card       | scenic scores     | closest (m) | rides",
+      "trip                            | searches | ms    | sets seen/all | dropped | cards | card times (min) | km per card       | scenic scores     | closest (m) | rides",
     );
     for (const trip of TRIPS) {
       const snapped = snapPair(graph, index, trip.from, trip.to);
@@ -145,10 +145,11 @@ for (const mode of MODES) {
         console.log(`${trip.name}: no snap (${snapped.reason})`);
         continue;
       }
+      selectionDiagnostics.dominated = 0;
       selectionDiagnostics.visited = 0;
       selectionDiagnostics.enumerated = 0;
       const started = performance.now();
-      const plan = planRoutes({
+      const plan = await planRoutes({
         weights,
         search: (candidate) =>
           engine.search(snapped.start, snapped.dest, candidate),
@@ -175,6 +176,7 @@ for (const mode of MODES) {
         `${selectionDiagnostics.visited}/${selectionDiagnostics.enumerated}`.padStart(
           13,
         ),
+        String(selectionDiagnostics.dominated).padStart(7),
         String(plan.routes.length).padStart(5),
         plan.routes
           .map((route) => minutes(route.result.travelSeconds))

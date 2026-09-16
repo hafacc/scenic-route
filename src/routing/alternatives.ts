@@ -54,6 +54,8 @@ export interface Plan {
   routes: PlannedRoute[];
   bestByFactor: Partial<Record<FactorKey, number>>;
   searches: number;
+  // Abandoned partway because the caller had something newer to answer. Its routes are empty.
+  superseded: boolean;
 }
 
 export interface PlanInput {
@@ -63,6 +65,10 @@ export interface PlanInput {
   minMultiplier: (weights: RouteWeights) => number;
   factorMax?: Partial<Record<FactorKey, number>>; // graph max per factor; missing reads as 1
   onCandidate?: (result: RouteResult) => void; // per distinct route as it is found, R_max first
+  // Asked between searches, and answering true abandons the plan. The await is the point of it as
+  // much as the answer: a worker learns of a newer request only when it lets the event loop run,
+  // so a plan that never yields cannot find out that it is already stale.
+  superseded?: () => Promise<boolean>;
 }
 
 // Most scenic first, most direct last — the end the owner cares about is the one read first. One
@@ -523,7 +529,7 @@ function solveScale(
   return (low + high) / 2;
 }
 
-export function planRoutes(input: PlanInput): Plan {
+export async function planRoutes(input: PlanInput): Promise<Plan> {
   const { weights, search, minMultiplier, factorMax, onCandidate } = input;
 
   const pool: Pooled[] = [];
@@ -535,7 +541,11 @@ export function planRoutes(input: PlanInput): Plan {
   const differs = (left: Pooled, right: Pooled): boolean =>
     separation.differ(left, right);
 
-  const run = (candidate: RouteWeights): Pooled | null => {
+  let superseded = false;
+  const run = async (candidate: RouteWeights): Promise<Pooled | null> => {
+    if (superseded) {
+      return null;
+    }
     const key = JSON.stringify(
       factorKeys(candidate)
         .map((factor) => candidate[factor])
@@ -544,6 +554,10 @@ export function planRoutes(input: PlanInput): Plan {
     const memoised = byWeights.get(key);
     if (memoised !== undefined) {
       return memoised;
+    }
+    if (searches > 0 && input.superseded && (await input.superseded())) {
+      superseded = true;
+      return null;
     }
     searches += 1;
     const result = search(candidate);
@@ -575,9 +589,9 @@ export function planRoutes(input: PlanInput): Plan {
     return pooled;
   };
 
-  const maxRoute = run(weights);
+  const maxRoute = await run(weights);
   if (maxRoute === null) {
-    return { routes: [], bestByFactor: {}, searches };
+    return { routes: [], bestByFactor: {}, searches, superseded };
   }
 
   // What the back-off axes may move.
@@ -592,11 +606,11 @@ export function planRoutes(input: PlanInput): Plan {
     return next;
   };
 
-  const zeroRoute = run(scaled(0));
+  const zeroRoute = await run(scaled(0));
   // The baseline still carries the mode's transit penalty, which can leave it walking from a station
   // it should have stayed on the train past. The trip with nothing priced at all is the quickest one
   // there is, and it is the card the reader reaches for when none of the scenery is worth the time.
-  run({ ...scaled(0), transit: 0 });
+  await run({ ...scaled(0), transit: 0 });
 
   // A mode of penalties alone moves the bound not at all, so the weight scale is stepped instead.
   const openBound = minMultiplier(scaled(0));
@@ -611,7 +625,7 @@ export function planRoutes(input: PlanInput): Plan {
     if (openBound - fullBound > 1e-9) {
       scale = solveScale(boundAt, openBound - share * (openBound - fullBound));
     }
-    samples.push({ scale, route: run(scaled(scale)) });
+    samples.push({ scale, route: await run(scaled(scale)) });
   }
   samples.push({ scale: 1, route: maxRoute });
 
@@ -631,7 +645,7 @@ export function planRoutes(input: PlanInput): Plan {
     if (high >= 0) {
       for (let step = 0; step < BREAKPOINT_SEARCHES; step++) {
         const middle = (low + high) / 2;
-        const route = run(scaled(middle));
+        const route = await run(scaled(middle));
         if (route !== null && differs(route, zeroRoute)) {
           high = middle;
         } else {
@@ -651,10 +665,10 @@ export function planRoutes(input: PlanInput): Plan {
   const dropAxes: FactorKey[] =
     weights.transit === 0 ? scenic : [...scenic, "transit"];
   for (const key of dropAxes) {
-    run({ ...weights, [key]: 0 });
+    await run({ ...weights, [key]: 0 });
   }
   if (!weights.allowSheds) {
-    run({ ...weights, allowSheds: true });
+    await run({ ...weights, allowSheds: true });
   }
   // A mode that prices no ride at all — Rain, for which a train is shelter — rides every trip the
   // rail is quicker on, and the sweep would never think to ask what walking looks like, since
@@ -666,7 +680,7 @@ export function planRoutes(input: PlanInput): Plan {
     weights.allowTransit &&
     maxRoute.result.steps.some((step) => step.kind === "ride")
   ) {
-    run({ ...weights, allowTransit: false });
+    await run({ ...weights, allowTransit: false });
   }
   // And whatever the chosen route rides — a boat as readily as a train — the walk that stays on the
   // surface the whole way is a card worth offering, which no back-off axis can reach: barring a
@@ -677,7 +691,12 @@ export function planRoutes(input: PlanInput): Plan {
       (step) => step.kind === "ferry" || step.kind === "ride",
     )
   ) {
-    run({ ...weights, allowFerries: false, allowTransit: false });
+    await run({ ...weights, allowFerries: false, allowTransit: false });
+  }
+
+  if (superseded) {
+    // Nothing downstream is worth the work: the caller is about to draw another plan's cards.
+    return { routes: [], bestByFactor: {}, searches, superseded };
   }
 
   // Penalties are never scored or chipped: a card says what a route has, not what it avoided.
@@ -742,5 +761,5 @@ export function planRoutes(input: PlanInput): Plan {
     bestByFactor[key] = bestIndex;
   }
 
-  return { routes, bestByFactor, searches };
+  return { routes, bestByFactor, searches, superseded };
 }
