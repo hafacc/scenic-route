@@ -63,7 +63,7 @@ function graphOf(nodeCount: number, edges: EdgeSpec[]): RoutingGraph {
     // flat: these fixtures are about crossings, not grades
     edgeAscent: new Uint8Array(edgeCount),
     edgeDescent: new Uint8Array(edgeCount),
-    edgeDurationSeconds: new Float32Array(edgeCount),
+    edgeDurationSeconds: new Uint16Array(edgeCount),
     nodeMidRoadway: markMidRoadwayNodes(
       nodeCount,
       csr,

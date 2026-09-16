@@ -153,7 +153,7 @@ function buildGraph(
     shade: null,
     sheds: null,
     ferries: null,
-    edgeDurationSeconds: new Float32Array(edgeCount),
+    edgeDurationSeconds: new Uint16Array(edgeCount),
     ferryEdges: new Uint32Array(0),
     transitEdges: new Uint32Array(0),
     boardEdges: new Uint32Array(0),

@@ -120,7 +120,7 @@ function graphOf(bakedSeconds: number): RoutingGraph {
     edgeNodeB: Uint32Array.from([1]),
     edgeLength: Float32Array.from([8000]),
     edgeKindSide: Uint8Array.from([KIND_FERRY]),
-    edgeDurationSeconds: Float32Array.from([bakedSeconds]),
+    edgeDurationSeconds: Uint16Array.from([bakedSeconds]),
     ferryEdges: Uint32Array.from([0]),
     ferryEndpointNames: new Map([[0, { a: NORTH, b: SOUTH }]]),
     nodeMidRoadway: new Uint8Array(2),
@@ -366,7 +366,7 @@ test("staying on the same boat costs nothing at the piers it calls at", () => {
     KIND_FERRY,
     KIND_FERRY,
   ]);
-  (graph.edgeDurationSeconds as Float32Array) = Float32Array.from([600, 600]);
+  (graph.edgeDurationSeconds as Uint16Array) = Uint16Array.from([600, 600]);
   (graph.ferryEdges as Uint32Array) = Uint32Array.from([0, 1]);
   graph.ferryEndpointNames.set(0, { a: NORTH, b: "Middle Terminal" });
   graph.ferryEndpointNames.set(1, { a: "Middle Terminal", b: SOUTH });

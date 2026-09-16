@@ -1,7 +1,7 @@
 // The synthetic routing graph the transit tests are run over: one straight kilometre of pavement
 // with a two-station line beside it, and a hand-written timetable for that line.
 //
-// Written as GRPH v11 BYTES and decoded, rather than assembled as an object the way the ferry
+// Written as GRPH BYTES and decoded, rather than assembled as an object the way the ferry
 // fixture is. The transit cost model reads things the tiler puts in the side tables — which lane a
 // board edge departs against, which stop of it this platform is, which route a ride runs — so a
 // fixture that hand-set those fields would be asking the cost model about a graph no tiler writes.
@@ -11,15 +11,8 @@
 // chosen and not incidental — see the assertions in transit-cost.test.ts.
 
 import type { RouteWeights } from "./cost";
-import {
-  decodeGraph,
-  EDGE_RECORD_BYTES,
-  FORMAT_VERSION,
-  HEADER_BYTES,
-  NO_GEOMETRY,
-  NO_SOURCE_ID,
-  type RoutingGraph,
-} from "./graph";
+import { decodeGraph, type RoutingGraph } from "./graph";
+import { encodeGraph } from "./graph-bytes.fixture";
 import { haversineMeters, type Snap } from "./snap";
 import {
   resolveTimetable,
@@ -203,140 +196,53 @@ const BOARD_TABLE: readonly [number, number, number, number][] = [
 ];
 const RIDE_TABLE: readonly [number, number][] = [[RIDE_EDGE, 0]];
 
-function align4(offset: number): number {
-  return (offset + 3) & ~3;
-}
-
-// The GRPH blob, laid out as crates/tiler/src/graph.rs writes one: the fixed sections back to back
-// from the header, then the names, the (empty) geometry and ferry table, and the transit tables.
+// The GRPH blob for this fixture, built from the same description the tiler's own writer takes.
 function graphBytes(
   lanes: readonly number[],
   nodes: readonly (readonly [number, number])[],
   edges: readonly EdgeSpec[],
 ): ArrayBuffer {
-  const nodeCount = nodes.length;
-  const edgeCount = edges.length;
-  const nameBlob = new TextEncoder().encode(NAMES.join(""));
-  const nameTableBytes = 4 + 4 * (NAMES.length + 1) + nameBlob.length;
-
-  const nodeLngAt = HEADER_BYTES;
-  const nodeLatAt = nodeLngAt + 4 * nodeCount;
-  const componentAt = nodeLatAt + 4 * nodeCount;
-  const csrAt = align4(componentAt + 2 * nodeCount);
-  const adjacencyAt = csrAt + 4 * (nodeCount + 1);
-  const edgesAt = adjacencyAt + 8 * edgeCount;
-  const nameAt = align4(edgesAt + EDGE_RECORD_BYTES * edgeCount);
-  const ferryAt = align4(nameAt + nameTableBytes);
-  const transitAt = ferryAt + 4;
-  const total =
-    transitAt +
-    4 +
-    12 +
-    4 +
-    12 * BOARD_TABLE.length +
-    4 +
-    8 * RIDE_TABLE.length;
-
   const lat = (node: number): number => ORIGIN_LAT + nodes[node][1] * SCALE;
   const lng = (node: number): number => ORIGIN_LNG + nodes[node][0] * SCALE;
-
-  const buffer = new ArrayBuffer(total);
-  const bytes = new Uint8Array(buffer);
-  const view = new DataView(buffer);
-  bytes.set(new TextEncoder().encode("GRPH"));
-  view.setUint16(4, FORMAT_VERSION, true);
-  view.setUint16(6, HEADER_BYTES, true);
-  view.setUint32(8, nodeCount, true);
-  view.setUint32(12, edgeCount, true);
-  view.setFloat64(16, ORIGIN_LNG, true);
-  view.setFloat64(24, ORIGIN_LAT, true);
-  view.setFloat64(32, SCALE, true);
-  view.setUint32(40, 1, true);
-  view.setUint32(44, nameAt, true);
-  view.setUint32(48, nameTableBytes, true);
-  view.setUint32(52, ferryAt, true); // an empty geometry blob: every edge here is a straight line
-  view.setUint32(56, 0, true);
-  view.setUint32(60, ferryAt, true);
-  view.setUint32(64, transitAt, true);
-
-  for (const [node, [x, y]] of nodes.entries()) {
-    view.setInt32(nodeLngAt + 4 * node, x, true);
-    view.setInt32(nodeLatAt + 4 * node, y, true);
-  }
-
-  const incident: number[][] = nodes.map(() => []);
-  for (const [edge, spec] of edges.entries()) {
-    incident[spec.a].push(edge);
-    incident[spec.b].push(edge);
-  }
-  let cursor = 0;
-  for (const [node, edges] of incident.entries()) {
-    view.setUint32(csrAt + 4 * node, cursor, true);
-    for (const edge of edges) {
-      view.setUint32(adjacencyAt + 4 * cursor, edge, true);
-      cursor += 1;
-    }
-  }
-  view.setUint32(csrAt + 4 * nodeCount, cursor, true);
-
-  for (const [edge, spec] of edges.entries()) {
-    const record = edgesAt + EDGE_RECORD_BYTES * edge;
-    view.setUint32(record, spec.a, true);
-    view.setUint32(record + 4, spec.b, true);
-    // The true geodesic span between the two nodes, which is what keeps the A* walking floor a
-    // lower bound: the heuristic measures the same coordinates.
-    view.setFloat32(
-      record + 8,
-      haversineMeters(lat(spec.a), lng(spec.a), lat(spec.b), lng(spec.b)),
-      true,
-    );
-    view.setUint32(record + 12, NO_GEOMETRY, true);
-    view.setUint16(record + 16, 0, true);
-    view.setUint16(record + 18, spec.name, true);
-    view.setUint16(record + 20, spec.seconds, true);
-    if (spec.cover !== undefined) {
-      bytes[record + 20] = Math.round(spec.cover * 255);
-      bytes[record + 21] = 0;
-    }
-    bytes[record + 22] = spec.kind;
-    view.setUint32(record + 29, NO_SOURCE_ID, true);
-  }
-
-  view.setUint32(nameAt, NAMES.length, true);
-  let nameCursor = 0;
-  for (const [index, name] of NAMES.entries()) {
-    view.setUint32(nameAt + 4 + 4 * index, nameCursor, true);
-    nameCursor += name.length;
-  }
-  view.setUint32(nameAt + 4 + 4 * NAMES.length, nameCursor, true);
-  bytes.set(nameBlob, nameAt + 4 + 4 * (NAMES.length + 1));
-  view.setUint32(ferryAt, 0, true); // no ferries in this fixture
-
-  let at = transitAt;
-  view.setUint32(at, 1, true); // one route
-  at += 4;
-  bytes.set([0x00, 0x39, 0xa6, 0xff, 0xff, 0xff], at);
-  view.setUint16(at + 6, SHORT_NAME, true);
-  view.setUint16(at + 8, LONG_NAME, true);
-  view.setUint16(at + 10, ROUTE_ID, true);
-  at += 12;
-  view.setUint32(at, BOARD_TABLE.length, true);
-  at += 4;
-  for (const [index, [edge, , route, stop]] of BOARD_TABLE.entries()) {
-    view.setUint32(at, edge, true);
-    view.setUint32(at + 4, lanes[index], true);
-    view.setUint16(at + 8, route, true);
-    view.setUint16(at + 10, stop, true);
-    at += 12;
-  }
-  view.setUint32(at, RIDE_TABLE.length, true);
-  at += 4;
-  for (const [edge, route] of RIDE_TABLE) {
-    view.setUint32(at, edge, true);
-    view.setUint16(at + 4, route, true);
-    at += 8;
-  }
-  return buffer;
+  return encodeGraph({
+    originLng: ORIGIN_LNG,
+    originLat: ORIGIN_LAT,
+    scale: SCALE,
+    nodes: nodes.map(([qx, qy]) => ({ qx, qy })),
+    edges: edges.map((spec) => ({
+      a: spec.a,
+      b: spec.b,
+      kind: spec.kind,
+      // The true geodesic span between the two nodes, which is what keeps the A* walking floor a
+      // lower bound: the heuristic measures the same coordinates.
+      length: haversineMeters(
+        lat(spec.a),
+        lng(spec.a),
+        lat(spec.b),
+        lng(spec.b),
+      ),
+      nameId: spec.name,
+      durationSeconds: spec.seconds,
+      cover: spec.cover === undefined ? 0 : Math.round(spec.cover * 255),
+    })),
+    names: NAMES,
+    transitRoutes: [
+      {
+        color: [0x00, 0x39, 0xa6],
+        textColor: [0xff, 0xff, 0xff],
+        shortName: SHORT_NAME,
+        longName: LONG_NAME,
+        id: ROUTE_ID,
+      },
+    ],
+    board: BOARD_TABLE.map(([edge, , route, stop], index) => ({
+      edge,
+      lane: lanes[index],
+      route,
+      stop,
+    })),
+    ride: RIDE_TABLE.map(([edge, route]) => ({ edge, route })),
+  });
 }
 
 // The fixture graph, with no timetable on it: hang one with `transitGraph().transit = ...`.

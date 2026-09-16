@@ -150,24 +150,29 @@ pub const SIDE_SOUTH: u8 = 3;
 const SIDE_WEST: u8 = 4;
 const FLAG_GEOMETRY_RIGHT: u8 = 1 << 2; // this sidewalk lies right of its stored geometry direction
 
-// v10 grew the record to 40 for the industrial-frontage byte and three reserved zeros. The
-// historic-district byte took the first of those three without moving the version, and the bridge
-// byte the second: a graph written before either bake reads that byte back as 0 everywhere, which
-// gates its slider off rather than mispricing anything, so the client needs no way to tell the v10s
-// and v11s apart.
-const GRAPH_FORMAT: u16 = 11;
+// v12 lays the graph out by column instead of by 40-byte edge record, so the client views every
+// column in place rather than copying 640k records through a DataView. The maxima, the mid-roadway
+// node flags and the ferry/transit/board id lists come baked with it, and the half-offset byte —
+// which nothing outside this file read — is gone.
+const GRAPH_FORMAT: u16 = 12;
 // The field the relief is sampled off is built at this zoom's pixel size — about 5 m at San
 // Francisco's latitude. Finer than the block a grade is measured over, coarser than the metre the
 // DEM is published at, and a whole city of it is tens of megabytes rather than gigabytes.
 const RELIEF_FIELD_ZOOM: u32 = 15;
-// v11 grew the header to 80 for the transit side table's offset; bytes 68-79 are its spare u32s.
-const GRAPH_HEADER_BYTES: usize = 80;
-// 24 + landmark(24), art(25), highway(26), commercial(27), directCanopy(28), sourceId(29..32),
-// ordinal(33), ascent(34), descent(35), industrial(36), historic(37), bridge(38), reserved(39)
-const EDGE_RECORD_BYTES: usize = 40;
-// Record bytes 29-33: the source record an edge was derived from (a CSCL physicalid, or an OSM way
-// id for a conflated path) and the how-many-th edge of that source, on that side, this is. With the
-// side label already in byte 22 the triple (source id, side, ordinal) survives a rebuild, where the
+// 64 fixed header bytes, then a 48-entry (offset, length, column tag) section directory of which v12
+// fills 35. The spare entries are how the next column lands without a version bump: a reader that
+// finds an entry absent materialises the zero column a graph written before that bake would have
+// carried. There are only 48 of them, so the writer stops rather than running the 49th into node 0.
+const GRAPH_HEADER_BYTES: usize = 640;
+const GRAPH_DIRECTORY_AT: usize = 64;
+const GRAPH_DIRECTORY_ENTRY: usize = 12;
+const GRAPH_DIRECTORY_MAX: usize = 48;
+const GRAPH_SECTIONS: usize = 35;
+// Every section starts here, so a Float64, Float32 or Uint32 view over any of them is legal.
+const SECTION_ALIGN: usize = 8;
+// The source record an edge was derived from (a CSCL physicalid, or an OSM way id for a conflated
+// path) and the how-many-th edge of that source, on that side, this is. With the side label already
+// in the kind/side byte the triple (source id, side, ordinal) survives a rebuild, where the
 // positional edge id does not.
 const NO_SOURCE_ID: u32 = 0xFFFF_FFFF; // no durable identity: a crossing, a link or a ferry
 // A long greenway noded and welded against every street it crosses becomes many path edges under one
@@ -1645,14 +1650,6 @@ fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
 }
 
 fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn put_i32(bytes: &mut [u8], offset: usize, value: i32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn put_f32(bytes: &mut [u8], offset: usize, value: f32) {
     bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 
@@ -5119,6 +5116,116 @@ fn shade_columns(
         .collect()
 }
 
+/// The column a directory entry holds, as FNV-1a 32 over the name this file calls it by. The reader
+/// finds a section by its POSITION in the directory, so two same-sized columns appended in the other
+/// order would each be read as the other, silently; the tag is what makes that a refusal.
+fn column_tag(name: &str) -> u32 {
+    let mut hash = 0x811c_9dc5u32;
+    for byte in name.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// One v12 section as it lands in the blob: padded onto an 8-byte boundary, appended, and recorded
+/// as the (offset, length, column tag) entry the header's directory names it by.
+struct Layout {
+    bytes: Vec<u8>,
+    directory: Vec<(u32, u32, u32)>,
+}
+
+impl Layout {
+    fn new() -> Self {
+        Layout {
+            bytes: vec![0u8; GRAPH_HEADER_BYTES],
+            directory: Vec::with_capacity(GRAPH_SECTIONS),
+        }
+    }
+
+    fn section(&mut self, name: &str, payload: &[u8]) {
+        assert!(
+            self.directory.len() < GRAPH_DIRECTORY_MAX,
+            "the v12 directory holds {GRAPH_DIRECTORY_MAX} sections, and {name} would be the {}th",
+            self.directory.len() + 1
+        );
+        while !self.bytes.len().is_multiple_of(SECTION_ALIGN) {
+            self.bytes.push(0);
+        }
+        self.directory.push((
+            self.bytes.len() as u32,
+            payload.len() as u32,
+            column_tag(name),
+        ));
+        self.bytes.extend_from_slice(payload);
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        put_u32(&mut self.bytes, 44, self.directory.len() as u32);
+        for (index, &(offset, length, tag)) in self.directory.iter().enumerate() {
+            let entry = GRAPH_DIRECTORY_AT + GRAPH_DIRECTORY_ENTRY * index;
+            put_u32(&mut self.bytes, entry, offset);
+            put_u32(&mut self.bytes, entry + 4, length);
+            put_u32(&mut self.bytes, entry + 8, tag);
+        }
+        self.bytes
+    }
+}
+
+fn le_u16(values: &[u16]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+fn le_u32(values: &[u32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+fn le_i32(values: &[i32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+fn le_f32(values: &[f32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+/// The nodes standing in a roadway rather than on pavement: those whose every walking edge is a
+/// crossing, i.e. the joints inside one marked crossing of a divided street. Mirrors
+/// `markMidRoadwayNodes` in src/routing/graph.ts, which stays exported as this bake's oracle.
+fn mark_mid_roadway(
+    node_count: usize,
+    csr: &[u32],
+    adjacency: &[u32],
+    edge_kind_side: &[u8],
+) -> Vec<u8> {
+    let mut mid_roadway = vec![0u8; node_count];
+    for node in 0..node_count {
+        let mut walking = 0usize;
+        let mut all_crossings = true;
+        for slot in csr[node] as usize..csr[node + 1] as usize {
+            let kind = edge_kind_side[adjacency[slot] as usize] & KIND_MASK;
+            if matches!(kind, KIND_ACCESS | KIND_BOARD | KIND_RIDE) {
+                continue;
+            }
+            walking += 1;
+            all_crossings &= kind == KIND_CROSSING;
+        }
+        mid_roadway[node] = u8::from(all_crossings && walking > 0);
+    }
+    mid_roadway
+}
+
 /// The graph blob, its version file, the stranded list and the SHDE bake, out of the base and the
 /// columns baked over it. Seconds: nothing here computes anything about the city, it only lays the
 /// two out in the order the client reads them.
@@ -5167,7 +5274,7 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
         }
     }
 
-    // The name table blob: (count + 1) byte offsets, then the UTF-8 names back to back.
+    // The name table: a u32 count, (count + 1) byte offsets, then the UTF-8 names back to back.
     let mut name_blob: Vec<u8> = Vec::new();
     let mut name_offsets: Vec<u32> = Vec::with_capacity(names.len() + 1);
     for name in names {
@@ -5175,57 +5282,27 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
         name_blob.extend_from_slice(name.as_bytes());
     }
     name_offsets.push(name_blob.len() as u32);
-    let name_table_bytes = 4 + 4 * name_offsets.len() + name_blob.len();
+    let mut name_table: Vec<u8> = Vec::with_capacity(4 + 4 * name_offsets.len() + name_blob.len());
+    name_table.extend_from_slice(&(names.len() as u32).to_le_bytes());
+    name_table.extend_from_slice(&le_u32(&name_offsets));
+    name_table.extend_from_slice(&name_blob);
 
-    let align4 = |offset: usize| offset.div_ceil(4) * 4;
-    let component_pad = if node_count % 2 == 1 { 2 } else { 0 };
-    let node_lng_offset = GRAPH_HEADER_BYTES;
-    let node_lat_offset = node_lng_offset + 4 * node_count;
-    let node_component_offset = node_lat_offset + 4 * node_count;
-    let csr_offset = node_component_offset + 2 * node_count + component_pad;
-    let adjacency_offset = csr_offset + 4 * (node_count + 1);
-    let edges_offset = adjacency_offset + 8 * edge_count;
-    // Every section starts on a 4-byte boundary so the client can view it as a typed array; the
-    // record's own size is not part of the contract, so the name table is padded back onto one.
-    let name_offset = align4(edges_offset + EDGE_RECORD_BYTES * edge_count);
-    let geometry_offset = align4(name_offset + name_table_bytes);
-
-    let mut bytes = vec![0u8; geometry_offset];
-    bytes[0..4].copy_from_slice(b"GRPH");
-    put_u16(&mut bytes, 4, GRAPH_FORMAT);
-    put_u16(&mut bytes, 6, GRAPH_HEADER_BYTES as u16);
-    put_u32(&mut bytes, 8, node_count as u32);
-    put_u32(&mut bytes, 12, edge_count as u32);
-    put_f64(&mut bytes, 16, origin_lng);
-    put_f64(&mut bytes, 24, origin_lat);
-    put_f64(&mut bytes, 32, scale);
-    put_u32(&mut bytes, 40, component_count as u32);
-    put_u32(&mut bytes, 44, name_offset as u32);
-    put_u32(&mut bytes, 48, name_table_bytes as u32);
-    put_u32(&mut bytes, 52, geometry_offset as u32);
-    put_u32(&mut bytes, 56, geometry.len() as u32);
-
-    for (index, &value) in node_lng.iter().enumerate() {
-        put_i32(&mut bytes, node_lng_offset + 4 * index, value);
-    }
-    for (index, &value) in node_lat.iter().enumerate() {
-        put_i32(&mut bytes, node_lat_offset + 4 * index, value);
-    }
-    for (index, &value) in node_component.iter().enumerate() {
-        put_u16(&mut bytes, node_component_offset + 2 * index, value);
-    }
-    for (index, &value) in csr.iter().enumerate() {
-        put_u32(&mut bytes, csr_offset + 4 * index, value);
-    }
-    for (index, &value) in adjacency.iter().enumerate() {
-        put_u32(&mut bytes, adjacency_offset + 4 * index, value);
-    }
-    // The cover byte is clamped to 254 so the client's maxCover stays < 1: cost.ts's admissible
-    // heuristic collapses (the greenest edge goes free at w = 1) if any edge reads a full 255, which
-    // the denser OSM tree field can now reach.
+    let mut edge_node_a: Vec<u32> = Vec::with_capacity(edge_count);
+    let mut edge_node_b: Vec<u32> = Vec::with_capacity(edge_count);
+    let mut edge_length: Vec<f32> = Vec::with_capacity(edge_count);
+    let mut edge_geom_offset: Vec<u32> = Vec::with_capacity(edge_count);
+    let mut edge_geom_count: Vec<u16> = Vec::with_capacity(edge_count);
+    let mut edge_name_id: Vec<u16> = Vec::with_capacity(edge_count);
+    let mut edge_duration: Vec<u16> = Vec::with_capacity(edge_count);
+    let mut edge_kind_side: Vec<u8> = Vec::with_capacity(edge_count);
+    let mut edge_flags: Vec<u8> = Vec::with_capacity(edge_count);
+    let mut edge_cover: Vec<u8> = Vec::with_capacity(edge_count);
+    let mut edge_source_id: Vec<u32> = Vec::with_capacity(edge_count);
+    let mut ferry_edges: Vec<u32> = Vec::new();
+    let mut transit_edges: Vec<u32> = Vec::new();
+    let mut board_edges: Vec<u32> = Vec::new();
     let mut cover_clamped = 0usize;
     for (edge_id, edge) in v2_edges.iter().enumerate() {
-        let record = edges_offset + EDGE_RECORD_BYTES * edge_id;
         let (geom_offset, vertex_count) = if edge.geom == NO_GEOMETRY {
             (NO_GEOMETRY, 0u16)
         } else {
@@ -5234,109 +5311,182 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
                 geometry_polys[edge.geom as usize].0.len() as u16,
             )
         };
-        // A ferry or a transit edge carries a u16 duration in bytes 20-21 (edge.cover is its low
-        // byte, edge.half_offset its high byte), so the 254 cover clamp — which keeps a real edge's
-        // client maxCover < 1 — applies only to the cover-bearing kinds.
-        let cover = if timed_kind(edge.kind) {
-            edge.cover
-        } else if edge.cover > 254 {
-            cover_clamped += 1;
-            254
+        edge_node_a.push(edge.a);
+        edge_node_b.push(edge.b);
+        edge_length.push(edge.length);
+        edge_geom_offset.push(geom_offset);
+        edge_geom_count.push(vertex_count);
+        edge_name_id.push(edge.name_id);
+        edge_kind_side.push((edge.kind & KIND_MASK) | (edge.side << SIDE_SHIFT));
+        edge_flags.push(edge.flags);
+        // The durable key: the source record's id, and the ordinal that — with the side already in
+        // the kind/side byte — picks this edge out within it. A crossing, link or ferry has no
+        // source geometry, so it carries the sentinel and a zero ordinal.
+        edge_source_id.push(edge.source_id);
+        // A timed kind carries its seconds and no cover; a walking kind the reverse. The cover byte
+        // is clamped to 254 so the client's maxCover stays under 1: cost.ts's admissible heuristic
+        // collapses (the greenest edge goes free at w = 1) if any edge reads a full 255, which the
+        // denser OSM tree field can now reach.
+        if timed_kind(edge.kind) {
+            edge_duration.push(u16::from(edge.cover) | (u16::from(edge.half_offset) << 8));
+            edge_cover.push(0);
         } else {
-            edge.cover
-        };
-        put_u32(&mut bytes, record, edge.a);
-        put_u32(&mut bytes, record + 4, edge.b);
-        put_f32(&mut bytes, record + 8, edge.length);
-        put_u32(&mut bytes, record + 12, geom_offset);
-        put_u16(&mut bytes, record + 16, vertex_count);
-        put_u16(&mut bytes, record + 18, edge.name_id);
-        bytes[record + 20] = cover;
-        bytes[record + 21] = edge.half_offset;
-        bytes[record + 22] = (edge.kind & KIND_MASK) | (edge.side << SIDE_SHIFT);
-        bytes[record + 23] = edge.flags;
-        // The attribute bytes (v5 scenic, v6 direct canopy): a ferry passes no landmark, art,
-        // highway or commercial frontage and walks under no crown, and neither does a train, so both
-        // keep the record's default zeros; every walking kind carries the baked attributes.
-        if !timed_kind(edge.kind) {
-            bytes[record + 24] = columns.landmark[edge_id];
-            bytes[record + 25] = columns.art[edge_id];
-            bytes[record + 26] = columns.highway[edge_id];
-            bytes[record + 27] = columns.commercial[edge_id];
-            bytes[record + 28] = columns.direct_canopy[edge_id];
-            // The relief bytes (v9): how much height this edge climbs and how much it drops, walked
-            // a->b, so reversing it swaps the two. A ferry crosses water and has neither.
-            bytes[record + 34] = columns.ascent[edge_id];
-            bytes[record + 35] = columns.descent[edge_id];
-            // The industrial frontage byte (v10), read as a `1 + w*attr` penalty, and beside it the
-            // share of the edge inside a historic district and the share of a deck over water, both
-            // read as `1 - w*attr` discounts. Byte 39 is the reserved zero the 40-byte record still
-            // leaves for the next attribute.
-            bytes[record + 36] = columns.industrial[edge_id];
-            bytes[record + 37] = columns.historic[edge_id];
-            bytes[record + 38] = columns.bridge[edge_id];
+            edge_duration.push(0);
+            edge_cover.push(if edge.cover > 254 {
+                cover_clamped += 1;
+                254
+            } else {
+                edge.cover
+            });
         }
-        // The durable key (v6): the source record's id, and the ordinal that — with the side already
-        // in byte 22 — picks this edge out within it. A crossing, link or ferry has no source
-        // geometry, so it carries the sentinel and a zero ordinal.
-        put_u32(&mut bytes, record + 29, edge.source_id);
-        bytes[record + 33] = edge_ordinals[edge_id];
+        match edge.kind {
+            KIND_FERRY => ferry_edges.push(edge_id as u32),
+            KIND_BOARD => {
+                transit_edges.push(edge_id as u32);
+                board_edges.push(edge_id as u32);
+            }
+            KIND_ACCESS | KIND_RIDE => transit_edges.push(edge_id as u32),
+            _ => {}
+        }
     }
 
-    put_u32(&mut bytes, name_offset, names.len() as u32);
-    for (index, &value) in name_offsets.iter().enumerate() {
-        put_u32(&mut bytes, name_offset + 4 + 4 * index, value);
-    }
-    let name_blob_offset = name_offset + 4 + 4 * name_offsets.len();
-    bytes[name_blob_offset..name_blob_offset + name_blob.len()].copy_from_slice(&name_blob);
-    bytes.extend_from_slice(&geometry);
+    // A ferry passes no landmark, art, highway or commercial frontage and walks under no crown, and
+    // neither does a train, so every timed kind reads zero out of each attribute column.
+    let walking_only = |values: &[u8]| -> Vec<u8> {
+        v2_edges
+            .iter()
+            .enumerate()
+            .map(|(edge_id, edge)| {
+                if timed_kind(edge.kind) {
+                    0
+                } else {
+                    values[edge_id]
+                }
+            })
+            .collect()
+    };
+    let edge_landmark = walking_only(&columns.landmark);
+    let edge_art = walking_only(&columns.art);
+    let edge_highway = walking_only(&columns.highway);
+    let edge_commercial = walking_only(&columns.commercial);
+    let edge_direct_canopy = walking_only(&columns.direct_canopy);
+    let edge_industrial = walking_only(&columns.industrial);
+    let edge_historic = walking_only(&columns.historic);
+    let edge_bridge = walking_only(&columns.bridge);
+    let edge_ascent = walking_only(&columns.ascent);
+    let edge_descent = walking_only(&columns.descent);
 
-    // The ferry endpoint-stop-name side table, 4-aligned after the geometry blob: a u32 count, then
-    // per ferry edge a (u32 edge id, u16 a-stop name id, u16 b-stop name id) triple, the ids into
-    // the name table above. Its offset rides in the spare header u32 at byte 60 (0-length when the
-    // build carried no ferries).
-    while bytes.len() % 4 != 0 {
-        bytes.push(0);
-    }
-    let ferry_table_offset = bytes.len() as u32;
-    put_u32(&mut bytes, 60, ferry_table_offset);
-    bytes.extend_from_slice(&(ferry_side_table.len() as u32).to_le_bytes());
+    let node_mid_roadway = mark_mid_roadway(node_count, csr, adjacency, &edge_kind_side);
+
+    // The ferry endpoint-stop-name side table: a u32 count, then per ferry edge a (u32 edge id,
+    // u16 a-stop name id, u16 b-stop name id) triple, the ids into the name table above.
+    let mut ferry_table: Vec<u8> = Vec::with_capacity(4 + 8 * ferry_side_table.len());
+    ferry_table.extend_from_slice(&(ferry_side_table.len() as u32).to_le_bytes());
     for &(edge_id, a_stop_name, b_stop_name) in ferry_side_table {
-        bytes.extend_from_slice(&edge_id.to_le_bytes());
-        bytes.extend_from_slice(&a_stop_name.to_le_bytes());
-        bytes.extend_from_slice(&b_stop_name.to_le_bytes());
+        ferry_table.extend_from_slice(&edge_id.to_le_bytes());
+        ferry_table.extend_from_slice(&a_stop_name.to_le_bytes());
+        ferry_table.extend_from_slice(&b_stop_name.to_le_bytes());
     }
 
-    // The transit side tables (v11), 4-aligned after the ferry table and reached through the header
-    // u32 at byte 64: the route table, then per board edge its lane id, route and stop index, then
-    // per ride edge its route. Each is a u32 count and fixed-size records, and all three are empty
-    // for a city with no transit source.
-    while bytes.len() % 4 != 0 {
-        bytes.push(0);
-    }
-    let transit_table_offset = bytes.len() as u32;
-    put_u32(&mut bytes, 64, transit_table_offset);
-    bytes.extend_from_slice(&(transit_routes.len() as u32).to_le_bytes());
+    // The transit side tables: the route table, then per board edge its lane id, route and stop
+    // index, then per ride edge its route. Each is a u32 count and fixed-size records, and all
+    // three are empty for a city with no transit source.
+    let mut transit_table: Vec<u8> = Vec::new();
+    transit_table.extend_from_slice(&(transit_routes.len() as u32).to_le_bytes());
     for route in transit_routes {
-        bytes.extend_from_slice(&route.color);
-        bytes.extend_from_slice(&route.text_color);
-        bytes.extend_from_slice(&route.short_name.to_le_bytes());
-        bytes.extend_from_slice(&route.long_name.to_le_bytes());
-        bytes.extend_from_slice(&route.id_name.to_le_bytes());
+        transit_table.extend_from_slice(&route.color);
+        transit_table.extend_from_slice(&route.text_color);
+        transit_table.extend_from_slice(&route.short_name.to_le_bytes());
+        transit_table.extend_from_slice(&route.long_name.to_le_bytes());
+        transit_table.extend_from_slice(&route.id_name.to_le_bytes());
     }
-    bytes.extend_from_slice(&(transit_board_table.len() as u32).to_le_bytes());
+    transit_table.extend_from_slice(&(transit_board_table.len() as u32).to_le_bytes());
     for &(edge_id, lane_id, route_index, stop_index) in transit_board_table {
-        bytes.extend_from_slice(&edge_id.to_le_bytes());
-        bytes.extend_from_slice(&lane_id.to_le_bytes());
-        bytes.extend_from_slice(&route_index.to_le_bytes());
-        bytes.extend_from_slice(&stop_index.to_le_bytes());
+        transit_table.extend_from_slice(&edge_id.to_le_bytes());
+        transit_table.extend_from_slice(&lane_id.to_le_bytes());
+        transit_table.extend_from_slice(&route_index.to_le_bytes());
+        transit_table.extend_from_slice(&stop_index.to_le_bytes());
     }
-    bytes.extend_from_slice(&(transit_ride_table.len() as u32).to_le_bytes());
+    transit_table.extend_from_slice(&(transit_ride_table.len() as u32).to_le_bytes());
     for &(edge_id, route_index) in transit_ride_table {
-        bytes.extend_from_slice(&edge_id.to_le_bytes());
-        bytes.extend_from_slice(&route_index.to_le_bytes());
-        bytes.extend_from_slice(&0u16.to_le_bytes());
+        transit_table.extend_from_slice(&edge_id.to_le_bytes());
+        transit_table.extend_from_slice(&route_index.to_le_bytes());
+        transit_table.extend_from_slice(&0u16.to_le_bytes());
     }
+
+    let mut layout = Layout::new();
+    layout.bytes[0..4].copy_from_slice(b"GRPH");
+    put_u16(&mut layout.bytes, 4, GRAPH_FORMAT);
+    put_u16(&mut layout.bytes, 6, GRAPH_HEADER_BYTES as u16);
+    put_u32(&mut layout.bytes, 8, node_count as u32);
+    put_u32(&mut layout.bytes, 12, edge_count as u32);
+    put_f64(&mut layout.bytes, 16, origin_lng);
+    put_f64(&mut layout.bytes, 24, origin_lat);
+    put_f64(&mut layout.bytes, 32, scale);
+    put_u32(&mut layout.bytes, 40, component_count as u32);
+    // The column maxima, baked so neither thread has to scan 640k edges to learn which sliders the
+    // city can even offer. In the order the client reads them back.
+    let greatest = |values: &[u8]| values.iter().copied().max().unwrap_or(0);
+    for (index, column) in [
+        &edge_cover,
+        &edge_landmark,
+        &edge_art,
+        &edge_commercial,
+        &edge_direct_canopy,
+        &edge_industrial,
+        &edge_historic,
+        &edge_bridge,
+    ]
+    .iter()
+    .enumerate()
+    {
+        layout.bytes[48 + index] = greatest(column);
+    }
+    let max_relief = edge_ascent
+        .iter()
+        .zip(&edge_descent)
+        .map(|(&ascent, &descent)| u16::from(ascent) + u16::from(descent))
+        .max()
+        .unwrap_or(0);
+    put_u16(&mut layout.bytes, 56, max_relief);
+    layout.bytes[58] = u8::from(edge_flags.iter().any(|flags| flags & GRPH_TUNNEL != 0));
+
+    layout.section("nodeQx", &le_i32(node_lng));
+    layout.section("nodeQy", &le_i32(node_lat));
+    layout.section("nodeComponent", &le_u16(node_component));
+    layout.section("nodeMidRoadway", &node_mid_roadway);
+    layout.section("csr", &le_u32(csr));
+    layout.section("adjacency", &le_u32(adjacency));
+    layout.section("edgeNodeA", &le_u32(&edge_node_a));
+    layout.section("edgeNodeB", &le_u32(&edge_node_b));
+    layout.section("edgeLength", &le_f32(&edge_length));
+    layout.section("edgeGeomOffset", &le_u32(&edge_geom_offset));
+    layout.section("edgeGeomCount", &le_u16(&edge_geom_count));
+    layout.section("edgeNameId", &le_u16(&edge_name_id));
+    layout.section("edgeDurationSeconds", &le_u16(&edge_duration));
+    layout.section("edgeKindSide", &edge_kind_side);
+    layout.section("edgeFlags", &edge_flags);
+    layout.section("edgeCover", &edge_cover);
+    layout.section("edgeLandmark", &edge_landmark);
+    layout.section("edgeArt", &edge_art);
+    layout.section("edgeHighway", &edge_highway);
+    layout.section("edgeCommercial", &edge_commercial);
+    layout.section("edgeDirectCanopy", &edge_direct_canopy);
+    layout.section("edgeIndustrial", &edge_industrial);
+    layout.section("edgeHistoric", &edge_historic);
+    layout.section("edgeBridge", &edge_bridge);
+    layout.section("edgeAscent", &edge_ascent);
+    layout.section("edgeDescent", &edge_descent);
+    layout.section("edgeSourceId", &le_u32(&edge_source_id));
+    layout.section("edgeOrdinal", edge_ordinals);
+    layout.section("ferryEdges", &le_u32(&ferry_edges));
+    layout.section("transitEdges", &le_u32(&transit_edges));
+    layout.section("boardEdges", &le_u32(&board_edges));
+    layout.section("names", &name_table);
+    layout.section("geometry", &geometry);
+    layout.section("ferryEndpoints", &ferry_table);
+    layout.section("transitTables", &transit_table);
+    let bytes = layout.finish();
 
     if let Some(parent) = args.out.parent() {
         fs::create_dir_all(parent)?;
@@ -5432,6 +5582,129 @@ pub fn run(args: &Args, dem: Option<&mut crate::dem::Dem>) -> Fallible<Vec<u32>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A section of an odd length, so the one after it has to be pushed onto the next boundary: a
+    // reader views these as Uint32 and Float64 arrays, which is only legal 8-aligned.
+    #[test]
+    fn every_section_starts_on_an_eight_byte_boundary() {
+        let mut layout = Layout::new();
+        for length in [1usize, 7, 8, 9, 0, 33] {
+            layout.section("edgeCover", &vec![0xABu8; length]);
+        }
+        let bytes = layout.finish();
+        assert_eq!(
+            get_u32(&bytes, 44),
+            6,
+            "the directory says how many it wrote"
+        );
+        for (index, &(offset, length, tag)) in layout_entries(&bytes, 6).iter().enumerate() {
+            assert_eq!(offset % SECTION_ALIGN as u32, 0, "section {index}");
+            assert!(
+                offset as usize + length as usize <= bytes.len(),
+                "section {index}"
+            );
+            assert_eq!(tag, column_tag("edgeCover"), "section {index}");
+        }
+    }
+
+    // The directory is fixed-size, and the 49th entry's bytes are node 0's: a column added past the
+    // end used to corrupt the graph rather than fail the build.
+    #[test]
+    #[should_panic(expected = "the v12 directory holds 48 sections")]
+    fn the_directory_does_not_run_past_its_last_entry() {
+        let mut layout = Layout::new();
+        for _ in 0..=GRAPH_DIRECTORY_MAX {
+            layout.section("edgeCover", &[0u8; 8]);
+        }
+    }
+
+    // The column tag is what the client checks a section's identity against, so the two have to
+    // agree on it byte for byte. This is the figure src/routing/graph.ts computes for the same name.
+    #[test]
+    fn the_column_tag_is_fnv_1a_32_of_the_name() {
+        assert_eq!(column_tag("edgeCover"), 0x6365_59C7);
+        assert_ne!(column_tag("edgeCover"), column_tag("edgeLandmark"));
+    }
+
+    // Every section this writes, named once: two entries claiming one column would make the client's
+    // check pass on a file whose columns are not the ones it names.
+    #[test]
+    fn no_two_sections_claim_the_same_column() {
+        let names = [
+            "nodeQx",
+            "nodeQy",
+            "nodeComponent",
+            "nodeMidRoadway",
+            "csr",
+            "adjacency",
+            "edgeNodeA",
+            "edgeNodeB",
+            "edgeLength",
+            "edgeGeomOffset",
+            "edgeGeomCount",
+            "edgeNameId",
+            "edgeDurationSeconds",
+            "edgeKindSide",
+            "edgeFlags",
+            "edgeCover",
+            "edgeLandmark",
+            "edgeArt",
+            "edgeHighway",
+            "edgeCommercial",
+            "edgeDirectCanopy",
+            "edgeIndustrial",
+            "edgeHistoric",
+            "edgeBridge",
+            "edgeAscent",
+            "edgeDescent",
+            "edgeSourceId",
+            "edgeOrdinal",
+            "ferryEdges",
+            "transitEdges",
+            "boardEdges",
+            "names",
+            "geometry",
+            "ferryEndpoints",
+            "transitTables",
+        ];
+        assert_eq!(names.len(), GRAPH_SECTIONS);
+        let mut tags: Vec<u32> = names.iter().map(|name| column_tag(name)).collect();
+        tags.sort_unstable();
+        tags.dedup();
+        assert_eq!(tags.len(), GRAPH_SECTIONS);
+    }
+
+    // A crossing chained through an island (nodes 0-1-2), with a station node 3 hung off the island
+    // by an access edge. The island is still mid-roadway — a walker standing there is part way
+    // through one crossing — and the station, which has no walking edge at all, is not. The same
+    // case `markMidRoadwayNodes` is asked in src/routing/graph.test.ts.
+    #[test]
+    fn a_station_on_a_traffic_island_does_not_pave_it() {
+        let csr = [0u32, 1, 4, 5, 6];
+        let adjacency = [0u32, 0, 1, 2, 1, 2];
+        let kinds = [KIND_CROSSING, KIND_CROSSING, KIND_ACCESS];
+        assert_eq!(
+            mark_mid_roadway(4, &csr, &adjacency, &kinds),
+            vec![1, 1, 1, 0]
+        );
+    }
+
+    fn get_u32(bytes: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("4 bytes"))
+    }
+
+    fn layout_entries(bytes: &[u8], count: usize) -> Vec<(u32, u32, u32)> {
+        (0..count)
+            .map(|index| {
+                let entry = GRAPH_DIRECTORY_AT + GRAPH_DIRECTORY_ENTRY * index;
+                (
+                    get_u32(bytes, entry),
+                    get_u32(bytes, entry + 4),
+                    get_u32(bytes, entry + 8),
+                )
+            })
+            .collect()
+    }
 
     // Two of the bits the record spends are stamped late, from state the proto carries on other
     // bits: one reused by accident would have a sidewalk claim to be a tunnel.
