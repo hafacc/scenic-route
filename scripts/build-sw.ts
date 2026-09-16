@@ -21,7 +21,15 @@ const OUT = join(ROOT, "out");
 // `_next/static/` is taken whole rather than filtered. It is the export's own output, already
 // content-hashed and already minimal, and picking through it by extension is how a precache ends up
 // missing the one chunk that a cold offline start needs.
-const SHELL_FILES = ["index.html", "404.html", "manifest.webmanifest"];
+//
+// Explorer's page is a FILE next to the root one, not a directory index: the app's data paths are
+// relative to the document, so a page one directory down would fetch its data from `/explorer/`.
+const SHELL_FILES = [
+  "index.html",
+  "404.html",
+  "manifest.webmanifest",
+  "explorer.html",
+];
 const SHELL_DIRS = ["_next/static", "icons"];
 
 function exists(path: string): Promise<boolean> {

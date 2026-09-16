@@ -2,15 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { FiCheck, FiCloudOff, FiLayers, FiSliders } from "react-icons/fi";
-import type { City } from "../src/cities";
+import type { City } from "../../src/cities";
 import {
   OVERLAYS,
   type OverlayId,
   overlayLabel,
-} from "../src/overlays/registry";
-import { useUnreachableLayers } from "../src/overlays/status";
-import { orderedOverlays } from "../src/settings/store";
-import { useSettings } from "./use-settings";
+} from "../../src/overlays/registry";
+import { useUnreachableLayers } from "../../src/overlays/status";
+import { orderedOverlays } from "../../src/settings/store";
+import { useSettings } from "../use-settings";
 
 interface LayersControlProps {
   city: City;

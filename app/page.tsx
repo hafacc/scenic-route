@@ -1,5 +1,5 @@
-import MapApp from "../components/map-app";
+import Explorer from "../components/explorer/explorer";
 
 export default function Home() {
-  return <MapApp />;
+  return <Explorer />;
 }

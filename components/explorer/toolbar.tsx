@@ -15,19 +15,19 @@ import {
   FiSliders,
   FiUser,
 } from "react-icons/fi";
-import { CITIES, type City } from "../src/cities";
-import type { OverlayId } from "../src/overlays/registry";
-import CityDialog from "./city-dialog";
-import ClockControl from "./clock-control";
-import FeedbackDialog from "./feedback-dialog";
-import FeedbackInbox from "./feedback-inbox";
-import InstallDialog from "./install-dialog";
+import { CITIES, type City } from "../../src/cities";
+import type { OverlayId } from "../../src/overlays/registry";
+import CityDialog from "../city-dialog";
+import ClockControl from "../clock-control";
+import FeedbackDialog from "../feedback-dialog";
+import FeedbackInbox from "../feedback-inbox";
+import InstallDialog from "../install-dialog";
+import type { AuthState } from "../map-shell";
+import RouteToggle from "../route-toggle";
+import ShareControl from "../share-control";
+import ThemeToggle from "../theme-toggle";
+import { useInstall } from "../use-install";
 import LayersControl from "./layers-control";
-import type { AuthState } from "./map-app";
-import RouteToggle from "./route-toggle";
-import ShareControl from "./share-control";
-import ThemeToggle from "./theme-toggle";
-import { useInstall } from "./use-install";
 
 interface ToolbarProps {
   auth: AuthState;
