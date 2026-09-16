@@ -448,6 +448,14 @@ cells, and one with none keeps the 0 that means unknown. Measured: that rejects 
 canopy area, all of it downtown and along roof edges, and the run reports the upper tail
 (p95/p99/max and the share above the cut) for exactly this reason.
 
+Two rules under that ceiling belong to the mosaic path alone — New York's raster ships decimetres
+already and is read untouched. A cell's metres round to the **nearest** decimetre rather than
+truncating, because a published 21.3 m arrives as the float32 21.299999 and truncation loses the
+tenth on about 5% of cells. And a cell under **half a metre** is dropped as ground rather than kept
+as a low crown: a mapped canopy polygon is 4.57 m tall at the least, so a reading that low is street
+or roof the ring simplification swept inside the crown, and a few of them pull a small crown's
+percentile down by metres.
+
 The two cities' numbers are not comparable as like for like, and the difference is the product, not
 the trees: New York measures 46% of its polygons, median 15.2 m, IQR 8.2 m; San Francisco measures
 75% of them, median 16.6 m, IQR 16.9 m. A crown-core threshold drops low canopy, which lifts the
