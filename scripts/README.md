@@ -2004,7 +2004,7 @@ meaning of a few record fields differ. Per 24-byte record:
 | 20 | u8 | rw_type | **kind: 6 = path, 7 = steps** (the two the model distinguishes) |
 | 21 | u8 | street width | **0** — a path has no roadway, so it is sampled once on its line |
 | 22 | u8 | posted speed | **0** |
-| 23 | u8 | flags | **bit2 structure** only (a bridge/tunnel deck or a non-zero `layer`); bits 0/1 are zero |
+| 23 | u8 | flags | **bit2 structure** (a bridge/tunnel deck or a non-zero `layer`) and **bit3 tunnel** (`tunnel` present and not `no`, or `covered=yes`) only; bits 0/1 are zero. A tunnelled way sets both. Bit3 is the left-sidewalk bit on STRT, so read it as a tunnel only here |
 
 Kind 6/7 both drive `half_offset_meters` to 0, so — exactly like a boardwalk or a CSCL path — the
 one sample taken on the centerline fills both density bytes of the vertex. The name blob holds the
@@ -2028,7 +2028,7 @@ cut every median crossing in two). Per 24-byte record, where it differs from STR
 | 20 | u8 | rw_type | **kind: 20 = sidewalk, 21 = crossing, 22 = traffic island** |
 | 21 | u8 | street width | **0** — these have no roadway of their own |
 | 22 | u8 | posted speed | **0** |
-| 23 | u8 | flags | **bit2 structure** only (a bridge/tunnel deck or a non-zero `layer`) |
+| 23 | u8 | flags | **bit2 structure** (a bridge/tunnel deck or a non-zero `layer`) and **bit3 tunnel**, exactly as PATH's |
 
 The kinds sit outside CSCL's `rw_type` range (1..10) and PATH's 6/7 on purpose: a reader pointed at
 the wrong file gets a kind it cannot mistake for a road type. Geometry is land-clipped and
@@ -3371,7 +3371,7 @@ can view them as typed arrays without copying):
 | 20 | u8 | cover, 0–254, this edge's own single value (**ferry**: low byte of the u16 duration at 20–21) |
 | 21 | u8 | half-offset to the sidewalk, decimetres (sidewalk kind only; else 0) (**ferry**: high byte of the duration) |
 | 22 | u8 | kind and side: bits 0–2 kind (0 sidewalk, 1 crossing, 2 link, 3 path, 4 ferry, 5 access, 6 board, 7 ride — the last three are transit, below); bits 3–5 side (0 none, 1 N, 2 E, 3 S, 4 W) |
-| 23 | u8 | flags: bit0 structure, bit1 steps, bit2 **geometry-right** (this sidewalk lies right of its stored geometry direction; clear = left), bit3 **OSM** (this edge came from the conflated OSM path network) |
+| 23 | u8 | flags: bit0 structure, bit1 steps, bit2 **geometry-right** (this sidewalk lies right of its stored geometry direction; clear = left), bit3 **OSM** (this edge came from the conflated OSM path network), bit4 **tunnel** (under a deck rather than on one: a tunnel street, a way OSM tags `tunnel`/`covered=yes`, or a sidewalk or crossing conflated to one). A graph written before the tunnel bit reads it as 0 |
 | 24 | u8 | landmark amenity, 0–254 (a discount attribute; 0 for a ferry) |
 | 25 | u8 | public-art amenity, 0–254 (a discount attribute; 0 for a ferry) |
 | 26 | u8 | highway/rail nuisance, 0–254 (a penalty attribute; 0 for a ferry) |
@@ -3384,7 +3384,7 @@ can view them as typed arrays without copying):
 
 | 36 | u8 | **industrial frontage**, 0–254 (a penalty attribute; 0 for a ferry and for an edge on a bridge or tunnel deck): the share of the edge's length running past industrial land, each side of the walk counted for half, so both sides reads twice one side. Baked from `INDL` by `crates/tiler/src/industrial.rs`; 0 across a city with no industrial source, which is what drops that city's slider |
 | 37 | u8 | **historic district**, 0–254 (a discount attribute; 0 for a ferry): the share of the edge's length falling inside a designated historic district, tested underfoot rather than probed sideways. Baked from `HDST` by `crates/tiler/src/historic.rs`; 0 across a city with no district source, which is what drops that city's slider. It took the first of byte 36's three reserved zeros **without a version bump** — an older v10 graph reads it back as 0 everywhere, which gates the slider off rather than mispricing anything |
-| 38 | u8 | **bridge over water**, 0–254 (a discount attribute; 0 for a ferry): the share of the edge's length that crosses open water on a bridge deck. The graph's structure flag (byte 23 bit 0) says "bridge or tunnel deck" and no more, so the deck's polyline is tested against the city's `LAND` mask and this is the share NOT over land — which is what leaves a tunnel, and a viaduct over a rail yard, reading 0. Baked by `crates/tiler/src/bridge.rs`; it took the second of byte 36's three reserved zeros **without a version bump**, on the same terms byte 37 did |
+| 38 | u8 | **bridge over water**, 0–254 (a discount attribute; 0 for a ferry): the share of the edge's length that crosses open water on a bridge deck. An edge carrying the tunnel bit (byte 23 bit 4) is not a deck and reads 0 outright; the rest are tested against the city's `LAND` mask, and this is the share NOT over land — which is what leaves a viaduct over a rail yard, and a tunnel nothing tagged, reading 0. Baked by `crates/tiler/src/bridge.rs`; it took the second of byte 36's three reserved zeros **without a version bump**, on the same terms byte 37 did |
 | 39 | u8 | reserved, zero. The record grew to 40 for byte 36 and the next per-edge attribute rides here without a v12 |
 
 The record is 40 bytes, a multiple of the 4-byte boundary every section starts on, so the name

@@ -122,14 +122,16 @@ export async function overpassQuery(
   });
 }
 
-// One OSM pedestrian/park way: the geometry, its uppercase-later name, and the two record flags
-// the model reads — `steps` (highway=steps, kind 7) and `structure` (a bridge/tunnel deck or a
-// non-zero layer, which suppresses false conflation welds in Phase 2).
+// One OSM pedestrian/park way: the geometry, its uppercase-later name, and the three record flags
+// the model reads — `steps` (highway=steps, kind 7), `structure` (a bridge/tunnel deck or a
+// non-zero layer, which suppresses false conflation welds in Phase 2) and `tunnel` (the walk itself
+// runs under something).
 export interface PathWay {
   id: number;
   name?: string;
   steps: boolean;
   structure: boolean;
+  tunnel: boolean;
   points: Coord[];
 }
 
@@ -190,6 +192,11 @@ function tagged(value: string | undefined): boolean {
   return value !== undefined && value !== "no";
 }
 
+// `covered` with any other value — arcade, colonnade — is a roof open along one side, not a tunnel.
+export function tunneled(tags: Record<string, string>): boolean {
+  return tagged(tags.tunnel) || tags.covered === "yes";
+}
+
 export async function fetchPaths(
   south: number,
   west: number,
@@ -219,6 +226,7 @@ export async function fetchPaths(
         tagged(tags.bridge) ||
         tagged(tags.tunnel) ||
         (tags.layer !== undefined && layer !== 0),
+      tunnel: tunneled(tags),
       points: toCoords(geometry),
     });
   }
@@ -288,12 +296,13 @@ export async function fetchSidewalkTags(
 }
 
 // One OSM way describing a street's own pavement: which of the three `footway` values it carries,
-// and the same geometry/name/structure a PathWay does.
+// and the same geometry, name and flags a PathWay carries.
 export interface SidewalkWay {
   id: number;
   name?: string;
   footway: "sidewalk" | "crossing" | "traffic_island";
   structure: boolean;
+  tunnel: boolean;
   points: Coord[];
 }
 
@@ -338,6 +347,7 @@ export async function fetchSidewalks(
         tagged(tags.bridge) ||
         tagged(tags.tunnel) ||
         (tags.layer !== undefined && layer !== 0),
+      tunnel: tunneled(tags),
       points: toCoords(geometry),
     });
   }

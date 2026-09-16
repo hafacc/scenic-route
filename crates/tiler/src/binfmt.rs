@@ -440,9 +440,10 @@ pub struct Streets {
     pub ids: Vec<u32>, // per segment: the CSCL physicalid (STRT) or the OSM way id (PATH), record offset 0
     pub road_types: Vec<u8>, // per segment: 1 street, 3 bridge, 4 tunnel, 5 boardwalk, 6 path, 7 step, 10 alley
     pub width_feet: Vec<u8>, // curb to curb, 0 unknown — what the sidewalk offset is derived from
-    // per segment: bit0 vehicular-only, bit1 non-vehicular deck, bit2 structure, and on STRT bits
-    // 3-6 the per-side sidewalk bits — OSM-mapped left/right, then surveyed left/right (the city's
-    // planimetric ROW polygons) — which `graph.rs`'s existence gate reads
+    // per segment: bit0 vehicular-only, bit1 non-vehicular deck, bit2 structure; on STRT bits 3-6
+    // are the per-side sidewalk bits — OSM-mapped left/right, then surveyed left/right (the city's
+    // planimetric ROW polygons) — which `graph.rs`'s existence gate reads, while on PATH and SWLK
+    // bit 3 is instead the tunnel one OSM's own tags supply
     pub flags: Vec<u8>,
     pub name_ids: Vec<u16>, // per segment: index into `names`, 0xFFFF when the row carried no label
     pub names: Vec<String>, // the distinct street names, decoded from the trailing name blob

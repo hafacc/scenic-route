@@ -28,7 +28,7 @@ import {
 import { projectX, projectY } from "./planar";
 import { SIDEWALK_WIDTH_COUNT, SIDEWALK_WIDTH_DATASET } from "./sf";
 import { type Coord, DATA_SF, NYC_OPEN_DATA } from "./socrata";
-import { toInt } from "./streets";
+import { FLAG_TUNNEL, toInt } from "./streets";
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const SIDEWALK_DIR = join(DATA_DIR, "sidewalks");
@@ -99,7 +99,7 @@ const SIDEWALK_INSET_METERS = 2;
 const MAX_OFFSET_METERS = 25.5;
 const FLAG_VEHICULAR_ONLY = 1 << 0;
 const FLAG_NON_VEHICULAR = 1 << 1;
-const FLAG_STRUCTURE = 1 << 2; // and SWLK byte 23's only bit, as PATH's
+const FLAG_STRUCTURE = 1 << 2; // and one of SWLK byte 23's two bits, as PATH's
 const WIDTH_BASED_TYPES = [1, 3, 4, 10]; // street, bridge, tunnel, alley
 
 // The parts of a STRT segment the per-side bits are computed from. `flags` is stamped in place,
@@ -813,6 +813,7 @@ interface SidewalkSegment {
   name: string;
   nameId: number;
   structure: boolean;
+  tunnel: boolean;
   points: Coord[];
   lengthMeters: number;
 }
@@ -847,6 +848,7 @@ function toSidewalkSegments(
       name: (way.name ?? "").trim().toUpperCase(),
       nameId: UNNAMED_ID,
       structure: way.structure,
+      tunnel: way.tunnel,
       points: dense.points,
       lengthMeters: dense.lengthMeters,
     });
@@ -856,7 +858,7 @@ function toSidewalkSegments(
 
 // SWLK v1: the OSM sidewalk, crossing and traffic-island ways. The record id is the OSM way id;
 // kind is 20/21/22; these have no roadway of their own, so width and speed are 0 and byte 23
-// carries only the structure flag. layout: scripts/README.md
+// carries the structure and tunnel flags alone. layout: scripts/README.md
 function encodeSidewalks(
   segments: readonly SidewalkSegment[],
   names: readonly string[],
@@ -871,7 +873,9 @@ function encodeSidewalks(
       kind: segment.kind,
       width: 0,
       speed: 0,
-      flags: segment.structure ? FLAG_STRUCTURE : 0,
+      flags:
+        (segment.structure ? FLAG_STRUCTURE : 0) |
+        (segment.tunnel ? FLAG_TUNNEL : 0),
       points: segment.points,
     })),
     names,

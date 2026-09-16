@@ -88,6 +88,7 @@ import {
 import {
   FLAG_NON_VEHICULAR,
   FLAG_STRUCTURE,
+  FLAG_TUNNEL,
   FLAG_VEHICULAR_ONLY,
   ROAD_TYPES,
   type RoadType,
@@ -107,6 +108,7 @@ interface PathSegment {
   osmId: number; // record offset 0; guarded to fit a u32
   kind: number; // PATH_KIND_PATH or PATH_KIND_STEPS, record byte 20
   structure: boolean; // record byte 23 bit2: a bridge/tunnel deck or a non-zero layer
+  tunnel: boolean; // record byte 23 bit3: the walk runs under something
   name: string; // uppercased, "" when the way carries none
   nameId: number; // index into the PATH name table, UNNAMED_ID when unnamed
   points: Coord[]; // densified, so the field is sampled at least every DENSIFY_METERS
@@ -509,6 +511,7 @@ function toPathSegments(
       osmId: way.id,
       kind: way.steps ? PATH_KIND_STEPS : PATH_KIND_PATH,
       structure: way.structure,
+      tunnel: way.tunnel,
       name: (way.name ?? "").trim().toUpperCase(),
       nameId: UNNAMED_ID,
       points: dense.points,
@@ -633,8 +636,8 @@ function encodeStreets(segments: Segment[], names: string[]): Uint8Array {
 }
 
 // PATH v1: the OSM pedestrian/park network. The record id is the OSM way id; kind is 6 (path) or
-// 7 (steps); a path has no roadway, so width and speed are 0 and byte 23 carries only the
-// structure flag. layout: scripts/README.md
+// 7 (steps); a path has no roadway, so width and speed are 0 and byte 23 carries the structure and
+// tunnel flags alone. layout: scripts/README.md
 function encodePaths(segments: PathSegment[], names: string[]): Uint8Array {
   return encodeNetwork(
     "PATH",
@@ -646,7 +649,9 @@ function encodePaths(segments: PathSegment[], names: string[]): Uint8Array {
       kind: segment.kind,
       width: 0,
       speed: 0,
-      flags: segment.structure ? FLAG_STRUCTURE : 0,
+      flags:
+        (segment.structure ? FLAG_STRUCTURE : 0) |
+        (segment.tunnel ? FLAG_TUNNEL : 0),
       points: segment.points,
     })),
     names,

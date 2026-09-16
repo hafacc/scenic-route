@@ -27,6 +27,9 @@ const KIND_BOARD = 6;
 const KIND_RIDE = 7;
 // flags byte bit 2 marks a sidewalk that lies to the right of its stored geometry direction.
 const GEOMETRY_RIGHT_FLAG = 0x4;
+// flags byte bit 4 marks an edge running through a tunnel. No format bump came with it: the byte was
+// already there, so a graph written before the bit reads it as 0 and behaves as it always did.
+export const TUNNEL_FLAG = 0x10;
 
 // An edge with no durable identity — a crossing, a link or a ferry, none of which comes from a
 // source segment. Its source-id slot carries this sentinel.
@@ -240,7 +243,11 @@ export interface RoutingGraph extends GraphIdentity {
   // the A* heuristic keeps under the transit credit. Infinity when the city has no rail.
   minRideSecPerMetre: number;
   minAccessSecPerMetre: number;
-  edgeFlags: Uint8Array; // bit0 structure, bit1 steps, bit2 geometry-right (sidewalks), bit3 OSM-sourced
+  // bit0 structure, bit1 steps, bit2 geometry-right (sidewalks), bit3 OSM-sourced, bit4 tunnel
+  edgeFlags: Uint8Array;
+  // Whether any edge carries the tunnel bit, which is what lets `maxShelter` raise its bound to meet
+  // a tunnel's shelter of 1 without loosening the heuristic for a city with nothing underground.
+  hasTunnels: boolean;
   names: string[];
   geometry: Uint8Array;
   // Per ferry edge, its two terminal stop names at the node-a and node-b ends (aligned to
@@ -371,6 +378,7 @@ export function decodeGraph(
   let maxBridgeByte = 0;
   let maxDirectCanopyByte = 0;
   let maxReliefByte = 0;
+  let hasTunnels = false;
   let minFerrySecPerMetre = Number.POSITIVE_INFINITY;
   let minRideSecPerMetre = Number.POSITIVE_INFINITY;
   let minAccessSecPerMetre = Number.POSITIVE_INFINITY;
@@ -385,6 +393,7 @@ export function decodeGraph(
     const kindSide = bytes[record + 22];
     edgeKindSide[edge] = kindSide;
     edgeFlags[edge] = bytes[record + 23];
+    hasTunnels ||= (edgeFlags[edge] & TUNNEL_FLAG) !== 0;
     const kind = kindSide & KIND_MASK;
     if (kind === KIND_FERRY) {
       // A ferry carries no cover and no half-offset; bytes 20-21 are a u16 crossing-plus-wait
@@ -533,6 +542,7 @@ export function decodeGraph(
     minRideSecPerMetre,
     minAccessSecPerMetre,
     edgeFlags,
+    hasTunnels,
     names,
     geometry,
     ferryEndpointNames,
@@ -775,6 +785,11 @@ export function edgeName(graph: RoutingGraph, edge: number): string | null {
 // True when this sidewalk lies to the right of its stored geometry direction (flags bit 2).
 export function edgeGeometryRight(graph: RoutingGraph, edge: number): boolean {
   return (graph.edgeFlags[edge] & GEOMETRY_RIGHT_FLAG) !== 0;
+}
+
+// True when this edge runs through a tunnel (flags bit 4): roofed, and out of the sun.
+export function isTunnel(graph: RoutingGraph, edge: number): boolean {
+  return (graph.edgeFlags[edge] & TUNNEL_FLAG) !== 0;
 }
 
 // Keyed by city: switching city loads a different graph, and coming back must not refetch the first.

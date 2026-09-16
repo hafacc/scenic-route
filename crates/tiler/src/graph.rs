@@ -56,6 +56,9 @@ use crate::sidewalks::{self, FLAG_NON_VEHICULAR};
 // warnings` rejects an unused `pub const`, and their only consumer is here.
 pub const FLAG_VEHICULAR_ONLY: u8 = 1 << 0;
 pub const FLAG_STRUCTURE: u8 = 1 << 2;
+// PATH and SWLK only: OSM tagged the way a tunnel, or covered. A STRT record spends this bit on
+// FLAG_OSM_LEFT and says the same thing with road type 4.
+pub const FLAG_TUNNEL: u8 = 1 << 3;
 // The per-side sidewalk bits `scripts/sidewalks.ts` stamps into every offsetted record: whether OSM
 // maps a sidewalk way on that side, and whether a survey says there is pavement there — the city's
 // own where it publishes one, and OSM's `sidewalk=*` tag on the road itself where it does not.
@@ -110,12 +113,17 @@ const GRPH_PATHLIKE: u8 = 1 << 2;
 // suppression and the invariants feed below both key on it, and the client masks the bits it reads.
 // Provenance rides in `Edge::osm` through construction and only lands in the byte at write.
 const GRPH_OSM: u8 = 1 << 3;
+// Under the deck rather than on it: a tunnel street (rw_type 4), an OSM way tagged tunnel or
+// covered, and whatever sidewalk or crossing was conflated to one. The structure bit carries both
+// and cannot tell them apart, which is what left the bridge bake crediting a tube under a channel
+// as a view. Written into the record's flags byte (bit 4), which an older graph reads as 0.
+const GRPH_TUNNEL: u8 = 1 << 4;
 // Internal only, masked out at write: this walking line has the buildings to its geometry-right, so
 // the record it writes carries FLAG_GEOMETRY_RIGHT. A derived sidewalk knows this from which side it
 // was offset to; an OSM way is digitized whichever way its mapper drew it, so the association
 // measures it. The shed placement reads that flag to know which side of the pavement a frontage is
 // on, and a walking line that lies about it places its scaffolding across the road.
-const GRPH_BUILDING_RIGHT: u8 = 1 << 4;
+const GRPH_BUILDING_RIGHT: u8 = 1 << 5;
 
 // v3 edge kinds (record byte 22, bits 0-2) and side labels (bits 3-5). A crossing carries no side,
 // and no geometry unless OSM drew it — a mapped crossing keeps its own polyline, a synthesized one is
@@ -170,6 +178,7 @@ const NO_GEOMETRY: u32 = 0xFFFF_FFFF; // edge record byte 12 sentinel: straight 
 const UNNAMED: u16 = 0xFFFF;
 pub const DECIMETERS_PER_METER: f64 = 10.0; // the half-offset byte's unit, as the chunk uses
 const STEP_STREET: u8 = 7;
+const TUNNEL_STREET: u8 = 4; // CSCL rw_type 4, as against 3 for a bridge
 // A sidewalk's baked geometry runs corner-to-corner (the centreline offset to its side, with the
 // two end vertices replaced by the corner nodes), so its length is the geodesic sum of that
 // polyline; it is clamped up to the straight corner-to-corner distance only if quantization ever
@@ -2468,6 +2477,9 @@ fn topology(args: &Args) -> Fallible<Base> {
         if streets.flags[segment] & FLAG_STRUCTURE != 0 {
             flags |= GRPH_STRUCTURE;
         }
+        if streets.road_types[segment] == TUNNEL_STREET {
+            flags |= GRPH_TUNNEL;
+        }
         if streets.road_types[segment] == STEP_STREET {
             flags |= GRPH_STEPS;
         }
@@ -2530,6 +2542,9 @@ fn topology(args: &Args) -> Fallible<Base> {
             if paths.flags[segment] & FLAG_STRUCTURE != 0 {
                 flags |= GRPH_STRUCTURE;
             }
+            if paths.flags[segment] & FLAG_TUNNEL != 0 {
+                flags |= GRPH_TUNNEL;
+            }
             if paths.road_types[segment] == STEP_STREET {
                 flags |= GRPH_STEPS;
             }
@@ -2586,6 +2601,9 @@ fn topology(args: &Args) -> Fallible<Base> {
             let mut flags = GRPH_PATHLIKE;
             if ways.flags[segment] & FLAG_STRUCTURE != 0 {
                 flags |= GRPH_STRUCTURE;
+            }
+            if ways.flags[segment] & FLAG_TUNNEL != 0 {
+                flags |= GRPH_TUNNEL;
             }
             let name_id = if ways.name_ids[segment] == UNNAMED {
                 UNNAMED
@@ -2750,6 +2768,9 @@ fn topology(args: &Args) -> Fallible<Base> {
                     piece.name_id = street.name_id;
                     piece.source_id = street.source_id;
                     piece.side = if left { left_label } else { right_label };
+                    // OSM rarely tags the pavement itself; the roadway it belongs to is what knows
+                    // it is in a tube, so the bit comes across with the name and the cover.
+                    piece.flags |= street.flags & GRPH_TUNNEL;
                     if matched.street_left {
                         piece.flags |= GRPH_BUILDING_RIGHT;
                     }
@@ -2769,6 +2790,7 @@ fn topology(args: &Args) -> Fallible<Base> {
                             crossing_cover_bytes(street.cover_left, street.cover_right);
                         piece.cover_right = piece.cover_left;
                         piece.name_id = street.name_id;
+                        piece.flags |= street.flags & GRPH_TUNNEL;
                     }
                 }
             }
@@ -3332,7 +3354,7 @@ fn topology(args: &Args) -> Fallible<Base> {
                     name_id: crossed.name_id,
                     kind: KIND_CROSSING,
                     side: SIDE_NONE,
-                    flags: crossed.flags & (GRPH_STRUCTURE | GRPH_STEPS),
+                    flags: crossed.flags & (GRPH_STRUCTURE | GRPH_STEPS | GRPH_TUNNEL),
                     source_id: NO_SOURCE_ID,
                 });
                 crossing_count += 1;
@@ -3435,7 +3457,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         }
     };
     for (edge_id, edge) in final_edges.iter().enumerate() {
-        let base_flags = edge.flags & (GRPH_STRUCTURE | GRPH_STEPS);
+        let base_flags = edge.flags & (GRPH_STRUCTURE | GRPH_STEPS | GRPH_TUNNEL);
         if edge.flags & GRPH_PATHLIKE != 0 {
             // An end the entrance snap bound to a kerb takes that corner; the rest take the base
             // node's path node. The stored polyline ends on the centreline either way — that is what
@@ -3701,7 +3723,7 @@ fn topology(args: &Args) -> Fallible<Base> {
                 name_id: crossed.name_id,
                 kind: KIND_CROSSING,
                 side: SIDE_NONE,
-                flags: crossed.flags & (GRPH_STRUCTURE | GRPH_STEPS),
+                flags: crossed.flags & (GRPH_STRUCTURE | GRPH_STEPS | GRPH_TUNNEL),
                 source_id: NO_SOURCE_ID,
             });
             union(&mut v2_parent, corner_a, corner_b);
@@ -4969,9 +4991,10 @@ fn bake(
         None => vec![0u8; edge_count],
     };
 
-    // The bridge byte: how much of a deck edge crosses open water rather than ground. The
-    // structure flag alone cannot say — it carries tunnels and viaducts over rail yards too — so the
-    // land mask is what the polyline is tested against; see bridge.rs.
+    // The bridge byte: how much of a deck edge crosses open water rather than ground. The structure
+    // flag carries viaducts over rail yards too, so the land mask is what the polyline is tested
+    // against; the tunnel bit takes the tubes out first, since a bore under a channel is water
+    // overhead and no view at all. See bridge.rs.
     let bridge = match &args.land {
         Some(path) => column(
             cache.as_deref_mut(),
@@ -4979,19 +5002,14 @@ fn bake(
             keys.map(|keys| keys.bridge.as_str()),
             edge_count,
             || {
-                let on_structure: Vec<bool> = base
+                let on_bridge: Vec<bool> = base
                     .edges
                     .iter()
-                    .map(|edge| edge.flags & GRPH_STRUCTURE != 0)
+                    .map(|edge| edge.flags & GRPH_STRUCTURE != 0 && edge.flags & GRPH_TUNNEL == 0)
                     .collect();
                 let lengths: Vec<f32> = base.edges.iter().map(|edge| edge.length).collect();
-                let baked = bridge::bridge(
-                    polylines.get(),
-                    &on_structure,
-                    &lengths,
-                    path,
-                    base.origin_lat,
-                )?;
+                let baked =
+                    bridge::bridge(polylines.get(), &on_bridge, &lengths, path, base.origin_lat)?;
                 eprintln!(
                     "bridge: {} land parts, {} edges over water, {:.0} m of deck over water, max \
                      byte {}",
@@ -5414,6 +5432,30 @@ pub fn run(args: &Args, dem: Option<&mut crate::dem::Dem>) -> Fallible<Vec<u32>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Two of the bits the record spends are stamped late, from state the proto carries on other
+    // bits: one reused by accident would have a sidewalk claim to be a tunnel.
+    #[test]
+    fn the_written_flag_bits_are_all_different() {
+        let written = [
+            GRPH_STRUCTURE,
+            GRPH_STEPS,
+            FLAG_GEOMETRY_RIGHT,
+            GRPH_OSM,
+            GRPH_TUNNEL,
+        ];
+        for (index, bit) in written.iter().enumerate() {
+            assert_eq!(bit.count_ones(), 1, "{bit:#04x} is not one bit");
+            for other in &written[index + 1..] {
+                assert_eq!(bit & other, 0, "{bit:#04x} and {other:#04x} share a bit");
+            }
+        }
+        // Both of these are masked out at write; only GRPH_BUILDING_RIGHT survives to be read back,
+        // as FLAG_GEOMETRY_RIGHT, so neither may sit on a bit the record spends.
+        for internal in [GRPH_PATHLIKE, GRPH_BUILDING_RIGHT] {
+            assert_eq!(internal & (GRPH_STRUCTURE | GRPH_STEPS | GRPH_TUNNEL), 0);
+        }
+    }
 
     // Two stations the feed puts in one transfer complex, each served by a line of its own, plus a
     // station at either end for the two lines to run to.
