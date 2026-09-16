@@ -276,6 +276,9 @@ function socrata(host: string): Socrata {
 
 export const NYC_OPEN_DATA = socrata("data.cityofnewyork.us");
 export const DATA_SF = socrata("data.sfgov.org");
+// New York STATE's portal, not the city's: the MTA is a state authority and publishes its subway
+// station and entrance inventories here.
+export const NY_STATE_OPEN_DATA = socrata("data.ny.gov");
 
 // Socrata returns points as WKT, e.g. "POINT(-73.8165 40.7162)" (lng first).
 export function parseWktPoint(wkt: string): Coord | null {

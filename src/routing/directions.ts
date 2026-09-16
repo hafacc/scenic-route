@@ -7,8 +7,11 @@
 
 import type { RideSummary } from "../modes/cards";
 import {
+  doorStreet,
   edgeName,
   edgePath,
+  isElevatorDoor,
+  isStayAboard,
   isSurfaceStop,
   otherEnd,
   patternTerminus,
@@ -61,6 +64,9 @@ export interface Maneuver {
   // Which of the three station acts this row is, since all of them share one kind. "change" is an
   // alight the reader gets straight back onto a train from.
   station?: "enter" | "exit" | "alight" | "change";
+  // The door an enter or an exit goes through, which wears its own icon. Absent on an alight, which
+  // happens on a platform, and on a kerbside stop, which has no door at all.
+  door?: "stair" | "elevator";
   // A rail leg's departure, seconds from midnight of the routed day. Taken from the route's own leg
   // rather than looked up here: the timetable lives in the worker, and these are built on the page.
   departureSeconds?: number;
@@ -171,6 +177,11 @@ interface Run {
   station: string | null;
   stationAction: "enter" | "exit" | "alight" | null;
   stationSurface: boolean; // a stop in the street rather than a station with a way in
+  stationElevator: boolean; // the door is a lift rather than a stair
+  // The street the door stands on and which side of it, off the walking step at the door: what
+  // tells a reader WHICH of a station's several ways in to take. Raw name, null when there is none.
+  doorName: string | null;
+  doorSide: SideLabel;
   lngs: number[];
   lats: number[];
 }
@@ -190,6 +201,9 @@ const NO_TRANSIT = {
   station: null,
   stationAction: null,
   stationSurface: false,
+  stationElevator: false,
+  doorName: null,
+  doorSide: null,
 } as const;
 
 // A ferry step's destination terminal: node b when travelled a -> b, else node a.
@@ -358,6 +372,10 @@ function buildRuns(
       continue;
     }
     if (step.kind === "ride") {
+      // Staying aboard between two stops is nothing a reader does: no stop, no distance, no time.
+      if (isStayAboard(graph, step.edge)) {
+        continue;
+      }
       const open = runs[runs.length - 1];
       if (open?.kind === "transit") {
         open.lengthMeters += step.lengthMeters;
@@ -375,15 +393,26 @@ function buildRuns(
       }
       const from = stepFrom(graph, step);
       const to = otherEnd(graph, step.edge, from);
-      // Three walks wear this one kind, told apart by which end you set off from: a platform is an
-      // alight, a station is the way out, and anything else is the pavement, so the way in. Only a
-      // station node answers `stationName`, which is what makes that last test work.
+      // Four walks wear this one kind, told apart by their two ends: a platform is an alight, a
+      // station node at both ends is the change of train, a station node at the near end is the way
+      // out, and anything else set off from the pavement, so the way in. Only a station node answers
+      // `stationName`, which is what tells the last two apart.
+      const fromStation = stationName(graph, from);
       const action =
         graph.nodePlatform[from] === 1
           ? "alight"
-          : stationName(graph, from) === null
+          : fromStation === null
             ? "enter"
-            : "exit";
+            : stationName(graph, to) === null
+              ? "exit"
+              : "change";
+      // The change of train is the station's own exit walking round to its own entry: no distance,
+      // no time, and nothing to tell a reader beyond the "Change at ..." the alight before it
+      // already says.
+      if (action === "change") {
+        continue;
+      }
+      const door = doorStreet(graph, step.edge);
       runs.push({
         ...NO_TRANSIT,
         kind: "station",
@@ -393,9 +422,12 @@ function buildRuns(
         stepEnd: index + 1,
         lengthMeters: step.lengthMeters,
         durationSeconds: 0,
-        station: stationName(graph, action === "exit" ? from : to),
+        station: action === "exit" ? fromStation : stationName(graph, to),
         stationAction: action,
         stationSurface: isSurfaceStop(graph, step.edge),
+        stationElevator: isElevatorDoor(graph, step.edge),
+        doorName: door?.street ?? null,
+        doorSide: door?.side ?? null,
         lngs: [],
         lats: [],
       });
@@ -705,6 +737,14 @@ export function buildDirections(
       // A tram stop is not a building: you go to one and you leave it, where a station is entered
       // and exited. The alight is the same words either way — you get off a train wherever it is.
       const stop = run.stationSurface;
+      // A station has several ways in and they are not interchangeable — which stair you take
+      // settles which platform you reach — so the door is named by the street it stands on.
+      const doorName = run.doorName ? prettifyStreetName(run.doorName) : null;
+      const doorKind = run.stationElevator ? "elevator" : "stair";
+      const through =
+        doorName === null
+          ? ""
+          : ` by the ${doorKind} on ${descriptor(run.doorSide, doorName)}`;
       const text = changing
         ? `Change at ${place ?? "the station"}`
         : run.stationAction === "alight"
@@ -712,14 +752,19 @@ export function buildDirections(
           : run.stationAction === "enter"
             ? stop
               ? `Go to the ${place ?? "stop"} stop`
-              : `Enter ${place ?? "the station"}`
+              : `Enter ${place ?? "the station"}${through}`
             : stop
               ? `Leave the ${place ?? "stop"} stop`
-              : `Exit ${place ?? "the station"}`;
+              : `Exit ${place ?? "the station"}${through}`;
       maneuvers.push({
         kind: "station",
         text,
         station: changing ? "change" : (run.stationAction ?? "enter"),
+        // A kerbside stop has no door, and an alight happens on a platform: neither takes one.
+        door:
+          changing || stop || run.stationAction === "alight"
+            ? undefined
+            : doorKind,
         name: place,
         side: null,
         turn: null,

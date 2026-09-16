@@ -6,6 +6,7 @@ import {
   MdAccountBalance,
   MdArrowUpward,
   MdDirectionsBoat,
+  MdElevator,
   MdFlag,
   MdLogout,
   MdOutlineDirectionsWalk,
@@ -56,6 +57,9 @@ export function maneuverIcon(maneuver: Maneuver) {
     }
     if (maneuver.station === "change") {
       return <MdTransferWithinAStation {...props} />;
+    }
+    if (maneuver.door === "elevator") {
+      return <MdElevator {...props} />;
     }
     return <MdStairs {...props} />;
   }
