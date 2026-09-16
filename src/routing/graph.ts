@@ -483,6 +483,13 @@ export function edgeGeometryRight(graph: RoutingGraph, edge: number): boolean {
 
 // Keyed by city: switching city loads a different graph, and coming back must not refetch the first.
 const graphPromises = new Map<string, Promise<RoutingGraph>>();
+// Kept so the routing worker can be handed a copy without a second download; the decoded graph
+// views most of these bytes in place.
+const graphBuffers = new Map<string, ArrayBuffer>();
+
+export function graphBuffer(cityId: string): ArrayBuffer | undefined {
+  return graphBuffers.get(cityId);
+}
 
 // How the graph beside it names itself, read out of the deploy's own record rather than recomputed
 // here: FNV-1a over 30 MB of graph is ~0.5 s of blocked main thread on a laptop and several times
@@ -506,6 +513,18 @@ async function fetchGraphIdentity(cityId: string): Promise<GraphIdentity> {
   }
 }
 
+// The pier wait is not in the artifact, and both decoders go through here — the page's fetch and
+// the worker's copy of the same bytes — so neither can be the one that forgets it.
+export function decodeCityGraph(
+  cityId: string,
+  buffer: ArrayBuffer,
+  identity: GraphIdentity,
+): RoutingGraph {
+  const graph = decodeGraph(buffer, identity);
+  graph.maxFerryWaitSeconds = cityById(cityId)?.maxFerryWaitSeconds;
+  return graph;
+}
+
 export function loadGraph(cityId: string): Promise<RoutingGraph> {
   const pending = graphPromises.get(cityId);
   if (pending) {
@@ -517,10 +536,9 @@ export function loadGraph(cityId: string): Promise<RoutingGraph> {
       if (!response.ok) {
         throw new Error(`${url}: ${response.status} ${response.statusText}`);
       }
-      const graph = decodeGraph(await response.arrayBuffer(), identity);
-      // Attached here so every caller's graph carries it, not just the router's.
-      graph.maxFerryWaitSeconds = cityById(cityId)?.maxFerryWaitSeconds;
-      return graph;
+      const buffer = await response.arrayBuffer();
+      graphBuffers.set(cityId, buffer);
+      return decodeCityGraph(cityId, buffer, identity);
     })
     .catch((error: unknown) => {
       graphPromises.delete(cityId); // a failed load must not be memoized
@@ -549,16 +567,27 @@ export interface EdgePath {
 }
 
 // Bounded most-recently-used cache: a route decodes an edge's geometry once for the search and
-// again while stitching, and adjacent queries revisit the same corridor. Production runs one graph,
-// so keying on the edge id alone is safe; tests that build several synthetic graphs reusing edge ids
-// call clearEdgePathCache between them so a stale polyline never leaks across graphs.
-const pathCache = new Map<number, EdgePath>();
+// again while stitching, and adjacent queries revisit the same corridor. Edge ids repeat between
+// cities, so each graph gets its own cache and drops it when the graph itself is dropped.
+let pathCaches = new WeakMap<RoutingGraph, Map<number, EdgePath>>();
 
 export function clearEdgePathCache(): void {
-  pathCache.clear();
+  pathCaches = new WeakMap<RoutingGraph, Map<number, EdgePath>>();
+}
+
+function cacheFor(graph: RoutingGraph): Map<number, EdgePath> {
+  const existing = pathCaches.get(graph);
+  if (existing) {
+    return existing;
+  } else {
+    const created = new Map<number, EdgePath>();
+    pathCaches.set(graph, created);
+    return created;
+  }
 }
 
 export function edgePath(graph: RoutingGraph, edge: number): EdgePath {
+  const pathCache = cacheFor(graph);
   const cached = pathCache.get(edge);
   if (cached) {
     pathCache.delete(edge);
