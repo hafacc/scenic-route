@@ -84,6 +84,12 @@ const PROGRESS_BANDS: usize = 40;
 /// surfaces it differences disagree by noise; neither is a crown.
 const ABOVE_GROUND_FLOOR_METERS: f64 = 0.05;
 
+/// The same floor under a canopy polygon, where a cell this low is street or roof the ring
+/// simplification swept inside the crown rather than a low tree: the polygons are mapped to a
+/// 4.57 m minimum canopy height, so nothing real is dropped and a small crown's percentile stops
+/// being dragged down by metres of ground.
+const CROWN_FLOOR_METERS: f64 = 0.5;
+
 /// No dry land is under this — the Dead Sea shore, the lowest there is, sits at about -430 m — so a
 /// ground elevation below it is a mosaic's nodata pad and not terrain. It is the datum an elevation
 /// is stored against as well, which is what keeps ground at and under sea level a reading: the tide
@@ -116,6 +122,15 @@ impl Quantity {
         }
     }
 
+    /// A crown height: a height above ground on the canopy's own floor.
+    const fn crown() -> Quantity {
+        Quantity {
+            floor_meters: CROWN_FLOOR_METERS,
+            ceiling_meters: IMPLAUSIBLE_CROWN_METERS,
+            datum_meters: 0.0,
+        }
+    }
+
     /// An elevation above sea level, dropped above the highest ground the city could stand on.
     pub const fn elevation(ceiling_meters: f64) -> Quantity {
         Quantity {
@@ -130,7 +145,9 @@ impl Quantity {
     fn decimetres(self, value: f32) -> Option<u16> {
         let meters = f64::from(value);
         (meters > self.floor_meters && meters <= self.ceiling_meters)
-            .then_some(((meters - self.datum_meters) * 10.0) as u16)
+            // Nearest rather than truncated: a cell of 21.3 m arrives as the float32 21.299999 and
+            // would otherwise store a decimetre short of what the publisher wrote.
+            .then_some(((meters - self.datum_meters) * 10.0).round() as u16)
     }
 
     /// And back: what one sampled reading measures.
@@ -894,7 +911,7 @@ pub fn run(args: &Args) -> Fallible<Report> {
             &canopy.polygons,
             &raster.source,
             raster.projection,
-            Quantity::above_ground(IMPLAUSIBLE_CROWN_METERS),
+            Quantity::crown(),
         )?;
         skipped_tiles += sampled.skipped_tiles;
         for (polygon, sample) in sampled.values.iter().enumerate() {
@@ -923,7 +940,30 @@ pub fn run(args: &Args) -> Fallible<Report> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Quantity, SF_CS13, Tmerc, UTM_10N, UTM_18N};
+    use super::{HEIGHT_PERCENTILE, Quantity, SF_CS13, Tmerc, UTM_10N, UTM_18N, percentile_dm};
+
+    /// Decimetres are what the publisher wrote, not what float32 can hold: this is the 5% of cells
+    /// whose metres land a hair under a tenth and truncation loses.
+    #[test]
+    fn a_cell_on_a_decimetre_reads_that_decimetre() {
+        let crown = Quantity::crown();
+        assert_eq!(crown.decimetres(21.30), Some(213));
+        assert_eq!(crown.decimetres(6.0), Some(60));
+        assert_eq!(Quantity::elevation(4_000.0).decimetres(-2.5), Some(9975));
+    }
+
+    /// A crown polygon's ring can enclose the street it overhangs, and those cells are ground.
+    #[test]
+    fn a_crowns_ground_cells_are_not_sampled() {
+        let crown = Quantity::crown();
+        let mut sample: Vec<u16> = [0.06f32, 0.1, 5.9, 6.0, 6.2]
+            .into_iter()
+            .filter_map(|cell| crown.decimetres(cell))
+            .collect();
+        assert_eq!(sample, vec![59, 60, 62]);
+        sample.sort_unstable();
+        assert_eq!(percentile_dm(&sample, HEIGHT_PERCENTILE), 62);
+    }
 
     /// The floor that means "no crown here" is a floor over ground elevation only in the sense that
     /// it rejects the shoreline the East Bay's low-lying buildings stand on, so the two quantities
@@ -933,6 +973,7 @@ mod tests {
         let crown = Quantity::above_ground(65.0);
         let ground = Quantity::elevation(4_000.0);
         assert_eq!(crown.decimetres(0.04), None);
+        assert_eq!(crown.decimetres(65.1), None);
         let shore = ground.decimetres(0.04).expect("the tide line is ground");
         assert!(ground.meters(shore).abs() < 0.05);
         let under = ground
