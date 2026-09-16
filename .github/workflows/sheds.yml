@@ -1,10 +1,14 @@
 name: sheds
 
-# The sidewalk-shed artifact, rebuilt from the DOB's feed. The feed regenerates around 09:47 ET, so
-# this fires at 15:00 UTC — 10:00 EST and 11:00 EDT, comfortably after it either way. GitHub's cron
-# is UTC only and is best-effort, delayed by minutes to an hour under load; that does not matter here,
-# because `update-sheds` reads the day the published artifact reached and replays everything the feed
-# has put out since. A run that is late, or that never happened, catches up on the next one.
+# The sidewalk-shed artifact and the two timetables, on three triggers: the daily cron, a push to
+# `main` that changes what the timetables are built from, and `workflow_dispatch` for a run started
+# by hand.
+#
+# The sheds are rebuilt from the DOB's feed, which regenerates around 09:47 ET, so the cron fires at
+# 15:00 UTC — 10:00 EST and 11:00 EDT, comfortably after it either way. GitHub's cron is UTC only and
+# is best-effort, delayed by minutes to an hour under load; that does not matter here, because
+# `update-sheds` reads the day the published artifact reached and replays everything the feed has put
+# out since. A run that is late, or that never happened, catches up on the next one.
 #
 # Scheduled workflows on a public repo are DISABLED after 60 days without a PUSH to the repository,
 # and only ever run from the default branch. A scheduled run completing does not reset that clock —
@@ -16,9 +20,48 @@ name: sheds
 # itself, and a later push does not re-enable it either — that takes a person. Do NOT add a keepalive
 # scheme on top. GitHub blocked the widely-cited `keepalive-workflow` action in April 2025 as a terms
 # violation, so anything whose purpose is to game this timer is a policy risk rather than insurance.
+#
+# The `push` filter is the timetables' republish: a change to how they are built should reach
+# `public/` without waiting for tomorrow's cron. It names only what decides their bytes — the two
+# scripts, every module they import, what they read, and this workflow — so a push carrying anything
+# else does not run it, and
+# the paths this job itself commits (all under `public/`) are deliberately absent, so its own daily
+# commit cannot retrigger it. A push-triggered run costs nothing when the change did not move any
+# bytes: the commit step below compares what it rebuilt against what is committed and exits on
+# "nothing to commit".
 on:
   schedule:
     - cron: "0 15 * * *"
+  push:
+    branches: [main]
+    paths:
+      # The two scripts and everything they import, transitively: a helper they read through decides
+      # their bytes exactly as their own code does, and one left out is a change that never reaches
+      # public/ until the next cron.
+      - "scripts/ferry-schedule.ts"
+      - "scripts/transit-schedule.ts"
+      - "scripts/alameda.ts"
+      - "scripts/arcgis.ts"
+      - "scripts/cache.ts"
+      - "scripts/csv.ts"
+      - "scripts/ferries.ts"
+      - "scripts/geometry.ts"
+      - "scripts/gtfs.ts"
+      - "scripts/http.ts"
+      - "scripts/land-filter.ts"
+      - "scripts/land.ts"
+      - "scripts/manifest.ts"
+      - "scripts/overpass.ts"
+      - "scripts/schedule-record.ts"
+      - "scripts/sf.ts"
+      - "scripts/socrata.ts"
+      - "scripts/streets.ts"
+      - "scripts/subway-format.ts"
+      - "scripts/transit.ts"
+      - "src/tiles/varint.ts"
+      - "data/transit/**"
+      - "data/ferries/**"
+      - ".github/workflows/sheds.yml"
   workflow_dispatch:
 
 permissions:
