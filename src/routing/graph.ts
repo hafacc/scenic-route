@@ -172,11 +172,16 @@ export interface RoutingGraph extends GraphIdentity {
   // 0..254, the share of this edge inside a designated historic district — a discount attribute, so
   // its max below is a term of the A* lower bound and not only a slider gate. 0 for a ferry.
   edgeHistoric: Uint8Array;
+  // 0..254, the share of this edge that crosses open water on a bridge deck — a discount attribute,
+  // so its max below is a term of the A* lower bound as well as the slider's gate. A tunnel and a
+  // viaduct over a rail yard read 0, and so does everything off a deck. 0 for a ferry.
+  edgeBridge: Uint8Array;
   maxLandmark: number; // the greatest per-edge landmark amenity, 0..1; sets that discount's clip floor
   maxArt: number; // the greatest per-edge art amenity, 0..1; sets that discount's clip floor
   maxCommercial: number; // the greatest per-edge commercial amenity, 0..1; sets that discount's clip floor
   maxIndustrial: number; // the greatest per-edge industrial frontage, 0..1; gates the slider, never the heuristic
   maxHistoric: number; // the greatest per-edge historic share, 0..1; sets that discount's clip floor
+  maxBridge: number; // the greatest per-edge over-water share, 0..1; sets that discount's clip floor
 
   // The share of the edge that lies DIRECTLY under a crown, unblurred — what edgeCover, the smoothed
   // field the overlay is coloured from, cannot answer.
@@ -275,9 +280,10 @@ export const FORMAT_VERSION = 11;
 // v11 grew the header to 80 for the transit side table's offset at byte 64. Exported for the same
 // reason the two above are: a fixture writing its own header must write this one.
 export const HEADER_BYTES = 80;
-// v10 grew the record by 4: byte 36 the industrial attribute, then 37 the historic one, which took
-// the first of its three reserved zeros without a version bump. A graph written before that bake
-// reads byte 37 back as 0 on every edge, so its max is 0 and its slider gates itself off.
+// v10 grew the record by 4: byte 36 the industrial attribute, then 37 the historic one and 38 the
+// bridge one, each taking a reserved zero without a version bump. A graph written before one of
+// those bakes reads its byte back as 0 on every edge, so its max is 0 and its slider gates itself
+// off; byte 39 is the one zero still reserved.
 export const EDGE_RECORD_BYTES = 40;
 // relative, so both pick up the deploy basePath
 // Written by the same pass as the graph itself, and named after it: one directory holds
@@ -347,6 +353,7 @@ export function decodeGraph(
   const edgeCommercial = new Uint8Array(edgeCount);
   const edgeIndustrial = new Uint8Array(edgeCount);
   const edgeHistoric = new Uint8Array(edgeCount);
+  const edgeBridge = new Uint8Array(edgeCount);
   const edgeDirectCanopy = new Uint8Array(edgeCount);
   const edgeSourceId = new Uint32Array(edgeCount);
   const edgeOrdinal = new Uint8Array(edgeCount);
@@ -361,6 +368,7 @@ export function decodeGraph(
   let maxCommercialByte = 0;
   let maxIndustrialByte = 0;
   let maxHistoricByte = 0;
+  let maxBridgeByte = 0;
   let maxDirectCanopyByte = 0;
   let maxReliefByte = 0;
   let minFerrySecPerMetre = Number.POSITIVE_INFINITY;
@@ -427,6 +435,7 @@ export function decodeGraph(
     edgeDescent[edge] = bytes[record + 35];
     edgeIndustrial[edge] = bytes[record + 36];
     edgeHistoric[edge] = bytes[record + 37];
+    edgeBridge[edge] = bytes[record + 38];
     maxReliefByte = Math.max(
       maxReliefByte,
       edgeAscent[edge] + edgeDescent[edge],
@@ -436,6 +445,7 @@ export function decodeGraph(
     maxCommercialByte = Math.max(maxCommercialByte, edgeCommercial[edge]);
     maxIndustrialByte = Math.max(maxIndustrialByte, edgeIndustrial[edge]);
     maxHistoricByte = Math.max(maxHistoricByte, edgeHistoric[edge]);
+    maxBridgeByte = Math.max(maxBridgeByte, edgeBridge[edge]);
     maxDirectCanopyByte = Math.max(maxDirectCanopyByte, edgeDirectCanopy[edge]);
   }
   const maxRelief = maxReliefByte / 255;
@@ -445,6 +455,7 @@ export function decodeGraph(
   const maxCommercial = maxCommercialByte / 255;
   const maxIndustrial = maxIndustrialByte / 255;
   const maxHistoric = maxHistoricByte / 255;
+  const maxBridge = maxBridgeByte / 255;
   const maxDirectCanopy = maxDirectCanopyByte / 255;
 
   const names = decodeNames(buffer, nameTableOffset);
@@ -499,11 +510,13 @@ export function decodeGraph(
     edgeCommercial,
     edgeIndustrial,
     edgeHistoric,
+    edgeBridge,
     maxLandmark,
     maxArt,
     maxCommercial,
     maxIndustrial,
     maxHistoric,
+    maxBridge,
     edgeDirectCanopy,
     maxDirectCanopy,
     edgeAscent,

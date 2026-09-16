@@ -37,6 +37,7 @@ test("every route field survives a round trip", () => {
     commercial: 0.6,
     industrial: 0.35,
     historic: 0.55,
+    bridge: 0.65,
     shade: -0.85,
     shelter: 0.25,
     transit: 1.5,
@@ -303,4 +304,12 @@ test("a share link is the page it was made on, plus the hash", () => {
       encodeModes({ ...DEFAULT_MODE_STATE, mode: "rain" }),
     ),
   ).toBe("https://hafaio.github.io/scenic-route/#mode=rain");
+});
+
+test("the bridge weight rides on its own key", () => {
+  const weights: RouteWeights = { ...DEFAULT_WEIGHTS, bridge: 0.75 };
+  const hash = formatHash(encodeRoute({ ...DEFAULT_ROUTE_STATE, weights }));
+
+  expect(hash).toBe("#bridge=0.75");
+  expect(decodeRoute(hashParams(hash)).weights.bridge).toBe(0.75);
 });

@@ -29,6 +29,7 @@ export function graphFactorMax(
     art: graph.maxArt,
     commercial: graph.maxCommercial,
     historic: graph.maxHistoric,
+    bridge: graph.maxBridge,
     shade: graph.shade ? graph.shade.maxAbs : 0,
     shelter: maxShelter(graph),
   };

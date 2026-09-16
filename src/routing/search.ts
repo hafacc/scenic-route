@@ -111,6 +111,7 @@ export interface RouteFactors {
   commercial: number;
   industrial: number;
   historic: number;
+  bridge: number; // the share of the walk that crosses open water on a bridge deck
   shelter: number; // what is overhead in the rain: the decked share plus the crowns over the rest
   ferry: number; // the share of the trip spent on the boat itself, the pier wait excluded
 }
@@ -373,6 +374,7 @@ function reconstruct(
     commercial: 0,
     industrial: 0,
     historic: 0,
+    bridge: 0,
     shelter: 0,
     ferry: 0,
   };
@@ -442,6 +444,7 @@ function reconstruct(
       sums.commercial += (graph.edgeCommercial[edge] / 255) * seconds;
       sums.industrial += (graph.edgeIndustrial[edge] / 255) * seconds;
       sums.historic += (graph.edgeHistoric[edge] / 255) * seconds;
+      sums.bridge += (graph.edgeBridge[edge] / 255) * seconds;
       const shed = edgeShed(graph, edge);
       // The same attribute the shelter discount is priced off, so the chip and the cost agree about
       // what is overhead.
@@ -488,6 +491,7 @@ function reconstruct(
       commercial: share(factorSeconds.commercial),
       industrial: share(factorSeconds.industrial),
       historic: share(factorSeconds.historic),
+      bridge: share(factorSeconds.bridge),
       shelter: share(factorSeconds.shelter),
       ferry: share(factorSeconds.ferry),
     },

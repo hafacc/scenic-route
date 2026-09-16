@@ -45,10 +45,12 @@ interface EdgeSpec {
   cover: number; // a walking edge's own byte
   seconds: number; // a ferry's or a transit edge's, in bytes 20-21
   geometry: boolean;
+  bridge?: number; // record byte 38, the over-water share of a deck
 }
 
 const EDGES: readonly EdgeSpec[] = [
-  { a: 0, b: 1, kind: 0, cover: 100, seconds: 0, geometry: true }, // sidewalk
+  // The sidewalk carries a bridge byte: it is the walk that crosses the water here.
+  { a: 0, b: 1, kind: 0, cover: 100, seconds: 0, geometry: true, bridge: 200 },
   { a: 0, b: 1, kind: 4, cover: 0, seconds: 600, geometry: false }, // ferry
   { a: 2, b: 0, kind: 5, cover: 0, seconds: 90, geometry: false }, // access, underground
   { a: 3, b: 1, kind: 5, cover: 0, seconds: 30, geometry: false }, // access, surface
@@ -77,7 +79,9 @@ function writeVarint(out: number[], value: number): void {
 
 // The blob as `assemble` lays it out: sections back to back from the header, each 4-byte aligned,
 // then the geometry, the ferry side table and the transit tables.
-function graphBytes(withTransit: boolean): ArrayBuffer {
+// `bakedBridge` false stands in for a graph written before that column existed: byte 38 zero on
+// every edge, which is what the decoder's gate has to read.
+function graphBytes(withTransit: boolean, bakedBridge = true): ArrayBuffer {
   const nodeCount = NODES.length;
   const edgeCount = EDGES.length;
   const align4 = (offset: number): number => (offset + 3) & ~3;
@@ -174,6 +178,7 @@ function graphBytes(withTransit: boolean): ArrayBuffer {
     }
     bytes[record + 22] = spec.kind;
     view.setUint32(record + 29, NO_SOURCE_ID, true);
+    bytes[record + 38] = bakedBridge ? (spec.bridge ?? 0) : 0;
   }
 
   view.setUint32(nameAt, NAMES.length, true);
@@ -258,6 +263,14 @@ describe("the v11 graph decoder", () => {
     expect(graph.edgeCover[0]).toBe(100);
     expect(graph.maxCover).toBeCloseTo(100 / 255, 10);
     expect(graph.edgeCover[6]).toBe(0);
+  });
+
+  test("reads the bridge byte, which a graph written before the bake leaves 0", () => {
+    expect(graph.edgeBridge[0]).toBe(200);
+    expect(graph.maxBridge).toBeCloseTo(200 / 255, 10);
+    // The bake's own gate: a graph with the byte unwritten reads 0 everywhere, so the factor's max
+    // is 0 and its slider takes itself off the panel rather than mispricing anything.
+    expect(decodeGraph(graphBytes(true, false), identity).maxBridge).toBe(0);
   });
 
   test("says which lane a board edge departs against and which route it runs", () => {

@@ -30,6 +30,7 @@ pub const RELIEF: &str = "relief";
 pub const CANOPY: &str = "canopy";
 pub const INDUSTRIAL: &str = "industrial";
 pub const HISTORIC: &str = "historic";
+pub const BRIDGE: &str = "bridge";
 /// One entry per sun bin, keyed on that bin alone — so a schedule that gained a bin bakes one bin.
 pub const SHADE: &str = "shade";
 
@@ -51,6 +52,7 @@ pub struct Keys {
     pub canopy: String,
     pub industrial: String,
     pub historic: String,
+    pub bridge: String,
     /// In schedule order, and empty for a city that bakes no per-edge shade.
     pub shade: Vec<String>,
 }

@@ -215,6 +215,7 @@ export function ExplorerPanels({
           commercialWeight={weights.commercial}
           industrialWeight={weights.industrial}
           historicWeight={weights.historic}
+          bridgeWeight={weights.bridge}
           shadeWeight={weights.shade}
           shadeDataLost={shell.shadeDataLost}
           shelterWeight={weights.shelter}
@@ -234,6 +235,7 @@ export function ExplorerPanels({
           onCommercialWeight={(weight) => onWeight("commercial", weight)}
           onIndustrialWeight={(weight) => onWeight("industrial", weight)}
           onHistoricWeight={(weight) => onWeight("historic", weight)}
+          onBridgeWeight={(weight) => onWeight("bridge", weight)}
           onShadeWeight={(weight) => onWeight("shade", weight)}
           onShelterWeight={(weight) => onWeight("shelter", weight)}
           onGate={onGate}

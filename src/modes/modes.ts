@@ -74,6 +74,8 @@ const SHADE_WEIGHTS: Readonly<Record<Toggles["sun"], number>> = {
   neutral: 0,
 };
 
+// Every mode asks for `bridge: 1`: a walk over open water is scenery whatever else the reader came
+// out for, and a city with no span over water bakes the byte at 0 everywhere, which gates it off.
 export const MODES: readonly Mode[] = [
   {
     id: "naturalist",
@@ -82,7 +84,7 @@ export const MODES: readonly Mode[] = [
     // The deep half of the canopy ramp: its pale end is a wash over ground, not a line on it.
     palette: CANOPY_HEX.light.slice(3),
     overlays: ["canopy"],
-    weights: { tree: 1, industrial: 1, transit: 1 },
+    weights: { tree: 1, bridge: 1, industrial: 1, transit: 1 },
     allowSheds: false,
     needs: ["tree"],
   },
@@ -100,7 +102,7 @@ export const MODES: readonly Mode[] = [
     overlays: ["scaffolding"],
     // Transit is the one factor Rain is silent about, and deliberately: a train is shelter, waiting
     // for it included, so the mode that wants a roof has no reason to price the ride.
-    weights: { shelter: 1 },
+    weights: { shelter: 1, bridge: 1 },
     allowSheds: true,
     needs: ["shelter"],
   },
@@ -115,11 +117,12 @@ export const MODES: readonly Mode[] = [
       LEGACY_COLOR.light, // yellow-600, the old-business dots
     ],
     overlays: ["historic", "legacy", "landmarks", "art"],
-    // A harbour crossing is a way of seeing a city that predates every other line on the map.
     weights: {
       historic: 1,
       landmark: 1,
       art: 0.9,
+      bridge: 1,
+      // A harbour crossing is a way of seeing a city that predates every other line on the map.
       ferry: 0.1,
       industrial: 1,
       transit: 1,
@@ -143,6 +146,7 @@ export const MODES: readonly Mode[] = [
       landmark: 0.75,
       art: 0.75,
       historic: 0.5,
+      bridge: 1,
       industrial: 1,
       transit: 1,
     },
@@ -181,6 +185,7 @@ type GraphMaxima = Pick<
   | "maxLandmark"
   | "maxArt"
   | "maxHistoric"
+  | "maxBridge"
   | "maxIndustrial"
   | "maxCommercial"
   | "maxRelief"
@@ -195,6 +200,7 @@ export function graphFactors(graph: GraphMaxima | null): FactorAvailability {
     landmark: (graph?.maxLandmark ?? 0) > 0,
     art: (graph?.maxArt ?? 0) > 0,
     historic: (graph?.maxHistoric ?? 0) > 0,
+    bridge: (graph?.maxBridge ?? 0) > 0,
     industrial: (graph?.maxIndustrial ?? 0) > 0,
     hill: (graph?.maxRelief ?? 0) > 0,
     commercial: (graph?.maxCommercial ?? 0) > 0,

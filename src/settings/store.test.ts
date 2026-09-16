@@ -268,3 +268,15 @@ test("a switch is stamped on its own, not with the other two", () => {
   expect(updatedAt["toggles.sun"]).toBeUndefined();
   expect(updatedAt.toggles).toBeUndefined();
 });
+
+// A factor added after the document format was settled has no legacy key and needs none: the
+// document is a map keyed by factor, so it carries the new weight the same way it carries the rest.
+test("a weight with no legacy key of its own still survives the document", () => {
+  const { settings, migrated } = settingsFrom(
+    { weights: { bridge: 0.8 } },
+    fromLegacy,
+  );
+
+  expect(settings.weights.bridge).toBe(0.8);
+  expect(migrated).toBe(false);
+});
