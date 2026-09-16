@@ -12,6 +12,7 @@ import {
   type FactorAvailability,
   graphFactors,
   MODES,
+  type Mode,
   modeById,
   modesForCity,
   type Toggles,
@@ -82,7 +83,8 @@ test("each mode spends what the table says it spends", () => {
   const weights = Object.fromEntries(
     MODES.map((mode) => [mode.id, spent(neutral(mode))]),
   );
-  expect(weights.naturalist).toEqual({ tree: 1, industrial: 5 });
+  expect(weights.naturalist).toEqual({ tree: 1, industrial: 5, transit: 3 });
+  // Rain is the one mode that does not price a ride: a train is shelter, waiting included.
   expect(weights.rain).toEqual({ shelter: 1 });
   // Historic is the one mode that asks for the boat: a harbour crossing is a way of seeing the city.
   expect(weights.historic).toEqual({
@@ -91,6 +93,7 @@ test("each mode spends what the table says it spends", () => {
     historic: 1,
     ferry: 0.1,
     industrial: 5,
+    transit: 3,
   });
   expect(weights.streetlife).toEqual({
     landmark: 0.75,
@@ -98,6 +101,7 @@ test("each mode spends what the table says it spends", () => {
     historic: 0.5,
     commercial: 1,
     industrial: 5,
+    transit: 3,
   });
 });
 
@@ -129,6 +133,22 @@ test("the hills toggle steps from free to the top of the slider", () => {
   expect(hill("none")).toBe(5);
 });
 
+// There is no switch for the rail: a mode says what a ride costs and the planner is the only thing
+// that ever shuts it off, for the walking card it offers beside a ride.
+test("every mode leaves the rail reachable and prices it with a weight", () => {
+  for (const mode of MODES) {
+    const weights = effectiveWeights(mode, DEFAULT_TOGGLES, ALL_FACTORS);
+    expect(weights.allowTransit, mode.id).toBe(true);
+  }
+  expect(
+    effectiveWeights(DEFAULT_MODE, DEFAULT_TOGGLES, ALL_FACTORS).transit,
+  ).toBe(3);
+  expect(
+    effectiveWeights(modeById("rain") as Mode, DEFAULT_TOGGLES, ALL_FACTORS)
+      .transit,
+  ).toBe(0);
+});
+
 test("the ferry toggle is the gate, not a preference for boats", () => {
   const allowed = effectiveWeights(DEFAULT_MODE, DEFAULT_TOGGLES, ALL_FACTORS);
   expect(allowed.allowFerries).toBe(true);
@@ -152,7 +172,7 @@ test("a factor this place cannot answer is dropped, and the rest are not", () =>
     { ...DEFAULT_TOGGLES, hills: "none" },
     withoutIndustry,
   );
-  expect(spent(weights)).toEqual({ tree: 1 });
+  expect(spent(weights)).toEqual({ tree: 1, transit: 3 });
   expect(weights.hill).toBe(0); // the toggle is off the table too, not just the mode's weights
 });
 
@@ -170,6 +190,7 @@ test("a graph with nothing baked answers only the factors every city bakes", () 
     hill: false,
     commercial: false,
     ferry: false,
+    transit: false,
   });
   const loaded = graphFactors({
     maxLandmark: 0.4,
@@ -179,12 +200,14 @@ test("a graph with nothing baked answers only the factors every city bakes", () 
     maxCommercial: 0,
     maxRelief: 0.2,
     ferryEdges: new Uint32Array([7]),
+    boardEdges: new Uint32Array([9]),
   });
   expect(loaded.landmark).toBe(true);
   expect(loaded.art).toBe(false);
   expect(loaded.hill).toBe(true);
   expect(loaded.commercial).toBe(false);
   expect(loaded.ferry).toBe(true);
+  expect(loaded.transit).toBe(true);
 });
 
 test("a city offers the modes its layers can answer, with the layers it has", () => {

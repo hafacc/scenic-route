@@ -2,6 +2,7 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { FiEye, FiEyeOff, FiX } from "react-icons/fi";
 import { MdDragIndicator } from "react-icons/md";
 import {
@@ -565,8 +566,11 @@ export default function SettingsDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  return (
-    <div className="fixed inset-0 z-[1100] flex items-end justify-center md:items-center">
+  // Portalled to the body at a z-index above the toolbar: the toolbar that opens these sits in a
+  // stacking context of its own at z-1200, and a dialog left inside the page's layers paints under
+  // its buttons while its scrim no longer blocks them.
+  return createPortal(
+    <div className="fixed inset-0 z-[1300] flex items-end justify-center md:items-center">
       <button
         type="button"
         aria-label="Close settings"
@@ -583,7 +587,6 @@ export default function SettingsDialog({
         aria-labelledby="settings-title"
         className="relative flex max-h-[90dvh] w-full flex-col rounded-t-3xl bg-white p-6 shadow-2xl ring-1 ring-black/5 dark:bg-slate-800 dark:ring-white/10 md:max-w-md md:rounded-3xl md:p-7"
       >
-        <div className="mx-auto mb-3 h-1.5 w-10 shrink-0 rounded-full bg-slate-200 dark:bg-slate-700 md:hidden" />
         <div className="flex shrink-0 items-start gap-3">
           <h2
             id="settings-title"
@@ -634,6 +637,7 @@ export default function SettingsDialog({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

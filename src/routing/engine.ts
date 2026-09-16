@@ -107,10 +107,19 @@ export class RoutingEngine {
     anchorSeconds: number,
   ): RouteResult | null {
     const graph = this.graph;
+    // A start drag solves backwards from the held dest, and a route found that way rides its trains
+    // in reverse: the board it reports is the alight, and flipping the steps cannot flip that. So the
+    // live preview of a start drag walks. The drop re-solves forward and may ride.
     const solver = (this.dragSolver ??=
       this.dragWhich === "dest"
         ? new RouteSolver(graph, anchor, weights)
-        : new RouteSolver(graph, anchor, weights, anchorSeconds, -1));
+        : new RouteSolver(
+            graph,
+            anchor,
+            { ...weights, allowTransit: false },
+            anchorSeconds,
+            -1,
+          ));
     const solved = solver.solveApprox(moving);
     return this.dragWhich === "start" && solved
       ? reverseResult(graph, solved)

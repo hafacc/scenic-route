@@ -33,7 +33,10 @@ export const weights = (
   historic: 0,
   shade: 0,
   shelter: 0,
+  transit: 0,
   allowFerries,
+  // The fixture has no rail at all; stated for the reason the crossing gate below is.
+  allowTransit: true,
   allowSheds: true,
   // The fixture draws no crossing edges, so this is free either way; it is stated because a
   // RouteWeights that omits it reads as "avoid crossings", which is not what these tests mean.
@@ -152,6 +155,11 @@ export function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
     shade: null,
     edgeDurationSeconds,
     ferryEdges: Uint32Array.from(ferryEdges),
+    // No rail in this fixture, and the empty tables say so: the transit credit reads them on every
+    // search, so leaving them off would be a graph that cannot be searched rather than one with no
+    // trains.
+    transitEdges: new Uint32Array(0),
+    boardEdges: new Uint32Array(0),
     names: [],
     geometry: new Uint8Array(0),
   } as unknown as RoutingGraph;

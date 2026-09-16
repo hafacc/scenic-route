@@ -39,7 +39,10 @@ test("every route field survives a round trip", () => {
     historic: 0.55,
     shade: -0.85,
     shelter: 0.25,
+    transit: 1.5,
     allowFerries: false,
+    // No key of its own: the planner owns it, so a link neither carries nor restores it.
+    allowTransit: true,
     allowSheds: false,
     allowCrossings: true,
   };

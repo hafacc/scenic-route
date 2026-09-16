@@ -4,6 +4,8 @@
 // stops is, and when the next train leaves the platform you are standing on.
 
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   buildTopology,
   decodeTopology,
@@ -15,7 +17,7 @@ import {
   deriveBands,
   encodeTimetable,
 } from "../../scripts/transit-schedule";
-import { SECONDS_PER_DAY, shiftedDay } from "./schedule-days";
+import { SECONDS_PER_DAY, servicesOn, shiftedDay } from "./schedule-days";
 import {
   FIRST_TRUNK_DEPARTURE,
   fixtureFeeds,
@@ -290,4 +292,45 @@ test("a frequency-based service boards off its published headway", () => {
     departure: SHUTTLE_BAND_START + SHUTTLE_HEADWAY,
     wait: SHUTTLE_BAND_START + SHUTTLE_HEADWAY - wall,
   });
+});
+
+// The standing San Francisco artifact, which holds two agencies in one record: BART's calendars run
+// into 2027 while Muni's ended on Friday 2026-08-28. A fallback that asked whether the RECORD had
+// run out would never fire for Muni, and every Muni Metro lane in the graph would have no departures
+// for the rest of the year. Read off the shipped file rather than a fixture, because the shape that
+// broke it is the one the agency publishes.
+test("a weekday past Muni's calendars still boards Muni, and BART resolves normally", () => {
+  const bytes = new Uint8Array(
+    readFileSync(
+      join(import.meta.dirname, "../../public/transit-schedule/sf.bin"),
+    ),
+  );
+  const { record } = decodeSchedule(bytes);
+  const day = 20_260_904; // a Friday, past the Muni calendars and inside the BART ones
+  const running = servicesOn(record.services, record.exceptions, day);
+  const coverageEnd = (service: number): number =>
+    Math.max(
+      record.services[service].endDay,
+      ...record.exceptions
+        .filter((exception) => exception.service === service)
+        .map((exception) => exception.day),
+    );
+  const stale = [...running].filter((service) => coverageEnd(service) < day);
+  const live = [...running].filter((service) => coverageEnd(service) >= day);
+  expect(live.length).toBeGreaterThan(0); // BART, inside its own range
+  expect(stale.length).toBeGreaterThan(0); // Muni, voted in past the end of its own
+
+  // Every lane those services run has a train that Friday lunchtime. The 37 Muni Metro lanes
+  // (J/K/L/M/N/T) are in here, beside the cable cars and the F.
+  const noon = new Date(Date.UTC(2026, 8, 4, 19, 0, 0)); // 12:00 PDT
+  const table = resolveTimetable(record, noon, "America/Los_Angeles");
+  const lanes = new Set(
+    record.lanes
+      .filter((lane) => stale.includes(lane.service))
+      .map((lane) => record.patterns[lane.pattern].laneId),
+  );
+  expect(lanes.size).toBeGreaterThan(0);
+  for (const lane of lanes) {
+    expect(table.board(lane, 0, 0)).not.toBeNull();
+  }
 });

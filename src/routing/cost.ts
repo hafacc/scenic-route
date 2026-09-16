@@ -14,12 +14,24 @@
 // lower bound 1 - |w|*maxAbsAttr): a lower bound on any edge's multiplier, so the estimate never
 // overestimates and the search stays optimal. INVARIANT: this holds only while each discount's max
 // attribute stays < 1 (the ingest's 254 byte ceiling) and |w| <= 1 with maxAbsAttr < 1 for shade.
+// Rail is priced outside all of that. A board edge costs the wait the day's timetable gives it plus
+// a boarding constant, a ride edge its baked seconds, and both are multiplied by the transit penalty
+// (1 + w) and by the shelter discount at attr = 1 — under cover, waiting included — and by nothing
+// else: no shade, which is about being outside, and no scenic factor, none of which is a fact about
+// a tunnel. The walk in and out of a station is plain seconds. The A* credit for a ride is in
+// `transitCredit`.
 // Scaffolding rides on top of that: a deck's share of an edge is sheltered from rain outright and
 // shaded for as long as the sun has not slid its shadow off the sidewalk, whether or not the toggle
 // bars scaffolding — a deck you were told to avoid is still overhead. Barring it adds a flat per-metre
 // penalty on the decked share, which only raises the multiplier, so the heuristic still bounds it.
 
-import { edgeKind, type RoutingGraph } from "./graph";
+import {
+  edgeKind,
+  laneOf,
+  type RoutingGraph,
+  stopIndexOf,
+  transitForward,
+} from "./graph";
 import { shedShade } from "./sheds";
 
 // NYC DCP's Pedestrian Level of Service Study (2006) timed 8,978 Lower Manhattan pedestrians at a
@@ -65,6 +77,19 @@ export const CROSSING_AVOID_MULTIPLE = 10;
 // boat coming. The cost of a longer cap is a route that proposes a long wait; the cost of a short one
 // is refusing a trip that is possible.
 export const DEFAULT_MAX_FERRY_WAIT_SECONDS = 90 * 60;
+
+// What getting on a train takes beyond waiting for it: down the stairs the timetable's clock does not
+// run on, along the platform, through the doors. One number for every station, in the spirit of
+// CROSSING_SECONDS — it varies with the station, and no walker knows theirs.
+export const BOARDING_SECONDS = 60;
+
+// How long a walker will stand on a platform before the train stops being a way to get anywhere.
+// The same bargain the pier makes: the timetable always has a next train — tomorrow morning's, if
+// nothing else — so without a bound a route planned at midnight would propose waiting for it. Half
+// an hour, because a rail headway longer than that is a line running its night service, and past it
+// the walk is the better answer. Per city, since a region whose rail is the only way through wants a
+// longer one; New York and the Bay both take the default today.
+export const DEFAULT_MAX_TRANSIT_WAIT_SECONDS = 30 * 60;
 
 // Every weight spans [0, 1]. w must stay <= 1 or a discount floor (1 - w*max) can go negative, and a
 // negative edge cost breaks Dijkstra/A*. Defaults sit a little in from the extremes for a mild bias.
@@ -280,6 +305,14 @@ export const DEFAULT_HISTORIC_WEIGHT = 0.1;
 // how it is shown. Admissibility is untouched — a penalty's minimum factor is 1, and `minMultiplier`
 // never sees it.
 export const MAX_INDUSTRIAL_WEIGHT = 5;
+// The penalty on time spent waiting for and riding a train, in the highway/industrial family: a
+// second on the A costs 1 + w seconds. The whole point of this app is the walk, so every mode but
+// Rain carries the top of the slider, where a ride costs four times its own minutes — enough that a
+// walkable trip is walked, and not so much that a rail-length trip refuses the rail.
+export const MAX_TRANSIT_WEIGHT = 3;
+// Explorer opens at the top of it for the same reason: a scenic walking route that puts you
+// underground unasked has answered a question nobody put to it.
+export const DEFAULT_TRANSIT_WEIGHT = MAX_TRANSIT_WEIGHT;
 // 1 rather than highway's 0.5: it moves 63% of those trips for 3.6% more walking, where 0.5 moves
 // under half. Reads as 20% on the slider.
 export const DEFAULT_INDUSTRIAL_WEIGHT = 1;
@@ -316,6 +349,14 @@ export const GATE_KEYS = [
 ] as const;
 
 export type GateKey = (typeof GATE_KEYS)[number];
+
+// A switch with no toggle behind it: the planner shuts it to ask for the walk it will offer beside a
+// ride, and nothing else ever moves it. It is not a gate — a gate is a control the reader has, and
+// this is not — and it is not a weight, so it is excluded from the factor list the way the gates are
+// and compared like them where a route's context is compared.
+export const INTERNAL_FLAGS = ["allowTransit"] as const;
+
+export type InternalFlag = (typeof INTERNAL_FLAGS)[number];
 
 // The factors that DISCOUNT a walked metre (a `1 - w*attr` term in `edgeMultiplier`) rather than
 // price it (`1 + w*attr`). `ferry` is in neither: it discounts a crossing's seconds, not a metre.
@@ -355,7 +396,14 @@ export interface RouteWeights {
   historic: number;
   shade: number; // signed sun/shade preference in [-1, 1]; positive prefers sun, negative shade
   shelter: number; // preference for cover overhead in the rain: decks and canopy
+  // Penalty on the seconds a train takes — the wait on the platform and the ride itself. Not a
+  // distaste for trains as such: it is what keeps a walking route walking, and backing it off is how
+  // the planner offers "take the subway" as one of its cards.
+  transit: number;
   allowFerries: boolean;
+  // False skips every board edge, so no route gets on a train. Not a reader's switch: the planner
+  // turns it off for one candidate so a mode that prices no ride at all still offers the walk.
+  allowTransit: boolean;
   allowSheds: boolean; // false routes around scaffolding, at a large per-metre penalty
   // Whether the route may spend crossings freely to reach what it is looking for. False — the
   // default — prices every crossing far above what it takes to walk, which is what stops a route
@@ -556,16 +604,66 @@ export function ferrySeconds(
   }
 }
 
+// What getting on a train at this platform takes, `elapsedSeconds` into the walk: the wait for the
+// next departure of the lane the board edge names, plus the boarding constant. Infinity once the
+// day's last train has gone or the wait runs past the cap, which drops the edge out of the search
+// rather than pricing a walk to a dark platform.
+//
+// Infinity too when there is no timetable at all — a day no record covers, or a fetch that failed.
+// The graph bakes a board edge no duration to fall back on, and inventing an average headway would
+// be putting a walker on a train nobody has said runs: no schedule, no train.
+export function boardSeconds(
+  graph: RoutingGraph,
+  edge: number,
+  elapsedSeconds: number,
+): number {
+  const lane = laneOf(graph, edge);
+  if (!graph.transit?.covers(lane)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const departure = graph.transit.board(
+    lane,
+    stopIndexOf(graph, edge),
+    elapsedSeconds,
+  );
+  const cap = graph.maxTransitWaitSeconds ?? DEFAULT_MAX_TRANSIT_WAIT_SECONDS;
+  if (!departure || departure.wait > cap) {
+    return Number.POSITIVE_INFINITY;
+  } else {
+    return departure.wait + BOARDING_SECONDS;
+  }
+}
+
+// What a second of transit costs: the transit penalty on it, discounted by the shelter preference at
+// attr = 1 — a train and the platform it leaves from are both under cover, waiting included. Floored
+// the way a ferry's crossing is, so no amount of shelter preference makes a ride free and no route
+// can ride in circles for a heuristic credit. Nothing else touches it: not the shade term, which is
+// about being outside, and not any other scenic factor, none of which is a fact about a tunnel.
+export function transitMultiplier(weights: RouteWeights): number {
+  return (1 + weights.transit) * Math.max(FERRY_FLOOR, 1 - weights.shelter);
+}
+
+// What a second on the water costs: the taste for a boat and the taste for a roof, both floored the
+// way `transitMultiplier` is so a crossing is never free.
+export function ferryCrossingDiscount(weights: RouteWeights): number {
+  return (
+    Math.max(FERRY_FLOOR, 1 - weights.ferry) *
+    Math.max(FERRY_FLOOR, 1 - weights.shelter)
+  );
+}
+
 // The undiscounted travel time of an edge entered at `fromNode` after `elapsedSeconds` of walking: a
-// ferry's wait-plus-crossing, or a walked edge's length over walking speed plus any crossing wait.
-// This is the ETA unit — the reported trip time sums it.
+// ferry's wait-plus-crossing, a transit edge's own seconds (the wait for a board edge, the baked
+// ride or station walk for the other two), or a walked edge's length over walking speed plus any
+// crossing wait. This is the ETA unit — the reported trip time sums it.
 export function rawSeconds(
   graph: RoutingGraph,
   edge: number,
   fromNode: number,
   elapsedSeconds = 0,
 ): number {
-  if (edgeKind(graph, edge) === "ferry") {
+  const kind = edgeKind(graph, edge);
+  if (kind === "ferry") {
     const { wait, crossing } = ferrySeconds(
       graph,
       edge,
@@ -573,6 +671,10 @@ export function rawSeconds(
       elapsedSeconds,
     );
     return wait + crossing;
+  } else if (kind === "board") {
+    return boardSeconds(graph, edge, elapsedSeconds);
+  } else if (kind === "ride" || kind === "access") {
+    return graph.edgeDurationSeconds[edge];
   } else {
     return (
       graph.edgeLength[edge] /
@@ -593,7 +695,22 @@ export function effSeconds(
   elapsedSeconds = 0,
   fromNode = -1,
 ): number {
-  if (edgeKind(graph, edge) === "ferry") {
+  const kind = edgeKind(graph, edge);
+  if (kind === "board" || kind === "ride" || kind === "access") {
+    // The topology is directed, and the graph is not: refusing the reverse here is what stops a
+    // route riding a train backwards or stepping onto a platform through an alight edge.
+    if (!transitForward(graph, edge, fromNode)) {
+      return Number.POSITIVE_INFINITY;
+    } else if (kind === "access") {
+      return graph.edgeDurationSeconds[edge]; // the walk in and out of a station, priced plainly
+    } else if (kind === "board") {
+      return weights.allowTransit
+        ? boardSeconds(graph, edge, elapsedSeconds) * transitMultiplier(weights)
+        : Number.POSITIVE_INFINITY;
+    } else {
+      return graph.edgeDurationSeconds[edge] * transitMultiplier(weights);
+    }
+  } else if (kind === "ferry") {
     if (!weights.allowFerries) {
       return Number.POSITIVE_INFINITY;
     } else {
@@ -607,7 +724,10 @@ export function effSeconds(
       // wait at full price — otherwise a strong preference would make standing on a pier cheap, and
       // the router would pick the later sailing. The baked figure has the two fused and is discounted
       // whole, which is the closest it can come.
-      return wait + crossing * Math.max(FERRY_FLOOR, 1 - weights.ferry);
+      //
+      // The shelter preference splits the same way, and for the same reason it is the crossing that
+      // gets it: a boat has a cabin and a pier does not.
+      return wait + crossing * ferryCrossingDiscount(weights);
     }
   } else {
     // The crossing price is added AFTER the multiplier, not multiplied by it: it is a price on
@@ -661,6 +781,54 @@ export function walkSecondsCoeff(
 // has to be its cost at the LUCKIEST arrival: the quickest sailing, boarded with no wait at all.
 // That is looser than the truth — the credit only ever grows, which shrinks the heuristic — so the
 // estimate stays a lower bound and the search stays optimal, at the price of expanding more nodes.
+// The most seconds a route can save by riding instead of walking: per transit edge, the walking
+// floor for its span less the least that edge can cost, summed over EVERY one of them in the city.
+//
+// Why the sum is over all of them, and why it is admissible. The heuristic is
+// `coeff × straight-line − credit`; the straight line is at most the length of any path, so it is
+// enough that the credit covers `Σ (coeff × length − cost)` over that path's edges. A walked edge's
+// term is at most 0 by the definition of `coeff`. A ride's is positive — that is what a train is —
+// and so, less obviously, is a long station walk's: a 250 m access edge costs its baked 90 seconds
+// however far it runs. Both are in this sum, every term is non-negative, and the path's transit
+// edges are a subset of the city's, so the sum is at least the path's saving whatever chain of
+// rides and transfers it takes.
+//
+// The wait is taken as zero, which is a true lower bound over every departure time and only makes
+// the credit looser. Loose is the price of the shape: at a low transit penalty the credit swamps the
+// straight-line term on its own, which is why the caller keeps `heuristicFloor` under it.
+//
+// Zero with no timetable loaded: every board edge then costs Infinity, so no route rides and there
+// is nothing to credit.
+export function transitCredit(
+  graph: RoutingGraph,
+  weights: RouteWeights,
+): number {
+  if (
+    !weights.allowTransit ||
+    graph.transit === null ||
+    graph.boardEdges.length === 0
+  ) {
+    return 0;
+  }
+  const coeff = walkSecondsCoeff(graph, weights);
+  const multiplier = transitMultiplier(weights);
+  let credit = 0;
+  for (const edge of graph.transitEdges) {
+    // A board edge only spans anything inside a transfer complex, where the station node is the
+    // members' centroid and the platform stands on its own stop; the wait it costs is not bounded
+    // below by anything, so its whole span counts as a saving.
+    const kind = edgeKind(graph, edge);
+    const cheapest =
+      kind === "ride"
+        ? graph.edgeDurationSeconds[edge] * multiplier
+        : kind === "access"
+          ? graph.edgeDurationSeconds[edge]
+          : 0;
+    credit += Math.max(0, coeff * graph.edgeLength[edge] - cheapest);
+  }
+  return credit;
+}
+
 export function ferryCredit(
   graph: RoutingGraph,
   weights: RouteWeights,
@@ -669,7 +837,7 @@ export function ferryCredit(
     return 0;
   }
   const coeff = walkSecondsCoeff(graph, weights);
-  const discount = Math.max(FERRY_FLOOR, 1 - weights.ferry);
+  const discount = ferryCrossingDiscount(weights);
   let bestShortcut = 0;
   let secondShortcut = 0;
   for (const edge of graph.ferryEdges) {
@@ -688,4 +856,43 @@ export function ferryCredit(
     }
   }
   return bestShortcut + secondShortcut;
+}
+
+// The least seconds ANY metre of the network can cost, whatever it is travelled by. The two credits
+// above are sums over every ferry or transit edge in the city, and at a low transit penalty they
+// swamp `coeff × straight-line` everywhere: the estimate goes to zero and A* settles for what
+// Dijkstra would. So the caller takes the larger of the credited estimate and `floor × straight`,
+// which is a lower bound on the trip in its own right — a path is at least as long as the straight
+// line, and no metre of it is cheaper than this.
+//
+// A board edge is left out. Its cost is a wait, which nothing bounds below per metre, so including
+// it would drop the floor to zero; what that costs instead is the slack of one floor's worth of the
+// passage inside a transfer complex, tens of seconds on a trip that changes trains twice.
+export function heuristicFloor(
+  graph: RoutingGraph,
+  weights: RouteWeights,
+): number {
+  let floor = walkSecondsCoeff(graph, weights);
+  if (weights.allowFerries) {
+    // Per ferry rather than from the baked figure: that one has the average wait fused into the
+    // crossing, and a boat boarded with no wait costs less per metre than it.
+    const discount = ferryCrossingDiscount(weights);
+    for (const edge of graph.ferryEdges) {
+      const length = graph.edgeLength[edge];
+      const quickest = graph.ferries?.covers(edge)
+        ? graph.ferries.minRideSeconds(edge)
+        : graph.edgeDurationSeconds[edge];
+      if (length > 0) {
+        floor = Math.min(floor, (quickest * discount) / length);
+      }
+    }
+  }
+  if (weights.allowTransit && graph.transit !== null) {
+    floor = Math.min(
+      floor,
+      graph.minRideSecPerMetre * transitMultiplier(weights),
+      graph.minAccessSecPerMetre,
+    );
+  }
+  return floor;
 }

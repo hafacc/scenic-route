@@ -126,7 +126,10 @@ export default function Toolbar({
     // Tighter on a phone, because this row is no longer the only thing on it: the follow toggle and
     // the search button take the left end, and at 375px eight 40px circles do not fit a 351px strip
     // at an 8px gap. 4px puts the toolbar's left edge at 103, clear of the search button's 100.
-    <div className="absolute top-3 right-3 z-[1000] flex items-center gap-1 sm:gap-2">
+    // Above every floating layer (all of them z-1000: the desktop mode pill, the layer list, the
+    // banner, the card and the buttons hung off it), because this row's menu and the dialogs it opens
+    // drop over the whole page — and a menu half behind a card is a menu you cannot read.
+    <div className="absolute top-3 right-3 z-[1200] flex items-center gap-1 sm:gap-2">
       {cityDialogOpen ? (
         <CityDialog
           city={city}

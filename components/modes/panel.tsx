@@ -46,6 +46,12 @@ const HEADER_BUTTON =
 // The card's own padding, 12 on all four sides, and 8 between every row it stacks.
 const MODES_CARD = `${PANEL_CARD} relative gap-2 p-3`;
 
+// Half the screen, once a route is being asked about or read: the map is the other half of the
+// answer, and a card that grows to fill a phone hides the very lines its rows are about. The list
+// inside — cards or maneuvers — scrolls within it, as it already does under the desktop cap.
+const PHONE_HALF =
+  "max-md:max-h-[calc(50dvh-max(0.75rem,env(safe-area-inset-bottom)))]!";
+
 interface ModesPanelProps {
   city: City;
   modes: readonly Mode[];
@@ -176,6 +182,7 @@ export default function ModesPanel({
         ? {
             maneuver: directions[progress.nextManeuver],
             distanceMeters: progress.distanceToNextMeters,
+            current: directions[progress.currentManeuver] ?? null,
           }
         : null;
     return (
@@ -187,12 +194,13 @@ export default function ModesPanel({
             : "Walking directions"
         }
         // The mode stays switchable with the card shrunk away: a mode is not something the peek bar
-        // is a peek at, and reopening the card to change it is the long way round.
+        // is a peek at, and reopening the card to change it is the long way round. It is the card's
+        // own first row, as in every other state — on a wide screen the row floats above the map
+        // instead, which leaves the peek row alone in the card.
         header={
-          <div className="mb-2 flex items-center rounded-2xl bg-white/85 p-2 shadow-lg ring-1 ring-black/5 backdrop-blur-md md:hidden dark:bg-slate-800/80 dark:ring-white/10">
-            {modeBar}
-          </div>
+          <div className="flex shrink-0 items-center md:hidden">{modeBar}</div>
         }
+        cardClassName={MODES_CARD}
         corner={<CloseButton onClose={onClose} />}
         onExpand={onToggleMinimize}
       />
@@ -215,7 +223,7 @@ export default function ModesPanel({
 
   return (
     <div className={PANEL_WRAPPER}>
-      <div className={MODES_CARD}>
+      <div className={`${MODES_CARD} ${routing ? PHONE_HALF : ""}`}>
         {routing ? <CloseButton onClose={onClose} /> : null}
         {/* The chips scroll under a right-hand cluster that does not: the switches are three fixed
             things, and a row that scrolls them away hides the state the routes were found under. */}

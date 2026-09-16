@@ -1,16 +1,29 @@
 // Turn-by-turn directions: a pure function of the labeled step sequence, no React or Leaflet. The
-// A* result carries, per step, its kind ("sidewalk"|"crossing"|"link"|"path"), stored side, raw
+// A* result carries, per step, its kind ("sidewalk"|"crossing"|"link"|"path"|the boat and rail
+// kinds), stored side, raw
 // street name, cover, and walked length; directions are assembled from those plus the step geometry
 // (for bearings and the maneuver anchor). Grouping collapses steps into runs, then emission turns
 // runs into human maneuvers.
 
-import { edgeName, edgePath, type RoutingGraph, type SideLabel } from "./graph";
+import type { RideSummary } from "../modes/cards";
+import {
+  edgeName,
+  edgePath,
+  isSurfaceStop,
+  otherEnd,
+  patternTerminus,
+  type RoutingGraph,
+  routeOf,
+  type SideLabel,
+  stationName,
+} from "./graph";
 import type { PassedPoi } from "./pois";
 import {
   type RouteResult,
   type RouteStep,
   stepFrom,
   stepSeconds,
+  type TransitLeg,
 } from "./search";
 import { prettifyStreetName } from "./street-names";
 
@@ -30,6 +43,8 @@ export interface Maneuver {
     | "cross"
     | "path"
     | "ferry"
+    | "transit" // boarding a train and riding it, however many stops that is
+    | "station" // stepping into, out of, or off at one: the walks a ride is bracketed by
     | "arrive"
     | "landmark" // a POI passed along the route, spliced in between the walking maneuvers
     | "art";
@@ -38,7 +53,17 @@ export interface Maneuver {
   side: SideLabel;
   turn: Turn;
   lengthMeters: number; // walked length this maneuver covers
-  durationSeconds?: number; // a ferry leg's crossing time, shown where a walk shows its distance
+  durationSeconds?: number; // a ferry or rail leg's ride time, shown where a walk shows its distance
+  stops?: number; // a rail leg's stop count, which is what says how long it is
+  // The line ridden, in the livery the agency publishes: a ride row wears its bullet where every
+  // other row wears an icon.
+  ride?: RideSummary;
+  // Which of the three station acts this row is, since all of them share one kind. "change" is an
+  // alight the reader gets straight back onto a train from.
+  station?: "enter" | "exit" | "alight" | "change";
+  // A rail leg's departure, seconds from midnight of the routed day. Taken from the route's own leg
+  // rather than looked up here: the timetable lives in the worker, and these are built on the page.
+  departureSeconds?: number;
   stepRange: [number, number]; // half-open indexes into RouteResult.steps
   at: { lat: number; lng: number };
 }
@@ -58,6 +83,9 @@ export function formatDistance(meters: number): string {
     Math.round(meters / METERS_PER_FOOT / FEET_ROUNDING) * FEET_ROUNDING;
   return `${Math.max(FEET_ROUNDING, feet)} ft`;
 }
+
+// A ride whose route the graph does not name, which is what an unliveried bullet falls back to.
+const UNLIVERIED = { color: "#334155", textColor: "#ffffff" };
 
 // A ferry leg's crossing time, shown in the same slot a walking leg shows its distance.
 export function formatDuration(seconds: number): string {
@@ -116,7 +144,7 @@ function stepTravelPoints(
 // One run: a maximal group of same-labeled steps, with its travel polyline retained for bearings and
 // the maneuver anchor.
 interface Run {
-  kind: "sidewalk" | "crossing" | "path" | "ferry";
+  kind: "sidewalk" | "crossing" | "path" | "ferry" | "transit" | "station";
   name: string | null; // raw, unprettified
   side: SideLabel;
   stepStart: number;
@@ -129,9 +157,40 @@ interface Run {
   // actually catches, so the maneuver can name it. Null with no timetable loaded, where the graph's
   // baked figure is an average wait rather than a departure.
   ferryDeparture: number | null;
+  // A rail run's line, where it is bound and how many stops are ridden; a station run's own name and
+  // which of the three things it is. Both null on every other kind.
+  transitRoute: string | null;
+  transitLivery: { color: string; textColor: string } | null;
+  transitToward: string | null;
+  transitStops: number;
+  // The caught train's departure, from the route's own leg — the page has no timetable to ask.
+  transitDeparture: number | null;
+  // The platform wait that bought that departure. Not part of the maneuver's own duration, which is
+  // the ride; carried so the line pill can say what a card says, which counts the wait.
+  transitWaitSeconds: number;
+  station: string | null;
+  stationAction: "enter" | "exit" | "alight" | null;
+  stationSurface: boolean; // a stop in the street rather than a station with a way in
   lngs: number[];
   lats: number[];
 }
+
+// Everything a run carries beyond the walking kinds, so one object literal per run does not have to
+// spell out the seven that do not apply to it.
+const NO_TRANSIT = {
+  ferryRoute: null,
+  ferryDest: null,
+  ferryDeparture: null,
+  transitRoute: null,
+  transitLivery: null,
+  transitToward: null,
+  transitStops: 0,
+  transitDeparture: null,
+  transitWaitSeconds: 0,
+  station: null,
+  stationAction: null,
+  stationSurface: false,
+} as const;
 
 // A ferry step's destination terminal: node b when travelled a -> b, else node a.
 function ferryDestName(graph: RoutingGraph, step: RouteStep): string | null {
@@ -186,7 +245,11 @@ function appendPoints(
 
 // Collapse steps into runs. Link steps are silent — their length is absorbed into the run they touch
 // and they contribute no maneuver.
-function buildRuns(graph: RoutingGraph, steps: RouteStep[]): Run[] {
+function buildRuns(
+  graph: RoutingGraph,
+  steps: RouteStep[],
+  rides: readonly TransitLeg[],
+): Run[] {
   const runs: Run[] = [];
   let current: Run | null = null;
   let pendingLinkMeters = 0;
@@ -194,10 +257,15 @@ function buildRuns(graph: RoutingGraph, steps: RouteStep[]): Run[] {
   // the SAME clock the ETA summary runs (hence the shared `stepSeconds`), or the two disagree about
   // which boat is caught and the maneuver names a sailing the reported time never allowed for.
   let elapsedSeconds = 0;
+  let legIndex = 0; // which of the route's rail legs the next board step is
   for (let index = 0; index < steps.length; index++) {
     const step = steps[index];
     const reachedAt = elapsedSeconds;
-    elapsedSeconds += stepSeconds(graph, step, reachedAt);
+    // A board edge's seconds come off the leg the search recorded rather than out of the timetable:
+    // these are built on the page, which has none, and asking for one there would answer Infinity
+    // and stop the clock every later leg is read against.
+    const leg = step.kind === "board" ? rides[legIndex] : undefined;
+    elapsedSeconds += leg?.waitSeconds ?? stepSeconds(graph, step, reachedAt);
     // A ferry is its own run: flush any open walk run, then start (or extend) a ferry run. Its
     // crossing seconds sum onto the run so the maneuver can report the ride time.
     if (step.kind === "ferry") {
@@ -232,6 +300,7 @@ function buildRuns(graph: RoutingGraph, steps: RouteStep[]): Run[] {
         appendPoints(last, points);
       } else {
         const ferryRun: Run = {
+          ...NO_TRANSIT,
           kind: "ferry",
           name: null,
           side: null,
@@ -252,12 +321,86 @@ function buildRuns(graph: RoutingGraph, steps: RouteStep[]): Run[] {
       }
       continue;
     }
-    if (
-      step.kind === "access" ||
-      step.kind === "board" ||
-      step.kind === "ride"
-    ) {
-      continue; // no route rides yet: the transit kinds are in the graph and inert
+    // Rail: a board edge opens a run that every ride edge after it extends, since a walker boards
+    // once and stays on. The station walks either side of it are their own runs — they are what a
+    // reader is actually told to do, and the ride between them is where the time goes.
+    if (step.kind === "board") {
+      legIndex += 1;
+      if (current) {
+        runs.push(current);
+        current = null;
+      }
+      const platform = step.forward
+        ? graph.edgeNodeB[step.edge]
+        : graph.edgeNodeA[step.edge];
+      const route = routeOf(graph, step.edge);
+      runs.push({
+        ...NO_TRANSIT,
+        kind: "transit",
+        name: null,
+        side: null,
+        stepStart: index,
+        stepEnd: index + 1,
+        lengthMeters: step.lengthMeters,
+        durationSeconds: 0, // the wait is the walk's, not the ride's; the rides add themselves
+        transitRoute: route?.shortName ?? null,
+        transitLivery: route
+          ? { color: route.color, textColor: route.textColor }
+          : null,
+        transitToward: patternTerminus(graph, platform),
+        transitStops: 0,
+        transitDeparture: leg?.departureSeconds ?? null,
+        transitWaitSeconds: leg?.waitSeconds ?? 0,
+        lngs: [],
+        lats: [],
+      });
+      appendPoints(runs[runs.length - 1], stepTravelPoints(graph, step));
+      continue;
+    }
+    if (step.kind === "ride") {
+      const open = runs[runs.length - 1];
+      if (open?.kind === "transit") {
+        open.lengthMeters += step.lengthMeters;
+        open.durationSeconds += graph.edgeDurationSeconds[step.edge];
+        open.transitStops += 1;
+        open.stepEnd = index + 1;
+        appendPoints(open, stepTravelPoints(graph, step));
+      }
+      continue;
+    }
+    if (step.kind === "access") {
+      if (current) {
+        runs.push(current);
+        current = null;
+      }
+      const from = stepFrom(graph, step);
+      const to = otherEnd(graph, step.edge, from);
+      // Three walks wear this one kind, told apart by which end you set off from: a platform is an
+      // alight, a station is the way out, and anything else is the pavement, so the way in. Only a
+      // station node answers `stationName`, which is what makes that last test work.
+      const action =
+        graph.nodePlatform[from] === 1
+          ? "alight"
+          : stationName(graph, from) === null
+            ? "enter"
+            : "exit";
+      runs.push({
+        ...NO_TRANSIT,
+        kind: "station",
+        name: null,
+        side: null,
+        stepStart: index,
+        stepEnd: index + 1,
+        lengthMeters: step.lengthMeters,
+        durationSeconds: 0,
+        station: stationName(graph, action === "exit" ? from : to),
+        stationAction: action,
+        stationSurface: isSurfaceStop(graph, step.edge),
+        lngs: [],
+        lats: [],
+      });
+      appendPoints(runs[runs.length - 1], stepTravelPoints(graph, step));
+      continue;
     }
     if (step.kind === "link") {
       if (current) {
@@ -276,6 +419,7 @@ function buildRuns(graph: RoutingGraph, steps: RouteStep[]): Run[] {
         runs.push(current);
       }
       current = {
+        ...NO_TRANSIT,
         kind: step.kind,
         name: step.name,
         side: step.side,
@@ -283,9 +427,6 @@ function buildRuns(graph: RoutingGraph, steps: RouteStep[]): Run[] {
         stepEnd: index + 1,
         lengthMeters: step.lengthMeters + pendingLinkMeters,
         durationSeconds: 0,
-        ferryRoute: null,
-        ferryDest: null,
-        ferryDeparture: null,
         lngs: [],
         lats: [],
       };
@@ -455,7 +596,7 @@ export function buildDirections(
     passed?: readonly PassedPoi[];
   } = {},
 ): Maneuver[] {
-  const runs = buildRuns(graph, result.steps);
+  const runs = buildRuns(graph, result.steps, result.rides);
   const maneuvers: Maneuver[] = [];
   if (runs.length === 0) {
     return maneuvers;
@@ -503,6 +644,86 @@ export function buildDirections(
         turn: null,
         lengthMeters: run.lengthMeters,
         durationSeconds: run.durationSeconds,
+        stepRange: [run.stepStart, run.stepEnd],
+        at: runStart(run),
+      });
+      lastWalk = null;
+      walkManeuverIndex = -1;
+      lastCrossIndex = -1;
+      continue;
+    }
+
+    // A ride is a standalone maneuver: it names the line, where the train is bound and how many
+    // stops it is ridden, and reports the ride time where a walk reports its distance. Like a ferry
+    // it resets the walk-tracking state, so the pavement after it starts a fresh "Walk ...".
+    if (run.kind === "transit") {
+      const line = run.transitRoute;
+      const stops = run.transitStops;
+      const count = `${stops} stop${stops === 1 ? "" : "s"}`;
+      const at =
+        run.transitDeparture === null
+          ? ""
+          : ` at ${formatDeparture(run.transitDeparture)}`;
+      maneuvers.push({
+        kind: "transit",
+        text: line
+          ? `Take the ${line}${at}${run.transitToward ? ` toward ${run.transitToward}` : ""} (${count})`
+          : `Take the train${at} (${count})`,
+        name: line,
+        side: null,
+        turn: null,
+        lengthMeters: run.lengthMeters,
+        durationSeconds: run.durationSeconds,
+        stops,
+        departureSeconds: run.transitDeparture ?? undefined,
+        ride: {
+          shortName: line ?? "",
+          color: run.transitLivery?.color ?? UNLIVERIED.color,
+          textColor: run.transitLivery?.textColor ?? UNLIVERIED.textColor,
+          // Wait plus ride, which is what the card's pill says: waiting for the A is time spent
+          // taking the A, and one number cannot mean two things across two screens.
+          seconds: run.transitWaitSeconds + run.durationSeconds,
+        },
+        stepRange: [run.stepStart, run.stepEnd],
+        at: runStart(run),
+      });
+      lastWalk = null;
+      walkManeuverIndex = -1;
+      lastCrossIndex = -1;
+      continue;
+    }
+
+    // The walks a ride is bracketed by. Each is a real distance underground and carries it, but none
+    // of them is a turn on any street, so they leave the walk-tracking state where the ride did.
+    if (run.kind === "station") {
+      const place = run.station;
+      // Getting off one train to get straight onto another is one act, not two: the reader is told
+      // to change here, and the "Take the L ..." under it says which train to change to.
+      const changing =
+        run.stationAction === "alight" &&
+        runs[runIndex + 1]?.kind === "transit";
+      // A tram stop is not a building: you go to one and you leave it, where a station is entered
+      // and exited. The alight is the same words either way — you get off a train wherever it is.
+      const stop = run.stationSurface;
+      const text = changing
+        ? `Change at ${place ?? "the station"}`
+        : run.stationAction === "alight"
+          ? `Get off at ${place ?? "your stop"}`
+          : run.stationAction === "enter"
+            ? stop
+              ? `Go to the ${place ?? "stop"} stop`
+              : `Enter ${place ?? "the station"}`
+            : stop
+              ? `Leave the ${place ?? "stop"} stop`
+              : `Exit ${place ?? "the station"}`;
+      maneuvers.push({
+        kind: "station",
+        text,
+        station: changing ? "change" : (run.stationAction ?? "enter"),
+        name: place,
+        side: null,
+        turn: null,
+        lengthMeters: run.lengthMeters,
         stepRange: [run.stepStart, run.stepEnd],
         at: runStart(run),
       });

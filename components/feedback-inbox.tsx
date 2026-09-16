@@ -43,7 +43,7 @@ export default function FeedbackInbox({ onClose }: FeedbackInboxProps) {
 
   // portalled for the same reason as the feedback dialog: the toolbar's wrapper traps its z-index
   return createPortal(
-    <div className="fixed inset-0 z-[1100] flex items-end justify-center md:items-center">
+    <div className="fixed inset-0 z-[1300] flex items-end justify-center md:items-center">
       <button
         type="button"
         aria-label="Close feedback inbox"
@@ -56,7 +56,6 @@ export default function FeedbackInbox({ onClose }: FeedbackInboxProps) {
         aria-labelledby="feedback-inbox-title"
         className="relative flex max-h-[90dvh] w-full flex-col rounded-t-3xl bg-white p-5 shadow-2xl ring-1 ring-black/5 dark:bg-slate-800 dark:ring-white/10 md:max-w-lg md:rounded-3xl md:p-6"
       >
-        <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-200 dark:bg-slate-700 md:hidden" />
         <div className="flex items-start gap-3">
           <span className="mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-md">
             <FiInbox className="h-5 w-5" />

@@ -91,7 +91,8 @@ const REGISTRY_ORDER: readonly OverlayId[] = OVERLAYS.map(({ id }) => id);
 // removing them would be a destructive write on behalf of a reader who has not asked for anything,
 // and they cost a few dozen bytes. They are a snapshot of migration day, not a live mirror: nothing
 // writes them any more.
-const LEGACY_WEIGHT_KEYS: Record<FactorKey, string> = {
+// A factor that landed after the document did — transit — has none, which is why this is partial.
+const LEGACY_WEIGHT_KEYS: Partial<Record<FactorKey, string>> = {
   tree: "scenic-route:tree-weight",
   ferry: "scenic-route:ferry-weight",
   landmark: "scenic-route:landmark-weight",
@@ -241,7 +242,7 @@ interface LegacyPrefs {
 function legacyPrefs(legacy: (key: string) => string | null): LegacyPrefs {
   const weights: Partial<Record<FactorKey, number>> = {};
   for (const [key, storageKey] of Object.entries(LEGACY_WEIGHT_KEYS)) {
-    const stored = legacy(storageKey);
+    const stored = storageKey === undefined ? null : legacy(storageKey);
     const parsed = stored === null ? Number.NaN : Number.parseFloat(stored);
     if (Number.isFinite(parsed)) {
       weights[key as FactorKey] = parsed;

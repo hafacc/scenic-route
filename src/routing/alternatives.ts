@@ -2,7 +2,12 @@
 // The sweep steps `minMultiplier` rather than the weight scale, which is a cliff: Times Sq to Battery
 // is the identical route at t = 0, 0.25 and 0.5.
 
-import { GATE_KEYS, type RouteWeights, SCENIC_KEYS } from "./cost";
+import {
+  GATE_KEYS,
+  INTERNAL_FLAGS,
+  type RouteWeights,
+  SCENIC_KEYS,
+} from "./cost";
 import type { FactorKey } from "./factors";
 import type { RouteResult } from "./search";
 
@@ -15,10 +20,14 @@ import type { RouteResult } from "./search";
 export const DIFFERENT_METERS = 50;
 
 const MAX_CARDS = 4;
-// Shade is fixed: the bracket is exact only while the moving-sun term is a path constant.
+// Held still while the sweep scales the rest. Shade because the bracket is exact only while the
+// moving-sun term is a path constant; transit because it is a PENALTY, and a sweep that scales it
+// toward zero makes its own baseline the most train-happy route there is — when what the baseline is
+// for is the fastest walk to compare the scenic ones against.
 const FIXED_FACTORS: ReadonlySet<FactorKey> = new Set<FactorKey>([
   "shade",
   "hill",
+  "transit",
 ]);
 
 // Eight searches between them, per the plan's budget.
@@ -263,10 +272,17 @@ function lineDistanceMeters(
 
 const SCENIC: ReadonlySet<FactorKey> = new Set<FactorKey>(SCENIC_KEYS);
 
+// Every switch the sweep must hold fixed and key its memo on: the reader's gates and the planner's
+// own rail flag, which it moves itself below.
+const SWITCHES: readonly (keyof RouteWeights)[] = [
+  ...GATE_KEYS,
+  ...INTERNAL_FLAGS,
+];
+
 function factorKeys(weights: RouteWeights): FactorKey[] {
-  const gates: readonly string[] = GATE_KEYS;
+  const switches: readonly string[] = SWITCHES;
   return (Object.keys(weights) as (keyof RouteWeights)[])
-    .filter((key): key is FactorKey => !gates.includes(key))
+    .filter((key): key is FactorKey => !switches.includes(key))
     .sort();
 }
 
@@ -282,18 +298,31 @@ function factorSeconds(result: RouteResult, key: FactorKey): number {
   return totals[key] ?? 0;
 }
 
+// How many legs a route rides, trains and boats counted apart. What the reader chooses between is a
+// walk, a ride, a connection and a boat — not the A against the C — so one subway ride is the same
+// trip as any other whatever line it is, and two rides the same as any other two. Routes that ride
+// alike fall through to the ground between them; routes that do not are different cards however
+// close they run, a walk and the same walk with a train in the middle of it included.
+export function rideSignature(result: RouteResult): string {
+  const { rides, ferries } = result;
+  return `${rides.length}:${ferries.length}`;
+}
+
 interface Pooled extends Sampled {
   result: RouteResult;
+  rideSignature: string;
   index: number; // its place in the pool, which is its row in the separation cache
 }
 
 // How far apart two pooled routes run, taken once and kept. A pair costs a walk down both
 // polylines, and the selection below asks for the same pairs over and over.
 interface Separation {
-  // The figure itself, which the card search needs to pick the set that runs widest apart.
+  // The figure itself, which the card search needs to pick the set that runs widest apart. Floored
+  // at DIFFERENT_METERS for a pair that rides differently, so the objective still prefers the
+  // geometrically widest pair among routes that are all distinct.
   meters(left: Pooled, right: Pooled): number;
-  // Whether the two are different walks, which a mean already over the floor answers without the
-  // figure.
+  // Whether the two are different trips: a different count of rides settles it, and so does a pair
+  // already over the floor, without a figure.
   differ(left: Pooled, right: Pooled): boolean;
 }
 
@@ -317,21 +346,28 @@ function separationCache(): Separation {
   };
   return {
     meters(left: Pooled, right: Pooled): number {
-      return exact(keyOf(left, right), left, right);
+      const apart = exact(keyOf(left, right), left, right);
+      return left.rideSignature === right.rideSignature
+        ? apart
+        : Math.max(apart, DIFFERENT_METERS);
     },
     differ(left: Pooled, right: Pooled): boolean {
-      const key = keyOf(left, right);
-      const settled = different.get(key);
-      if (settled !== undefined) {
-        return settled;
+      if (left.rideSignature !== right.rideSignature) {
+        return true;
       } else {
-        const apart = lineDistanceMeters(left, right, DIFFERENT_METERS);
-        const differs = apart >= DIFFERENT_METERS;
-        if (Number.isFinite(apart)) {
-          meters.set(key, apart);
+        const key = keyOf(left, right);
+        const settled = different.get(key);
+        if (settled !== undefined) {
+          return settled;
+        } else {
+          const apart = lineDistanceMeters(left, right, DIFFERENT_METERS);
+          const differs = apart >= DIFFERENT_METERS;
+          if (Number.isFinite(apart)) {
+            meters.set(key, apart);
+          }
+          different.set(key, differs);
+          return differs;
         }
-        different.set(key, differs);
-        return differs;
       }
     },
   };
@@ -503,7 +539,7 @@ export function planRoutes(input: PlanInput): Plan {
     const key = JSON.stringify(
       factorKeys(candidate)
         .map((factor) => candidate[factor])
-        .concat(GATE_KEYS.map((gate) => (candidate[gate] ? 1 : 0))),
+        .concat(SWITCHES.map((switched) => (candidate[switched] ? 1 : 0))),
     );
     const memoised = byWeights.get(key);
     if (memoised !== undefined) {
@@ -527,6 +563,7 @@ export function planRoutes(input: PlanInput): Plan {
     const line = projectRoute(result, referenceLat);
     const pooled: Pooled = {
       result,
+      rideSignature: rideSignature(result),
       line,
       samples: densify(line),
       index: pool.length,
@@ -556,6 +593,10 @@ export function planRoutes(input: PlanInput): Plan {
   };
 
   const zeroRoute = run(scaled(0));
+  // The baseline still carries the mode's transit penalty, which can leave it walking from a station
+  // it should have stayed on the train past. The trip with nothing priced at all is the quickest one
+  // there is, and it is the card the reader reaches for when none of the scenery is worth the time.
+  run({ ...scaled(0), transit: 0 });
 
   // A mode of penalties alone moves the bound not at all, so the weight scale is stepped instead.
   const openBound = minMultiplier(scaled(0));
@@ -600,22 +641,43 @@ export function planRoutes(input: PlanInput): Plan {
     }
   }
 
-  // A factor that was not binding returns the max-scenic route again; expected, and cheap. Nothing
-  // is asked BETWEEN 0 and the mode's weight: a fixed path's cost is affine in one weight, so the
-  // cheapest cost over the paths is concave in it, and a route that wins at both ends of the interval
-  // wins at every point of it.
-  for (const key of scenic) {
+  // A factor that was not binding returns the max-scenic route again; expected, and cheap. The
+  // transit penalty earns a drop of its own even though the sweep holds it still: dropping it is how
+  // the route that rides gets asked for.
+  //
+  // Nothing is asked BETWEEN 0 and the mode's weight: a fixed path's cost is affine in one weight, so
+  // the cheapest cost over the paths is concave in it, and a route that wins at both ends of the
+  // interval wins at every point of it.
+  const dropAxes: FactorKey[] =
+    weights.transit === 0 ? scenic : [...scenic, "transit"];
+  for (const key of dropAxes) {
     run({ ...weights, [key]: 0 });
   }
   if (!weights.allowSheds) {
     run({ ...weights, allowSheds: true });
   }
-  // A route that takes a boat is offered the walk that stays on the surface the whole way, a card
-  // no back-off axis can reach: barring a crossing is a switch, not a weight. So it is asked for
-  // outright, the way the shed gate above is, and only when the route does cross, since otherwise
-  // the answer is the route already in the pool.
-  if (maxRoute.result.steps.some((step) => step.kind === "ferry")) {
-    run({ ...weights, allowFerries: false });
+  // A mode that prices no ride at all — Rain, for which a train is shelter — rides every trip the
+  // rail is quicker on, and the sweep would never think to ask what walking looks like, since
+  // backing a weight of zero off changes nothing. So the walk is asked for outright, the way the
+  // shed gate above is. Only when the chosen route does ride: otherwise the answer is the route we
+  // already have, for a search.
+  if (
+    weights.transit === 0 &&
+    weights.allowTransit &&
+    maxRoute.result.steps.some((step) => step.kind === "ride")
+  ) {
+    run({ ...weights, allowTransit: false });
+  }
+  // And whatever the chosen route rides — a boat as readily as a train — the walk that stays on the
+  // surface the whole way is a card worth offering, which no back-off axis can reach: barring a
+  // crossing is a switch, not a weight. Asked outright, as the two above are, and only when the
+  // route does ride, since otherwise the answer is the route already in the pool.
+  if (
+    maxRoute.result.steps.some(
+      (step) => step.kind === "ferry" || step.kind === "ride",
+    )
+  ) {
+    run({ ...weights, allowFerries: false, allowTransit: false });
   }
 
   // Penalties are never scored or chipped: a card says what a route has, not what it avoided.

@@ -331,6 +331,7 @@ test("each boat boarded is a leg of its own, timed at the crossing", () => {
       route: null,
       waitSeconds: 0,
       crossingSeconds: graphB.edgeDurationSeconds[step.edge],
+      ridesBefore: 0,
     })),
   );
 });

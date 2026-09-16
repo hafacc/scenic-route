@@ -1,17 +1,29 @@
 "use client";
 
 import L from "leaflet";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Marker, Polyline, useMap } from "react-leaflet";
 import { CROSS_CITY_METERS } from "../src/cities";
-import { FERRY_COLOR } from "../src/overlays/colors";
-import { edgeKind, type RoutingGraph, subEdgePath } from "../src/routing/graph";
+import { FERRY_COLOR, SUBWAY_COLOR } from "../src/overlays/colors";
+import {
+  edgeKind,
+  type RoutingGraph,
+  routeOf,
+  subEdgePath,
+} from "../src/routing/graph";
 import type { RouteResult, RouteStep } from "../src/routing/search";
 import type { Snap } from "../src/routing/snap";
+import type { Subway } from "../src/subway/format";
+import {
+  loadSubwayTracks,
+  sliceTrack,
+  trackShapes,
+} from "../src/subway/tracks";
 import { currentTheme } from "../src/theme/current";
 import CanvasGrid from "../src/tiles/canvas-grid";
 import { KEEP_BUFFER, tileRatio } from "../src/tiles/raster";
 import { repeatable } from "../src/tiles/repaint";
+import { useCity } from "./city-context";
 import { destIcon, startIcon } from "./map-icons";
 
 export interface RouteLine {
@@ -76,9 +88,10 @@ export const ROUTE_COLOR = "#334155"; // slate-700: a neutral route that reads o
 const CASING_COLOR = "#ffffff";
 const CONNECTOR_COLOR = "#94a3b8"; // slate-400
 const CONNECTOR_MIN_METERS = 15; // draw the dashed tapped->snapped link only past this gap
-// An unselected alternative: narrower and washed out, but not gone.
+// An unselected alternative: narrower and washed well back, but not gone. Its badge wears the same
+// alpha as its line — a full-strength disc over a faint line reads as the route being highlighted.
 const ALT_WIDTH = 0.7;
-const ALT_ALPHA = 0.55;
+const ALT_ALPHA = 0.35;
 // A stroke has to be painted to receive a tap, hence the near-zero opacity.
 const TAP_WIDTH = 18;
 const TAP_OPACITY = 0.01;
@@ -104,14 +117,34 @@ function haversineMeters(
   return 2 * EARTH_RADIUS_METERS * Math.asin(Math.min(1, Math.sqrt(inner)));
 }
 
-// A per-step polyline in travel order. Every kind now draws its stored geometry as-is: a sidewalk's
-// baked offset already runs corner-to-corner on its own side, and a crossing or link is the straight
-// corner-to-corner line edgePath synthesizes, so there is no draw-time offset to apply.
+// A per-step polyline in travel order. Every walked kind draws its stored geometry as-is: a
+// sidewalk's baked offset already runs corner-to-corner on its own side, and a crossing or link is
+// the straight corner-to-corner line edgePath synthesizes, so there is no draw-time offset to apply.
+// A ride is the exception, and the reason `mode` is not a boolean: it has no geometry of its own and
+// borrows the agency's drawn track (../src/subway/tracks), which it wears in the line's own colour.
 interface DrawStep {
   lngs: Float64Array;
   lats: Float64Array;
-  ferry: boolean; // a ferry leg, stroked in blue instead of the neutral walked line
+  mode: "walk" | "ferry" | { color: string };
 }
+
+// A white disc at each station the route stops being carried at: where it gets on, where it changes
+// and where it gets off, in the colour of the line boarded there.
+interface StationDot {
+  lat: number;
+  lng: number;
+  color: string;
+}
+
+interface RouteDrawing {
+  steps: DrawStep[];
+  stations: StationDot[];
+  badge: { lat: number; lng: number } | null;
+}
+
+// A transfer's two platforms are metres apart, so the alight dot and the board dot that follows it
+// are one station: the second wins, in the colour of the line the reader is getting onto.
+const TRANSFER_METERS = 150;
 
 // The a -> b along-distance bounds this step actually walked, so the end edges are trimmed at the
 // snap projections rather than drawn all the way to the intersection.
@@ -145,9 +178,61 @@ function stepBounds(
   return [0, edgeLength];
 }
 
-function buildDrawSteps(graph: RoutingGraph, result: RouteResult): DrawStep[] {
+// One boarding's worth of ride steps, gathered so the whole leg can be laid on one drawn track
+// rather than each hop between two stops projected on its own.
+interface RideLeg {
+  route: { shortName: string; color: string } | null;
+  lngs: number[];
+  lats: number[];
+}
+
+function buildDrawing(
+  graph: RoutingGraph,
+  result: RouteResult,
+  tracks: Subway | null,
+): RouteDrawing {
   const draw: DrawStep[] = [];
+  const stations: StationDot[] = [];
   const stepCount = result.steps.length;
+  let leg: RideLeg | null = null;
+
+  // The leg's own chords give way to the stretch of published track between its two stations, where
+  // the artifact has one. The dots go where the drawing ends, not where the platform node sits.
+  const closeLeg = (): void => {
+    if (leg === null) {
+      return;
+    }
+    const color = leg.route?.color ?? SUBWAY_COLOR[currentTheme()];
+    const chord = {
+      lngs: Float64Array.from(leg.lngs),
+      lats: Float64Array.from(leg.lats),
+    };
+    const board = { lat: leg.lats[0], lng: leg.lngs[0] };
+    const alight = {
+      lat: leg.lats[leg.lats.length - 1],
+      lng: leg.lngs[leg.lngs.length - 1],
+    };
+    const track =
+      tracks && leg.route
+        ? sliceTrack(trackShapes(tracks, leg.route), board, alight)
+        : null;
+    const drawn = track ?? chord;
+    draw.push({ lngs: drawn.lngs, lats: drawn.lats, mode: { color } });
+    const last = drawn.lats.length - 1;
+    const boardDot = { lat: drawn.lats[0], lng: drawn.lngs[0], color };
+    const previous = stations[stations.length - 1];
+    if (
+      previous &&
+      haversineMeters(previous.lat, previous.lng, boardDot.lat, boardDot.lng) <
+        TRANSFER_METERS
+    ) {
+      stations.pop();
+    }
+    stations.push(boardDot);
+    stations.push({ lat: drawn.lats[last], lng: drawn.lngs[last], color });
+    leg = null;
+  };
+
   for (let index = 0; index < stepCount; index++) {
     const step = result.steps[index];
     const [fromMeters, toMeters] = stepBounds(
@@ -165,13 +250,29 @@ function buildDrawSteps(graph: RoutingGraph, result: RouteResult): DrawStep[] {
     if (lngs.length < 2) {
       continue;
     }
+    if (edgeKind(graph, step.edge) === "ride") {
+      const route = routeOf(graph, step.edge);
+      if (leg === null || leg.route?.shortName !== route?.shortName) {
+        closeLeg();
+        leg = { route, lngs: [], lats: [] };
+      }
+      // The hops share their junction vertex, which is the platform they both call at.
+      const from = leg.lngs.length === 0 ? 0 : 1;
+      for (let vertex = from; vertex < lngs.length; vertex++) {
+        leg.lngs.push(lngs[vertex]);
+        leg.lats.push(lats[vertex]);
+      }
+      continue;
+    }
+    closeLeg();
     draw.push({
       lngs: Float64Array.from(lngs),
       lats: Float64Array.from(lats),
-      ferry: edgeKind(graph, step.edge) === "ferry",
+      mode: edgeKind(graph, step.edge) === "ferry" ? "ferry" : "walk",
     });
   }
-  return draw;
+  closeLeg();
+  return { steps: draw, stations, badge: midpointOf(draw) };
 }
 
 interface DrawBand {
@@ -230,6 +331,9 @@ class RouteGrid extends CanvasGrid {
       const width = base * band.width;
       const walkPath = new Path2D();
       const ferryPath = new Path2D();
+      // One path per line ridden: a trip that changes trains is two colours, and each has to be
+      // cased and stroked whole so its joins meet.
+      const ridePaths = new Map<string, Path2D>();
       for (const step of band.steps) {
         const count = step.lngs.length;
         const margin = width;
@@ -257,7 +361,16 @@ class RouteGrid extends CanvasGrid {
         if (!overlaps) {
           continue;
         }
-        const path = step.ferry ? ferryPath : walkPath;
+        let path: Path2D;
+        if (step.mode === "walk") {
+          path = walkPath;
+        } else if (step.mode === "ferry") {
+          path = ferryPath;
+        } else {
+          const existing = ridePaths.get(step.mode.color);
+          path = existing ?? new Path2D();
+          ridePaths.set(step.mode.color, path);
+        }
         path.moveTo(xs[0], ys[0]);
         for (let vertex = 1; vertex < count; vertex++) {
           path.lineTo(xs[vertex], ys[vertex]);
@@ -271,21 +384,67 @@ class RouteGrid extends CanvasGrid {
       context.strokeStyle = CASING_COLOR;
       context.stroke(walkPath);
       context.stroke(ferryPath);
+      for (const path of ridePaths.values()) {
+        context.stroke(path);
+      }
       context.lineWidth = width;
       context.strokeStyle = band.color;
       context.stroke(walkPath);
       context.strokeStyle = FERRY_COLOR[currentTheme()];
       context.stroke(ferryPath);
+      for (const [color, path] of ridePaths) {
+        context.strokeStyle = color;
+        context.stroke(path);
+      }
       context.globalAlpha = 1;
     }
   }
 }
 
-// The vertex nearest halfway along, so the badge lands on the route rather than between two bends.
-function midpointOf(result: RouteResult): { lat: number; lng: number } {
-  const { lats, lngs } = result.path;
-  const middle = Math.floor(lats.length / 2);
-  return { lat: lats[middle], lng: lngs[middle] };
+// Halfway along the DRAWN route by length, rather than at its middle vertex. By vertex count a
+// route that spends most of its distance on a train would put its badge on whichever walk had the
+// more corners, which is near one of its ends; by length it lands where the trip's middle is, ride
+// included.
+function midpointOf(
+  steps: readonly DrawStep[],
+): { lat: number; lng: number } | null {
+  const spans: number[] = [];
+  let total = 0;
+  for (const step of steps) {
+    let length = 0;
+    for (let vertex = 1; vertex < step.lats.length; vertex++) {
+      length += haversineMeters(
+        step.lats[vertex - 1],
+        step.lngs[vertex - 1],
+        step.lats[vertex],
+        step.lngs[vertex],
+      );
+    }
+    spans.push(length);
+    total += length;
+  }
+  let running = 0;
+  for (let index = 0; index < steps.length; index++) {
+    const step = steps[index];
+    if (running + spans[index] < total / 2) {
+      running += spans[index];
+      continue;
+    }
+    for (let vertex = 1; vertex < step.lats.length; vertex++) {
+      const segment = haversineMeters(
+        step.lats[vertex - 1],
+        step.lngs[vertex - 1],
+        step.lats[vertex],
+        step.lngs[vertex],
+      );
+      if (running + segment >= total / 2) {
+        return { lat: step.lats[vertex], lng: step.lngs[vertex] };
+      }
+      running += segment;
+    }
+  }
+  const last = steps[steps.length - 1];
+  return last ? { lat: last.lats[0], lng: last.lngs[0] } : null;
 }
 
 // Thinned to a few hundred vertices: this is hit-testing, not drawing, and a route carries thousands.
@@ -306,21 +465,40 @@ function tapPositions(result: RouteResult): [number, number][] {
 // What a route's geometry decides for the marks laid over it, worked out once per route.
 interface RouteMark {
   positions: [number, number][];
-  badge: { lat: number; lng: number };
   icon: L.DivIcon;
   color: string;
   label: string;
   dimmed: boolean;
+  selected: boolean; // the badge is drawn back with its line, so a hover has to mint a new icon
 }
 
 function badgeIcon(line: RouteLine): L.DivIcon {
-  const opacity = line.dimmed ? ALT_ALPHA : 1;
+  const opacity = line.selected && !line.dimmed ? 1 : ALT_ALPHA;
   return L.divIcon({
     className: "",
     html: `<span class="scenic-route-badge" style="background:${line.color};opacity:${opacity}">${line.label}</span>`,
     iconSize: [22, 22],
     iconAnchor: [11, 11],
   });
+}
+
+// One white disc ringed in the line's colour, at a station the reader gets on, changes or gets off
+// at. Minted per colour rather than per stop: a trip calls at two or three of them and they all
+// look the same.
+const stationIcons = new Map<string, L.DivIcon>();
+function stationIcon(color: string): L.DivIcon {
+  const cached = stationIcons.get(color);
+  if (cached) {
+    return cached;
+  }
+  const icon = L.divIcon({
+    className: "",
+    html: `<span class="scenic-station-dot" style="border-color:${color}"></span>`,
+    iconSize: [12, 12],
+    iconAnchor: [6, 6],
+  });
+  stationIcons.set(color, icon);
+  return icon;
 }
 
 function routeBounds(result: RouteResult): L.LatLngBounds {
@@ -348,8 +526,38 @@ export default function RouteLayer({
   onEndpointDrag,
 }: RouteLayerProps) {
   const map = useMap();
+  const cityId = useCity().id;
   const gridRef = useRef<RouteGrid | null>(null);
   const dropped = useMemo(() => destIcon(markerColor), [markerColor]);
+  // The agency's drawn track, fetched as soon as this layer has a graph that carries rail rather
+  // than when a plan first rides one: a ride whose shapes have not landed is drawn as the chord the
+  // graph carries, and waiting for the plan is waiting until there is a chord on the map to replace.
+  // Where the shapes do not answer for a line at all, the chord is what stays.
+  const [loaded, setLoaded] = useState<{ city: string; subway: Subway } | null>(
+    null,
+  );
+  const rail = (graph?.boardEdges.length ?? 0) > 0;
+  useEffect(() => {
+    if (!rail) {
+      return;
+    }
+    let live = true;
+    loadSubwayTracks(cityId)
+      .then((subway) => {
+        if (live) {
+          setLoaded({ city: cityId, subway });
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn("subway tracks", error);
+      });
+    return () => {
+      live = false;
+    };
+  }, [rail, cityId]);
+  // Held by city, so a switch draws chords for the moment before the new city's shapes land rather
+  // than projecting its stations onto the last city's track.
+  const tracks = loaded?.city === cityId ? loaded.subway : null;
   // The dest object last framed by the camera; a slider recompute keeps its identity, a new
   // destination replaces it, so only the latter re-frames.
   const framedDest = useRef<{ lat: number; lng: number } | null>(preframedDest);
@@ -384,37 +592,46 @@ export default function RouteLayer({
       cached &&
       cached.color === line.color &&
       cached.label === line.label &&
-      cached.dimmed === (line.dimmed ?? false)
+      cached.dimmed === (line.dimmed ?? false) &&
+      cached.selected === line.selected
     ) {
       return cached;
     }
     const fresh: RouteMark = {
       positions: tapPositions(line.result),
-      badge: midpointOf(line.result),
       icon: badgeIcon(line),
       color: line.color,
       label: line.label,
       dimmed: line.dimmed ?? false,
+      selected: line.selected,
     };
     marks.current.set(line.result, fresh);
     return fresh;
   };
-  const drawSteps = useRef(new WeakMap<RouteResult, DrawStep[]>());
-  const stepsFor = (
+  // A drawing is thrown away wholesale when the track arrives, which is the one thing that changes
+  // what a route looks like without the route itself changing.
+  const drawings = useRef<{
+    tracks: Subway | null;
+    cache: WeakMap<RouteResult, RouteDrawing>;
+  }>({ tracks: null, cache: new WeakMap() });
+  const drawingFor = (
     routeGraph: RoutingGraph,
     route: RouteResult,
-  ): DrawStep[] => {
-    const cached = drawSteps.current.get(route);
+  ): RouteDrawing => {
+    if (drawings.current.tracks !== tracks) {
+      drawings.current = { tracks, cache: new WeakMap() };
+    }
+    const cached = drawings.current.cache.get(route);
     if (cached) {
       return cached;
     }
-    const fresh = buildDrawSteps(routeGraph, route);
-    drawSteps.current.set(route, fresh);
+    const fresh = buildDrawing(routeGraph, route, tracks);
+    drawings.current.cache.set(route, fresh);
     return fresh;
   };
 
   // The deck's own lines when it has them, otherwise the single route.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: stepsFor reads only its arguments
+  // biome-ignore lint/correctness/useExhaustiveDependencies: drawingFor reads only its arguments
   const bands = useMemo(() => {
     if (!graph) {
       return [];
@@ -422,7 +639,7 @@ export default function RouteLayer({
       return [...lines]
         .sort((left, right) => Number(left.selected) - Number(right.selected))
         .map((line) => ({
-          steps: stepsFor(graph, line.result),
+          steps: drawingFor(graph, line.result).steps,
           color: line.color,
           width: line.selected && !line.dimmed ? 1 : ALT_WIDTH,
           alpha: line.selected && !line.dimmed ? 1 : ALT_ALPHA,
@@ -430,7 +647,7 @@ export default function RouteLayer({
     } else if (result) {
       return [
         {
-          steps: stepsFor(graph, result),
+          steps: drawingFor(graph, result).steps,
           color: ROUTE_COLOR,
           width: 1,
           alpha: 1,
@@ -439,7 +656,18 @@ export default function RouteLayer({
     } else {
       return [];
     }
-  }, [graph, result, lines]);
+  }, [graph, result, lines, tracks]);
+
+  // The dots belong to the line the reader is looking at: the chosen card, or the one the pointer is
+  // over while they are all drawn. An alternative's stations are noise on a map of three routes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: drawingFor reads only its arguments
+  const stations = useMemo<StationDot[]>(() => {
+    if (!graph) {
+      return [];
+    }
+    const highlighted = lines?.find((line) => line.selected)?.result ?? result;
+    return highlighted ? drawingFor(graph, highlighted).stations : [];
+  }, [graph, result, lines, tracks]);
 
   useEffect(() => {
     gridRef.current?.setBands(bands);
@@ -517,18 +745,27 @@ export default function RouteLayer({
         if (line.label === "") {
           return null; // a chosen route is the only one drawn, and a badge would number a set of one
         }
-        const { badge, icon } = markFor(line);
-        return (
+        const badge = graph ? drawingFor(graph, line.result).badge : null;
+        return badge ? (
           <Marker
             // biome-ignore lint/suspicious/noArrayIndexKey: the deck's order IS a line's identity
             key={`badge-${index}`}
             position={[badge.lat, badge.lng]}
-            icon={icon}
+            icon={markFor(line).icon}
             zIndexOffset={line.selected ? 900 : 800}
             eventHandlers={{ click: () => onSelectLine?.(index) }}
           />
-        );
+        ) : null;
       })}
+      {stations.map((station) => (
+        <Marker
+          key={`station-${station.lat},${station.lng}`}
+          position={[station.lat, station.lng]}
+          icon={stationIcon(station.color)}
+          zIndexOffset={850} // under the route badge, over everything the map draws itself
+          interactive={false}
+        />
+      ))}
       {start ? (
         <Marker
           position={[start.lat, start.lng]}

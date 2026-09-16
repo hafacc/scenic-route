@@ -23,6 +23,22 @@ function coordinate({ lat, lng }: Waypoint): string {
 // Origin and destination are the reader's OWN requested endpoints rather than the points we snapped
 // them to: Google re-snaps whatever it is given to its own network, so handing it our snap only
 // moves the walk's ends about for no gain.
+// A route that gets on a train reaches Google whole: pins between two stations would be WALKED, and
+// Google's own transit planner is closer to what the reader is holding than a nine-point walk
+// through the same city would be. Google plans its own ride; the button's title says so.
+export function googleMapsTransitUrl(
+  origin: Waypoint,
+  destination: Waypoint,
+): string {
+  const params = new URLSearchParams({
+    api: "1",
+    origin: coordinate(origin),
+    destination: coordinate(destination),
+    travelmode: "transit",
+  });
+  return `https://www.google.com/maps/dir/?${params}`;
+}
+
 export function googleMapsWalkingUrl(
   origin: Waypoint,
   destination: Waypoint,

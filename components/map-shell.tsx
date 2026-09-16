@@ -55,7 +55,11 @@ import {
   setCustomHour,
   subscribeRouteTime,
 } from "../src/route-time/store";
-import { type RouteClock, RouteContexts } from "../src/routing/contexts";
+import {
+  followsRouteTime,
+  type RouteClock,
+  RouteContexts,
+} from "../src/routing/contexts";
 import type { RouteWeights } from "../src/routing/cost";
 import { buildDirections, type Maneuver } from "../src/routing/directions";
 import { loadGraph, type RoutingGraph } from "../src/routing/graph";
@@ -589,25 +593,28 @@ export default function MapShell({
     shelter: shelterWeight,
     allowSheds,
     allowFerries,
+    allowTransit,
   } = weights;
   // While anything the route reads moves with the clock, follow it: each tick re-costs the route
   // against the sun's new position and against the sailing a ferry terminal is next offering, and a
   // tick that lands on a new day also restands the scaffolding. The store only ticks in "now" mode or
   // on a scrub, and only with a listener.
   //
-  // Ferries are on by default, so this normally subscribes from the outset — which is the point: an
-  // ETA built on "the 6:20 boat" has to stop saying so once 6:20 has gone.
+  // Ferries and trains are on by default, so this normally subscribes from the outset — which is the
+  // point: an ETA built on "the 6:20 boat" has to stop saying so once 6:20 has gone.
   useEffect(() => {
-    if (
-      shadeWeight === 0 &&
-      shelterWeight === 0 &&
-      allowSheds &&
-      !allowFerries
-    ) {
+    const follows = followsRouteTime({
+      shade: shadeWeight,
+      shelter: shelterWeight,
+      allowSheds,
+      allowFerries,
+      allowTransit,
+    });
+    if (!follows) {
       return;
     }
     return subscribeRouteTime(() => setRouteTimeTick((tick) => tick + 1));
-  }, [shadeWeight, shelterWeight, allowSheds, allowFerries]);
+  }, [shadeWeight, shelterWeight, allowSheds, allowFerries, allowTransit]);
 
   // A note written while the device was offline is queued in Firestore's own cache, and that cache
   // only drains once something has built the Firestore instance. A signed-out visitor builds nothing
@@ -1938,6 +1945,7 @@ export default function MapShell({
           routeDest={routeDest}
           routeStart={routeStart}
           searchPin={searchPin}
+          onSearchPinDrag={dropSearchPin}
           markerColor={accentHex}
           picking={pickTarget !== null}
           onMapPick={handleMapPick}

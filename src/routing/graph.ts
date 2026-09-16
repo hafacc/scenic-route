@@ -7,6 +7,7 @@ import { cityById } from "../cities";
 import type { FerryTimetable } from "./ferry-schedule";
 import type { ShadeField } from "./shade";
 import type { ShedField } from "./sheds";
+import type { TransitTimetable } from "./transit-schedule";
 
 // A no-geometry edge (a crossing, a link, or a straight ferry) stores this sentinel in its geometry
 // offset; its polyline is the straight line between its two node coordinates.
@@ -20,7 +21,7 @@ const KIND_CROSSING = 1;
 const KIND_FERRY = 4;
 // The three transit kinds: the walk in and out of a station, the step onto a pattern's platform
 // (whose wait the timetable answers at route time, so it bakes no duration), and one platform to the
-// next. Nothing routes over them yet — the search skips them until the transit cost lands.
+// next. All three are DIRECTED — see `transitForward`.
 const KIND_ACCESS = 5;
 const KIND_BOARD = 6;
 const KIND_RIDE = 7;
@@ -199,10 +200,11 @@ export interface RoutingGraph extends GraphIdentity {
   // whole walk (no shade to bias); its maxAbs (0..1) is the shade factor's clip-floor input.
   shade: ShadeField | null;
 
-  // How long this region's walker will wait on a pier, from src/cities.ts. Not baked into the
-  // artifact: it is a judgement about the timetable rather than a fact about the geometry, and
-  // changing it should not mean rebuilding a 40 MB graph.
+  // How long this region's walker will wait on a pier, and how long on a platform, from
+  // src/cities.ts. Not baked into the artifact: both are judgements about a timetable rather than
+  // facts about the geometry, and changing one should not mean rebuilding a 40 MB graph.
   maxFerryWaitSeconds?: number;
+  maxTransitWaitSeconds?: number;
 
   // The picked day's sidewalk sheds, filled from the SHED artifact by computeEdgeSheds: per edge, how
   // much of it stands under a deck. A deck is opaque and dry, so it feeds the shade composite, the
@@ -221,8 +223,8 @@ export interface RoutingGraph extends GraphIdentity {
   edgeDurationSeconds: Float32Array;
   ferryEdges: Uint32Array; // ids of the ferry edges, for the A* ferry-credit heuristic
   // The transit topology baked into the graph (GRPH v11): the ids of every access, board and ride
-  // edge, and the board subset on its own. Nothing routes over them yet — `isTransitEdge` is what
-  // the search skips on — so they are inert exactly as a ferry is with its gate closed.
+  // edge, and the board subset on its own, which is what the A* transit credit and the mode gating
+  // read.
   transitEdges: Uint32Array;
   boardEdges: Uint32Array;
   // Every route the city's transit topology carries, in the order the side table lists them, which
@@ -239,10 +241,21 @@ export interface RoutingGraph extends GraphIdentity {
   // Per ferry edge, its two terminal stop names at the node-a and node-b ends (aligned to
   // edgeNodeA/edgeNodeB). The route name is the edge's own name (`edgeName`).
   ferryEndpointNames: Map<number, { a: string; b: string }>;
-  // Per board edge, the lane (route, direction, stop pattern) the daily timetable is keyed by, and
-  // per board and ride edge, the route it runs. `laneOf` and `routeOf` read these.
+  // Per board edge, the lane (route, direction, stop pattern) the daily timetable is keyed by and
+  // which of that lane's stops this platform is, and per board and ride edge, the route it runs.
+  // `laneOf`, `stopIndexOf` and `routeOf` read these.
   transitLaneOf: Map<number, number>;
+  transitStopOf: Map<number, number>;
   transitRouteOf: Map<number, number>;
+  // 1 for a node a board edge lands on, which is a pattern's own platform rather than a place anyone
+  // walks. It is what tells an alight edge from the walk out of a station: both are access edges,
+  // and only one of them may be walked backwards. Derived from the board edges, not stored.
+  nodePlatform: Uint8Array;
+
+  // The departure date's rail timetable, filled from the TSCH artifact by computeTransitSchedule:
+  // per lane, when the next train leaves each of its stops. Null until that resolves and on any day
+  // no record covers, and every board edge then costs Infinity — no schedule, no train.
+  transit: TransitTimetable | null;
 }
 
 // One transit route as the graph carries it: what a rider calls it, the corridor it runs, its feed
@@ -442,11 +455,12 @@ export function decodeGraph(
     names,
   );
 
-  const { transitRoutes, transitLaneOf, transitRouteOf } = decodeTransitTables(
-    buffer,
-    transitTableOffset,
-    names,
-  );
+  const { transitRoutes, transitLaneOf, transitStopOf, transitRouteOf } =
+    decodeTransitTables(buffer, transitTableOffset, names);
+  const nodePlatform = new Uint8Array(nodeCount);
+  for (const edge of boardEdges) {
+    nodePlatform[edgeNodeB[edge]] = 1;
+  }
 
   const nodeMidRoadway = markMidRoadwayNodes(
     nodeCount,
@@ -498,6 +512,7 @@ export function decodeGraph(
     shade: null, // populated lazily once the SHDE artifact loads, keyed on the departure instant
     sheds: null, // populated lazily once the SHED artifact loads, keyed on the picked day
     ferries: null, // populated lazily once the FSCH artifact loads, keyed on the departure day
+    transit: null, // and this once the TSCH artifact loads, keyed on the same day
     edgeHalfOffsetDm,
     edgeDurationSeconds,
     ferryEdges: Uint32Array.from(ferryEdges),
@@ -512,7 +527,9 @@ export function decodeGraph(
     boardEdges: Uint32Array.from(boardEdges),
     transitRoutes,
     transitLaneOf,
+    transitStopOf,
     transitRouteOf,
+    nodePlatform,
   };
 }
 
@@ -562,8 +579,8 @@ function decodeFerryEndpointNames(
 
 // The transit side tables (the byte-64 offset, 4-aligned after the ferry table): a u32 count and a
 // 12-byte record per route (RGB, text RGB, three u16 name ids), then a u32 count and a 12-byte
-// record per board edge (edge id, lane id, route index, pad), then a u32 count and an 8-byte record
-// per ride edge (edge id, route index, pad). All three are empty for a city with no transit source.
+// record per board edge (edge id, lane id, route index, stop index), then a u32 count and an 8-byte
+// record per ride edge (edge id, route index, pad). All are empty for a city with no transit source.
 function decodeTransitTables(
   buffer: ArrayBuffer,
   tableOffset: number,
@@ -571,13 +588,15 @@ function decodeTransitTables(
 ): {
   transitRoutes: TransitRoute[];
   transitLaneOf: Map<number, number>;
+  transitStopOf: Map<number, number>;
   transitRouteOf: Map<number, number>;
 } {
   const transitRoutes: TransitRoute[] = [];
   const transitLaneOf = new Map<number, number>();
+  const transitStopOf = new Map<number, number>();
   const transitRouteOf = new Map<number, number>();
   if (tableOffset === 0 || tableOffset + 4 > buffer.byteLength) {
-    return { transitRoutes, transitLaneOf, transitRouteOf };
+    return { transitRoutes, transitLaneOf, transitStopOf, transitRouteOf };
   }
   const view = new DataView(buffer);
   const bytes = new Uint8Array(buffer);
@@ -603,6 +622,7 @@ function decodeTransitTables(
     const edge = view.getUint32(at, true);
     transitLaneOf.set(edge, view.getUint32(at + 4, true));
     transitRouteOf.set(edge, view.getUint16(at + 8, true));
+    transitStopOf.set(edge, view.getUint16(at + 10, true));
     at += 12;
   }
   const rideCount = view.getUint32(at, true);
@@ -611,7 +631,7 @@ function decodeTransitTables(
     transitRouteOf.set(view.getUint32(at, true), view.getUint16(at + 4, true));
     at += 8;
   }
-  return { transitRoutes, transitLaneOf, transitRouteOf };
+  return { transitRoutes, transitLaneOf, transitStopOf, transitRouteOf };
 }
 
 // The lane the daily timetable answers this board edge against — a (route, direction, stop pattern),
@@ -619,6 +639,13 @@ function decodeTransitTables(
 // that is not a board edge.
 export function laneOf(graph: RoutingGraph, edge: number): number {
   return graph.transitLaneOf.get(edge) ?? -1;
+}
+
+// Which of its lane's stops this board edge's platform is, counted as the FEED lists them — the
+// index TSCH's per-stop offsets are in, so a station the snap dropped leaves a hole in the graph's
+// chain and none in this numbering. -1 for every edge that is not a board edge.
+export function stopIndexOf(graph: RoutingGraph, edge: number): number {
+  return graph.transitStopOf.get(edge) ?? -1;
 }
 
 // The route a board or ride edge runs, or null for anything else — an access edge included, since
@@ -631,11 +658,92 @@ export function routeOf(
   return index === undefined ? null : (graph.transitRoutes[index] ?? null);
 }
 
-// Is this edge part of the transit topology rather than the walking network? The search skips these
-// wholesale: the graph carries the stations, platforms and rides, and the cost model that prices
-// them does not exist yet, so no route may use one.
+// Is this edge part of the transit topology rather than the walking network? Read where something
+// walks the graph and only pavement will do — the waypoint proxy, the reversal check.
 export function isTransitEdge(graph: RoutingGraph, edge: number): boolean {
   return TRANSIT_KINDS.has(edgeKind(graph, edge));
+}
+
+// May this edge be entered at `fromNode`? The topology is directed — you board a platform from its
+// station, ride to the next platform, and alight back to a station — but the graph stores every edge
+// undirected, so each of those has a reverse the search must refuse. Riding backwards is the obvious
+// one; the quiet one is stepping onto a platform through an alight edge, which would put a walker on
+// a train with no wait at all. The walk between a station and the pavement is the one transit edge
+// that goes both ways, since a station is entered and left. Every walking edge is traversable.
+export function transitForward(
+  graph: RoutingGraph,
+  edge: number,
+  fromNode: number,
+): boolean {
+  const kind = edgeKind(graph, edge);
+  if (kind === "board" || kind === "ride") {
+    return fromNode === graph.edgeNodeA[edge];
+  } else if (kind === "access" && graph.nodePlatform[graph.edgeNodeA[edge]]) {
+    return fromNode === graph.edgeNodeA[edge]; // an alight: off the platform only
+  } else {
+    return true;
+  }
+}
+
+// What a station is called, asked of the station node itself. Only the walk out to the pavement
+// carries the name — an alight edge is unnamed and a board edge is named for its line — so the named
+// access edge leaving this node is the one to read. Null for any other node.
+export function stationName(graph: RoutingGraph, node: number): string | null {
+  for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
+    const edge = graph.adjacency[slot];
+    if (edgeKind(graph, edge) === "access" && graph.edgeNodeA[edge] === node) {
+      const name = edgeName(graph, edge);
+      if (name !== null) {
+        return name;
+      }
+    }
+  }
+  return null;
+}
+
+// The seconds the tiler bakes for the walk between a kerbside stop and the pavement, against the
+// longer one it bakes for a station with a way in (crates/tiler/src/graph.rs, SURFACE_ACCESS_SECONDS
+// and UNDERGROUND_ACCESS_SECONDS). The feed's own surface flag is not in the graph, and this is the
+// only trace of it left: what a rider is told to do differs — you go to a tram stop and you enter a
+// station — so the distinction has to survive somehow.
+const SURFACE_ACCESS_SECONDS = 30;
+
+// Is this access edge the walk to a stop standing in the street rather than into a station?
+export function isSurfaceStop(graph: RoutingGraph, edge: number): boolean {
+  return graph.edgeDurationSeconds[edge] <= SURFACE_ACCESS_SECONDS;
+}
+
+// The last station a pattern calls at, ridden from this platform: the ride chain followed to its
+// end. This is what a rider is told a train is bound FOR, which the graph never writes down — it is
+// simply where the line the walker is standing on runs out.
+export function patternTerminus(
+  graph: RoutingGraph,
+  platformNode: number,
+): string | null {
+  let node = platformNode;
+  let station: string | null = null;
+  for (;;) {
+    let next = -1;
+    for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
+      const edge = graph.adjacency[slot];
+      if (edgeKind(graph, edge) === "ride" && graph.edgeNodeA[edge] === node) {
+        next = graph.edgeNodeB[edge];
+        break;
+      }
+    }
+    if (next < 0) {
+      break;
+    }
+    node = next;
+  }
+  for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
+    const edge = graph.adjacency[slot];
+    // The platform's alight edge, whose node b is the station it climbs back up to.
+    if (edgeKind(graph, edge) === "access" && graph.edgeNodeA[edge] === node) {
+      station = stationName(graph, graph.edgeNodeB[edge]);
+    }
+  }
+  return station;
 }
 
 export function edgeKind(graph: RoutingGraph, edge: number): EdgeKind {
@@ -688,15 +796,17 @@ async function fetchGraphIdentity(cityId: string): Promise<GraphIdentity> {
   }
 }
 
-// The pier wait is not in the artifact, and both decoders go through here — the page's fetch and
-// the worker's copy of the same bytes — so neither can be the one that forgets it.
+// The pier and platform waits are not in the artifact, and both decoders go through here — the
+// page's fetch and the worker's copy of the same bytes — so neither can be the one that forgets them.
 export function decodeCityGraph(
   cityId: string,
   buffer: ArrayBuffer,
   identity: GraphIdentity,
 ): RoutingGraph {
   const graph = decodeGraph(buffer, identity);
-  graph.maxFerryWaitSeconds = cityById(cityId)?.maxFerryWaitSeconds;
+  const city = cityById(cityId);
+  graph.maxFerryWaitSeconds = city?.maxFerryWaitSeconds;
+  graph.maxTransitWaitSeconds = city?.maxTransitWaitSeconds;
   return graph;
 }
 

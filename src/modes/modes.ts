@@ -82,7 +82,7 @@ export const MODES: readonly Mode[] = [
     // The deep half of the canopy ramp: its pale end is a wash over ground, not a line on it.
     palette: CANOPY_HEX.light.slice(3),
     overlays: ["canopy"],
-    weights: { tree: 1, industrial: 1 },
+    weights: { tree: 1, industrial: 1, transit: 1 },
     allowSheds: false,
     needs: ["tree"],
   },
@@ -98,6 +98,8 @@ export const MODES: readonly Mode[] = [
       "#0284c7", // sky-600, the shelter slider (FACTORS shelter)
     ],
     overlays: ["scaffolding"],
+    // Transit is the one factor Rain is silent about, and deliberately: a train is shelter, waiting
+    // for it included, so the mode that wants a roof has no reason to price the ride.
     weights: { shelter: 1 },
     allowSheds: true,
     needs: ["shelter"],
@@ -114,7 +116,14 @@ export const MODES: readonly Mode[] = [
     ],
     overlays: ["historic", "legacy", "landmarks", "art"],
     // A harbour crossing is a way of seeing a city that predates every other line on the map.
-    weights: { historic: 1, landmark: 1, art: 0.9, ferry: 0.1, industrial: 1 },
+    weights: {
+      historic: 1,
+      landmark: 1,
+      art: 0.9,
+      ferry: 0.1,
+      industrial: 1,
+      transit: 1,
+    },
     allowSheds: false,
     needs: ["historic"],
   },
@@ -135,6 +144,7 @@ export const MODES: readonly Mode[] = [
       art: 0.75,
       historic: 0.5,
       industrial: 1,
+      transit: 1,
     },
     allowSheds: true,
     needs: ["commercial"],
@@ -175,6 +185,7 @@ type GraphMaxima = Pick<
   | "maxCommercial"
   | "maxRelief"
   | "ferryEdges"
+  | "boardEdges"
 >;
 
 // Exact: a city can ship a layer whose per-edge attribute is zero on every edge of it.
@@ -188,6 +199,7 @@ export function graphFactors(graph: GraphMaxima | null): FactorAvailability {
     hill: (graph?.maxRelief ?? 0) > 0,
     commercial: (graph?.maxCommercial ?? 0) > 0,
     ferry: (graph?.ferryEdges.length ?? 0) > 0,
+    transit: (graph?.boardEdges.length ?? 0) > 0,
   };
 }
 
@@ -216,6 +228,9 @@ export function effectiveWeights(
   const weights: RouteWeights = {
     ...ZERO_FACTORS,
     allowFerries: toggles.ferries,
+    // No switch: a mode says what a ride costs through its transit weight, and the planner is the
+    // only thing that ever shuts the rail off — for the walking card it offers beside a ride.
+    allowTransit: true,
     allowSheds: mode.allowSheds,
     allowCrossings: false, // never: see DEFAULT_WEIGHTS
   };

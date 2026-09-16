@@ -25,6 +25,7 @@ import {
   DEFAULT_LANDMARK_WEIGHT,
   DEFAULT_SHADE_WEIGHT,
   DEFAULT_SHELTER_WEIGHT,
+  DEFAULT_TRANSIT_WEIGHT,
   DEFAULT_TREE_WEIGHT,
   MAX_ART_WEIGHT,
   MAX_COMMERCIAL_WEIGHT,
@@ -36,6 +37,7 @@ import {
   MAX_LANDMARK_WEIGHT,
   MAX_SHADE_WEIGHT,
   MAX_SHELTER_WEIGHT,
+  MAX_TRANSIT_WEIGHT,
   MAX_TREE_WEIGHT,
   type RouteWeights,
 } from "./routing/cost";
@@ -96,7 +98,10 @@ export const DEFAULT_WEIGHTS: RouteWeights = {
   historic: DEFAULT_HISTORIC_WEIGHT,
   shade: DEFAULT_SHADE_WEIGHT,
   shelter: DEFAULT_SHELTER_WEIGHT,
+  transit: DEFAULT_TRANSIT_WEIGHT,
   allowFerries: true,
+  // No key: nothing a reader sets, so nothing a link carries. See INTERNAL_FLAGS in routing/cost.ts.
+  allowTransit: true,
   allowSheds: true,
   // Off: a route that spends crossings freely zigzags across a street to chase the shady side, which
   // is the cost model buying something nobody asked for rather than a taste anyone holds.
@@ -173,6 +178,7 @@ const WEIGHT_PARAMS: readonly WeightParam[] = [
     max: MAX_SHADE_WEIGHT,
   },
   { key: "shelter", field: "shelter", min: 0, max: MAX_SHELTER_WEIGHT },
+  { key: "transit", field: "transit", min: 0, max: MAX_TRANSIT_WEIGHT },
 ];
 
 // Every key this module owns, so a rewrite can clear its own and leave the rest (the About flag today,
