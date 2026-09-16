@@ -23,7 +23,7 @@ import {
   type RoutingGraph,
   stopIndexOf,
 } from "./graph";
-import { findRoute, type RouteResult } from "./search";
+import { findRoute, networkMetersTo, type RouteResult } from "./search";
 import type { Snap } from "./snap";
 import {
   ACCESS_SECONDS,
@@ -382,6 +382,28 @@ test("A* with the transit credit matches the Dijkstra oracle", () => {
           costOf(graph, route as RouteResult, weights),
           `${transit}/${shelter}/${allowTransit}`,
         ).toBeCloseTo(dijkstraCost(graph, start, dest, weights), 6);
+      }
+    }
+  }
+});
+
+// The same matrix with the estimate measured along the network — rides and crossings included at
+// their own lengths — instead of through the air. A tighter lower bound is still a lower bound.
+test("the network estimate leaves the A* optimum where it was", () => {
+  const graph = scheduled();
+  const { start, dest } = ends(graph);
+  const reuse = { networkMeters: networkMetersTo(graph, dest) };
+  for (const transit of [0, 0.5, 1, 2, MAX_TRANSIT_WEIGHT]) {
+    for (const shelter of [0, 1]) {
+      for (const allowTransit of [true, false]) {
+        const weights = transitWeights({ transit, shelter, allowTransit });
+        const label = `${transit}/${shelter}/${allowTransit}`;
+        const route = findRoute(graph, start, dest, weights, reuse);
+        expect(route, label).not.toBeNull();
+        expect(costOf(graph, route as RouteResult, weights), label).toBeCloseTo(
+          dijkstraCost(graph, start, dest, weights),
+          6,
+        );
       }
     }
   }

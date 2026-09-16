@@ -30,7 +30,7 @@ import {
   effSeconds,
   type RouteWeights,
   WALK_METERS_PER_SECOND,
-  walkSpeedOn,
+  walkSecondsPerMeter,
 } from "./cost";
 import { edgeKind, isTransitEdge, otherEnd, type RoutingGraph } from "./graph";
 import { NodeHeap } from "./node-heap";
@@ -292,7 +292,8 @@ class ProxyExplorer {
         // dozen multiplications to arrive back at the walk. `proxyPricesAWalk` pins the equality.
         const forward = edgeForward(this.graph, edge, node);
         const walked =
-          this.graph.edgeLength[edge] / walkSpeedOn(this.graph, edge, forward);
+          this.graph.edgeLength[edge] *
+          walkSecondsPerMeter(this.graph, edge, forward);
         const relaxed = this.distance[node] + walked;
         if (relaxed < this.distance[neighbour]) {
           if (this.distance[neighbour] === Number.POSITIVE_INFINITY) {

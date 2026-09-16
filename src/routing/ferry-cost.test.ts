@@ -10,7 +10,7 @@ import {
 } from "./cost";
 import { buildGraph, snapAtNode, weights } from "./ferry.fixture";
 import { clearEdgePathCache, otherEnd, type RoutingGraph } from "./graph";
-import { findRoute, type RouteResult } from "./search";
+import { findRoute, networkMetersTo, type RouteResult } from "./search";
 import { haversineMeters, type Snap } from "./snap";
 
 // The reference optimum: a plain Dijkstra (heuristic identically 0, no early exit) over effective
@@ -314,6 +314,46 @@ test("A* effective cost matches the Dijkstra oracle across the weight matrix", (
   }
   // 5 scenarios x 3 tree x 3 ferry x 2 allow.
   expect(combinations).toBe(90);
+});
+
+// The same matrix with the estimate measured along the network instead of through the air. A
+// tighter lower bound is still a lower bound, so every answer has to be the one above.
+test("the network estimate leaves the A* optimum where it was", () => {
+  for (const scenario of scenarios) {
+    const reuse = {
+      networkMeters: networkMetersTo(scenario.graph, scenario.dest),
+    };
+    for (const treeWeight of TREE_WEIGHTS) {
+      for (const ferryWeight of FERRY_WEIGHTS) {
+        for (const allowFerries of ALLOW) {
+          const optimum = dijkstraCost(
+            scenario.graph,
+            scenario.start,
+            scenario.dest,
+            treeWeight,
+            ferryWeight,
+            allowFerries,
+          );
+          const result = findRoute(
+            scenario.graph,
+            scenario.start,
+            scenario.dest,
+            weights(treeWeight, ferryWeight, allowFerries),
+            reuse,
+          );
+          const label = `${scenario.name} tw=${treeWeight} fw=${ferryWeight} allow=${allowFerries}`;
+          expect(result, label).not.toBeNull();
+          const cost = effectiveCostOf(
+            scenario.graph,
+            result as RouteResult,
+            treeWeight,
+            ferryWeight,
+          );
+          expect(Math.abs(cost - optimum), label).toBeLessThan(1e-3);
+        }
+      }
+    }
+  }
 });
 
 test("the sole crossing is optimal, and barring it leaves no route", () => {

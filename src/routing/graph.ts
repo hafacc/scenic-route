@@ -8,6 +8,7 @@ import type { FerryTimetable } from "./ferry-schedule";
 import type { ShadeField } from "./shade";
 import type { ShedField } from "./sheds";
 import type { TransitTimetable } from "./transit-schedule";
+import { bakeWalkSeconds, type WalkSeconds } from "./walk-speed";
 
 // A no-geometry edge (a crossing, a link, or a straight ferry) stores this sentinel in its geometry
 // offset; its polyline is the straight line between its two node coordinates.
@@ -195,6 +196,10 @@ export interface RoutingGraph extends GraphIdentity {
   // 0 for a ferry and for a city with no DEM.
   edgeAscent: Uint8Array;
   edgeDescent: Uint8Array;
+  // Every edge's walking seconds both ways round, taken from the two bytes above as the graph is
+  // decoded: the relax loop reads them rather than running Tobler's exponential four times an edge.
+  // Null on a hand-built fixture, which bakes it on first use (./walk-speed).
+  walkSeconds: WalkSeconds | null;
   // The largest total grade present, as a fraction of 35% — up to 2, since the two bytes clamp
   // separately. NOT a heuristic bound — hill is a penalty, whose minimum factor is 1, so it never
   // loosens the A* lower bound. This is read to tell a city with no elevation source (every edge 0)
@@ -296,7 +301,11 @@ export const EDGE_RECORD_BYTES = 40;
 // Written by the same pass as the graph itself, and named after it: one directory holds
 // every city's, so a shared name would describe whichever built last.
 const versionUrl = (cityId: string): string => `routing/${cityId}.version.json`;
-const PATH_CACHE_LIMIT = 512;
+// Above the edge count of one long route, which is the run this cache has to hold: a search reads an
+// edge's geometry and the stitching reads it again, so a limit under a route's length threw the
+// first half away before the second half asked for it. New York's longest bench trip is 13 km of
+// pavement at some 30 m an edge.
+const PATH_CACHE_LIMIT = 4096;
 
 function fourByteAlign(offset: number): number {
   return (offset + 3) & ~3;
@@ -530,6 +539,7 @@ export function decodeGraph(
     maxDirectCanopy,
     edgeAscent,
     edgeDescent,
+    walkSeconds: bakeWalkSeconds({ edgeLength, edgeAscent, edgeDescent }),
     maxRelief,
     shade: null, // populated lazily once the SHDE artifact loads, keyed on the departure instant
     sheds: null, // populated lazily once the SHED artifact loads, keyed on the picked day

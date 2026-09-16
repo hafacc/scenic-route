@@ -80,6 +80,20 @@ test("the cached route is findRoute, and reports when the path moved", async () 
   expect(new Set(seen).size).toBe(seen.length);
 });
 
+// The searcher the cache was handed, which is the only way to see that it kept the engine's own one:
+// the bare `findRoute` answers the same routes, without the label reuse or the network estimate.
+function cacheSearcher(engine: RoutingEngine): unknown {
+  return (engine as unknown as { cache: { search: unknown } }).cache.search;
+}
+
+test("dropping the cache keeps the engine's own searcher", async () => {
+  const engine = await preparedEngine();
+  expect(cacheSearcher(engine)).not.toBe(findRoute);
+  engine.resetCache();
+  expect(cacheSearcher(engine)).not.toBe(findRoute);
+  expect(typeof cacheSearcher(engine)).toBe("function");
+});
+
 test("a drag frame answers the moved endpoint", async () => {
   const engine = await preparedEngine();
   engine.dragStart("dest");

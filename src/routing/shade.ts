@@ -114,14 +114,14 @@ export interface ShadeField {
 // large scope.
 class ScheduledShadeField implements ShadeField {
   // Each referenced bin's composited signed row, built on first use and kept: A* reads an edge's
-  // attribute in its innermost loop, so the composite cannot live in `attrAt`. Tau ties a row to the
-  // departure date, so the field computeEdgeShade builds for a new date is what retires them.
+  // attribute in its innermost loop, so the composite cannot live in `attrAt`.
   private readonly rows: (Int8Array | null)[];
 
   constructor(
     private readonly fractions: BinFractions[], // the referenced bins, in bucket-reference order
     private readonly intensities: Float64Array, // per referenced bin, its solar intensity
     private readonly tau: number, // the share of direct light a crown stops on the departure date
+    private readonly rowKeys: string[], // per referenced bin, its key in the shared row cache
     private readonly binA: Int32Array, // per bucket: index into `fractions`, or -1 for a night bucket
     private readonly binB: Int32Array, // per bucket: the second blended bin's index into `fractions`
     private readonly weightA: Float64Array, // per bucket: bin A's blend weight, already divided by 128
@@ -155,6 +155,14 @@ class ScheduledShadeField implements ShadeField {
   // `1 - (1 - buildings)(1 - tau*trees)`; the bin's intensity then scales the sunlit-positive,
   // shaded-negative attribute.
   private composite(index: number): Int8Array {
+    const key = this.rowKeys[index];
+    const shared = rowCache.get(key);
+    if (shared) {
+      rowCache.delete(key); // re-inserted below, which is what makes the eviction an LRU
+      rowCache.set(key, shared);
+      this.rows[index] = shared;
+      return shared;
+    }
     const { buildings, trees } = this.fractions[index];
     const intensity = this.intensities[index];
     const row = new Int8Array(buildings.length);
@@ -164,9 +172,27 @@ class ScheduledShadeField implements ShadeField {
       row[edge] = encodeAttr(intensity * (1 - 2 * shaded));
     }
     this.rows[index] = row;
+    rowCache.set(key, row);
+    for (const oldest of rowCache.keys()) {
+      if (rowCache.size <= CACHE_ROWS) {
+        break;
+      }
+      rowCache.delete(oldest);
+    }
     return row;
   }
 }
+
+// The composited rows, shared across every field ever built. A row is a pure function of its city,
+// its bin and the canopy tau of the departure date, none of which the clock moves: without this, the
+// minute tick rebuilds the field and the first search of the new minute recomposites a 640k-edge row
+// per referenced bin, which is the cost of asking for a route while the clock runs.
+//
+// One byte an edge, so a New York row is 640 kB. Eight is what one schedule references at its worst
+// (see CACHE_BINS), and a row is a pass over the edges rather than a fetch, so there is less to gain
+// from holding a second schedule's worth than there is for the bins themselves.
+const CACHE_ROWS = 8;
+const rowCache = new Map<string, Int8Array>();
 
 // A time-invariant field over already-decoded signed floats in (-1, 1), for tests and any caller that
 // wants a fixed sun position rather than a walk-length schedule.
@@ -464,6 +490,10 @@ export async function computeEdgeShade(
     order.map((bin) => loadShadeBin(bin.index, forCity.id)),
   );
   const intensities = Float64Array.from(order, intensityOf);
+  const tau = canopyTau(date);
+  // The city and the bin say which occlusions went in, tau says how much of the light a crown stops:
+  // two fields that agree on all three hold the identical row.
+  const rowKeys = order.map((bin) => `${forCity.id}:${bin.index}:${tau}`);
   // |1 - 2*shaded| <= 1, so a bin's attributes cannot exceed its intensity in magnitude, and the
   // encoding caps that below 1. A bound is all the admissible heuristic needs, and this one is all but
   // exact: some edge in a city is fully sunlit in every bin.
@@ -479,7 +509,8 @@ export async function computeEdgeShade(
   graph.shade = new ScheduledShadeField(
     fractions,
     intensities,
-    canopyTau(date),
+    tau,
+    rowKeys,
     binA,
     binB,
     weightA,

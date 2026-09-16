@@ -60,36 +60,48 @@ export class RouteContexts {
     weights: RouteWeights,
   ): Promise<ContextSync> {
     const date = new Date(clock.dateMs);
-    let rebuilt = false;
     let shadeRebuilt = false;
     let shadeLost = false;
 
-    if (weights.shade !== 0) {
-      const key = `${city.id}:${clock.tick}`;
-      if (this.shadeKey !== key) {
-        this.shadeKey = key;
-        rebuilt = true;
-        shadeRebuilt = true;
-        try {
-          await computeEdgeShade(graph, date, city);
-        } catch (error) {
-          console.error("shade routing disabled:", error);
-          graph.shade = null;
-          shadeLost = true;
-        }
+    // The four fields are four independent fetches, and a plan waits on all of them before its first
+    // search: run together, the walk pays for the slowest rather than the sum. Nothing here reads
+    // what another writes — the shed set feeds the shade COMPOSITE, which is asked for per edge at
+    // search time, not while the field is built.
+    const shade = (async (): Promise<boolean> => {
+      if (weights.shade === 0) {
+        graph.shade = null;
+        this.shadeKey = "";
+        return false;
       }
-    } else {
-      graph.shade = null;
-      this.shadeKey = "";
-    }
+      const key = `${city.id}:${clock.tick}`;
+      if (this.shadeKey === key) {
+        return false;
+      }
+      this.shadeKey = key;
+      shadeRebuilt = true;
+      try {
+        await computeEdgeShade(graph, date, city);
+      } catch (error) {
+        console.error("shade routing disabled:", error);
+        graph.shade = null;
+        shadeLost = true;
+      }
+      return true;
+    })();
 
     // The standing shed set moves only with the picked day, and feeds the shade composite as well as
     // the shelter factor and the scaffolding gate.
-    if (weights.shade !== 0 || weights.shelter !== 0 || !weights.allowSheds) {
+    const sheds = (async (): Promise<boolean> => {
+      if (weights.shade === 0 && weights.shelter === 0 && weights.allowSheds) {
+        graph.sheds = null;
+        this.shedKey = "";
+        return false;
+      }
       const key = `${city.id}:${shedDay(date)}`;
+      let built = false;
       if (this.shedKey !== key) {
         this.shedKey = key;
-        rebuilt = true;
+        built = true;
         try {
           await computeEdgeSheds(graph, date, city);
         } catch (error) {
@@ -100,16 +112,18 @@ export class RouteContexts {
       if (graph.sheds) {
         setShedSun(graph.sheds, date, city);
       }
-    } else {
-      graph.sheds = null;
-      this.shedKey = "";
-    }
+      return built;
+    })();
 
-    const ferryRebuilt = await this.syncFerries(graph, city, clock, weights);
-    const transitRebuilt = await this.syncTransit(graph, city, clock, weights);
+    const rebuilt = await Promise.all([
+      shade,
+      sheds,
+      this.syncFerries(graph, city, clock, weights),
+      this.syncTransit(graph, city, clock, weights),
+    ]);
 
     return {
-      rebuilt: rebuilt || ferryRebuilt || transitRebuilt,
+      rebuilt: rebuilt.some((field) => field),
       shadeRebuilt,
       shadeLost,
     };
