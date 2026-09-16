@@ -67,11 +67,14 @@ const BAND_CHANNELS: Record<ThemeName, readonly [number, number, number]> = {
 const BAND_METERS = 50;
 const MIN_BAND_PX = 4;
 
-// Feathered band edges. The band is drawn onto an offscreen padded by BLUR_PAD (~3× the blur, so a
-// band near the tile edge still has pixels for the blur to pull from), blurred by BAND_BLUR_PX, then
-// only the centre TILE_SIZE region is composited — so a blurred edge lines up with the neighbouring
-// tile's. Both are tunable by eye.
-const BAND_BLUR_PX = 5;
+// Feathered band edges. The feather is a share of the band's OWN width, so it shrinks with the band
+// as the map zooms out — a fixed pixel blur swallows a thin band and turns the strips into a wash —
+// capped so a wide band at high zoom keeps the soft edge it has. The band is drawn onto an offscreen
+// padded by BLUR_PAD (~3× the widest blur, so a band near the tile edge still has pixels for the blur
+// to pull from), blurred, then only the centre TILE_SIZE region is composited — so a blurred edge
+// lines up with the neighbouring tile's. All three are tunable by eye.
+const BLUR_FRACTION = 0.18;
+const MAX_BLUR_PX = 5;
 const BLUR_PAD = 15;
 
 const EQUATOR_METERS_PER_PIXEL = 156_543.033_92; // web mercator, at the equator, at z0
@@ -349,7 +352,7 @@ function compositeBand(
   offContext.clearRect(0, 0, offscreen.width, offscreen.height);
   offContext.scale(ratio, ratio);
   offContext.translate(BLUR_PAD, BLUR_PAD);
-  offContext.filter = `blur(${BAND_BLUR_PX}px)`;
+  offContext.filter = `blur(${Math.min(MAX_BLUR_PX, width * BLUR_FRACTION)}px)`;
   offContext.lineCap = "square";
   offContext.lineJoin = "miter";
   offContext.lineWidth = width;
