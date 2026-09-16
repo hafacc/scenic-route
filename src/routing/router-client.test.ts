@@ -8,13 +8,9 @@ import { createDispatch } from "./dispatch";
 import { graphFactorMax, RoutingEngine } from "./engine";
 import { buildGraph, snapAtNode, weights } from "./ferry.fixture";
 import { clearEdgePathCache } from "./graph";
-import type { PlanRequest, RouterResponse } from "./protocol";
-import {
-  type PlanCandidate,
-  RouterClient,
-  type RouterPort,
-} from "./router-client";
-import { findRoute } from "./search";
+import type { RouteRequest, RouterRequest, RouterResponse } from "./protocol";
+import { RouterClient, type RouterPort } from "./router-client";
+import { findRoute, type RouteResult } from "./search";
 
 const CITY = "nyc";
 const CLOCK = { tick: 0, dateMs: Date.UTC(2026, 5, 21, 16, 0, 0) };
@@ -38,7 +34,15 @@ const start = snapAtNode(graph, 0, 0);
 const dest = snapAtNode(graph, 3, 1);
 const PLAN_WEIGHTS = weights(1, 0, false);
 
-const request: PlanRequest = {
+const routeRequest: RouteRequest = {
+  cityId: CITY,
+  clock: CLOCK,
+  weights: PLAN_WEIGHTS,
+  start,
+  dest,
+};
+
+const request: RouteRequest = {
   cityId: CITY,
   clock: CLOCK,
   start,
@@ -51,6 +55,8 @@ function client(): RouterClient {
   engine.load(CITY, graph);
   const port: RouterPort = {
     onmessage: null,
+    onerror: null,
+    onmessageerror: null,
     postMessage: (message) => {
       void dispatch.receive(message);
     },
@@ -61,7 +67,7 @@ function client(): RouterClient {
   return new RouterClient(port);
 }
 
-test("a plan resolves with the planned set, having streamed every route", async () => {
+test("a plan resolves with the planned set, having previewed its first route", async () => {
   clearEdgePathCache();
   const expected = planRoutes({
     weights: PLAN_WEIGHTS,
@@ -71,21 +77,16 @@ test("a plan resolves with the planned set, having streamed every route", async 
   });
   clearEdgePathCache();
 
-  const streamed: PlanCandidate[] = [];
-  const plan = await client().plan(request, (candidate) =>
-    streamed.push(candidate),
-  );
+  const previewed: RouteResult[] = [];
+  const plan = await client().plan(request, (result) => previewed.push(result));
   expect(plan).toEqual(expected);
-  expect(streamed.map((candidate) => candidate.index)).toEqual(
-    streamed.map((_, index) => index),
+  // One route reaches the page before `done`, which is what lets the map draw without waiting.
+  expect(previewed).toHaveLength(1);
+  expect(previewed[0].steps.map((step) => step.edge)).toEqual(
+    findRoute(graph, start, dest, PLAN_WEIGHTS)?.steps.map(
+      (step) => step.edge,
+    ) ?? [],
   );
-  // Every card was streamed before `done`, which is what lets the map draw one without waiting.
-  const streamedTimes = new Set(
-    streamed.map((candidate) => candidate.result.travelSeconds),
-  );
-  for (const route of plan?.routes ?? []) {
-    expect(streamedTimes.has(route.result.travelSeconds)).toBe(true);
-  }
 });
 
 test("a plan a newer one overtakes resolves null", async () => {
@@ -94,4 +95,68 @@ test("a plan a newer one overtakes resolves null", async () => {
   const newest = router.plan(request, () => {});
   expect(await overtaken).toBeNull();
   expect(await newest).not.toBeNull();
+});
+
+test("a route request posts the protocol's fields and nothing a caller hung on it", () => {
+  const posted: RouterRequest[] = [];
+  const port: RouterPort = {
+    onmessage: null,
+    onerror: null,
+    onmessageerror: null,
+    postMessage: (message) => {
+      posted.push(message);
+    },
+  };
+  // A deck's own solver takes the graph; the whole decoded thing would be cloned across the thread.
+  void new RouterClient(port).route({ ...routeRequest, graph } as RouteRequest);
+  expect(posted).toHaveLength(1);
+  expect(Object.keys(posted[0]).sort()).toEqual([
+    "cityId",
+    "clock",
+    "dest",
+    "id",
+    "start",
+    "type",
+    "weights",
+  ]);
+});
+
+// A worker whose chunk 404s after a deploy never runs a line of the code above: the only thing that
+// happens is `onerror`. Before it was listened for, every promise here stayed pending forever and
+// the panel spun with no error.
+test("a failed worker rejects what is waiting and what is asked afterwards", async () => {
+  const port: RouterPort = {
+    onmessage: null,
+    onerror: null,
+    onmessageerror: null,
+    postMessage: () => {},
+  };
+  const router = new RouterClient(port);
+  const routing = router.route(routeRequest);
+  const planning = router.plan(request, () => {});
+  port.onerror?.(new Error("chunk load failed"));
+
+  await expect(routing).rejects.toThrow(/routing worker/);
+  await expect(planning).rejects.toThrow(/routing worker/);
+  await expect(router.route(routeRequest)).rejects.toThrow(/routing worker/);
+  await expect(router.plan(request, () => {})).rejects.toThrow(
+    /routing worker/,
+  );
+  // A reply that cannot be cloned is the same dead end, and lands on its own handler.
+  const otherPort: RouterPort = {
+    onmessage: null,
+    onerror: null,
+    onmessageerror: null,
+    postMessage: () => {},
+  };
+  const asked = new RouterClient(otherPort).dragMove({
+    cityId: CITY,
+    clock: CLOCK,
+    weights: PLAN_WEIGHTS,
+    anchor: start,
+    moving: dest,
+    anchorSeconds: 0,
+  });
+  otherPort.onmessageerror?.(new Error("uncloneable"));
+  await expect(asked).rejects.toThrow(/routing worker/);
 });

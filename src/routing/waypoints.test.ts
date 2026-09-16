@@ -1,11 +1,16 @@
 import { expect, test } from "bun:test";
 import { effSeconds, type RouteWeights, walkSpeedOn } from "./cost";
+import { createDispatch } from "./dispatch";
+import { RoutingEngine } from "./engine";
+import { MAX_WAYPOINTS } from "./google-maps";
 import {
   clearEdgePathCache,
   edgeKind,
   NO_GEOMETRY,
   type RoutingGraph,
 } from "./graph";
+import type { RouterResponse, WaypointRequest } from "./protocol";
+import { RouterClient, type RouterPort } from "./router-client";
 import { findRoute, type RouteResult, type RouteStep } from "./search";
 import { haversineMeters, type Snap } from "./snap";
 import { PROXY_WEIGHTS, planWaypoints } from "./waypoints";
@@ -509,4 +514,79 @@ test("a route that doubles back through a node it already used still terminates"
   const plan = planWaypoints(graph, doubledBack, weightsWith(), 9);
   expect(plan.candidateCount).toBe(1); // the spur's end; the junction's second visit is not a candidate
   expect(plan.waypoints.length).toBeLessThanOrEqual(1);
+});
+
+// A real `City` must exist for this id: preparing the engine reads the shade bins off one. Every
+// weight below leaves the route-time fields off, so no artifact is ever fetched.
+const WORKER_CITY = "nyc";
+const WORKER_CLOCK = { tick: 0, dateMs: Date.UTC(2026, 5, 21, 16, 0, 0) };
+
+// The pins are planned in the routing worker, over its own graph and its own route-time fields, so
+// what the page receives has to be what calling the planner directly would have given.
+function fakeWorker(graph: RoutingGraph): {
+  client: RouterClient;
+  sent: RouterResponse[];
+} {
+  const sent: RouterResponse[] = [];
+  const engine = new RoutingEngine();
+  engine.load(WORKER_CITY, graph);
+  const port: RouterPort = {
+    onmessage: null,
+    onerror: null,
+    onmessageerror: null,
+    postMessage: (message) => {
+      void dispatch.receive(message);
+    },
+  };
+  const dispatch = createDispatch(engine, (response) => {
+    sent.push(response);
+    port.onmessage?.({ data: response } as MessageEvent<RouterResponse>);
+  });
+  return { client: new RouterClient(port), sent };
+}
+
+function waypointsRequest(route: RouteResult): WaypointRequest {
+  return {
+    cityId: WORKER_CITY,
+    clock: WORKER_CLOCK,
+    weights: weightsWith({ tree: 0.8 }),
+    steps: route.steps,
+  };
+}
+
+test("the worker plans the pins the planner would, and the client resolves them", async () => {
+  const { graph, route, diamonds } = diamondChain([0.5, 0.5, 0.5]);
+  const expected = planWaypoints(
+    graph,
+    route,
+    weightsWith({ tree: 0.8 }),
+    MAX_WAYPOINTS,
+  );
+  const plan = await fakeWorker(graph).client.waypoints(
+    waypointsRequest(route),
+  );
+  expect(plan).toEqual(expected);
+  expect(plan?.waypoints).toEqual(
+    diamonds.map(({ corner }) => at(graph, corner)),
+  );
+});
+
+test("only the newest of several queued waypoint requests is planned", async () => {
+  const { graph, route } = diamondChain([0.5, 0.5, 0.5]);
+  const worker = fakeWorker(graph);
+  const asked = [
+    worker.client.waypoints(waypointsRequest(route)),
+    worker.client.waypoints(waypointsRequest(route)),
+    worker.client.waypoints(waypointsRequest(route)),
+  ];
+  const [first, second, third] = await Promise.all(asked);
+  expect(worker.sent.map((response) => response.type)).toEqual([
+    "stale",
+    "stale",
+    "waypoints",
+  ]);
+  // A superseded plan resolves null rather than hanging, which is what lets the page drop it.
+  expect(first).toBeNull();
+  expect(second).toBeNull();
+  expect(third).not.toBeNull();
 });

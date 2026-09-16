@@ -13,6 +13,7 @@ import {
   edgeShed,
   effSeconds,
   ferryCredit,
+  ferrySeconds,
   hillFractionOf,
   type RouteWeights,
   rawSeconds,
@@ -92,7 +93,15 @@ export interface RouteFactors {
   industrial: number;
   historic: number;
   shelter: number; // what is overhead in the rain: the decked share plus the crowns over the rest
-  ferry: number; // the share of the trip spent on the boat
+  ferry: number; // the share of the trip spent on the boat itself, the pier wait excluded
+}
+
+// One boat boarded: the line the timetable put you on, the wait on the pier for it and the crossing
+// itself. A card names a trip's legs, and this is what it reads them off.
+export interface FerryLeg {
+  route: string | null;
+  waitSeconds: number;
+  crossingSeconds: number;
 }
 
 export interface RouteResult {
@@ -101,6 +110,10 @@ export interface RouteResult {
   lengthMeters: number; // total trip distance, walking plus ferry spans (nav-progress and the path rely on it)
   walkMeters: number; // walking-only distance, ferry spans excluded — the mileage the summary shows
   travelSeconds: number; // reported ETA: sum of undiscounted raw seconds over the chosen steps
+  // One entry per boat boarded, in trip order. Built here because only the search's own clock knows
+  // which sailing was caught: the wait on the pier is the one it found, and nothing downstream can
+  // ask again.
+  ferries: FerryLeg[];
   factors: RouteFactors; // each scenic attribute's share of the trip's time
   // The same sums before they are divided: attribute-seconds, which is what a card's absolute
   // scenic score is summed from — half a mile of trees is worth half a mile of trees.
@@ -148,6 +161,49 @@ function makeStep(
     cover: edgeCover(graph, edge),
     lengthMeters,
   };
+}
+
+// The boats an oriented step list boards, in trip order. A line calls at several piers and each
+// pier-to-pier hop is its own edge, but a walker boards once: a hop with nothing to wait for on the
+// same line is the same boat, which is the rule the maneuvers merge on too. It runs the clock the
+// directions run, so the wait a card says is the wait they say.
+function ferryLegs(
+  graph: RoutingGraph,
+  steps: readonly RouteStep[],
+): FerryLeg[] {
+  // Most routes take no boat at all, and the clock below is a pass over every step of the walk.
+  if (!steps.some((step) => step.kind === "ferry")) {
+    return [];
+  }
+  const legs: FerryLeg[] = [];
+  let boat: FerryLeg | null = null;
+  let elapsedSeconds = 0;
+  for (const step of steps) {
+    if (step.kind === "ferry") {
+      const from = stepFrom(graph, step);
+      const { wait, crossing } = ferrySeconds(
+        graph,
+        step.edge,
+        from,
+        elapsedSeconds,
+      );
+      const route =
+        graph.ferries?.board(step.edge, from, elapsedSeconds)?.route ??
+        edgeName(graph, step.edge);
+      if (boat && wait === 0 && boat.route === route) {
+        boat.crossingSeconds += crossing;
+      } else {
+        boat = { route, waitSeconds: wait, crossingSeconds: crossing };
+        legs.push(boat);
+      }
+      elapsedSeconds += wait + crossing;
+      continue;
+    }
+    // Anything else between two hops is a walk off the boat, so the next one is a new boat.
+    boat = null;
+    elapsedSeconds += stepSeconds(graph, step, elapsedSeconds);
+  }
+  return legs;
 }
 
 // Build the oriented route from a settled search: the parent-edge tree, the dest endpoint the
@@ -267,9 +323,14 @@ function reconstruct(
     lengthMeters += step.lengthMeters;
     if (step.kind === "ferry") {
       const seconds = stepSeconds(graph, step, elapsedSeconds);
-      // Being on the boat is the whole of what a ferry crossing has to offer, and a mode that asks
-      // for one says so with its ferry weight.
-      sums.ferry += seconds;
+      // Being on the boat is the whole of what a crossing has to offer, and the wait on the pier is
+      // time on a pier.
+      sums.ferry += ferrySeconds(
+        graph,
+        step.edge,
+        stepFrom(graph, step),
+        elapsedSeconds,
+      ).crossing;
       travelSeconds += seconds;
       elapsedSeconds += seconds;
     } else {
@@ -315,6 +376,7 @@ function reconstruct(
     lengthMeters,
     walkMeters: walkLengthMeters,
     travelSeconds,
+    ferries: ferryLegs(graph, steps),
     factorSeconds,
     factors: {
       tree: share(factorSeconds.tree),
@@ -776,6 +838,9 @@ export function reverseResult(
     lengthMeters: result.lengthMeters,
     walkMeters: result.walkMeters,
     travelSeconds: routeSeconds(graph, steps),
+    // A ferry edge IS walkable backwards, so these are re-read off the flipped steps: the boat
+    // caught going the other way sails at another time, and is waited for at the other pier.
+    ferries: ferryLegs(graph, steps),
     factors: result.factors,
     factorSeconds: result.factorSeconds,
     start: result.dest,

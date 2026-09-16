@@ -234,6 +234,13 @@ export function effectiveWeights(
   return weights;
 }
 
+// The reader's choice, or the city's first mode where this city does not offer it. Their choice is
+// left alone rather than rewritten, so a city that has it again puts them back in it.
+export function modeForCity(city: City, id: ModeId): Mode {
+  const offered = modesForCity(city);
+  return offered.find((mode) => mode.id === id) ?? offered[0] ?? DEFAULT_MODE;
+}
+
 export function modesForCity(city: City): Mode[] {
   const available = cityFactors(city);
   const offered = new Set<OverlayId>(city.overlays);

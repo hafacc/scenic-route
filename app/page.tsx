@@ -1,5 +1,5 @@
-import Explorer from "../components/explorer/explorer";
+import Modes from "../components/modes/modes";
 
 export default function Home() {
-  return <Explorer />;
+  return <Modes />;
 }

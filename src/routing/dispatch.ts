@@ -4,23 +4,31 @@
 // run. That is what keeps a drag solving only the position the cursor is at now: the page posts a
 // frame per animation frame, and searching the ones already overtaken would just push the live one
 // further behind. A plan is coalesced the same way, against other plans; it is also one synchronous
-// unit, so a drag frame never interleaves with the searches it is made of.
+// unit, so a drag frame never interleaves with the searches it is made of. A waypoint plan
+// coalesces against other waypoint plans, which is what keeps card-flipping from queueing one per
+// card.
 
 import { planRoutes } from "./alternatives";
 import { setArtifactBase } from "./artifact-base";
 import { minMultiplier } from "./cost";
 import { graphFactorMax, type RoutingEngine } from "./engine";
+import { MAX_WAYPOINTS } from "./google-maps";
 import { decodeCityGraph } from "./graph";
 import type { RouterRequest, RouterResponse } from "./protocol";
+import { planWaypoints } from "./waypoints";
 
 export interface Dispatch {
   receive(request: RouterRequest): Promise<void>;
 }
 
-type Coalesced = "route" | "plan";
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+type Coalesced = "route" | "plan" | "waypoints";
 type Coalescing = Extract<
   RouterRequest,
-  { type: "route" | "drag:move" | "plan" }
+  { type: "route" | "drag:move" | "plan" | "waypoints" }
 >;
 
 // Which answer a request competes for, or null where it competes for none: two requests of the same
@@ -30,6 +38,8 @@ function coalesced(request: RouterRequest): Coalesced | null {
     return "route";
   } else if (request.type === "plan") {
     return "plan";
+  } else if (request.type === "waypoints") {
+    return "waypoints";
   } else {
     return null;
   }
@@ -49,11 +59,21 @@ export function createDispatch(
   async function handle(request: RouterRequest): Promise<void> {
     switch (request.type) {
       case "load":
-        setArtifactBase(request.base);
-        engine.load(
-          request.cityId,
-          decodeCityGraph(request.cityId, request.buffer, request.identity),
-        );
+        // The one request whose failure has nowhere else to surface: a decode that runs out of
+        // memory would otherwise leave the page believing this city was loaded, and everything
+        // queued behind it stranded.
+        try {
+          const graph = decodeCityGraph(
+            request.cityId,
+            request.buffer,
+            request.identity,
+          );
+          setArtifactBase(request.base);
+          engine.load(request.cityId, graph);
+          post({ type: "loaded", id: request.id });
+        } catch (error) {
+          post({ type: "error", id: request.id, message: describe(error) });
+        }
         return;
       case "reset":
         engine.resetCache();
@@ -73,25 +93,47 @@ export function createDispatch(
             post({ type: "stale", id: request.id });
             return;
           }
-          let index = 0;
+          let previewed = false;
           const plan = planRoutes({
             weights,
             search: (candidate) => engine.search(start, dest, candidate),
             minMultiplier: (candidate) =>
               minMultiplier(engine.graph, candidate),
             factorMax: graphFactorMax(engine.graph),
-            onCandidate: ({ result }) => {
-              post({ type: "candidate", id: request.id, index, result });
-              index += 1;
+            onCandidate: (result) => {
+              if (!previewed) {
+                previewed = true;
+                post({ type: "preview", id: request.id, result });
+              }
             },
           });
           post({ type: "done", id: request.id, plan });
         } catch (error) {
+          post({ type: "error", id: request.id, message: describe(error) });
+        }
+        return;
+      }
+      case "waypoints": {
+        const { cityId, clock, weights, steps } = request;
+        try {
+          await engine.prepare(cityId, clock, weights);
+          // The context fetches above are the one place a newer set of pins can overtake this one.
+          if (queue.some((queued) => coalesced(queued) === "waypoints")) {
+            post({ type: "stale", id: request.id });
+            return;
+          }
           post({
-            type: "error",
+            type: "waypoints",
             id: request.id,
-            message: error instanceof Error ? error.message : String(error),
+            plan: planWaypoints(
+              engine.graph,
+              { steps },
+              weights,
+              MAX_WAYPOINTS,
+            ),
           });
+        } catch (error) {
+          post({ type: "error", id: request.id, message: describe(error) });
         }
         return;
       }
@@ -129,11 +171,7 @@ export function createDispatch(
             shadeLost: sync.shadeLost,
           });
         } catch (error) {
-          post({
-            type: "error",
-            id: request.id,
-            message: error instanceof Error ? error.message : String(error),
-          });
+          post({ type: "error", id: request.id, message: describe(error) });
         }
         return;
       }

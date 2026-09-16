@@ -236,6 +236,28 @@ test("toggles that are not an object at all read as the defaults", () => {
   expect(settings.toggles).toEqual(DEFAULT_TOGGLES);
 });
 
+test("a layer list drops an overlay and a mode this build cannot name", () => {
+  const { settings } = settingsFrom(
+    {
+      weights: {},
+      modeLayers: {
+        historic: ["legacy", "zeppelins"],
+        cartographer: ["canopy"],
+      },
+    } as unknown as Partial<Settings>,
+    () => null,
+  );
+  expect(settings.modeLayers).toEqual({ historic: ["legacy"] });
+});
+
+test("a mode's layer list is stamped on its own, not with the other modes'", () => {
+  updateSettings({ modeLayers: { historic: ["legacy"] } }, 2345);
+  const { updatedAt } = settings();
+  expect(updatedAt["modeLayers.historic"]).toBe(2345);
+  expect(updatedAt["modeLayers.naturalist"]).toBeUndefined();
+  expect(updatedAt.modeLayers).toBeUndefined();
+});
+
 // The row sets one switch at a time. Stamping all three together made a phone that barred ferries
 // and a laptop that asked for shade last-writer-wins over the whole set.
 test("a switch is stamped on its own, not with the other two", () => {

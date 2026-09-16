@@ -328,7 +328,7 @@ test("the sweep finds the corridor that is cheapest only in a band", () => {
     search: (candidate) =>
       findRoute(fixture.graph, fixture.start, fixture.dest, candidate),
     minMultiplier: (candidate) => minMultiplier(fixture.graph, candidate),
-    onCandidate: ({ result }) => found.push(fixture.corridorOf(result)),
+    onCandidate: (result) => found.push(fixture.corridorOf(result)),
   });
   expect(found[0]).toBe("deep"); // R_max is streamed first
   expect(found[1]).toBe("direct"); // then the fastest

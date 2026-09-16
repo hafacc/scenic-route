@@ -2,14 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { getPinnedTime, subscribeRouteTime } from "../src/route-time/store";
-import type { RouteWeights } from "../src/routing/cost";
-import { encodeRoute, type LatLng, replaceOwnKeys } from "../src/url-state";
+import { type LatLng, replaceOwnKeys } from "../src/url-state";
 
 interface UrlSyncProps {
   start: LatLng | null;
   dest: LatLng | null;
   pin: LatLng | null;
-  weights: RouteWeights;
+  // The deck's own keys, given the pinned clock this writer follows.
+  encode: (clock: {
+    hour: number | null;
+    day: string | null;
+  }) => URLSearchParams;
   // Held off until the hash at load has been applied, so the first render can't overwrite the link
   // being opened with the app's defaults.
   enabled: boolean;
@@ -23,7 +26,7 @@ export default function UrlSync({
   start,
   dest,
   pin,
-  weights,
+  encode,
   enabled,
 }: UrlSyncProps) {
   const [, bump] = useState(0);
@@ -51,14 +54,7 @@ export default function UrlSync({
     ) {
       return;
     }
-    const next = encodeRoute({
-      start,
-      dest,
-      pin,
-      weights,
-      customHour: hour,
-      customDay: day,
-    });
+    const next = encode({ hour, day });
     const hash = replaceOwnKeys(window.location.hash, next);
     if (hash !== window.location.hash) {
       window.history.replaceState(

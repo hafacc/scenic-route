@@ -1,4 +1,5 @@
-import { TOGGLE_KEYS, type Toggles } from "../modes/modes";
+import { MODES, type ModeId, TOGGLE_KEYS, type Toggles } from "../modes/modes";
+import type { OverlayId } from "../overlays/registry";
 import { GATE_KEYS } from "../routing/cost";
 import { FACTORS, type FactorKey } from "../routing/factors";
 import { DEFAULT_SETTINGS, type Settings } from "./store";
@@ -42,6 +43,7 @@ type SyncedField = (typeof FIELDS)[number];
 
 const weightPath = (key: FactorKey): string => `weights.${key}`;
 const togglePath = (key: keyof Toggles): string => `toggles.${key}`;
+const modeLayersPath = (id: ModeId): string => `modeLayers.${id}`;
 
 // Which side of a field to take: the one that changed it later, and the local one when neither has
 // ever changed it or the two are somehow simultaneous. Preferring local on a tie is what keeps a
@@ -95,6 +97,25 @@ export function mergeSettings(local: Settings, remote: Settings): Settings {
     }
   }
   merged.toggles = toggles;
+
+  // One mode's list at a time, for the reason the switches are merged one at a time: hiding a layer
+  // in Historic on a phone says nothing about what Naturalist draws on a laptop.
+  const modeLayers: Partial<Record<ModeId, readonly OverlayId[]>> = {
+    ...local.modeLayers,
+  };
+  for (const { id } of MODES) {
+    const path = modeLayersPath(id);
+    if (later(local.updatedAt, remote.updatedAt, path) === "remote") {
+      const hidden = remote.modeLayers[id];
+      if (hidden === undefined) {
+        delete modeLayers[id];
+      } else {
+        modeLayers[id] = hidden;
+      }
+      stamps[path] = remote.updatedAt[path];
+    }
+  }
+  merged.modeLayers = modeLayers;
 
   merged.updatedAt = stamps;
   return merged;

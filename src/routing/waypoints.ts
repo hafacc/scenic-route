@@ -34,7 +34,13 @@ import {
 } from "./cost";
 import { edgeKind, otherEnd, type RoutingGraph } from "./graph";
 import { NodeHeap } from "./node-heap";
-import { type RouteResult, stepFrom, stepSeconds } from "./search";
+import { type RouteStep, stepFrom, stepSeconds } from "./search";
+
+// All the planner reads of a route. A `RouteResult` satisfies it, and so does the step list on its
+// own, which is all the worker is sent: the stitched path is the bulk of a result and prices nothing.
+export interface PlannedRoute {
+  steps: readonly RouteStep[];
+}
 
 export interface Waypoint {
   lat: number;
@@ -150,7 +156,7 @@ interface RouteWalk {
 
 function walkRoute(
   graph: RoutingGraph,
-  route: RouteResult,
+  route: PlannedRoute,
   weights: RouteWeights,
 ): RouteWalk {
   const nodes: number[] = [];
@@ -323,7 +329,7 @@ class ProxyExplorer {
 // Exactly optimal over the corner candidates, given the proxy above.
 export function planWaypoints(
   graph: RoutingGraph,
-  route: RouteResult,
+  route: PlannedRoute,
   weights: RouteWeights,
   limit: number,
 ): WaypointPlan {

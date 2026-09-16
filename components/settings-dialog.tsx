@@ -539,13 +539,16 @@ export default function SettingsDialog({
   weights,
   onWeight,
   onGate,
+  sections = SECTIONS,
   syncingAs,
   section,
   onClose,
 }: {
-  weights: RouteWeights;
-  onWeight: (key: FactorKey, weight: number) => void;
-  onGate: (key: GateKey, on: boolean) => void;
+  // These three go together, and only with the routing group: Modes has no sliders to edit.
+  weights?: RouteWeights;
+  onWeight?: (key: FactorKey, weight: number) => void;
+  onGate?: (key: GateKey, on: boolean) => void;
+  sections?: readonly SettingsSection[];
   syncingAs: string | null; // the signed-in address, or null on a device that is only ever local
   // The group the reader asked for, so a link from the layers menu lands on the layers rather than
   // at the top of a page they then have to search. Empty string is "the page, no group in mind".
@@ -599,24 +602,30 @@ export default function SettingsDialog({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <Section
-            id="layers"
-            wanted={section === "layers"}
-            caption="The order of the layers menu, and which layers it offers. One order for every region — each shows the layers it has data for."
-          >
-            <LayerRows />
-          </Section>
+          {sections.includes("layers") ? (
+            <Section
+              id="layers"
+              wanted={section === "layers"}
+              caption="The order of the layers menu, and which layers it offers. One order for every region — each shows the layers it has data for."
+            >
+              <LayerRows />
+            </Section>
+          ) : null}
 
-          <Section
-            id="routing"
-            wanted={section === "routing"}
-            caption="One value per preference — these are the route panel's own sliders. Hiding one takes it out of the panel; it still prices the route."
-          >
-            <FactorRows weights={weights} onWeight={onWeight} />
-            <GateRows weights={weights} onGate={onGate} />
-          </Section>
+          {sections.includes("routing") && weights && onWeight && onGate ? (
+            <Section
+              id="routing"
+              wanted={section === "routing"}
+              caption="One value per preference — these are the route panel's own sliders. Hiding one takes it out of the panel; it still prices the route."
+            >
+              <FactorRows weights={weights} onWeight={onWeight} />
+              <GateRows weights={weights} onGate={onGate} />
+            </Section>
+          ) : null}
 
-          <OfflineSection wanted={section === "offline"} />
+          {sections.includes("offline") ? (
+            <OfflineSection wanted={section === "offline"} />
+          ) : null}
 
           <div className="mt-7 border-t border-slate-200/60 pt-4 text-xs text-slate-500 dark:border-slate-700/60 dark:text-slate-400">
             {syncingAs === null
