@@ -21,7 +21,9 @@ const weights = (
   historic: 0,
   shade: 0,
   shelter: 0,
+  transit: 0,
   allowFerries,
+  allowTransit: true,
   allowSheds: true,
 });
 

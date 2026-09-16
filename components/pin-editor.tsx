@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { FiCheck, FiCopy, FiMapPin, FiTrash2, FiX } from "react-icons/fi";
 import type { Pin, PinDraft } from "../src/pin";
 import { encodePlusCode } from "../src/plus-code";
@@ -83,8 +84,11 @@ export default function PinEditor({
 
   const eyebrow = mode === "create" ? "New pin" : "Edit pin";
 
-  return (
-    <div className="fixed inset-0 z-[1100] flex items-end justify-center md:items-center">
+  // Portalled to the body at a z-index above the toolbar: the toolbar that opens these sits in a
+  // stacking context of its own at z-1200, and a dialog left inside the page's layers paints under
+  // its buttons while its scrim no longer blocks them.
+  return createPortal(
+    <div className="fixed inset-0 z-[1300] flex items-end justify-center md:items-center">
       <button
         type="button"
         aria-label="Close editor"
@@ -96,7 +100,6 @@ export default function PinEditor({
         aria-modal="true"
         className="relative w-full max-h-[90dvh] overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl ring-1 ring-black/5 dark:bg-slate-800 dark:ring-white/10 md:max-w-lg md:rounded-3xl md:p-6"
       >
-        <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-200 dark:bg-slate-700 md:hidden" />
         <div className="flex items-start gap-3">
           <span className="mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-md">
             <FiMapPin className="h-5 w-5" />
@@ -179,6 +182,7 @@ export default function PinEditor({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

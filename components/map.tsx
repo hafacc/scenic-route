@@ -81,8 +81,14 @@ interface MapViewProps {
     lng: number,
   ) => void;
   onEndpointDrag: (which: "start" | "dest", lat: number, lng: number) => void;
+  // The found place moved by dragging its pin: the same act as tapping the map somewhere else, so it
+  // renames the place and leaves the deck asking whether to walk there.
+  onSearchPinDrag: (lat: number, lng: number) => void;
   onPinSelect: (pin: Pin) => void;
 }
+
+// Keep a dragged pin this far from the viewport edge, as a dragged endpoint is kept.
+const SEARCH_PIN_AUTOPAN: [number, number] = [80, 80];
 
 const draftIcon = L.divIcon({
   className: "",
@@ -518,6 +524,7 @@ export default function MapView({
   routeDest,
   routeStart,
   searchPin,
+  onSearchPinDrag,
   markerColor,
   picking,
   dragging,
@@ -616,13 +623,26 @@ export default function MapView({
         <Marker position={[draft.lat, draft.lng]} icon={draftIcon} />
       ) : null}
       {searchPin ? (
-        // Nothing to tap: the name is in the search panel that found it, and the panel is where the
-        // pin is cleared. Non-interactive so a tap that lands on it drops a route point on the map
-        // underneath, the way a tap beside it does.
+        // Nothing to tap — the name is in the search panel that found it, and the panel is where the
+        // pin is cleared — but it drags, as the destination does: a place found in roughly the right
+        // spot is moved by pulling it, not by tapping the map again and hoping.
+        //
+        // A draggable marker is interactive, and Leaflet stops an interactive marker's clicks at the
+        // marker: an armed "pick on the map" tap that landed on the pin did nothing at all. Bubbling
+        // hands the tap to the map, which is the one flow that arms, defers and cancels a pick.
         <Marker
           position={[searchPin.lat, searchPin.lng]}
           icon={searchMarker}
-          interactive={false}
+          draggable
+          bubblingMouseEvents
+          autoPan
+          autoPanPadding={SEARCH_PIN_AUTOPAN}
+          eventHandlers={{
+            dragend: (event) => {
+              const { lat, lng } = event.target.getLatLng();
+              onSearchPinDrag(lat, lng);
+            },
+          }}
         />
       ) : null}
     </MapContainer>

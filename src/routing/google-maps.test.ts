@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { googleMapsWalkingUrl, MAX_WAYPOINTS } from "./google-maps";
+import {
+  googleMapsTransitUrl,
+  googleMapsWalkingUrl,
+  MAX_WAYPOINTS,
+} from "./google-maps";
 
 const point = (lat: number, lng: number) => ({ lat, lng });
 
@@ -46,4 +50,20 @@ test("more waypoints than Google takes are cut rather than silently ignored", ()
   expect(waypoints).toHaveLength(MAX_WAYPOINTS);
   expect(waypoints[0]).toBe("40.700000,-74.000000");
   expect(waypoints[MAX_WAYPOINTS - 1]).toBe("40.708000,-74.000000");
+});
+
+test("a route that rides is handed over whole, in transit mode", () => {
+  // Pins between two stations would be WALKED by the router that receives them, so the two ends are
+  // the whole of the link and Google plans its own ride between them.
+  const url = new URL(
+    googleMapsTransitUrl(point(40.7128, -74.006), point(40.7484, -73.9857)),
+  );
+  expect(`${url.origin}${url.pathname}`).toBe(
+    "https://www.google.com/maps/dir/",
+  );
+  expect(url.searchParams.get("api")).toBe("1");
+  expect(url.searchParams.get("travelmode")).toBe("transit");
+  expect(url.searchParams.get("origin")).toBe("40.712800,-74.006000");
+  expect(url.searchParams.get("destination")).toBe("40.748400,-73.985700");
+  expect(url.searchParams.has("waypoints")).toBe(false);
 });

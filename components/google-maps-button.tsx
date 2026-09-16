@@ -1,7 +1,10 @@
 "use client";
 
 import { FcGoogle } from "react-icons/fc";
-import { googleMapsWalkingUrl } from "../src/routing/google-maps";
+import {
+  googleMapsTransitUrl,
+  googleMapsWalkingUrl,
+} from "../src/routing/google-maps";
 import type { WaypointPlan } from "../src/routing/waypoints";
 import type { LatLng } from "../src/url-state";
 
@@ -35,21 +38,24 @@ export default function GoogleMapsButton({
 }: GoogleMapsButtonProps) {
   const open = (): void => {
     if (plan) {
-      window.open(
-        googleMapsWalkingUrl(start, dest, plan.waypoints),
-        "_blank",
-        "noopener,noreferrer",
-      );
+      const url = plan.rides
+        ? googleMapsTransitUrl(start, dest)
+        : googleMapsWalkingUrl(start, dest, plan.waypoints);
+      window.open(url, "_blank", "noopener,noreferrer");
     }
   };
+
+  const label = plan?.rides
+    ? "Navigate by transit in Google Maps"
+    : "Navigate this route in Google Maps";
 
   return (
     <button
       type="button"
       onClick={open}
       disabled={plan === null}
-      aria-label="Navigate this route in Google Maps"
-      title="Navigate this route in Google Maps"
+      aria-label={label}
+      title={label}
       className={className ?? FLOATING}
     >
       <FcGoogle className="h-5 w-5" aria-hidden="true" />

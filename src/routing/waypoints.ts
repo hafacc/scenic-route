@@ -51,6 +51,9 @@ export interface WaypointPlan {
   waypoints: Waypoint[]; // the pinned points, in route order
   lostSeconds: number; // effective seconds of scenic value the approximation gives up
   candidateCount: number; // corners the choice was made over, for diagnostics
+  // The route gets on a train, so there are no pins to give: a walking router handed the stations
+  // would walk between them. The caller hands the two ends to Google in transit mode instead.
+  rides: boolean;
 }
 
 // What we imitate the outside router with. Every scenic weight off leaves pure Tobler walking time,
@@ -58,7 +61,8 @@ export interface WaypointPlan {
 // not by itself enough to make it plain: `allowCrossings` defaults to false, which prices every
 // crossing at CROSSING_AVOID_MULTIPLE times its delay, so the flag has to be flipped too. Ferries
 // are barred because Google's walking mode will not put a walker on a boat of our choosing, and
-// scaffolding is allowed because Google has never heard of it.
+// scaffolding is allowed because Google has never heard of it. Trains are barred for the reason
+// ferries are, and more so: the proxy exists to describe a walk.
 export const PROXY_WEIGHTS: RouteWeights = {
   tree: 0,
   ferry: 0,
@@ -71,7 +75,9 @@ export const PROXY_WEIGHTS: RouteWeights = {
   historic: 0,
   shade: 0,
   shelter: 0,
+  transit: 0,
   allowFerries: false,
+  allowTransit: false,
   allowSheds: true,
   allowCrossings: true,
 };
@@ -336,12 +342,22 @@ export function planWaypoints(
   weights: RouteWeights,
   limit: number,
 ): WaypointPlan {
+  // A ride is not a stretch pins can describe — the walking router they are handed to would walk
+  // between the two stations — so a route with one is handed over whole and this says why.
+  if (route.steps.some((step) => step.kind === "ride")) {
+    return {
+      waypoints: [],
+      lostSeconds: 0,
+      candidateCount: 0,
+      rides: true,
+    };
+  }
   const walk = walkRoute(graph, route, weights);
   const lastIndex = walk.nodes.length - 1;
   if (lastIndex <= 0) {
     // A walk that never leaves one edge, or leaves it for one more: the ends are snaps part way
     // along an edge, which no pin can carve and no leg can be drawn between.
-    return { waypoints: [], lostSeconds: 0, candidateCount: 0 };
+    return { waypoints: [], lostSeconds: 0, candidateCount: 0, rides: false };
   } else {
     // Positions the DP may stop at: the two ends of the interior walk, which are fixed, and the
     // corners between them, one to a junction. A node the route already visited is skipped even
@@ -402,6 +418,7 @@ export function planWaypoints(
         waypoints: [],
         lostSeconds: cost[count - 1],
         candidateCount: 0,
+        rides: false,
       };
     } else {
       // best[legs * count + to] is the least error reaching anchor `to` in exactly `legs` legs, and
@@ -448,6 +465,7 @@ export function planWaypoints(
         })),
         lostSeconds: best[bestLegs * count + count - 1],
         candidateCount: count - 2,
+        rides: false,
       };
     }
   }

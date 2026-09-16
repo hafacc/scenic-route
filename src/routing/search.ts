@@ -1,10 +1,12 @@
 // A* over the routing graph with virtual start/dest points sitting partway along their snapped
 // edges. Cost is effective seconds (raw travel time times a clipped discount): a shaded metre costs
-// less at high tree weight, and a ferry costs its discounted crossing time. The straight-line
-// heuristic scales distance by the least seconds a walked metre can cost, then subtracts a bounded
-// ferry credit (the two best ferry shortcuts) — a lower bound on remaining cost that keeps the
-// search admissible. The heap allows node reopening (no closed set), so admissible suffices for
-// optimality even though the ferry credit makes the heuristic inconsistent.
+// less at high tree weight, a ferry costs its discounted crossing time, and a train costs its wait
+// and ride at the transit penalty. The straight-line heuristic scales distance by the least seconds
+// a walked metre can cost, then subtracts a bounded ferry credit (the two best ferry shortcuts) and
+// the transit credit (every ride's shortcut), never falling below what the cheapest metre of the
+// network costs — a lower bound on remaining cost that keeps the search admissible. The heap allows
+// node reopening (no closed set), so admissible suffices for optimality even though those credits
+// make the heuristic inconsistent.
 
 import {
   crossingWait,
@@ -14,11 +16,13 @@ import {
   effSeconds,
   ferryCredit,
   ferrySeconds,
+  heuristicFloor,
   hillFractionOf,
   type RouteWeights,
   rawSeconds,
   shadeAttrOf,
   shelterAttrOf,
+  transitCredit,
   walkSecondsCoeff,
   walkSpeedOn,
 } from "./cost";
@@ -28,11 +32,15 @@ import {
   edgeName,
   edgePath,
   edgeSideLabel,
-  isTransitEdge,
+  laneOf,
   otherEnd,
   type RoutingGraph,
+  routeOf,
   type SideLabel,
+  stationName,
+  stopIndexOf,
   subEdgePath,
+  type TransitRoute,
 } from "./graph";
 import { NodeHeap } from "./node-heap";
 import { haversineMeters, type Snap } from "./snap";
@@ -54,7 +62,9 @@ export function stepSeconds(
   elapsedSeconds: number,
 ): number {
   const from = stepFrom(graph, step);
-  if (step.kind === "ferry") {
+  if (step.kind === "ferry" || isTransitKind(step.kind)) {
+    // Neither is walked, so neither is charged by the step's own length: a ferry's cost is its
+    // sailing and a train's is the wait the timetable gives it at exactly this point in the trip.
     return rawSeconds(graph, step.edge, from, elapsedSeconds);
   } else {
     return (
@@ -62,6 +72,11 @@ export function stepSeconds(
       crossingWait(graph, step.edge, from)
     );
   }
+}
+
+// The three kinds no one walks: into a station, onto a train, and along the line.
+export function isTransitKind(kind: EdgeKind): boolean {
+  return kind === "access" || kind === "board" || kind === "ride";
 }
 
 export interface RouteStep {
@@ -76,13 +91,16 @@ export interface RouteStep {
 
 // Each scenic attribute's share of the WHOLE trip's time, keyed to match the panel's slider factors.
 // Each is 0..1: an attribute earns the seconds spent walking under it, and the total is divided by
-// the trip's own seconds — so a route that spends half its time on a boat shows half the trees it
+// the trip's own seconds — so a route that rides the subway half the way shows half the trees it
 // walks under, which is what a share of the trip means. `shade` is *sun* exposure (the positive, i.e.
 // sunlit, part of the signed shade attribute, normalized by the field's peak intensity so a trip
 // walked entirely in peak sun reads ~100%), to contrast with the trees' canopy. The summary renders
 // a chip per factor.
 //
-// A crossing has none of these attributes, save `ferry`, which is the crossing itself.
+// A ride and a crossing have none of these attributes — nothing overhead is a tree — save `shelter`,
+// which they have outright: waiting on the platform and riding count as covered, and so does a ferry
+// crossing, since a boat has a cabin. The walk in and out of a station, and the wait on the pier,
+// are open sky. The boat is the exception twice over: the crossing itself is the `ferry` attribute.
 export interface RouteFactors {
   tree: number;
   shade: number; // sun exposure, not shade — see above
@@ -97,23 +115,44 @@ export interface RouteFactors {
   ferry: number; // the share of the trip spent on the boat itself, the pier wait excluded
 }
 
+// One boarding: the line, where it was got on and off, and the minutes it cost.
+export interface TransitLeg {
+  route: TransitRoute | null;
+  boardStation: string | null;
+  alightStation: string | null;
+  stops: number;
+  waitSeconds: number; // the platform wait plus the boarding constant
+  rideSeconds: number;
+  // The caught train's departure, seconds from midnight of the routed day, or null with no timetable
+  // loaded — which is also a route that could not have boarded at all.
+  departureSeconds: number | null;
+}
+
 // One boat boarded: the line the timetable put you on, the wait on the pier for it and the crossing
-// itself. A card names a trip's legs, and this is what it reads them off.
+// itself. `ridesBefore` counts the trains ridden before this boat, which is what puts it in trip
+// order beside them — a card names a trip's legs in the order they are taken.
 export interface FerryLeg {
   route: string | null;
   waitSeconds: number;
   crossingSeconds: number;
+  ridesBefore: number;
 }
 
 export interface RouteResult {
   path: { lats: Float64Array; lngs: Float64Array }; // stitched, end-edge partials trimmed at the snaps
   steps: RouteStep[];
-  lengthMeters: number; // total trip distance, walking plus ferry spans (nav-progress and the path rely on it)
-  walkMeters: number; // walking-only distance, ferry spans excluded — the mileage the summary shows
+  lengthMeters: number; // total trip distance, walking plus ferry and ride spans (nav-progress and the path rely on it)
+  walkMeters: number; // walking-only distance, ferry and transit spans excluded — the mileage the summary shows
   travelSeconds: number; // reported ETA: sum of undiscounted raw seconds over the chosen steps
-  // One entry per boat boarded, in trip order. Built here because only the search's own clock knows
-  // which sailing was caught: the wait on the pier is the one it found, and nothing downstream can
-  // ask again.
+  // Of that ETA, the seconds spent on rail: the platform wait and boarding plus every ride. What a
+  // card reports as "12 min on the A"; 0 for a route that never gets on a train.
+  transitSeconds: number;
+  // One entry per train boarded, in trip order. Built here because only the search's own clock knows
+  // which departure was caught — the page has no timetable to ask, so a card or a maneuver that says
+  // "the 3:42" is saying what this recorded.
+  rides: TransitLeg[];
+  // One entry per boat boarded, in trip order, for the same reason `rides` is built here: the wait
+  // on the pier is the one the search's own clock found, and nothing downstream can ask again.
   ferries: FerryLeg[];
   factors: RouteFactors; // each scenic attribute's share of the trip's time
   // The same sums before they are divided: attribute-seconds, which is what a card's absolute
@@ -166,11 +205,13 @@ function makeStep(
 
 // The boats an oriented step list boards, in trip order. A line calls at several piers and each
 // pier-to-pier hop is its own edge, but a walker boards once: a hop with nothing to wait for on the
-// same line is the same boat, which is the rule the maneuvers merge on too. It runs the clock the
-// directions run, so the wait a card says is the wait they say.
+// same line is the same boat, which is the rule the maneuvers merge on too. A board step's seconds
+// come off the leg the search recorded rather than out of the timetable, so this runs the same clock
+// the directions do.
 function ferryLegs(
   graph: RoutingGraph,
   steps: readonly RouteStep[],
+  rides: readonly TransitLeg[],
 ): FerryLeg[] {
   // Most routes take no boat at all, and the clock below is a pass over every step of the walk.
   if (!steps.some((step) => step.kind === "ferry")) {
@@ -178,6 +219,7 @@ function ferryLegs(
   }
   const legs: FerryLeg[] = [];
   let boat: FerryLeg | null = null;
+  let boarded = 0; // trains ridden so far
   let elapsedSeconds = 0;
   for (const step of steps) {
     if (step.kind === "ferry") {
@@ -194,7 +236,12 @@ function ferryLegs(
       if (boat && wait === 0 && boat.route === route) {
         boat.crossingSeconds += crossing;
       } else {
-        boat = { route, waitSeconds: wait, crossingSeconds: crossing };
+        boat = {
+          route,
+          waitSeconds: wait,
+          crossingSeconds: crossing,
+          ridesBefore: boarded,
+        };
         legs.push(boat);
       }
       elapsedSeconds += wait + crossing;
@@ -202,7 +249,13 @@ function ferryLegs(
     }
     // Anything else between two hops is a walk off the boat, so the next one is a new boat.
     boat = null;
-    elapsedSeconds += stepSeconds(graph, step, elapsedSeconds);
+    if (step.kind === "board") {
+      elapsedSeconds +=
+        rides[boarded]?.waitSeconds ?? stepSeconds(graph, step, elapsedSeconds);
+      boarded += 1;
+    } else {
+      elapsedSeconds += stepSeconds(graph, step, elapsedSeconds);
+    }
   }
   return legs;
 }
@@ -297,8 +350,11 @@ function reconstruct(
   }
 
   let lengthMeters = 0;
-  let walkLengthMeters = 0; // the distance actually walked: ferry spans excluded
-  let travelSeconds = 0; // undiscounted ETA: walked time by span, ferry time by its baked duration
+  let walkLengthMeters = 0; // the distance actually walked: ferry and rail spans excluded
+  let travelSeconds = 0; // undiscounted ETA: walked time by span, ferry and rail time by the clock
+  let transitSeconds = 0; // the rail share of it: waiting on the platform and riding
+  const rides: TransitLeg[] = [];
+  let leg: TransitLeg | null = null; // the train currently being ridden, while one is
   // Raw seconds elapsed at the *start* of each step, so the sun sampled for the sun-exposure mean matches
   // what routing costed the edge against (advances during walked spans and ferry crossings alike).
   let elapsedSeconds = 0;
@@ -322,18 +378,58 @@ function reconstruct(
   };
   for (const step of steps) {
     lengthMeters += step.lengthMeters;
-    if (step.kind === "ferry") {
+    if (step.kind === "ferry" || isTransitKind(step.kind)) {
       const seconds = stepSeconds(graph, step, elapsedSeconds);
-      // Being on the boat is the whole of what a crossing has to offer, and the wait on the pier is
-      // time on a pier.
-      sums.ferry += ferrySeconds(
-        graph,
-        step.edge,
-        stepFrom(graph, step),
-        elapsedSeconds,
-      ).crossing;
+      if (step.kind === "board") {
+        // The departure the search itself costed this edge against, so the leg names the train the
+        // reported time allowed for and not the one a second clock would have caught.
+        const departure =
+          graph.transit?.board(
+            laneOf(graph, step.edge),
+            stopIndexOf(graph, step.edge),
+            elapsedSeconds,
+          ) ?? null;
+        leg = {
+          route: routeOf(graph, step.edge),
+          boardStation: stationName(graph, stepFrom(graph, step)),
+          alightStation: null,
+          stops: 0,
+          waitSeconds: seconds,
+          rideSeconds: 0,
+          departureSeconds: departure?.departure ?? null,
+        };
+        rides.push(leg);
+      } else if (step.kind === "ride" && leg) {
+        leg.stops += 1;
+        leg.rideSeconds += seconds;
+      } else if (step.kind === "access" && leg) {
+        // The walk back up to a station ends the leg, and names the stop it was got off at.
+        leg.alightStation = stationName(
+          graph,
+          otherEnd(graph, step.edge, stepFrom(graph, step)),
+        );
+        leg = null;
+      }
       travelSeconds += seconds;
       elapsedSeconds += seconds;
+      // The walk in and out of a station is time on the trip but not time on the train, so it is
+      // reported with the walking rather than with the ride — and it is out in the weather, where
+      // the platform and the train are not.
+      if (step.kind === "board" || step.kind === "ride") {
+        transitSeconds += seconds;
+        sums.shelter += seconds;
+      } else if (step.kind === "ferry") {
+        // A boat has a cabin and a pier has none, which is the split the ferry cost prices too, and
+        // the same split the crossing is scenery over: the wait is time on a pier.
+        const crossing = ferrySeconds(
+          graph,
+          step.edge,
+          stepFrom(graph, step),
+          elapsedSeconds - seconds,
+        ).crossing;
+        sums.shelter += crossing;
+        sums.ferry += crossing;
+      }
     } else {
       const { edge, lengthMeters: stepMeters } = step;
       walkLengthMeters += stepMeters;
@@ -347,7 +443,8 @@ function reconstruct(
       sums.industrial += (graph.edgeIndustrial[edge] / 255) * seconds;
       sums.historic += (graph.edgeHistoric[edge] / 255) * seconds;
       const shed = edgeShed(graph, edge);
-      // The same value the shelter discount is priced off, so the chip and the cost agree.
+      // The same attribute the shelter discount is priced off, so the chip and the cost agree about
+      // what is overhead.
       sums.shelter += shelterAttrOf(graph, edge, shed) * seconds;
       // Sun exposure only: the positive (sunlit) part of the signed shade attribute at this point in the
       // walk, with a deck composited in whether or not scaffolding is barred, which is what the cost
@@ -377,7 +474,9 @@ function reconstruct(
     lengthMeters,
     walkMeters: walkLengthMeters,
     travelSeconds,
-    ferries: ferryLegs(graph, steps),
+    transitSeconds,
+    rides,
+    ferries: ferryLegs(graph, steps, rides),
     factorSeconds,
     factors: {
       tree: share(factorSeconds.tree),
@@ -411,21 +510,25 @@ export function findRoute(
   const parentEdge = new Int32Array(nodeCount).fill(-1);
   const heuristic = new Float64Array(nodeCount).fill(-1);
 
-  // The walking floor (seconds per straight-line metre) and the bounded ferry credit both depend on
-  // the weights, so they are computed once here and reused for every node's estimate.
+  // The walking floor (seconds per straight-line metre), the bounded ferry credit and the floor that
+  // keeps the credits from flattening the estimate all depend on the weights, so they are computed
+  // once here and reused for every node's estimate.
   const walkCoeff = walkSecondsCoeff(graph, weights);
-  const credit = ferryCredit(graph, weights);
+  const credit = ferryCredit(graph, weights) + transitCredit(graph, weights);
+  const floor = heuristicFloor(graph, weights);
   const heuristicOf = (node: number): number => {
     if (heuristic[node] < 0) {
-      const straight =
-        walkCoeff *
-        haversineMeters(
-          graph.originLat + graph.nodeQy[node] * graph.scale,
-          graph.originLng + graph.nodeQx[node] * graph.scale,
-          dest.point.lat,
-          dest.point.lng,
-        );
-      heuristic[node] = Math.max(0, straight - credit);
+      const meters = haversineMeters(
+        graph.originLat + graph.nodeQy[node] * graph.scale,
+        graph.originLng + graph.nodeQx[node] * graph.scale,
+        dest.point.lat,
+        dest.point.lng,
+      );
+      heuristic[node] = Math.max(
+        0,
+        walkCoeff * meters - credit,
+        floor * meters,
+      );
     }
     return heuristic[node];
   };
@@ -517,17 +620,22 @@ export function findRoute(
     for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
       const edge = graph.adjacency[slot];
       // A ferry is boardable only when ferries are allowed; otherwise skip it so no route uses one.
-      if (!weights.allowFerries && edgeKind(graph, edge) === "ferry") {
-        continue;
-      }
-      // The stations, platforms and rides GRPH v11 carries have no cost model yet, so nothing may
-      // route over one: skipping them here is what makes them inert.
-      if (isTransitEdge(graph, edge)) {
+      // A train the same way, on its board edges: a platform nobody may board is a dead end, so the
+      // rest of the topology falls out of reach on its own.
+      const kind = edgeKind(graph, edge);
+      if (
+        (!weights.allowFerries && kind === "ferry") ||
+        (!weights.allowTransit && kind === "board")
+      ) {
         continue;
       }
       const neighbour = otherEnd(graph, edge, node);
       const relaxed =
         distance[node] + effSeconds(graph, edge, weights, elapsed[node], node);
+      // One label per node, keyed on cost alone: a costlier path that reaches a platform EARLIER,
+      // and so catches an earlier train, is discarded here. Accepted — the ferries have always been
+      // costed the same way and the Dijkstra oracle shares the convention — but it is why a route
+      // over a timetable is a good route rather than provably the best one.
       if (relaxed < distance[neighbour]) {
         distance[neighbour] = relaxed;
         elapsed[neighbour] =
@@ -707,19 +815,23 @@ export class RouteSolver {
     // The heuristic and its per-node cache are only needed for the search below, so they are built
     // after the fast path to keep a settled-dest drag frame allocation-free.
     const walkCoeff = walkSecondsCoeff(graph, this.weights);
-    const credit = ferryCredit(graph, this.weights);
+    const credit =
+      ferryCredit(graph, this.weights) + transitCredit(graph, this.weights);
+    const floor = heuristicFloor(graph, this.weights);
     const heuristicCache = new Float64Array(graph.nodeCount).fill(-1);
     const heuristicOf = (node: number): number => {
       if (heuristicCache[node] < 0) {
-        const straight =
-          walkCoeff *
-          haversineMeters(
-            graph.originLat + graph.nodeQy[node] * graph.scale,
-            graph.originLng + graph.nodeQx[node] * graph.scale,
-            dest.point.lat,
-            dest.point.lng,
-          );
-        heuristicCache[node] = Math.max(0, straight - credit);
+        const meters = haversineMeters(
+          graph.originLat + graph.nodeQy[node] * graph.scale,
+          graph.originLng + graph.nodeQx[node] * graph.scale,
+          dest.point.lat,
+          dest.point.lng,
+        );
+        heuristicCache[node] = Math.max(
+          0,
+          walkCoeff * meters - credit,
+          floor * meters,
+        );
       }
       return heuristicCache[node];
     };
@@ -763,11 +875,12 @@ export class RouteSolver {
       // endpoint that was closed on this call.
       for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
         const edge = graph.adjacency[slot];
-        if (!this.weights.allowFerries && edgeKind(graph, edge) === "ferry") {
+        const kind = edgeKind(graph, edge);
+        if (
+          (!this.weights.allowFerries && kind === "ferry") ||
+          (!this.weights.allowTransit && kind === "board")
+        ) {
           continue;
-        }
-        if (isTransitEdge(graph, edge)) {
-          continue; // inert until the transit cost lands, as above
         }
         const neighbour = otherEnd(graph, edge, node);
         if (this.closed[neighbour] === 1) {
@@ -847,9 +960,14 @@ export function reverseResult(
     lengthMeters: result.lengthMeters,
     walkMeters: result.walkMeters,
     travelSeconds: routeSeconds(graph, steps),
+    transitSeconds: result.transitSeconds,
+    // Carried unflipped, which is only right because the one caller — a start drag's backward solve
+    // — bars transit and so never has any: reversing a ride would have to swap the board and alight
+    // stations, and the leg does not carry enough to do that.
+    rides: result.rides,
     // A ferry edge IS walkable backwards, so these are re-read off the flipped steps: the boat
     // caught going the other way sails at another time, and is waited for at the other pier.
-    ferries: ferryLegs(graph, steps),
+    ferries: ferryLegs(graph, steps, result.rides),
     factors: result.factors,
     factorSeconds: result.factorSeconds,
     start: result.dest,

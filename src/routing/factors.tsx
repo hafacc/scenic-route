@@ -15,7 +15,7 @@ import {
   MdWaterDrop,
   MdWbSunny,
 } from "react-icons/md";
-import { PiBoatFill, PiTreeEvergreenFill } from "react-icons/pi";
+import { PiBoatFill, PiTrainSimpleFill, PiTreeEvergreenFill } from "react-icons/pi";
 import type { OverlayId } from "../overlays/registry";
 import {
   MAX_ART_WEIGHT,
@@ -28,19 +28,22 @@ import {
   MAX_LANDMARK_WEIGHT,
   MAX_SHADE_WEIGHT,
   MAX_SHELTER_WEIGHT,
+  MAX_TRANSIT_WEIGHT,
   MAX_TREE_WEIGHT,
   type GateKey,
+  type InternalFlag,
   type RouteWeights,
 } from "./cost";
 
 // What each scenic factor is called, looks like and moves on. The route panel and the settings page
-// both draw the same eleven sliders, so the metadata lives here rather than in either of them: two
+// both draw the same twelve sliders, so the metadata lives here rather than in either of them: two
 // tables would be two chances for a label, a colour or a scale to drift.
 
-// Everything else in the cost context: one slider each. The switches are in ./cost.ts, with the type
-// they are excluded by, so the two lists cannot drift apart.
+// Everything else in the cost context: one slider each. The switches are in ./cost.ts, with the
+// types they are excluded by, so the two lists cannot drift apart. `allowTransit` is excluded there
+// too and has no row here: it is the planner's own flag, not a control.
 export type { GateKey };
-export type FactorKey = Exclude<keyof RouteWeights, GateKey>;
+export type FactorKey = Exclude<keyof RouteWeights, GateKey | InternalFlag>;
 
 export interface Factor {
   key: FactorKey;
@@ -192,6 +195,16 @@ export const FACTORS: readonly Factor[] = [
     tint: "text-violet-600 dark:text-violet-400",
     color: "#6d28d9",
     overlay: "commercial",
+  },
+  {
+    key: "transit",
+    label: "Avoid the subway",
+    Icon: PiTrainSimpleFill,
+    max: MAX_TRANSIT_WEIGHT,
+    // The lines' own colours are the routes', which vary by line; this is the layer's chrome.
+    tint: "text-slate-600 dark:text-slate-300",
+    color: "#475569",
+    overlay: "subway",
   },
   {
     key: "ferry",

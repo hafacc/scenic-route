@@ -18,6 +18,7 @@ import {
   DEFAULT_LANDMARK_WEIGHT,
   DEFAULT_SHADE_WEIGHT,
   DEFAULT_SHELTER_WEIGHT,
+  DEFAULT_TRANSIT_WEIGHT,
   DEFAULT_TREE_WEIGHT,
   MAX_FERRY_WEIGHT,
   MAX_HIGHWAY_WEIGHT,
@@ -25,6 +26,7 @@ import {
   MAX_INDUSTRIAL_WEIGHT,
   MAX_SHADE_WEIGHT,
   MAX_SHELTER_WEIGHT,
+  MAX_TRANSIT_WEIGHT,
   MAX_TREE_WEIGHT,
   type RouteWeights,
 } from "../../src/routing/cost";
@@ -77,7 +79,10 @@ function storedWeights(): RouteWeights {
       MAX_SHADE_WEIGHT,
     ),
     shelter: read("shelter", DEFAULT_SHELTER_WEIGHT, 0, MAX_SHELTER_WEIGHT),
+    transit: read("transit", DEFAULT_TRANSIT_WEIGHT, 0, MAX_TRANSIT_WEIGHT),
     allowFerries,
+    // Never a stored preference: the planner owns it (routing/cost.ts, INTERNAL_FLAGS).
+    allowTransit: true,
     allowSheds,
     allowCrossings,
   };
@@ -135,6 +140,10 @@ export default function Explorer() {
     DEFAULT_SHELTER_WEIGHT,
   );
   const [allowSheds, setAllowSheds] = useState<boolean>(true);
+  // The penalty on time spent on a train, which opens at its maximum: this is a walking map.
+  const [transitWeight, setTransitWeight] = useState<number>(
+    DEFAULT_TRANSIT_WEIGHT,
+  );
   const [allowCrossings, setAllowCrossings] = useState<boolean>(false);
 
   // The cost context every search runs against, and what the URL and the share link carry.
@@ -151,12 +160,15 @@ export default function Explorer() {
       historic: historicWeight,
       shade: shadeWeight,
       shelter: shelterWeight,
+      transit: transitWeight,
       allowFerries,
+      allowTransit: true,
       allowSheds,
       allowCrossings,
     }),
     [
       allowCrossings,
+      transitWeight,
       treeWeight,
       ferryWeight,
       landmarkWeight,
@@ -254,6 +266,11 @@ export default function Explorer() {
     persistWeight("shelter", weight);
   }, []);
 
+  const handleTransitWeight = useCallback((weight: number) => {
+    setTransitWeight(weight);
+    persistWeight("transit", weight);
+  }, []);
+
   // The three switches, by key rather than a callback each: they are a table now (src/routing/
   // factors.tsx), and a callback each would be a fourth place to add a line every time one is added.
   const handleGate = useCallback((key: GateKey, on: boolean) => {
@@ -282,10 +299,12 @@ export default function Explorer() {
         historic: handleHistoricWeight,
         shade: handleShadeWeight,
         shelter: handleShelterWeight,
+        transit: handleTransitWeight,
       };
       setters[key](weight);
     },
     [
+      handleTransitWeight,
       handleTreeWeight,
       handleFerryWeight,
       handleLandmarkWeight,
@@ -322,6 +341,7 @@ export default function Explorer() {
     setHistoricWeight(route.weights.historic);
     setShadeWeight(route.weights.shade);
     setShelterWeight(route.weights.shelter);
+    setTransitWeight(route.weights.transit);
     setAllowFerries(route.weights.allowFerries);
     setAllowSheds(route.weights.allowSheds);
     setAllowCrossings(route.weights.allowCrossings);

@@ -397,9 +397,14 @@ const graph = decodeGraph(
 const snapIndex = buildSnapIndex(graph);
 
 // The app's own defaults, imported rather than restated so a retuned slider moves this sample with
-// it — except that ferries are barred: a crossing would put a boat leg in a walk-versus-straight-line
-// ratio that has no meaning, and both ends of every sampled trip are in one borough anyway.
-const WEIGHTS: RouteWeights = { ...DEFAULT_WEIGHTS, allowFerries: false };
+// it — except that ferries and trains are barred: neither is walked, so a leg of one would put a
+// span in a walk-versus-straight-line ratio that has no meaning, and both ends of every sampled trip
+// are in one borough anyway.
+const WEIGHTS: RouteWeights = {
+  ...DEFAULT_WEIGHTS,
+  allowFerries: false,
+  allowTransit: false,
+};
 
 const measured = [...lotsByBorough].map(([borough, lots], index) =>
   measureBorough(

@@ -7,6 +7,7 @@ import { computeFerrySchedule } from "./ferry-schedule";
 import type { RoutingGraph } from "./graph";
 import { computeEdgeShade } from "./shade";
 import { computeEdgeSheds, setShedSun, shedDay } from "./sheds";
+import { loadTimetable } from "./transit-schedule";
 
 export interface RouteClock {
   tick: number; // bumped once a minute, which is what the shade and ferry fields are keyed on
@@ -19,10 +20,36 @@ export interface ContextSync {
   shadeLost: boolean; // ... and its artifact failed, so this departure carries no sun/shade bias
 }
 
+// What a field a search is costed against needs of the weights. RouteWeights satisfies it; the page
+// hands in the five values on their own, so following the clock does not resubscribe every time the
+// deck builds a fresh weights object.
+export interface RouteTimeInputs {
+  shade: number;
+  shelter: number;
+  allowSheds: boolean;
+  allowFerries: boolean;
+  allowTransit: boolean;
+}
+
+// Whether anything this route is costed against moves with the clock: the sun over it, the standing
+// scaffolding, the sailing a terminal is next offering, and the train a platform is. A page that
+// follows the clock re-costs the route on every tick, and one that does not would go on quoting the
+// 6:20 boat — or the 6:20 train — long after it had gone.
+export function followsRouteTime(weights: RouteTimeInputs): boolean {
+  return (
+    weights.shade !== 0 ||
+    weights.shelter !== 0 ||
+    !weights.allowSheds ||
+    weights.allowFerries ||
+    weights.allowTransit
+  );
+}
+
 export class RouteContexts {
   private shadeKey = "";
   private shedKey = "";
   private ferryKey = "";
+  private transitKey = "";
 
   // Every key carries the city: a field is built onto ONE city's graph, so a switch with the clock
   // stopped would otherwise leave the key claiming the new graph was already built.
@@ -79,8 +106,48 @@ export class RouteContexts {
     }
 
     const ferryRebuilt = await this.syncFerries(graph, city, clock, weights);
+    const transitRebuilt = await this.syncTransit(graph, city, clock, weights);
 
-    return { rebuilt: rebuilt || ferryRebuilt, shadeRebuilt, shadeLost };
+    return {
+      rebuilt: rebuilt || ferryRebuilt || transitRebuilt,
+      shadeRebuilt,
+      shadeLost,
+    };
+  }
+
+  // The rail timetable, keyed like the ferry one: a different day is a different artifact, and the
+  // clock tick is what re-resolves it. Only the worker needs it — the page's directions name a line
+  // and a terminus, both of which the graph itself carries.
+  //
+  // A day no record covers, or a fetch that failed, leaves it null and every board edge then costs
+  // Infinity (src/routing/cost.ts): no schedule, no train. There is deliberately no baked fallback
+  // the way a ferry has one — a board edge bakes no departure, and an invented headway would be
+  // putting a walker on a train nobody has said runs.
+  async syncTransit(
+    graph: RoutingGraph,
+    city: City,
+    clock: RouteClock,
+    weights: RouteWeights,
+  ): Promise<boolean> {
+    if (weights.allowTransit && graph.boardEdges.length > 0) {
+      const key = `${city.id}:${clock.tick}`;
+      if (this.transitKey !== key) {
+        this.transitKey = key;
+        try {
+          graph.transit = await loadTimetable(city.id, new Date(clock.dateMs));
+        } catch (error) {
+          console.error("transit timetable unavailable:", error);
+          graph.transit = null;
+        }
+        return true;
+      } else {
+        return false;
+      }
+    } else {
+      graph.transit = null;
+      this.transitKey = "";
+      return false;
+    }
   }
 
   // The timetable on its own, which is the one field the PAGE reads: `buildDirections` names the

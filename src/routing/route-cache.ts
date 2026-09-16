@@ -8,7 +8,7 @@
 // point, which is still valid because only the active slider moved. It reports whether the path
 // changed so the caller can skip redrawing an identical route.
 
-import { GATE_KEYS, type RouteWeights } from "./cost";
+import { GATE_KEYS, INTERNAL_FLAGS, type RouteWeights } from "./cost";
 import type { RoutingGraph } from "./graph";
 import { findRoute, type RouteResult } from "./search";
 import type { Snap } from "./snap";
@@ -28,6 +28,7 @@ const AXES = [
   "historic",
   "shade",
   "shelter",
+  "transit",
 ] as const;
 type Axis = (typeof AXES)[number];
 
@@ -53,17 +54,22 @@ function quantizeWeights(weights: RouteWeights): RouteWeights {
     historic: quantize(weights.historic),
     shade: quantize(weights.shade),
     shelter: quantize(weights.shelter),
+    transit: quantize(weights.transit),
     allowFerries: weights.allowFerries,
+    allowTransit: weights.allowTransit,
     allowSheds: weights.allowSheds,
     allowCrossings: weights.allowCrossings,
   };
 }
 
-// A gate that changed is not a bracketable axis and, more importantly, is not the same route. Read
-// off GATE_KEYS rather than listed here: this comparison decides whether the search runs at all, so
-// a gate missing from it is a control that silently does nothing.
+// A switch that changed is not a bracketable axis and, more importantly, is not the same route. Read
+// off the two lists rather than written out here: this comparison decides whether the search runs at
+// all, so a switch missing from it is a control that silently does nothing. The planner's own flag is
+// in it for that reason — it asks for a walking route and a riding one from the same endpoints.
+const SWITCHES = [...GATE_KEYS, ...INTERNAL_FLAGS] as const;
+
 function sameGates(left: RouteWeights, right: RouteWeights): boolean {
-  return GATE_KEYS.every((gate) => left[gate] === right[gate]);
+  return SWITCHES.every((switched) => left[switched] === right[switched]);
 }
 
 function sameWeights(left: RouteWeights, right: RouteWeights): boolean {

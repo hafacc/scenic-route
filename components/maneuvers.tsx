@@ -7,9 +7,12 @@ import {
   MdArrowUpward,
   MdDirectionsBoat,
   MdFlag,
+  MdLogout,
   MdOutlineDirectionsWalk,
   MdPalette,
+  MdStairs,
   MdSwapHoriz,
+  MdTransferWithinAStation,
   MdTurnLeft,
   MdTurnRight,
   MdTurnSlightLeft,
@@ -22,6 +25,11 @@ import {
   type Maneuver,
 } from "../src/routing/directions";
 import type { NavProgress } from "../src/routing/nav-progress";
+import { LinePill } from "./modes/route-cards";
+
+// A ride's bubble is not an icon in a disc: it is the line's own bullet, at the size the disc was.
+const RIDE_BUBBLE =
+  "flex h-7 min-w-7 shrink-0 items-center justify-center rounded-full px-1.5 text-[11px] font-bold leading-none";
 
 export function maneuverIcon(maneuver: Maneuver) {
   const props = { className: "h-4 w-4", "aria-hidden": true } as const;
@@ -39,6 +47,17 @@ export function maneuverIcon(maneuver: Maneuver) {
   }
   if (maneuver.kind === "ferry") {
     return <MdDirectionsBoat {...props} />;
+  }
+  if (maneuver.kind === "station") {
+    // Off a train, from one train to the next, or through the doors of the station itself — three
+    // different acts, and the only thing a reader has to tell them apart at a glance.
+    if (maneuver.station === "alight") {
+      return <MdLogout {...props} />;
+    }
+    if (maneuver.station === "change") {
+      return <MdTransferWithinAStation {...props} />;
+    }
+    return <MdStairs {...props} />;
   }
   if (maneuver.kind === "continue") {
     return <MdArrowUpward {...props} />;
@@ -107,15 +126,19 @@ export function ManeuverList({
               isNext ? "bg-brand-100 font-medium dark:bg-brand-500/25" : ""
             } ${isPassed ? "opacity-50" : ""}`}
           >
-            <span
-              className={`grid h-7 w-7 shrink-0 place-items-center rounded-full ${bubbleClass}`}
-            >
-              {maneuverIcon(maneuver)}
-            </span>
+            {maneuver.ride ? (
+              <LinePill ride={maneuver.ride} className={RIDE_BUBBLE} />
+            ) : (
+              <span
+                className={`grid h-7 w-7 shrink-0 place-items-center rounded-full ${bubbleClass}`}
+              >
+                {maneuverIcon(maneuver)}
+              </span>
+            )}
             <span className={`min-w-0 flex-1 text-sm ${textClass}`}>
               {maneuver.text}
             </span>
-            {maneuver.kind === "ferry" ? (
+            {maneuver.kind === "ferry" || maneuver.kind === "transit" ? (
               <span className="shrink-0 text-xs font-medium text-slate-400 dark:text-slate-500">
                 {formatDuration(maneuver.durationSeconds ?? 0)}
               </span>
@@ -133,13 +156,28 @@ export function ManeuverList({
 
 // The slim bar the panel collapses to while navigating: the next maneuver, or the route summary
 // where there is no live position to place the walker on.
+export interface PeekNext {
+  maneuver: Maneuver; // what to do next
+  distanceMeters: number; // how far off it is, on foot
+  // What the walker is doing now. Only a ride changes what the bar says, and it changes it entirely:
+  // there is no walking left between here and getting off, and underground there is no fix either.
+  current: Maneuver | null;
+}
+
+// The bar's own chrome, for a deck that floats it alone; a deck that keeps it as a row of its own
+// card hands it `bare` and the card carries the chrome instead.
+const PEEK_CHROME =
+  "rounded-2xl bg-white/85 px-4 py-3 shadow-lg ring-1 ring-black/5 backdrop-blur-md dark:bg-slate-800/80 dark:ring-white/10";
+
 export function PeekBar({
   next,
   fallback,
+  bare,
   onExpand,
 }: {
-  next: { maneuver: Maneuver; distanceMeters: number } | null;
+  next: PeekNext | null;
   fallback: string;
+  bare?: boolean;
   onExpand: () => void;
 }) {
   return (
@@ -147,7 +185,7 @@ export function PeekBar({
       type="button"
       onClick={onExpand}
       aria-label="Expand directions"
-      className="flex w-full items-center justify-between gap-2 rounded-2xl bg-white/85 px-4 py-3 text-left shadow-lg ring-1 ring-black/5 backdrop-blur-md dark:bg-slate-800/80 dark:ring-white/10"
+      className={`flex min-h-10 w-full items-center justify-between gap-2 text-left ${bare ? "" : PEEK_CHROME}`}
     >
       {next ? (
         <span className="flex min-w-0 flex-1 items-center gap-3">
@@ -159,7 +197,9 @@ export function PeekBar({
               {next.maneuver.text}
             </span>
             <span className="block text-xs font-medium text-slate-400 dark:text-slate-500">
-              in {formatDistance(next.distanceMeters)}
+              {next.current?.kind === "transit"
+                ? `after ${next.current.stops ?? 0} stop${next.current.stops === 1 ? "" : "s"} · ${formatDuration(next.current.durationSeconds ?? 0)}`
+                : `in ${formatDistance(next.distanceMeters)}`}
             </span>
           </span>
         </span>

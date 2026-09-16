@@ -197,6 +197,18 @@
   box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
 }
 
+/* A station the route boards, changes or alights at: a white disc ringed in the line's colour, which
+   the marker's own inline style supplies. */
+.scenic-station-dot {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  border: 2px solid #334155;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+}
+
 /* While a tap will set a point — an armed field, or a search a tap answers — the map reads as a target. */
 .leaflet-container.scenic-picking,
 .leaflet-container.scenic-picking .leaflet-grab,

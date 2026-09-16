@@ -5,9 +5,8 @@ import { FiNavigation, FiSearch } from "react-icons/fi";
 import { MdSwapVert } from "react-icons/md";
 import type { City } from "../src/cities";
 import type { GeocodeResult } from "../src/geocode";
-import type { Maneuver } from "../src/routing/directions";
 import LocationField, { type DestPrefill } from "./location-field";
-import { PeekBar } from "./maneuvers";
+import { PeekBar, type PeekNext } from "./maneuvers";
 
 // What both decks' bottom cards are made of. The two panels differ in everything they hold and in
 // nothing that holds it, so the box, the slim bar it shrinks to and the two endpoint fields live
@@ -33,26 +32,41 @@ export function MinimizedPanel({
   next,
   fallback,
   header,
+  cardClassName,
   corner,
   onExpand,
 }: {
-  next: { maneuver: Maneuver; distanceMeters: number } | null;
+  next: PeekNext | null;
   fallback: string;
-  // A deck whose controls outlive the card they were in: Modes keeps its mode row over the bar, so
-  // the walk can be re-planned without expanding it again.
+  // A deck whose controls outlive the card they were in: Modes keeps its mode row above the peek
+  // row, so the walk can be re-planned without expanding the card again.
   header?: ReactNode;
-  corner?: ReactNode; // hung off the bar's own corner, as the close is off the card's
+  // The deck's own card chrome, given with a header: the two rows are then ONE card — the directions
+  // card collapsed — rather than a floating pill above a floating bar.
+  cardClassName?: string;
+  corner?: ReactNode; // hung off the card's own corner, as the close is off the open one's
   onExpand: () => void;
 }) {
-  return (
-    <div className={PANEL_WRAPPER}>
-      {header}
-      <div className="relative">
-        <PeekBar next={next} fallback={fallback} onExpand={onExpand} />
-        {corner}
+  if (header === undefined || cardClassName === undefined) {
+    return (
+      <div className={PANEL_WRAPPER}>
+        <div className="relative">
+          <PeekBar next={next} fallback={fallback} onExpand={onExpand} />
+          {corner}
+        </div>
       </div>
-    </div>
-  );
+    );
+  } else {
+    return (
+      <div className={PANEL_WRAPPER}>
+        <div className={cardClassName}>
+          {corner}
+          {header}
+          <PeekBar next={next} fallback={fallback} bare onExpand={onExpand} />
+        </div>
+      </div>
+    );
+  }
 }
 
 interface EndpointFieldsProps {

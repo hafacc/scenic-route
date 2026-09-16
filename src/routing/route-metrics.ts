@@ -197,8 +197,9 @@ export function longestCrossingRun(result: RouteResult): number {
 
 // Walked metres over the straight line between the two ends. Measured between the *snapped* points
 // rather than the requested ones, so it reports what the router did and not how far the query was
-// from the pavement. Ferry spans are excluded from the numerator (the sampling suite bars ferries,
-// so for it this is the whole trip); a zero-length straight line has no ratio.
+// from the pavement. Ferry and rail spans are excluded from the numerator, being no part of a walk
+// (the sampling suite bars both, so for it this is the whole trip); a zero-length straight line has
+// no ratio.
 export function detourRatio(result: RouteResult): number | null {
   const straight = haversineMeters(
     result.start.point.lat,

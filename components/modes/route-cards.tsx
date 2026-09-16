@@ -2,11 +2,15 @@
 
 import { Fragment, type ReactElement } from "react";
 import { FiLoader } from "react-icons/fi";
+import { MdWaterDrop } from "react-icons/md";
 import { PiBoatFill } from "react-icons/pi";
 import {
   type CardSummary,
   type ChipView,
+  cardLine,
+  chipReading,
   type LinePart,
+  type RideSummary,
   type SummaryOrder,
   summaryLegs,
   summaryNumbers,
@@ -22,13 +26,34 @@ export interface CardView {
   chips: ChipView[];
 }
 
-// A boat's bullet leads its minutes, and is set inline rather than as a flex item, so a summary too
-// long for its row ellipses like any sentence.
-const FERRY_PILL =
-  "mr-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 align-middle text-[11px] font-bold leading-none";
+// A line's own bullet, in the livery the agency publishes: the map's colour, said on the card. Set
+// inline rather than as a flex item, so a summary too long for its row ellipses like any sentence.
+const PILL_SHAPE =
+  "inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 align-middle text-[11px] font-bold leading-none";
+// A ride's bullet follows its minutes ("12 min on the A"); a boat's leads them, having no name to be
+// read as part of the sentence.
+const PILL = `ml-1 ${PILL_SHAPE}`;
+const FERRY_PILL = `mr-1 ${PILL_SHAPE}`;
 
-// The summary, with each boat drawn as its bullet rather than named. Same segments as `cardLine`,
-// which is what the button's label and the peek bar still say in plain words.
+export function LinePill({
+  ride,
+  className,
+}: {
+  ride: RideSummary;
+  className?: string;
+}) {
+  return (
+    <span
+      className={className ?? PILL}
+      style={{ backgroundColor: ride.color, color: ride.textColor }}
+    >
+      {ride.shortName || "Train"}
+    </span>
+  );
+}
+
+// The summary, with the lines ridden drawn as their bullets rather than named. Same segments as
+// `cardLine`, which is what the button's label and the peek bar still say in plain words.
 function LegParts({ parts, lead }: { parts: LinePart[]; lead: boolean }) {
   return (
     <>
@@ -40,10 +65,18 @@ function LegParts({ parts, lead }: { parts: LinePart[]; lead: boolean }) {
           ) : null}
           {typeof part === "string" ? (
             part
-          ) : (
+          ) : part.kind === "ferry" ? (
             <>
               <FerryPill />
               {part.minutes}
+            </>
+          ) : (
+            <>
+              {part.minutes} on
+              {part.rides.map((ride, seat) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: the trip's order IS a ride's identity
+                <LinePill key={seat} ride={ride} />
+              ))}
             </>
           )}
         </Fragment>
@@ -118,6 +151,10 @@ export function CardNumber({ index, color }: { index: number; color: string }) {
   );
 }
 
+// The drop an exposure reading wears (`chipReading`) instead of the shelter icon: the number counts
+// the rain you are out in, so a bigger one has to read as wetter.
+const EXPOSURE = { Icon: MdWaterDrop, label: "Rain exposure" };
+
 export function CardChips({
   chips,
   lead,
@@ -133,16 +170,18 @@ export function CardChips({
         if (!factor) {
           return null;
         }
+        const { percent, exposure } = chipReading(chip.key, chip.percent);
+        const Icon = exposure ? EXPOSURE.Icon : factor.Icon;
         return (
           <span
             key={chip.key}
-            title={factor.label}
+            title={exposure ? EXPOSURE.label : factor.label}
             className={`inline-flex items-center gap-1 text-xs tabular-nums ${factor.tint} ${
               chip.best ? "font-bold" : "font-medium"
             }`}
           >
-            <factor.Icon className="h-3.5 w-3.5" aria-hidden={true} />
-            {chip.percent}
+            <Icon className="h-3.5 w-3.5" aria-hidden={true} />
+            {percent}
           </span>
         );
       })}
@@ -213,6 +252,9 @@ export default function RouteCards({
             }
           }}
           aria-pressed={index === selected}
+          // The rich line is bullets and numbers; a reader who hears the card rather than sees it
+          // gets the same sentence in words.
+          aria-label={`${index + 1} ${cardLine(card.summary)}`}
           className={`flex min-h-11 w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left transition hover:bg-slate-100 dark:hover:bg-slate-700/60 ${
             index === selected ? "bg-slate-100 dark:bg-slate-700/60" : ""
           }`}

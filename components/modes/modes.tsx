@@ -7,6 +7,7 @@ import {
   cardLine,
   chipFactors,
   ferrySummaries,
+  rideSummaries,
   visibleChips,
 } from "../../src/modes/cards";
 import {
@@ -56,6 +57,7 @@ function summaryOf(result: RouteResult): CardSummary {
     travelSeconds: result.travelSeconds,
     walkMeters: result.walkMeters,
     ferries: ferrySummaries(result.ferries),
+    rides: rideSummaries(result.rides),
   };
 }
 

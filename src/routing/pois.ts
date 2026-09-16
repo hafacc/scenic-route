@@ -100,6 +100,16 @@ export interface PassedPoi {
 
 const METERS_PER_DEGREE_LAT = 111_320;
 
+// The steps nothing beside is passed on foot: the three a walker is carried along, and the walk into
+// a station, which the graph draws as a straight chord from the street to a mezzanine and would
+// otherwise report every statue the concourse runs under.
+const CARRIED: ReadonlySet<string> = new Set<string>([
+  "ferry",
+  "board",
+  "ride",
+  "access",
+]);
+
 // Metres from a point to a segment, in a local flat approximation (the legs are short and the whole
 // thing is a proximity test, so the equirectangular error is negligible). Also returns the clamped
 // projection parameter `t` in [0, 1], so the caller can place the nearest point along the polyline.
@@ -159,15 +169,17 @@ export function passedPois(
   const marginLat = maxThreshold / METERS_PER_DEGREE_LAT;
   const marginLng = maxThreshold / metersPerLng;
 
-  // The walked polyline of each step (ferries skipped) in travel order, with the cumulative metre
-  // distance to each vertex, so a POI's nearest point can be placed along the route. Computed once.
+  // The walked polyline of each step (the carried ones skipped) in travel order, with the cumulative
+  // metre distance to each vertex, so a POI's nearest point can be placed along the route. Computed
+  // once. A ride is a chord from one platform to the next, so everything the train runs UNDER would
+  // otherwise be reported as passed — the statues of Union Square, spliced in after the boarding.
   const stepPolys: ({
     lngs: number[];
     lats: number[];
     cum: number[];
     total: number;
   } | null)[] = result.steps.map((step) => {
-    if (step.kind === "ferry") {
+    if (CARRIED.has(step.kind)) {
       return null;
     }
     const { lngs: edgeLngs, lats: edgeLats } = edgePath(graph, step.edge);

@@ -6,7 +6,7 @@ import {
   useCallback,
   useEffect,
 } from "react";
-import { ferrySummaries } from "../../src/modes/cards";
+import { ferrySummaries, rideSummaries } from "../../src/modes/cards";
 import type { OverlayId } from "../../src/overlays/registry";
 import { MODES_PAGE } from "../../src/pages";
 import { getPinnedTime } from "../../src/route-time/store";
@@ -196,6 +196,7 @@ export function ExplorerPanels({
               ? {
                   walkMeters: routeState.result.walkMeters,
                   travelSeconds: routeState.result.travelSeconds,
+                  rides: rideSummaries(routeState.result.rides),
                   ferries: ferrySummaries(routeState.result.ferries),
                   factors: routeState.result.factors,
                 }
@@ -204,6 +205,7 @@ export function ExplorerPanels({
           treeWeight={weights.tree}
           ferryWeight={weights.ferry}
           allowFerries={weights.allowFerries}
+          transitWeight={weights.transit}
           landmarkWeight={weights.landmark}
           artWeight={weights.art}
           highwayWeight={weights.highway}
@@ -224,6 +226,7 @@ export function ExplorerPanels({
           minimized={shell.minimized}
           onTreeWeight={(weight) => onWeight("tree", weight)}
           onFerryWeight={(weight) => onWeight("ferry", weight)}
+          onTransitWeight={(weight) => onWeight("transit", weight)}
           onLandmarkWeight={(weight) => onWeight("landmark", weight)}
           onArtWeight={(weight) => onWeight("art", weight)}
           onHighwayWeight={(weight) => onWeight("highway", weight)}

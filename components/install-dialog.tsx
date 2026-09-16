@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import { FiDownload, FiX } from "react-icons/fi";
 
 interface InstallDialogProps {
@@ -65,8 +66,11 @@ export default function InstallDialog({ onClose }: InstallDialogProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  return (
-    <div className="fixed inset-0 z-[1100] flex items-end justify-center md:items-center">
+  // Portalled to the body at a z-index above the toolbar: the toolbar that opens these sits in a
+  // stacking context of its own at z-1200, and a dialog left inside the page's layers paints under
+  // its buttons while its scrim no longer blocks them.
+  return createPortal(
+    <div className="fixed inset-0 z-[1300] flex items-end justify-center md:items-center">
       <button
         type="button"
         aria-label="Close install instructions"
@@ -79,7 +83,6 @@ export default function InstallDialog({ onClose }: InstallDialogProps) {
         aria-labelledby="install-title"
         className="relative max-h-[90dvh] w-full overflow-y-auto rounded-t-3xl bg-white p-6 shadow-2xl ring-1 ring-black/5 dark:bg-slate-800 dark:ring-white/10 md:max-w-sm md:rounded-3xl md:p-7"
       >
-        <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-200 dark:bg-slate-700 md:hidden" />
         <div className="flex items-start gap-3">
           <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-lg">
             <FiDownload className="h-5 w-5" />
@@ -115,6 +118,7 @@ export default function InstallDialog({ onClose }: InstallDialogProps) {
           ))}
         </ol>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -13,6 +13,16 @@ import type { RouterResponse, WaypointRequest } from "./protocol";
 import { RouterClient, type RouterPort } from "./router-client";
 import { findRoute, type RouteResult, type RouteStep } from "./search";
 import { haversineMeters, type Snap } from "./snap";
+import {
+  ACCESS_SECONDS,
+  departureReaching,
+  EAST_SIDEWALK,
+  fixtureTimetable,
+  snapAtNode,
+  transitGraph,
+  transitWeights,
+  WEST_SIDEWALK,
+} from "./transit-graph.fixture";
 import { PROXY_WEIGHTS, planWaypoints } from "./waypoints";
 
 const SCALE = 1e-6;
@@ -33,7 +43,9 @@ const weightsWith = (over: Partial<RouteWeights> = {}): RouteWeights => ({
   historic: 0,
   shade: 0,
   shelter: 0,
+  transit: 0,
   allowFerries: false,
+  allowTransit: false,
   allowSheds: true,
   allowCrossings: false,
   ...over,
@@ -589,4 +601,32 @@ test("only the newest of several queued waypoint requests is planned", async () 
   expect(first).toBeNull();
   expect(second).toBeNull();
   expect(third).not.toBeNull();
+});
+
+test("a route that rides is handed over whole, with no pins at all", () => {
+  const graph = transitGraph();
+  graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
+  const route = findRoute(
+    graph,
+    snapAtNode(graph, 0, WEST_SIDEWALK),
+    snapAtNode(graph, 2, EAST_SIDEWALK),
+    transitWeights({ transit: 0 }),
+  );
+  expect(route?.steps.some((step) => step.kind === "ride")).toBe(true);
+  // No sequence of pins describes a ride to a walking router, so the plan says so instead of
+  // spending nine of them on the stations either side of it.
+  const plan = planWaypoints(
+    graph,
+    route as RouteResult,
+    transitWeights({ transit: 0 }),
+    MAX_WAYPOINTS,
+  );
+  expect(plan.rides).toBe(true);
+  expect(plan.waypoints).toEqual([]);
+  expect(plan.lostSeconds).toBe(0);
+});
+
+test("the proxy walks: it is barred from the rail as it is from the water", () => {
+  expect(PROXY_WEIGHTS.allowTransit).toBe(false);
+  expect(PROXY_WEIGHTS.transit).toBe(0);
 });

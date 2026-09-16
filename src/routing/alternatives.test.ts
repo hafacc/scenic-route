@@ -11,6 +11,7 @@ import {
 import {
   MAX_COMMERCIAL_WEIGHT,
   MAX_INDUSTRIAL_WEIGHT,
+  MAX_TRANSIT_WEIGHT,
   MAX_TREE_WEIGHT,
   minMultiplier,
   type RouteWeights,
@@ -18,6 +19,16 @@ import {
 import { clearEdgePathCache, NO_GEOMETRY, type RoutingGraph } from "./graph";
 import { findRoute, type RouteResult } from "./search";
 import { haversineMeters, type Snap } from "./snap";
+import {
+  ACCESS_SECONDS,
+  departureReaching,
+  EAST_SIDEWALK,
+  fixtureTimetable,
+  snapAtNode,
+  transitGraph,
+  transitWeights,
+  WEST_SIDEWALK,
+} from "./transit-graph.fixture";
 
 // Four corridors between the same two ends, each five nodes wide and linked to the direct one at
 // both ends, with the breakpoints put where the planner has to find them:
@@ -141,6 +152,8 @@ function buildGraph(
     ferries: null,
     edgeDurationSeconds: new Float32Array(edgeCount),
     ferryEdges: new Uint32Array(0),
+    transitEdges: new Uint32Array(0),
+    boardEdges: new Uint32Array(0),
     names: [],
     geometry: new Uint8Array(0),
   } as unknown as RoutingGraph;
@@ -219,7 +232,9 @@ function weightsOf(over: Partial<RouteWeights> = {}): RouteWeights {
     historic: 0,
     shade: 0,
     shelter: 0,
+    transit: 0,
     allowFerries: false,
+    allowTransit: true,
     allowSheds: true,
     allowCrossings: false,
     ...over,
@@ -487,6 +502,203 @@ test("a search that finds nothing plans nothing", () => {
   expect(plan.searches).toBe(1);
 });
 
+// The sweep's zero end is what every scenic card is compared against, and that has to be the fastest
+// WALK. Transit is a PENALTY, so scaling it toward zero along with the discounts made the baseline
+// the most train-happy route there is, and the quickest way on foot was never asked for at all.
+test("the sweep's baseline is the fastest walk, not the ride", () => {
+  const graph = transitGraph(undefined, { detours: true });
+  graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
+  const start = snapAtNode(graph, 0, WEST_SIDEWALK);
+  const dest = snapAtNode(graph, 2, EAST_SIDEWALK);
+  const mode = transitWeights({
+    tree: MAX_TREE_WEIGHT,
+    transit: MAX_TRANSIT_WEIGHT,
+  });
+  const onFoot = findRoute(
+    graph,
+    start,
+    dest,
+    transitWeights({ allowTransit: false }),
+  );
+  const asked: RouteWeights[] = [];
+  const plan = planRoutes({
+    weights: mode,
+    search: (candidate) => {
+      asked.push(candidate);
+      return findRoute(graph, start, dest, candidate);
+    },
+    minMultiplier: (candidate) => minMultiplier(graph, candidate),
+  });
+  // Nothing the sweep asks for discounts the ride: the penalty is held where the mode put it.
+  expect(
+    asked.every(
+      (candidate) =>
+        candidate.transit === MAX_TRANSIT_WEIGHT || candidate.transit === 0,
+    ),
+  ).toBe(true);
+  const walks = plan.routes.filter(
+    (planned) => planned.result.transitSeconds === 0,
+  );
+  expect(walks.length).toBeGreaterThanOrEqual(2);
+  expect(
+    Math.min(...walks.map((walk) => walk.result.travelSeconds)),
+  ).toBeCloseTo((onFoot as RouteResult).travelSeconds, 6);
+});
+
+// The baseline is the fastest WALK, not the fastest trip: it still carries the mode's transit
+// penalty, which can have it leave the train a stop early and walk the rest. So the trip with
+// nothing priced at all is asked for outright, and it is what the least scenic card offers.
+test("the fastest trip is asked for even where the mode charges a ride", () => {
+  const graph = transitGraph(undefined, { detours: true });
+  graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
+  const start = snapAtNode(graph, 0, WEST_SIDEWALK);
+  const dest = snapAtNode(graph, 2, EAST_SIDEWALK);
+  const fastest = findRoute(
+    graph,
+    start,
+    dest,
+    transitWeights({ transit: 0 }),
+  ) as RouteResult;
+  const asked: RouteWeights[] = [];
+  const found: RouteResult[] = [];
+  const plan = planRoutes({
+    weights: transitWeights({
+      tree: MAX_TREE_WEIGHT,
+      transit: MAX_TRANSIT_WEIGHT,
+    }),
+    search: (candidate) => {
+      asked.push(candidate);
+      const result = findRoute(graph, start, dest, candidate);
+      if (result !== null) {
+        found.push(result);
+      }
+      return result;
+    },
+    minMultiplier: (candidate) => minMultiplier(graph, candidate),
+  });
+  expect(
+    asked.some((candidate) => candidate.transit === 0 && candidate.tree === 0),
+  ).toBe(true);
+  expect(Math.min(...found.map((route) => route.travelSeconds))).toBeCloseTo(
+    fastest.travelSeconds,
+    6,
+  );
+  // And the card it becomes is the quickest one offered: the absolute score puts it last, where the
+  // reader looking for the quick way round looks.
+  expect(
+    Math.min(...plan.routes.map((route) => route.result.travelSeconds)),
+  ).toBeCloseTo(fastest.travelSeconds, 6);
+});
+
+// The planner needs no special case for the rail: transit is a weight like any other, so backing it
+// off is one of the per-factor drops the sweep already makes, and the route that comes back is the
+// "take the subway" card.
+test("dropping the transit penalty is what offers the ride", () => {
+  const graph = transitGraph();
+  graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
+  const start = snapAtNode(graph, 0, WEST_SIDEWALK);
+  const dest = snapAtNode(graph, 2, EAST_SIDEWALK);
+  const asked: RouteWeights[] = [];
+  const plan = planRoutes({
+    weights: transitWeights({ transit: MAX_TRANSIT_WEIGHT }),
+    search: (candidate) => {
+      asked.push(candidate);
+      return findRoute(graph, start, dest, candidate);
+    },
+    minMultiplier: (candidate) => minMultiplier(graph, candidate),
+  });
+  expect(asked.some((candidate) => candidate.transit === 0)).toBe(true);
+  const riding = plan.routes.filter((planned) =>
+    planned.result.steps.some((step) => step.kind === "ride"),
+  );
+  expect(riding).toHaveLength(1);
+  expect(riding[0].result.transitSeconds).toBeGreaterThan(0);
+  // The route this mode chose walks, so the surface-only candidate below would be that same route
+  // again and is not asked for.
+  expect(
+    asked.every(
+      (candidate) => candidate.allowFerries || candidate.allowTransit,
+    ),
+  ).toBe(true);
+});
+
+// Rain prices no ride at all, so the sweep has nothing to back off: without a candidate asked for
+// outright, every route it found would be the same ride. Whether the walk it finds earns a card is
+// the dominance rule's business, not this one's — here the ride is quicker and the mode prices
+// nothing the walk has, so it does not.
+test("a mode that prices no ride is still offered the walk", () => {
+  const graph = transitGraph();
+  graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
+  const start = snapAtNode(graph, 0, WEST_SIDEWALK);
+  const dest = snapAtNode(graph, 2, EAST_SIDEWALK);
+  const asked: RouteWeights[] = [];
+  const found: RouteResult[] = [];
+  const plan = planRoutes({
+    weights: transitWeights({ transit: 0 }),
+    search: (candidate) => {
+      asked.push(candidate);
+      return findRoute(graph, start, dest, candidate);
+    },
+    minMultiplier: (candidate) => minMultiplier(graph, candidate),
+    onCandidate: (result) => found.push(result),
+  });
+  expect(asked.some((candidate) => !candidate.allowTransit)).toBe(true);
+  expect(
+    found.some((result) => result.steps.every((step) => step.kind !== "ride")),
+  ).toBe(true);
+  const riding = plan.routes.filter((planned) =>
+    planned.result.steps.some((step) => step.kind === "ride"),
+  );
+  expect(riding).toHaveLength(1);
+});
+
+// And a mode whose route walks anyway is not charged a search to be told so.
+test("the walking candidate is not asked for when nothing rides", () => {
+  const fixture = buildFixture();
+  const asked: RouteWeights[] = [];
+  planOn(fixture, weightsOf({ tree: MAX_TREE_WEIGHT }), asked);
+  expect(asked.every((candidate) => candidate.allowTransit)).toBe(true);
+});
+
+// The surface-only candidate: a route that rides is offered the walk that stays on the ground the
+// whole way, with the boats and the trains barred together. No back-off axis can reach it — barring
+// a crossing is a switch, not a weight — so it is asked for outright.
+test("a route that rides is offered the walk that stays on the surface", () => {
+  const graph = transitGraph();
+  graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
+  const start = snapAtNode(graph, 0, WEST_SIDEWALK);
+  const dest = snapAtNode(graph, 2, EAST_SIDEWALK);
+  const asked: RouteWeights[] = [];
+  const found: RouteResult[] = [];
+  planRoutes({
+    weights: transitWeights({ transit: 0 }),
+    search: (candidate) => {
+      asked.push(candidate);
+      return findRoute(graph, start, dest, candidate);
+    },
+    minMultiplier: (candidate) => minMultiplier(graph, candidate),
+    onCandidate: (result) => found.push(result),
+  });
+
+  expect(
+    asked.some(
+      (candidate) => !candidate.allowFerries && !candidate.allowTransit,
+    ),
+  ).toBe(true);
+  // Both switches are in the memo key, so the candidate is a search of its own rather than the
+  // answer to the weights it shares with the max-scenic route.
+  expect(
+    new Set(asked.map((candidate) => JSON.stringify(candidate))).size,
+  ).toBe(asked.length);
+  expect(
+    found.some((result) =>
+      result.steps.every(
+        (step) => step.kind !== "ride" && step.kind !== "ferry",
+      ),
+    ),
+  ).toBe(true);
+});
+
 // A route that runs due east in two even halves, each held a number of metres north of a shared
 // line: two of these run as far apart as the mean of their two gaps, which is what lets the
 // geometry of the pool below be read off as plain numbers. Every second of one is spent under trees,
@@ -611,6 +823,42 @@ test("no set of cards is offered whose closest pair is under the floor", () => {
   expect(routeDistanceMeters(near[0], near[1])).toBeLessThan(DIFFERENT_METERS);
 
   const plan = planOverPool([maxScenic, far, ...near]);
+  expect(edgesOf(plan)).toEqual([1, 2]);
+});
+
+// How much of a trip is ridden is read before the ground it covers: the walk and the same walk with
+// a train in the middle of it are two trips, and a reader told they are one card has been told
+// nothing about the train.
+test("a route that rides is a different card from the walk beside it", async () => {
+  const walk = twoHalves(1, 900, 0, 0);
+  const rail = riding(twoHalves(2, 600, 10, 10), "A");
+  expect(routeDistanceMeters(walk, rail)).toBeLessThan(DIFFERENT_METERS);
+
+  const plan = await planOverPool([walk, rail]);
+  expect(edgesOf(plan)).toEqual([1, 2]);
+});
+
+// Which line is boarded is not a trip of its own, though: two routes that each ride once fall back
+// to the ground between them, which here is the width of a street.
+test("the 2 and the 3 over the same ground are one card", async () => {
+  const express = riding(twoHalves(1, 600, 0, 0), "2");
+  const local = riding(twoHalves(2, 700, 10, 10), "3");
+  expect(routeDistanceMeters(express, local)).toBeLessThan(DIFFERENT_METERS);
+
+  const plan = await planOverPool([express, local]);
+  expect(edgesOf(plan)).toEqual([1]);
+});
+
+// A change of train is a trip of its own: one ride and two are different cards however close the
+// two run, because changing trains is something the reader is choosing about.
+test("one ride is a different card from two", async () => {
+  const through = riding(twoHalves(1, 600, 0, 0), "A");
+  const connection = riding(twoHalves(2, 700, 10, 10), "A", "C");
+  expect(routeDistanceMeters(through, connection)).toBeLessThan(
+    DIFFERENT_METERS,
+  );
+
+  const plan = await planOverPool([through, connection]);
   expect(edgesOf(plan)).toEqual([1, 2]);
 });
 

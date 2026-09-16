@@ -13,7 +13,11 @@ import {
 import { MdOutlineDirectionsWalk, MdSwapVert } from "react-icons/md";
 import type { City } from "../../src/cities";
 import type { GeocodeResult } from "../../src/geocode";
-import type { CardSummary, FerrySummary } from "../../src/modes/cards";
+import type {
+  CardSummary,
+  FerrySummary,
+  RideSummary,
+} from "../../src/modes/cards";
 import { cardLine } from "../../src/modes/cards";
 import type { FactorAvailability } from "../../src/modes/modes";
 import type { Maneuver } from "../../src/routing/directions";
@@ -58,12 +62,14 @@ interface RoutePanelProps {
   summary: {
     walkMeters: number; // walking-only distance; the mileage shown excludes any ferry crossing
     travelSeconds: number;
+    rides: readonly RideSummary[]; // the trains taken, named after the two numbers
     ferries: readonly FerrySummary[]; // the boats taken, timed beside them
     factors: RouteFactors; // per-factor mean intensities, rendered as chips for the active sliders
   } | null;
   treeWeight: number;
   ferryWeight: number;
   allowFerries: boolean;
+  transitWeight: number;
   landmarkWeight: number;
   artWeight: number;
   highwayWeight: number;
@@ -96,6 +102,7 @@ interface RoutePanelProps {
   minimized: boolean; // shrunk to the slim peek bar
   onTreeWeight: (weight: number) => void;
   onFerryWeight: (weight: number) => void;
+  onTransitWeight: (weight: number) => void;
   onLandmarkWeight: (weight: number) => void;
   onArtWeight: (weight: number) => void;
   onHighwayWeight: (weight: number) => void;
@@ -150,18 +157,20 @@ interface FactorState {
 // One scenic routing factor as the panel renders it: a chip when collapsed, a full slider when open.
 type PanelFactor = Factor & FactorState;
 
-// Distance, time and the boats taken; the per-factor makeup is shown as chips (factorChips below),
+// Distance, time and the rides taken; the per-factor makeup is shown as chips (factorChips below),
 // no longer folded into an ambiguous single "% shaded". The same segments Modes prints, in the order
 // this panel has always printed them.
 function summaryOf(summary: {
   walkMeters: number;
   travelSeconds: number;
+  rides: readonly RideSummary[];
   ferries: readonly FerrySummary[];
 }): CardSummary {
   return {
     travelSeconds: summary.travelSeconds,
     walkMeters: summary.walkMeters,
     ferries: summary.ferries,
+    rides: summary.rides,
   };
 }
 
@@ -180,6 +189,7 @@ export default function RoutePanel({
   treeWeight,
   ferryWeight,
   allowFerries,
+  transitWeight,
   landmarkWeight,
   artWeight,
   highwayWeight,
@@ -200,6 +210,7 @@ export default function RoutePanel({
   minimized,
   onTreeWeight,
   onFerryWeight,
+  onTransitWeight,
   onLandmarkWeight,
   onArtWeight,
   onHighwayWeight,
@@ -310,6 +321,11 @@ export default function RoutePanel({
       onChange: onCommercialWeight,
       available: graphAvailable.commercial,
     },
+    transit: {
+      weight: transitWeight,
+      onChange: onTransitWeight,
+      available: graphAvailable.transit,
+    },
     ferry: {
       weight: ferryWeight,
       onChange: onFerryWeight,
@@ -364,7 +380,12 @@ export default function RoutePanel({
   // will stay, and the tree half of that number is extrapolated from about four studied trees. It
   // is a preference, not a prediction.
   const factorChips = actingFactors.filter(
-    (factor) => factor.key !== "ferry" && factor.key !== "shelter",
+    (factor) =>
+      factor.key !== "ferry" &&
+      factor.key !== "shelter" &&
+      // A ride carries no scenery, so the transit mean is 0 on every route by construction: a chip
+      // for it would report the same nothing beside every walk.
+      factor.key !== "transit",
   );
   // A factor whose data is missing AND which the reader has asked for: the route on screen is not
   // the route they asked for, and the greyed slider saying so is folded away behind "Scenery".
@@ -384,6 +405,7 @@ export default function RoutePanel({
         ? {
             maneuver: directions[progress.nextManeuver],
             distanceMeters: progress.distanceToNextMeters,
+            current: directions[progress.currentManeuver] ?? null,
           }
         : null;
     return (

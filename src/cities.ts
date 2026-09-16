@@ -35,6 +35,9 @@ export interface City {
   // Absent means the default in src/routing/cost.ts. Set it where the timetable is thin AND the water
   // cannot be walked round, since that combination turns "wait too long" into "no route".
   maxFerryWaitSeconds?: number;
+  // The same judgement about a platform. Absent means the default; both regions take it, their rail
+  // running often enough by day that a longer wait is a walk in disguise.
+  maxTransitWaitSeconds?: number;
 }
 
 // Authored per city rather than derived from the artifacts on disk: a city may have the data for a

@@ -3503,10 +3503,13 @@ San Francisco stood to be re-priced by that alone.
    `route_color`, `u8[3]` `route_text_color`, and `u16` name ids for the short name, the long name
    and the feed's route id, all three into the name table (7) and rescued into it the way the ferry
    stop names are. Then the **board table**: `u32 count`, then per board edge (`u32 edge id`, `u32`
-   **lane id**, `u16 route index`, `u16` pad). Then the **ride table**: `u32 count`, then per ride
-   edge (`u32 edge id`, `u16 route index`, `u16` pad). The lane id is TRNS's own — FNV-1a over the
-   route, the direction and the station names — so the graph and a timetable published days later
-   agree about which departures a board edge waits for without either reading the other.
+   **lane id**, `u16 route index`, `u16` **stop index**). Then the **ride table**: `u32 count`, then
+   per ride edge (`u32 edge id`, `u16 route index`, `u16` pad). The lane id is TRNS's own — FNV-1a
+   over the route, the direction and the station names — so the graph and a timetable published days
+   later agree about which departures a board edge waits for without either reading the other. The
+   stop index is this platform's position in the pattern as the FEED lists it, which is what TSCH's
+   per-stop offsets are indexed by; a station the snap dropped leaves a hole in the graph's chain
+   and none in that numbering.
 
 7. **Name table**: `u32 count`, then (count+1) × u32 byte offsets into the following UTF-8 blob,
    then the blob. Only the names the kept edges reference, re-indexed; offsets make client access

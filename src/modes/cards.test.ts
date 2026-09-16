@@ -3,8 +3,10 @@ import {
   cardColors,
   cardLine,
   chipFactors,
+  chipReading,
   DIRECT_COLOR,
   ferrySummaries,
+  rideSummaries,
   visibleChips,
 } from "./cards";
 import { ALL_FACTORS, type FactorAvailability, modeById } from "./modes";
@@ -17,8 +19,15 @@ if (NATURALIST === null || HISTORIC === null) {
 
 const MILE = 1609.344;
 
-// A boat, as a card holds it: the minutes it cost, pier and crossing together.
-const boat = (seconds: number) => ({ seconds });
+const ride = (shortName: string, seconds: number) => ({
+  shortName,
+  color: "#0039a6",
+  textColor: "#ffffff",
+  seconds,
+});
+
+// A boat, and how many trains had been ridden before it — which is what orders the two.
+const boat = (seconds: number, ridesBefore = 0) => ({ seconds, ridesBefore });
 
 describe("cardLine", () => {
   test("a card reads as its own time and distance", () => {
@@ -27,6 +36,7 @@ describe("cardLine", () => {
         travelSeconds: 38 * 60,
         walkMeters: 1.9 * MILE,
         ferries: [],
+        rides: [],
       }),
     ).toBe("38 min · 1.9 mi");
   });
@@ -37,14 +47,20 @@ describe("cardLine", () => {
         travelSeconds: 47 * 60,
         walkMeters: 2.4 * MILE,
         ferries: [],
+        rides: [],
       }),
     ).toBe("47 min · 2.4 mi");
   });
 
   test("a walk too short for a mile reads in feet, as its directions do", () => {
-    expect(cardLine({ travelSeconds: 150, walkMeters: 120, ferries: [] })).toBe(
-      "3 min · 400 ft",
-    );
+    expect(
+      cardLine({
+        travelSeconds: 150,
+        walkMeters: 120,
+        ferries: [],
+        rides: [],
+      }),
+    ).toBe("3 min · 400 ft");
   });
 
   test("a ferry is timed rather than counted as mileage", () => {
@@ -53,18 +69,77 @@ describe("cardLine", () => {
         travelSeconds: 47 * 60,
         walkMeters: 2.4 * MILE,
         ferries: [boat(14 * 60)],
+        rides: [],
       }),
     ).toBe("47 min · 2.4 mi walk · 14 min by ferry");
   });
 
-  test("two boats are each said, in the order they were taken", () => {
+  test("a ride names the line, and the mileage becomes the walk", () => {
+    expect(
+      cardLine({
+        travelSeconds: 58 * 60,
+        walkMeters: 1.2 * MILE,
+        ferries: [],
+        rides: [ride("A", 12 * 60)],
+      }),
+    ).toBe("58 min · 1.2 mi walk · 12 min on the A");
+  });
+
+  test("a change of trains is one figure and two names", () => {
+    expect(
+      cardLine({
+        travelSeconds: 71 * 60,
+        walkMeters: 0.8 * MILE,
+        ferries: [],
+        rides: [ride("A", 9 * 60), ride("L", 5 * 60)],
+      }),
+    ).toBe("71 min · 0.8 mi walk · 14 min on the A then L");
+  });
+
+  test("three trains read as a list", () => {
+    expect(
+      cardLine({
+        travelSeconds: 80 * 60,
+        walkMeters: MILE,
+        ferries: [],
+        rides: [ride("A", 60), ride("C", 60), ride("L", 60)],
+      }),
+    ).toBe("80 min · 1.0 mi walk · 3 min on the A, C then L");
+  });
+
+  test("a trip that takes both a boat and a train times each", () => {
     expect(
       cardLine({
         travelSeconds: 62 * 60,
         walkMeters: 1.0 * MILE,
-        ferries: [boat(14 * 60), boat(9 * 60)],
+        ferries: [boat(14 * 60)],
+        rides: [ride("A", 9 * 60)],
       }),
-    ).toBe("62 min · 1.0 mi walk · 14 min by ferry · 9 min by ferry");
+    ).toBe("62 min · 1.0 mi walk · 14 min by ferry · 9 min on the A");
+  });
+
+  test("a boat caught after the train is said after it", () => {
+    expect(
+      cardLine({
+        travelSeconds: 62 * 60,
+        walkMeters: 1.0 * MILE,
+        ferries: [boat(14 * 60, 1)],
+        rides: [ride("A", 9 * 60)],
+      }),
+    ).toBe("62 min · 1.0 mi walk · 9 min on the A · 14 min by ferry");
+  });
+
+  test("a boat between two trains splits them, because that is the trip", () => {
+    expect(
+      cardLine({
+        travelSeconds: 80 * 60,
+        walkMeters: 1.0 * MILE,
+        ferries: [boat(14 * 60, 1)],
+        rides: [ride("A", 9 * 60), ride("L", 5 * 60)],
+      }),
+    ).toBe(
+      "80 min · 1.0 mi walk · 9 min on the A · 14 min by ferry · 5 min on the L",
+    );
   });
 
   test("Explorer leads with the mileage and says the same things after it", () => {
@@ -73,11 +148,62 @@ describe("cardLine", () => {
         {
           travelSeconds: 58 * 60,
           walkMeters: 1.2 * MILE,
-          ferries: [boat(14 * 60)],
+          ferries: [],
+          rides: [ride("A", 12 * 60)],
         },
         "distance",
       ),
-    ).toBe("1.2 mi walk · 58 min · 14 min by ferry");
+    ).toBe("1.2 mi walk · 58 min · 12 min on the A");
+  });
+});
+
+describe("rideSummaries", () => {
+  test("the minutes a card reports are the wait plus the ride", () => {
+    expect(
+      rideSummaries([
+        {
+          route: {
+            shortName: "Q",
+            longName: "Broadway Express",
+            id: "Q",
+            color: "#fccc0a",
+            textColor: "#000000",
+          },
+          boardStation: "Union Sq",
+          alightStation: "Prospect Park",
+          stops: 6,
+          waitSeconds: 180,
+          rideSeconds: 540,
+          departureSeconds: 8 * 3600,
+        },
+      ]),
+    ).toEqual([
+      { shortName: "Q", color: "#fccc0a", textColor: "#000000", seconds: 720 },
+    ]);
+  });
+
+  test("a ride whose route the graph cannot name is still a ride", () => {
+    const [only] = rideSummaries([
+      {
+        route: null,
+        boardStation: null,
+        alightStation: null,
+        stops: 2,
+        waitSeconds: 60,
+        rideSeconds: 120,
+        departureSeconds: null,
+      },
+    ]);
+    expect(only.shortName).toBe("");
+    expect(only.seconds).toBe(180);
+    expect(
+      cardLine({
+        travelSeconds: 600,
+        walkMeters: 400,
+        ferries: [],
+        rides: [only],
+      }),
+    ).toBe("10 min · 0.2 mi walk · 3 min on the train");
   });
 });
 
@@ -89,9 +215,10 @@ describe("ferrySummaries", () => {
           route: "Staten Island Ferry",
           waitSeconds: 9 * 60,
           crossingSeconds: 25 * 60,
+          ridesBefore: 0,
         },
       ]),
-    ).toEqual([{ seconds: 34 * 60 }]);
+    ).toEqual([{ seconds: 34 * 60, ridesBefore: 0 }]);
   });
 });
 
@@ -199,6 +326,28 @@ describe("cardColors", () => {
   });
 });
 
+describe("chipReading", () => {
+  test("in the rain the chip counts what the shelter mean leaves out", () => {
+    expect(chipReading("shelter", 91)).toEqual({ percent: 9, exposure: true });
+  });
+
+  test("the driest route is the least exposed one, so the bold card does not move", () => {
+    const shelter = [91, 64, 40];
+    const exposure = shelter.map(
+      (mean) => chipReading("shelter", mean).percent,
+    );
+    expect(exposure).toEqual([9, 36, 60]);
+    expect(exposure.indexOf(Math.min(...exposure))).toBe(
+      shelter.indexOf(Math.max(...shelter)),
+    );
+  });
+
+  test("every other factor reads as itself", () => {
+    expect(chipReading("tree", 64)).toEqual({ percent: 64, exposure: false });
+    expect(chipReading("shade", 12)).toEqual({ percent: 12, exposure: false });
+  });
+});
+
 describe("visibleChips", () => {
   test("a factor a route has none of is not drawn at all", () => {
     expect(visibleChips(["tree", "art"], [{ tree: 0.42, art: 0 }])).toEqual([
@@ -211,6 +360,12 @@ describe("visibleChips", () => {
       [],
       [{ key: "art", percent: 1, best: true }],
     ]);
+  });
+
+  test("in the rain the raw shelter decides, not the exposure the chip shows", () => {
+    expect(
+      visibleChips(["shelter"], [{ shelter: 0 }, { shelter: 0.31 }]),
+    ).toEqual([[], [{ key: "shelter", percent: 31, best: true }]]);
   });
 
   test("the bold card is the best of the ones still saying it", () => {
