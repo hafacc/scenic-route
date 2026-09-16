@@ -231,7 +231,7 @@ async function fetchKeyed<Row>(
           url.searchParams.set("$limit", String(PAGE_SIZE));
           return await fetchJson<Row>(url.toString());
         },
-        true,
+        { quiet: true },
       );
       done += 1;
       if (done % BATCH_PROGRESS === 0 || done === batches.length) {

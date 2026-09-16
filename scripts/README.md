@@ -774,7 +774,11 @@ encodes):
 `scripts/gtfs.ts` is dependency-light: it parses the zip's central directory by hand and inflates
 each entry with `node:zlib`, and parses the CSV tables (RFC 4180 quoting, CRLF, a stripped BOM)
 itself — no zip or csv package. Each download is disk-cached (base64, keyed on the URL) like every
-other source read, and the ingest also **freezes the two raw feed zips** under `data/ferries/`
+other source read, but **expires after a week**: an agency posts a new zip every few weeks and the
+calendar in the old one runs out, so a cached feed that never expired would go on building a
+timetable nobody runs (a Muni feed of 2026-08-17 was still in use a month later). A stale entry
+prints one line and is downloaded again; `--offline` (or `OFFLINE=1`) takes the cached copy whatever
+its age and fails if there is none. The ingest also **freezes the two raw feed zips** under `data/ferries/`
 (`siferry-gtfs.zip`, `nycferry-gtfs.zip`, both LFS-tracked) so a future time-of-day pass can
 re-derive from the exact feeds a build read.
 
@@ -831,7 +835,7 @@ its own line.
 ### The subway route lines and stations (`SBWY` v3)
 
 `scripts/subway.ts` (`bun run build-subway`) reads the MTA's one subway GTFS zip — 5.3 MiB, cached
-by `cachedFile` — and writes `data/subway/nyc.bin`, the route geometry and the station markers the
+by `cachedFile` on the same week-long expiry as every other feed — and writes `data/subway/nyc.bin`, the route geometry and the station markers the
 map draws the system with. **Display only.** Nothing here reaches the routing graph, the key space or the tile build: the
 rail a route actually rides is baked from the same feed by `scripts/transit.ts` (`TRNS`), which is a
 different artifact. `serve-sources.ts` copies it to
