@@ -256,7 +256,7 @@ in its own band.
 | paths | OSM pedestrian/park ways (footway/path/pedestrian/steps/cycleway/bridleway/track) plus park drives (roads closed to through motor traffic), via Overpass | the park, greenway and car-free-drive network CSCL lacks; a separate committed source, magic `PATH` — see below and "Binary layouts" |
 | sidewalks | OSM `footway=sidewalk`/`crossing`/`traffic_island` ways via Overpass; the city's own survey — NYC's planimetric SIDEWALK polygons, Socrata `52n9-sdep` (`sub_code` 380000 = street right-of-way), or SF's 2014 Sidewalk Widths study; and the `sidewalk`/`sidewalk:left`/`sidewalk:right`/`sidewalk:both` tags OSM puts on the **road** | the ways are a committed source, magic `SWLK`; the three together settle the four per-side sidewalk bits of every offsetted `STRT` record, and the ways themselves are the walking network wherever they exist — see below and "Binary layouts" |
 | ferries | the two NYC ferry GTFS feeds — Staten Island Ferry (NYC DOT) and NYC Ferry (Hornblower, via Connexionz) | consolidated to a time-independent ferry graph, a committed source, magic `FERR` — OSM- and canopy-independent, read by a later phase's routing graph, not the cover pipeline; see below and "Binary layouts" |
-| subway | the MTA's subway GTFS feed, `https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip` | the 29 routes as 93 polylines (every shape variant the feed runs that draws track nothing else does) and the 496 stations, with the colours and names the MTA publishes for each route and, per station, the set of routes that genuinely serve it and the complex `transfers.txt` puts it in; a committed source, magic `SBWY` — **display only**, it enters no routing input (this is a walking router and nobody walks the subway); see below and "Binary layouts" |
+| subway | the MTA's subway GTFS feed, `https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip` | the 29 routes as 93 polylines (every shape variant the feed runs that draws track nothing else does) and the 496 stations, with the colours and names the MTA publishes for each route and, per station, the set of routes that genuinely serve it and the complex `transfers.txt` puts it in; a committed source, magic `SBWY` — **display only**, it enters no routing input (the rail a route rides comes from `TRNS`); see below and "Binary layouts" |
 | transit (Bay Area) | SFMTA's Muni GTFS, `https://muni-gtfs.apps.sfmta.com/data/muni_gtfs-current.zip`, and BART's, `https://www.bart.gov/dev/schedules/google_transit.zip` — both keyless | Muni's rail (the six Metro lines, the F streetcar, the three cable cars) and **all six BART lines**, as 49 polylines drawn whole rather than cut at the region, and the 310 stations (no complexes: neither feed publishes a transfer between two of its stations), in the **same `SBWY`** blob New York's subway ships as; **display only**, it enters no routing input. Muni is San Francisco's alone; BART is what makes this a regional layer rather than a city one; see below |
 | legacy | SF Legacy Business Registry (ArcGIS, Office of Small Business) and NY State Historic Business Preservation Registry (ArcGIS, State Parks) | businesses trading 50+ years, at their register's own point; a committed POI source, magic `LGCY` — overlay only, no per-edge byte; see "Binary layouts" |
 | landmarks | **NYC**: LPC Individual Landmark Sites, Socrata `buis-pvji`. **SF**: Planning's Article 10 landmarks, `rzic-39gi`. **East Bay**: the California OHP's Built Environment Resource Directory for Alameda County, geocoded against the county's address points and parcels (`scripts/alameda.ts`) | designated historic/touristy sites as points — ~1.5k in New York, 458 in the Bay Area; a committed POI source, magic `LMRK` — fanned out into a per-edge routing discount, not the cover pipeline. **The East Bay's are a different kind of designation from the other two** — federal and state, not a local register, because neither Oakland's nor Berkeley's is published as data; see "Binary layouts" |
@@ -833,7 +833,8 @@ its own line.
 `scripts/subway.ts` (`bun run build-subway`) reads the MTA's one subway GTFS zip — 5.3 MiB, cached
 by `cachedFile` — and writes `data/subway/nyc.bin`, the route geometry and the station markers the
 map draws the system with. **Display only.** Nothing here reaches the routing graph, the key space or the tile build: the
-app routes a person on foot, and no walking route rides a train. `serve-sources.ts` copies it to
+rail a route actually rides is baked from the same feed by `scripts/transit.ts` (`TRNS`), which is a
+different artifact. `serve-sources.ts` copies it to
 `public/subway/<id>.bin` for the client, and it is not in the manifest — the same place `FERR`,
 `LMRK`, `ARTW` and `HWAY` sit, all of them committed sources that no cover-pipeline layer owns.
 
@@ -2187,6 +2188,116 @@ station-route pairs, 429 distinct names, 171,667 bytes.**
 v2 is the same file with a 16-byte station record and no complex id, which the client merged records
 by distance and name alone; nothing that reads it is deployed, so v2 is not accepted.
 
+### `data/transit/<id>.bin` — the rail topology the router rides, magic `TRNS` (v1)
+
+`SBWY` above is what the map draws; this is what the router rides, and the two are built from the
+same feeds and the same route types (`scripts/transit.ts`, beside `scripts/subway.ts` and
+`scripts/subway-sf.ts`, sharing their cache entries). It carries no geometry at all — a ride is a
+time, not a shape — and instead carries the thing a graph needs and a map does not: every **stop
+pattern** a route runs, in order, with the seconds from each stop to the next. The tiler turns a
+pattern into a chain of platform nodes and a station into one station node, and the timetable those
+board edges depart against is `public/transit-schedule/` below.
+
+**Plain git, never LFS**, and small enough to stay that way: 29,656 bytes for New York, 19,457 for
+the Bay Area. No `data/` pattern in `.gitattributes` matches it, so nothing has to be excluded.
+
+A **pattern** is one (route, direction) and one ordered list of stations. A route runs several: the
+full line, the express, the short turn, and a tail of one-offs a train laying up at a yard leaves in
+the feed. A pattern is kept when it carries at least **2% of its own (route, direction)'s trips**,
+and the busiest pattern of a direction is kept whatever its share. The shares run continuously from
+a single trip upward — there is no empty band to aim at, unlike the display ingest's service floor —
+so the value is set by what it costs against what it keeps: New York keeps 138 of 218 patterns,
+dropping 80 that between them carry 1.3% of its trips and a third of the platform nodes (6,357 down
+to 4,084); the Bay Area keeps 81 of 96, dropping 15 that carry 0.45%.
+
+Each pattern's **lane id** is FNV-1a over its route id, its direction and the NAMES of its stations.
+The graph bakes those ids into its board edges and the daily timetable is keyed by them, so two
+artifacts written days apart agree without either reading the other — the same reasoning that keys
+the ferry lanes by terminal name. A pattern whose stops change gets a new id and simply has no
+timetable until the graph is rebuilt; the ingest fails loudly if two patterns ever hash alike.
+
+A station is the feed's own: a `parent_station` where the feed publishes one (every MTA and BART
+stop), and otherwise the stop standing in for itself, with same-named stops within 100 m chained
+into one — Muni publishes no parents at all and one stop per kerb, so without that every
+intersection would be two stations a median apart and a rider changing direction would have nowhere
+to change. The `surface` flag is that same distinction: a feed that models its stops as stations is
+saying they are enclosed places with a way in, so New York's 496 and BART's 50 are all stairs, and
+Muni's are the kerb — apart from the 21 platforms of the Market Street and Central Subway stations,
+which the ingest names, because nothing in Muni's feed separates them from a stop on the tarmac.
+
+Header, 56 bytes, little-endian; coordinates quantized to `COORD_SCALE` (1e-6°) about a south-west
+origin, exactly the shared codec:
+
+| offset | type | field |
+| --- | --- | --- |
+| 0 | u8[4] | magic `TRNS` |
+| 4 | u16 | format version = 1 |
+| 6 | u16 | header bytes = 56 |
+| 8 | u32 | station count S |
+| 12 | u32 | route count R |
+| 16 | u32 | pattern count P |
+| 20 | u32 | pattern-stop blob length |
+| 24 | f64 | origin longitude, degrees |
+| 32 | f64 | origin latitude, degrees |
+| 40 | f64 | coordinate scale, degrees per quantized unit |
+| 48 | u32 | name table offset, from the start of the file |
+| 52 | u32 | total bytes |
+
+Then the **station table** (S × 16), the **route table** (R × 12) and the **pattern table**
+(P × 16), back to back after the header, so their offsets are implicit (`56`, `56 + 16·S` and
+`56 + 16·S + 12·R`); the pattern-stop blob follows them and the name table carries an explicit
+offset.
+
+Station record, 16 bytes — sorted south to north, then west to east, then by name:
+
+| offset | type | field |
+| --- | --- | --- |
+| 0 | i32 | longitude, quantized |
+| 4 | i32 | latitude, quantized |
+| 8 | u32 | station name id, an index into the name table |
+| 12 | u16 | complex id, from 1 — the component of the feed's own `transfers.txt` this station is in, or **0** where the feed publishes no station-to-station transfer |
+| 14 | u8 | flags: **bit 0 = surface**, a station entered off the pavement rather than down a stair |
+| 15 | u8 | pad |
+
+Route record, 12 bytes — routes are ordered by id, which is the display ingest's id for the same
+line (`A`, `muni:N`, `bart:Yellow`), so the two artifacts can be joined on it:
+
+| offset | type | field |
+| --- | --- | --- |
+| 0 | u8[3] | `route_color`, RGB, straight from the feed |
+| 3 | u8[3] | `route_text_color`, RGB |
+| 6 | u16 | short name id (the "A", "N", "Yellow" a rider says) |
+| 8 | u16 | long name id (the corridor) |
+| 10 | u16 | route id name id |
+
+Pattern record, 16 bytes — patterns are ordered by lane id, which is the only thing about them the
+timetable also knows:
+
+| offset | type | field |
+| --- | --- | --- |
+| 0 | u32 | lane id |
+| 4 | u16 | route index |
+| 6 | u8 | GTFS `direction_id` |
+| 7 | u8 | pad |
+| 8 | u16 | stop count |
+| 10 | u16 | pad |
+| 12 | u32 | offset into the pattern-stop blob |
+
+Then the **pattern-stop blob**: per pattern, per stop, two plain LEB128 varints — the **station
+index**, then the **seconds since the previous stop** (0 for the first). Both non-negative, so no
+zigzag. That second number is the ride the tiler bakes into the edge between the two platforms, and
+its running sum is the offset the timetable uses. It is the MEDIAN over the trips running the
+pattern, forced non-decreasing, so two trips that disagree about a second cannot make a ride run
+backwards. Zero-padded to 4 bytes so the name table starts aligned.
+
+Finally the **name table**: a `u32` count, then (count+1) × `u32` byte offsets into the following
+UTF-8 blob — the `GRPH`/`FSCH` layout, so a name is an O(1) read. Station names, route short names,
+route long names and route ids share it.
+
+At the 2026 feeds: New York **29 routes, 496 stations in 444 complexes, 138 patterns over 4,084
+pattern stops** (the longest, the 2 from Flatbush Av to Wakefield, 61 stops and 106 minutes); the Bay
+Area **16 routes, 310 stations (239 at street level), 81 patterns over 1,496 stops**.
+
 ### `public/ferry-schedule/` — the ferry timetable, magic `FSCH` (v1, derived, **committed**)
 
 FERR above flattens the whole timetable into one crossing-plus-average-wait figure per stop pair,
@@ -2272,6 +2383,88 @@ on each of the **three** days around it, then per ferry edge the sailings out of
 terminals, merged across routes and shifted into seconds from midnight of the routed day. Three days
 because a walk beginning near midnight catches a boat on the next service day, and because GTFS
 writes an after-midnight sailing as the previous day's 25:10.
+
+### `public/transit-schedule/` — the rail timetable, magic `TSCH` (v1, derived, **committed**)
+
+The ferry timetable's twin, for the same reason and in the same shape: `TRNS` above is baked into the
+routing graph, nothing in the daily path can rebuild that graph, so the timetable that moves lives on
+its own. `scripts/transit-schedule.ts` writes it, `src/routing/transit-schedule.ts` reads it, and the
+two files per city — `<city>.bin` in effect now, `<city>-past.bin` every superseded record with the
+day range it ran for — are published by the code both timetables share (`scripts/schedule-record.ts`),
+so an unchanged feed rewrites identical bytes and the daily job's "nothing to commit" path fires.
+**Committed and never LFS-tracked**, the same rule as `public/sheds/`.
+
+Where the ferry timetable lists sailings, this lists **headway bands**: per lane and service, a
+window with a start, an end and the seconds between trains inside it. A rail feed is an order of
+magnitude more departures than a ferry one — New York's rail publishes 20,353 where its ferries
+publish 2,969 — and what a walker needs from a five-minute service is that a train comes in about five
+minutes. The bands fold those 20,353 into 3,036, and the departure they model for a real train is a
+mean of **20 seconds** out, 89% of them inside a minute and none more than 4:16. Where service is
+sparse enough for the exact minute to matter the bands are short and say so; a band of one train is
+that train and nothing else.
+
+A band's departures are `start`, `start + headway`, … up to `end`, **and `end` itself**, which is the
+window's last train whether or not the grid lands on it: the headway written is the mean over the
+window, so the last grid point can fall a few seconds short of the real last train, and answering
+"no train" there would lose it. The grouping keeps a gap in a band while it sits within
+`max(60 s, 0.1 × mean headway)` of the mean so far, which is the slack a published timetable rounds
+to; at two minutes and a quarter the mean error is 75 seconds for 1,200 bands saved, so this is the
+end of the trade worth having.
+
+A lane is a `TRNS` **pattern** and a service, and it is keyed by the pattern's **lane id**, not by an
+index into anything — the graph is built days before this file and the two must agree with nothing
+between them. `frequencies.txt` is read where a feed publishes it: its rows are bands already, and
+the trip's own `stop_times` are a template nobody departs on. Neither the MTA's, Muni's nor BART's
+feed publishes one today, so every band in the committed artifacts is derived from `stop_times`.
+
+Header, 44 bytes, little-endian:
+
+| offset | type | field |
+| --- | --- | --- |
+| 0 | u8[4] | magic `TSCH` |
+| 4 | u16 | format version = 1 |
+| 6 | u16 | header bytes = 44 |
+| 8 | u32 | first day in effect, `YYYYMMDD` |
+| 12 | u32 | last day in effect, `YYYYMMDD`; **0 while this is the standing record** |
+| 16 | u32 | service count |
+| 20 | u32 | exception count |
+| 24 | u32 | pattern count |
+| 28 | u32 | lane count |
+| 32 | u32 | band blob length |
+| 36 | u32 | offset blob length |
+| 40 | u32 | record bytes, padding included — what walks the history file |
+
+Then the sections back to back, each 4-byte aligned, their offsets implicit from the counts above.
+
+1. **Services** (count × 12) and 2. **exceptions** (count × 8): byte for byte the `FSCH` tables — a
+   `u32` start day, `u32` end day and `u8` weekday mask per service; a `u32` day, `u16` service index
+   and `u8` type (1 = added, 2 = removed) per exception. A service named only by `calendar_dates.txt`
+   gets a zero mask over a zero range, which never matches a weekday.
+3. **Patterns** (count × 12): `u32 lane id`, `u16 stop count`, 2 pad bytes, `u32 offset into the
+   offset blob`. Ordered by lane id, exactly as `TRNS` orders them.
+4. **Lanes** (count × 12): `u16 pattern index`, `u16 service index`, `u16 band count`, 2 pad bytes,
+   `u32 offset into the band blob`. One per (pattern, service) that runs at all.
+5. **Band blob**: per lane, its bands in order, each three plain LEB128 varints — the start's gap
+   from the previous band's start (the first absolute, from midnight of the service day, so a GTFS
+   `25:10:00` reads as 90600), then the window's length in seconds, then the headway (**0 = a window
+   of one train**).
+6. **Offset blob**: per pattern, per stop, the seconds since the previous stop as a plain LEB128
+   varint (0 for the first) — the same numbers `TRNS` carries beside its station indices, repeated
+   here so a client can turn a first-stop departure into a departure at the stop the walker is
+   standing at without reading the graph.
+
+The client resolves a record against a departure instant in `resolveTimetable`: the services running
+on each of the **three** days around it (`src/routing/schedule-days.ts`, shared with the ferry
+reader), then per lane the bands of those days as seconds from midnight of the routed day. Three days
+because a walk beginning near midnight catches a train on the next service day, and because GTFS
+writes an after-midnight departure as the previous day's 25:10. `board(laneId, stopIndex, elapsed)`
+then answers with the first departure at that stop at or after `elapsed`, or null once the last train
+is gone.
+
+At the 2026 feeds: New York **138 patterns, 308 lanes, 3,036 bands over 7 services, 29,260 bytes**;
+the Bay Area **81 patterns, 403 lanes, 1,605 bands over 17 services and 51 calendar exceptions,
+18,548 bytes**. The Bay Area has more lanes over fewer patterns because Muni and BART between them
+publish 17 services where the MTA publishes 7.
 
 ### `public/addresses/<city>.bin.gz` — every street address, magic `ADDR` (v1, derived, **committed**)
 
@@ -2938,7 +3131,7 @@ This pyramid is **lossless** WebP where the canopy one is lossy: a lossy encode 
 but stores the two chroma planes at quarter resolution, measured 18-22 off, and here R and G are
 data.
 
-### `public/routing/{id}.bin` — the routing graph, magic `GRPH` (v10, derived, gitignored)
+### `public/routing/{id}.bin` — the routing graph, magic `GRPH` (v11, derived, gitignored)
 
 The graph pass contracts STRT into the graph the client routes on, then expands it into the edges a
 walker actually uses. For a city carrying a PATH layer it first **conflates** the OSM pedestrian/park
@@ -3139,8 +3332,8 @@ Header, 64 bytes:
 | offset | type | field |
 | --- | --- | --- |
 | 0 | u8[4] | magic `GRPH` |
-| 4 | u16 | format version = 10 |
-| 6 | u16 | header bytes = 64 |
+| 4 | u16 | format version = 11 |
+| 6 | u16 | header bytes = 80 |
 | 8 | u32 | node count N |
 | 12 | u32 | edge count E |
 | 16 | f64 | origin longitude, degrees |
@@ -3152,6 +3345,8 @@ Header, 64 bytes:
 | 52 | u32 | geometry blob offset, from the start of the file |
 | 56 | u32 | geometry blob length |
 | 60 | u32 | ferry endpoint-stop-name side-table offset, from the start of the file (0-length table when the build carried no ferries) |
+| 64 | u32 | transit side-table offset, from the start of the file (all three of its tables empty when the build carried no transit) |
+| 68 | u8[12] | reserved, zero |
 
 Then the sections, back to back, each starting 4-byte aligned (zero-padded as needed so the client
 can view them as typed arrays without copying):
@@ -3174,7 +3369,7 @@ can view them as typed arrays without copying):
 | 18 | u16 | street name id into the name table (0xFFFF = unnamed) |
 | 20 | u8 | cover, 0–254, this edge's own single value (**ferry**: low byte of the u16 duration at 20–21) |
 | 21 | u8 | half-offset to the sidewalk, decimetres (sidewalk kind only; else 0) (**ferry**: high byte of the duration) |
-| 22 | u8 | kind and side: bits 0–2 kind (0 sidewalk, 1 crossing, 2 link, 3 path, 4 ferry); bits 3–5 side (0 none, 1 N, 2 E, 3 S, 4 W) |
+| 22 | u8 | kind and side: bits 0–2 kind (0 sidewalk, 1 crossing, 2 link, 3 path, 4 ferry, 5 access, 6 board, 7 ride — the last three are transit, below); bits 3–5 side (0 none, 1 N, 2 E, 3 S, 4 W) |
 | 23 | u8 | flags: bit0 structure, bit1 steps, bit2 **geometry-right** (this sidewalk lies right of its stored geometry direction; clear = left), bit3 **OSM** (this edge came from the conflated OSM path network) |
 | 24 | u8 | landmark amenity, 0–254 (a discount attribute; 0 for a ferry) |
 | 25 | u8 | public-art amenity, 0–254 (a discount attribute; 0 for a ferry) |
@@ -3259,12 +3454,59 @@ it never lifts `maxCover`) and derives `minFerrySecPerMetre` (min over ferry edg
 length) at decode; its terminals are ordinary walking nodes, and the merged component labels let a
 route cross it.
 
+**Transit** (v11) is the rail topology of `data/transit/<city>.bin` (`TRNS` above) baked into the
+graph, and it is the one thing here that adds NODES. A ferry rides between two walking nodes; a train
+cannot, because a rider's wait belongs to one line running one way and not to the station. So each
+**transfer complex** becomes a node of its own — one node for the whole of Times Sq, and one per
+station where the feed publishes no complex — standing at its members' centroid and joined to its
+nearest walking node (250 m, the pier's reach — a station point is a mezzanine, not a street door) by
+an **access** edge; each stop of each stop pattern becomes a **platform** node standing on the stop
+its own line calls at; a **board** edge joins the complex's node to the platform, an access edge
+joins the platform back to it, and a **ride** edge joins one platform to the next. A transfer
+therefore needs no edge of its own, and a transfer *inside* a complex never reaches the street:
+alight, and board again. A complex with no walking node in range is dropped with a counted warning,
+and a pattern rides straight past it, since its stop-to-stop seconds are differences of offsets from
+the pattern's first stop.
+
+All three kinds carry their **seconds in bytes 20–21**, exactly as a ferry carries its crossing:
+90 s for the walk into a station the feed models as an enclosed place, 30 s into one whose every
+member is a stop on the pavement (the TRNS `surface` flag), 30 s for every walk back out, the
+pattern's own stop-to-stop figure for a ride, and **0 for a board** — what a board costs is the wait,
+which is a function of the clock and comes from `public/transit-schedule/` at route time, not from
+the graph. A board or an alight inside a complex spans the passage between two of its platforms, and
+costs those same seconds however far that runs.
+Their cover, every scenic attribute, their source id and their side are all zero or the sentinel, and
+none of them carries geometry: like a ferry, a transit edge lifts no max the A* lower bound is taken
+from. Their two endpoints are ordinary nodes of the merged component labels, so a station joins the
+component its pavement is in — which is how a ride joins two walking components the pavement does
+not, exactly as a ferry does.
+
+**Nothing routes over them yet**, and the walking graph a build without them produces is unchanged to
+the byte. `isTransitEdge` is what the client's search and its waypoint proxy skip on, and the snap
+index leaves them out, which is what keeps a walker from ever being snapped onto a platform. Two
+things had to learn about them to keep the bake identical. The landmark and art fan-outs walk the
+graph, so they snap only to a node with a walking edge on it and never step through a transit one — a
+board edge is zero metres long, and without that a landmark beside one station would deposit its
+discount on the pavement beside the next. And a node is mid-roadway when its every WALKING edge is a
+crossing: a station whose access edge lands on a traffic island does not pave it, and 11 islands in
+San Francisco stood to be re-priced by that alone.
+
 9. **Ferry endpoint-stop-name side table** (at the byte-60 offset, 4-aligned after the geometry
    blob): `u32 count`, then per ferry edge a (`u32 edge id`, `u16 a-stop name id`, `u16 b-stop name
    id`) triple, both ids into the name table (7). The two ids are the terminal names at the edge's
    node-a and node-b ends, aligned to its `node a`/`node b`. These ids are **not** edge name_ids, so
    the graph pass adds them to the kept-name set and remaps them alongside the edge names. A later
    phase reads the destination terminal from here (`node b` when the ferry is ridden a → b).
+
+10. **Transit side tables** (at the byte-64 offset, 4-aligned after the ferry table), three counted
+   tables back to back. First the **route table**: `u32 count`, then per route 12 bytes — `u8[3]`
+   `route_color`, `u8[3]` `route_text_color`, and `u16` name ids for the short name, the long name
+   and the feed's route id, all three into the name table (7) and rescued into it the way the ferry
+   stop names are. Then the **board table**: `u32 count`, then per board edge (`u32 edge id`, `u32`
+   **lane id**, `u16 route index`, `u16` pad). Then the **ride table**: `u32 count`, then per ride
+   edge (`u32 edge id`, `u16 route index`, `u16` pad). The lane id is TRNS's own — FNV-1a over the
+   route, the direction and the station names — so the graph and a timetable published days later
+   agree about which departures a board edge waits for without either reading the other.
 
 7. **Name table**: `u32 count`, then (count+1) × u32 byte offsets into the following UTF-8 blob,
    then the blob. Only the names the kept edges reference, re-indexed; offsets make client access
@@ -3933,9 +4175,10 @@ Four rules carry the weight:
   one). On any request naming a bin, the worker looks its season up and, if it differs from the
   season it has been keeping for that city, deletes every cached bin of the others across both the
   overlay and routing caches. Crossing a season boundary costs a re-download of what you look at.
-- **The daily feeds are network-first.** `sheds/**` and `ferry-schedule/**` are read from
-  `raw.githubusercontent.com`, rewritten in place by a daily job rather than by a deploy; a stale
-  timetable is worse than a slow one, so the cache is only what an offline walk falls back to.
+- **The daily feeds are network-first.** `sheds/**`, `ferry-schedule/**` and `transit-schedule/**`
+  are read from `raw.githubusercontent.com`, rewritten in place by a daily job rather than by a
+  deploy; a stale timetable is worse than a slow one, so the cache is only what an offline walk falls
+  back to.
 - **A worker script is never answered with a stored `Response` object.** Turbopack hands a dedicated
   worker its bootstrap config in the script URL's **fragment**, and a fragment is not part of a
   request's URL as far as fetch is concerned — so a worker whose script came back as a cached

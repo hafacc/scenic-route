@@ -125,6 +125,13 @@ pub const KIND_CROSSING: u8 = 1;
 pub const KIND_LINK: u8 = 2;
 pub const KIND_PATH: u8 = 3;
 const KIND_FERRY: u8 = 4;
+// The three transit kinds, which take the last of the eight the 3-bit field holds. An access edge
+// is the walk in and out of a station (pavement to station, and platform back to station); a board
+// edge is the station-to-platform step whose wait the timetable answers at route time, so it bakes
+// no duration; a ride is one platform to the next, and the only one carrying distance.
+const KIND_ACCESS: u8 = 5;
+const KIND_BOARD: u8 = 6;
+const KIND_RIDE: u8 = 7;
 const KIND_MASK: u8 = 0x7;
 const SIDE_SHIFT: u8 = 3;
 pub const SIDE_NONE: u8 = 0;
@@ -138,12 +145,13 @@ const FLAG_GEOMETRY_RIGHT: u8 = 1 << 2; // this sidewalk lies right of its store
 // historic-district byte took the first of those three without moving the version: a graph written
 // before that bake reads byte 37 back as 0 everywhere, which gates its slider off rather than
 // mispricing anything, so the client needs no way to tell the two v10s apart.
-const GRAPH_FORMAT: u16 = 10;
+const GRAPH_FORMAT: u16 = 11;
 // The field the relief is sampled off is built at this zoom's pixel size — about 5 m at San
 // Francisco's latitude. Finer than the block a grade is measured over, coarser than the metre the
 // DEM is published at, and a whole city of it is tens of megabytes rather than gigabytes.
 const RELIEF_FIELD_ZOOM: u32 = 15;
-const GRAPH_HEADER_BYTES: usize = 64;
+// v11 grew the header to 80 for the transit side table's offset; bytes 68-79 are its spare u32s.
+const GRAPH_HEADER_BYTES: usize = 80;
 // 24 + landmark(24), art(25), highway(26), commercial(27), directCanopy(28), sourceId(29..32),
 // ordinal(33), ascent(34), descent(35), industrial(36), historic(37), reserved(38..39)
 const EDGE_RECORD_BYTES: usize = 40;
@@ -183,6 +191,17 @@ const MAX_EDGE_VERTICES: usize = u16::MAX as usize; // a guard on the merged pol
 // A ferry terminal (a pier) sits off the street grid, so its snap to the nearest walking node has a
 // looser radius than the node merge; a linear scan over the ~26 stops is well under a millisecond.
 const FERRY_SNAP_RADIUS_METERS: f64 = 250.0;
+// A station point is the feed's own — the middle of a mezzanine, not a street door — so it reaches
+// as far for its pavement as a pier does. Entrance geometry is the later refinement that would let
+// this shrink.
+const TRANSIT_SNAP_RADIUS_METERS: f64 = 250.0;
+// What the walk in and out of a station costs, baked rather than measured: down a stair, along a
+// mezzanine and through a gate for a station the feed models as an enclosed place, and a step off
+// the kerb for one it models as a stop on the pavement. The way out is the shorter one either way —
+// nobody queues to leave — so every alight edge takes the surface figure.
+const UNDERGROUND_ACCESS_SECONDS: u16 = 90;
+const SURFACE_ACCESS_SECONDS: u16 = 30;
+const ALIGHT_SECONDS: u16 = SURFACE_ACCESS_SECONDS;
 // The seam radius: how far from where a corner would be placed OSM's own corner may stand and still
 // be that corner. A fan corner sits one averaged half-offset out along the gap bisector, and OSM's
 // kerb ramp sits at the true corner of the roadway, so the two differ by the difference between the
@@ -298,6 +317,9 @@ pub struct Args {
     // `footway=traffic_island`, which the PATH extract deliberately excludes.
     pub sidewalks: Option<PathBuf>,
     pub ferries: Option<PathBuf>,
+    /// The city's rail topology (TRNS): stations, routes and the stop patterns they run. A city
+    /// with none builds exactly as it did before — the graph simply carries no transit edge.
+    pub transit: Option<PathBuf>,
     pub landmarks: Option<PathBuf>,
     pub art: Option<PathBuf>,
     pub highways: Option<PathBuf>,
@@ -1625,6 +1647,304 @@ fn put_f64(bytes: &mut [u8], offset: usize, value: f64) {
 
 // Append `name` to `all_names` if new (deduped through `interned`) and return its u16 id. The ferry
 // route and terminal names are not in the STRT/PATH name tables, so they are interned here.
+/// The kinds whose record bytes 20-21 are a u16 of seconds rather than a cover byte and a
+/// half-offset, and which carry no scenic attribute at all: a ferry, and the three transit kinds.
+/// None of them has a polyline either, so every column that samples the ground reads them as empty.
+fn timed_kind(kind: u8) -> bool {
+    matches!(kind, KIND_FERRY | KIND_ACCESS | KIND_BOARD | KIND_RIDE)
+}
+
+/// One transit edge. None of them carries geometry, a source id or a scenic attribute; what it does
+/// carry is a u16 of seconds, in the two bytes a ferry uses for its crossing, and the straight
+/// node-to-node distance as its length — which is 0 for a board or an alight outside a transfer
+/// complex, where a platform stands on its station, and the passage between two platforms of one
+/// complex inside it.
+#[allow(clippy::too_many_arguments)]
+fn transit_edge(
+    node_x: &[i32],
+    node_y: &[i32],
+    from: u32,
+    to: u32,
+    kind: u8,
+    seconds: u16,
+    name_id: u16,
+    origin_lng: f64,
+    origin_lat: f64,
+    scale: f64,
+) -> V2Edge {
+    V2Edge {
+        a: from,
+        b: to,
+        length: node_distance(node_x, node_y, from, to, origin_lng, origin_lat, scale) as f32,
+        geom: NO_GEOMETRY,
+        cover: (seconds & 0x00FF) as u8,
+        half_offset: (seconds >> 8) as u8,
+        name_id,
+        kind,
+        side: SIDE_NONE,
+        flags: 0,
+        source_id: NO_SOURCE_ID,
+    }
+}
+
+/// One station node's worth of the topology: where it stands, what it is called and whether a rider
+/// reaches it off the kerb rather than down a stair.
+struct StationGroup {
+    lng: f64,
+    lat: f64,
+    name: String,
+    surface: bool,
+}
+
+/// The station nodes the graph gets, and for each station of the topology the group it joins: one
+/// group per transfer complex, one per station the feed puts in no complex. A group stands at its
+/// members' centroid, takes the name most of them carry, and is only a kerbside stop where every
+/// member is one. Giving a whole complex a single node is what makes a change of train there an
+/// alight and a board rather than a walk out to the pavement and back in through another door.
+fn station_groups(stations: &[binfmt::TransitStation]) -> (Vec<StationGroup>, Vec<usize>) {
+    let mut group_of_complex: HashMap<u16, usize> = HashMap::new();
+    let mut members: Vec<Vec<usize>> = Vec::new();
+    let mut group_of_station: Vec<usize> = Vec::with_capacity(stations.len());
+    for (index, station) in stations.iter().enumerate() {
+        let group = if station.complex == 0 {
+            members.push(Vec::new());
+            members.len() - 1
+        } else {
+            *group_of_complex.entry(station.complex).or_insert_with(|| {
+                members.push(Vec::new());
+                members.len() - 1
+            })
+        };
+        members[group].push(index);
+        group_of_station.push(group);
+    }
+
+    let groups = members
+        .iter()
+        .map(|member| {
+            let mut counts: HashMap<&str, usize> = HashMap::new();
+            for &station in member {
+                *counts.entry(stations[station].name.as_str()).or_insert(0) += 1;
+            }
+            let mut commonest = ("", 0usize);
+            for &station in member {
+                let name = stations[station].name.as_str();
+                if counts[name] > commonest.1 {
+                    commonest = (name, counts[name]);
+                }
+            }
+            let count = member.len() as f64;
+            StationGroup {
+                lng: member.iter().map(|&one| stations[one].lng).sum::<f64>() / count,
+                lat: member.iter().map(|&one| stations[one].lat).sum::<f64>() / count,
+                name: commonest.0.to_string(),
+                surface: member.iter().all(|&one| stations[one].surface),
+            }
+        })
+        .collect();
+    (groups, group_of_station)
+}
+
+/// What the transit pass appended, for the build log and for the graph's two transit side tables.
+#[derive(Default)]
+struct TransitBuild {
+    stations: usize,
+    unsnapped: usize,
+    platform_nodes: usize,
+    access_edges: usize,
+    board_edges: usize,
+    ride_edges: usize,
+    dropped_patterns: usize,
+    routes: Vec<TransitRouteRecord>,
+    /// Per board edge its lane id, route index and stop index along the pattern, and per ride edge
+    /// its route index — the two side tables, in edge-id order.
+    board_table: Vec<(u32, u32, u16, u16)>,
+    ride_table: Vec<(u32, u16)>,
+}
+
+/// Transit: the rail topology, on the ferries' terms and one step further. A ferry rides between two
+/// walking nodes; a train rides between nodes of its own, because a rider's wait belongs to one
+/// pattern and not to the station. So each station group becomes a node joined to the pavement by an
+/// access edge, each stop of each pattern becomes a platform node, and the ride is platform to
+/// platform. Every one of these edges is appended after the walking renumber, exactly as the ferries
+/// are, so no walking edge or node moves.
+#[allow(clippy::too_many_arguments)]
+fn append_transit(
+    transit: &binfmt::Transit,
+    node_lng: &mut Vec<i32>,
+    node_lat: &mut Vec<i32>,
+    v2_edges: &mut Vec<V2Edge>,
+    all_names: &mut Vec<String>,
+    walking_node_count: usize,
+    origin_lng: f64,
+    origin_lat: f64,
+    scale: f64,
+    meters_per_unit: (f64, f64),
+) -> TransitBuild {
+    let (meters_per_unit_lng, meters_per_unit_lat) = meters_per_unit;
+    let quantize_x = |lng: f64| ((lng - origin_lng) / scale).round() as i32;
+    let quantize_y = |lat: f64| ((lat - origin_lat) / scale).round() as i32;
+    let mut built = TransitBuild::default();
+    let mut interned: HashMap<String, u16> = HashMap::new();
+    for route in &transit.routes {
+        built.routes.push(TransitRouteRecord {
+            color: route.color,
+            text_color: route.text_color,
+            short_name: intern_name(all_names, &mut interned, &route.short_name),
+            long_name: intern_name(all_names, &mut interned, &route.long_name),
+            id_name: intern_name(all_names, &mut interned, &route.id),
+        });
+    }
+
+    // Each station group snaps to its nearest walking node, ranked in the equirectangular frame the
+    // whole pass quantizes in and confirmed on the great circle — the ferries' linear scan over a
+    // few hundred stops rather than a spatial index, which at a few hundred groups is still under a
+    // second and has nothing to go stale.
+    let (groups, group_of_station) = station_groups(&transit.stations);
+    let mut group_node: Vec<Option<u32>> = Vec::with_capacity(groups.len());
+    for group in &groups {
+        let group_x = quantize_x(group.lng);
+        let group_y = quantize_y(group.lat);
+        let mut nearest: Option<(u32, f64)> = None;
+        for node in 0..walking_node_count {
+            let away_x = f64::from(node_lng[node] - group_x) * meters_per_unit_lng;
+            let away_y = f64::from(node_lat[node] - group_y) * meters_per_unit_lat;
+            let square = away_x * away_x + away_y * away_y;
+            if nearest.is_none_or(|(_, best)| square < best) {
+                nearest = Some((node as u32, square));
+            }
+        }
+        let walking = nearest.filter(|&(node, _)| {
+            great_circle(
+                group_x,
+                group_y,
+                node_lng[node as usize],
+                node_lat[node as usize],
+                origin_lng,
+                origin_lat,
+                scale,
+            ) <= TRANSIT_SNAP_RADIUS_METERS
+        });
+        match walking {
+            Some((walking_node, _)) => {
+                let station_id = node_lng.len() as u32;
+                node_lng.push(group_x);
+                node_lat.push(group_y);
+                let name_id = intern_name(all_names, &mut interned, &group.name);
+                let seconds = if group.surface {
+                    SURFACE_ACCESS_SECONDS
+                } else {
+                    UNDERGROUND_ACCESS_SECONDS
+                };
+                v2_edges.push(transit_edge(
+                    node_lng,
+                    node_lat,
+                    station_id,
+                    walking_node,
+                    KIND_ACCESS,
+                    seconds,
+                    name_id,
+                    origin_lng,
+                    origin_lat,
+                    scale,
+                ));
+                built.access_edges += 1;
+                built.stations += 1;
+                group_node.push(Some(station_id));
+            }
+            None => {
+                built.unsnapped += 1;
+                eprintln!(
+                    "tiler graph: transit station \"{}\" ({:.6}, {:.6}) has no walking node within {TRANSIT_SNAP_RADIUS_METERS:.0} m; dropping it",
+                    group.name, group.lng, group.lat
+                );
+                group_node.push(None);
+            }
+        }
+    }
+
+    for pattern in &transit.patterns {
+        // A pattern skips a station the snap dropped and rides straight past it: the seconds are an
+        // offset from the pattern's first stop, so the ride either side of a gap is still the
+        // difference of two offsets. A pattern left with one stop is no ride at all.
+        // The stop index kept beside each of them is the one the TIMETABLE counts in — the position
+        // in the pattern as the feed wrote it — so a snap that dropped a station cannot slide the
+        // rest of the line onto the wrong departures.
+        let kept: Vec<(u32, (i32, i32), u32, u16)> = pattern
+            .stops
+            .iter()
+            .zip(&pattern.offsets)
+            .enumerate()
+            .filter_map(|(index, (&stop, &offset))| {
+                let station = &transit.stations[stop as usize];
+                let point = (quantize_x(station.lng), quantize_y(station.lat));
+                group_node[group_of_station[stop as usize]]
+                    .map(|node| (node, point, offset, index as u16))
+            })
+            .collect();
+        if kept.len() < 2 {
+            built.dropped_patterns += 1;
+            continue;
+        }
+        let route = &transit.routes[usize::from(pattern.route_index)];
+        let route_name = intern_name(all_names, &mut interned, &route.short_name);
+        let mut previous: Option<(u32, u32)> = None; // the last platform node and its offset
+        for &(station_id, (platform_x, platform_y), offset, stop_index) in &kept {
+            // The platform stands at the stop the feed gives this pattern, not on the station node:
+            // a complex's node is its members' centroid, and a ride drawn from there would start a
+            // couple of hundred metres off the track. The board and the alight carry that passage.
+            let platform = node_lng.len() as u32;
+            node_lng.push(platform_x);
+            node_lat.push(platform_y);
+            built.platform_nodes += 1;
+            let board = v2_edges.len() as u32;
+            v2_edges.push(transit_edge(
+                node_lng, node_lat, station_id, platform, KIND_BOARD, 0, route_name, origin_lng,
+                origin_lat, scale,
+            ));
+            built
+                .board_table
+                .push((board, pattern.lane_id, pattern.route_index, stop_index));
+            built.board_edges += 1;
+            // The way out, which the timetable has nothing to say about: a fixed walk back up to the
+            // station, of the access kind and carrying no route.
+            v2_edges.push(transit_edge(
+                node_lng,
+                node_lat,
+                platform,
+                station_id,
+                KIND_ACCESS,
+                ALIGHT_SECONDS,
+                UNNAMED,
+                origin_lng,
+                origin_lat,
+                scale,
+            ));
+            built.access_edges += 1;
+            if let Some((from_platform, from_offset)) = previous {
+                let seconds = offset.saturating_sub(from_offset).min(u32::from(u16::MAX));
+                let ride = v2_edges.len() as u32;
+                v2_edges.push(transit_edge(
+                    node_lng,
+                    node_lat,
+                    from_platform,
+                    platform,
+                    KIND_RIDE,
+                    seconds as u16,
+                    route_name,
+                    origin_lng,
+                    origin_lat,
+                    scale,
+                ));
+                built.ride_table.push((ride, pattern.route_index));
+                built.ride_edges += 1;
+            }
+            previous = Some((platform, offset));
+        }
+    }
+    built
+}
+
 fn intern_name(
     all_names: &mut Vec<String>,
     interned: &mut HashMap<String, u16>,
@@ -1815,6 +2135,18 @@ pub fn read_stranded(path: &std::path::Path) -> Fallible<Vec<u32>> {
         .collect())
 }
 
+/// One route of the city's transit topology as the graph carries it: the feed's own colours, and
+/// the three names as ids into the graph's name table.
+#[derive(Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq, Debug))]
+struct TransitRouteRecord {
+    color: [u8; 3],
+    text_color: [u8; 3],
+    short_name: u16,
+    long_name: u16,
+    id_name: u16,
+}
+
 /// One city's finished walking network, as everything downstream of the edge list reads it: the
 /// nodes, the edges in the order the blob ships them, their geometry, the compacted name table and
 /// the durable keys. `topology` computes it; `graph_cache` holds it between builds.
@@ -1839,6 +2171,13 @@ struct Base {
     /// The compact table; every edge's `name_id` already indexes it, `UNNAMED` and all.
     names: Vec<String>,
     ferry_side_table: Vec<(u32, u16, u16)>,
+    /// The transit side tables: every route the topology carries, then per board edge its lane id,
+    /// route and stop index along the pattern, and per ride edge its route. The lane id is what the
+    /// daily timetable is keyed by and the stop index is which of that lane's stops this platform
+    /// is, so a board edge can find its next departure without the graph knowing any schedule.
+    transit_routes: Vec<TransitRouteRecord>,
+    transit_board_table: Vec<(u32, u32, u16, u16)>,
+    transit_ride_table: Vec<(u32, u16)>,
     stranded_ways: Vec<u32>,
     /// What the pass reports about the network it built, bar the two figures the write itself
     /// measures. A build whose base came off the cache prints the same line, every number in it
@@ -1922,6 +2261,27 @@ impl Base {
             out.u16(a_stop_name);
             out.u16(b_stop_name);
         }
+        out.usize(self.transit_routes.len());
+        for route in &self.transit_routes {
+            for channel in route.color.iter().chain(&route.text_color) {
+                out.u8(*channel);
+            }
+            out.u16(route.short_name);
+            out.u16(route.long_name);
+            out.u16(route.id_name);
+        }
+        out.usize(self.transit_board_table.len());
+        for &(edge_id, lane_id, route_index, stop_index) in &self.transit_board_table {
+            out.u32(edge_id);
+            out.u32(lane_id);
+            out.u16(route_index);
+            out.u16(stop_index);
+        }
+        out.usize(self.transit_ride_table.len());
+        for &(edge_id, route_index) in &self.transit_ride_table {
+            out.u32(edge_id);
+            out.u16(route_index);
+        }
         out.usize(self.stranded_ways.len());
         for way in &self.stranded_ways {
             out.u32(*way);
@@ -1987,6 +2347,31 @@ impl Base {
         for _ in 0..ferry_count {
             ferry_side_table.push((input.u32()?, input.u16()?, input.u16()?));
         }
+        let transit_route_count = input.usize()?;
+        let mut transit_routes = Vec::with_capacity(transit_route_count);
+        for _ in 0..transit_route_count {
+            let mut channels = [0u8; 6];
+            for channel in &mut channels {
+                *channel = input.u8()?;
+            }
+            transit_routes.push(TransitRouteRecord {
+                color: [channels[0], channels[1], channels[2]],
+                text_color: [channels[3], channels[4], channels[5]],
+                short_name: input.u16()?,
+                long_name: input.u16()?,
+                id_name: input.u16()?,
+            });
+        }
+        let board_count = input.usize()?;
+        let mut transit_board_table = Vec::with_capacity(board_count);
+        for _ in 0..board_count {
+            transit_board_table.push((input.u32()?, input.u32()?, input.u16()?, input.u16()?));
+        }
+        let ride_count = input.usize()?;
+        let mut transit_ride_table = Vec::with_capacity(ride_count);
+        for _ in 0..ride_count {
+            transit_ride_table.push((input.u32()?, input.u16()?));
+        }
         let stranded_count = input.usize()?;
         let mut stranded_ways = Vec::with_capacity(stranded_count);
         for _ in 0..stranded_count {
@@ -2009,6 +2394,9 @@ impl Base {
             geometry_polys,
             names,
             ferry_side_table,
+            transit_routes,
+            transit_board_table,
+            transit_ride_table,
             stranded_ways,
             stats,
             csr,
@@ -3550,8 +3938,8 @@ fn topology(args: &Args) -> Fallible<Base> {
     for (index, &old) in node_order.iter().enumerate() {
         new_id[old as usize] = index as u32;
     }
-    let node_lng: Vec<i32> = node_order.iter().map(|&old| v2_x[old as usize]).collect();
-    let node_lat: Vec<i32> = node_order.iter().map(|&old| v2_y[old as usize]).collect();
+    let mut node_lng: Vec<i32> = node_order.iter().map(|&old| v2_x[old as usize]).collect();
+    let mut node_lat: Vec<i32> = node_order.iter().map(|&old| v2_y[old as usize]).collect();
     let node_component: Vec<u16> = node_order
         .iter()
         .map(|&old| node_component_of_v2[old as usize])
@@ -3724,6 +4112,34 @@ fn topology(args: &Args) -> Fallible<Base> {
         }
     }
 
+    let TransitBuild {
+        stations: transit_stations,
+        unsnapped: transit_stations_unsnapped,
+        platform_nodes: transit_platform_nodes,
+        access_edges: transit_access_edges,
+        board_edges: transit_board_edges,
+        ride_edges: transit_ride_edges,
+        dropped_patterns: transit_dropped_patterns,
+        routes: transit_routes,
+        board_table: transit_board_names,
+        ride_table: transit_ride_names,
+    } = match &args.transit {
+        Some(transit_file) => append_transit(
+            &binfmt::read_transit(transit_file)?,
+            &mut node_lng,
+            &mut node_lat,
+            &mut v2_edges,
+            &mut all_names,
+            node_count,
+            origin_lng,
+            origin_lat,
+            scale,
+            meters_per_unit,
+        ),
+        None => TransitBuild::default(),
+    };
+    let node_count = node_lng.len();
+
     // Merged walking-plus-ferry connectivity: union-find over every edge, then relabel the components
     // by size descending (0 = largest). This overwrites the walking-only node_component/component_count
     // above, so the ferry-joined boroughs share one component and the pre-write invariant loop's "an
@@ -3768,6 +4184,13 @@ fn topology(args: &Args) -> Fallible<Base> {
         used_names.push(a_stop_name);
         used_names.push(b_stop_name);
     }
+    // The route table's three names per route are reached through the transit side table rather than
+    // through any edge, so they need the same rescue.
+    for route in &transit_routes {
+        used_names.push(route.short_name);
+        used_names.push(route.long_name);
+        used_names.push(route.id_name);
+    }
     used_names.sort_unstable();
     used_names.dedup();
     if used_names.len() > UNNAMED as usize {
@@ -3782,6 +4205,15 @@ fn topology(args: &Args) -> Fallible<Base> {
         .iter()
         .map(|&(edge_id, a_stop_name, b_stop_name)| {
             (edge_id, name_remap[&a_stop_name], name_remap[&b_stop_name])
+        })
+        .collect();
+    let transit_routes: Vec<TransitRouteRecord> = transit_routes
+        .iter()
+        .map(|route| TransitRouteRecord {
+            short_name: name_remap[&route.short_name],
+            long_name: name_remap[&route.long_name],
+            id_name: name_remap[&route.id_name],
+            ..*route
         })
         .collect();
     // The edges are remapped here rather than at the write, so what the base holds is already the
@@ -3830,8 +4262,12 @@ fn topology(args: &Args) -> Fallible<Base> {
     // The whole-city invariants (invariants.rs), read off the finished edges. A CSCL key is only a
     // CSCL key on an edge that took one: an OSM way id and a physicalid are both u32 and do collide,
     // and only a derived edge or a mapped sidewalk matched to a street is keyed by the street.
+    // Over the walking network and the ferries that join its components — the transit edges are cut
+    // out, because every one of these bounds is a statement about pavement, and a ride between two
+    // stations is neither pavement nor a distance anyone walks.
     let invariant_edges: Vec<invariants::Edge> = v2_edges
         .iter()
+        .filter(|edge| !matches!(edge.kind, KIND_ACCESS | KIND_BOARD | KIND_RIDE))
         .map(|edge| {
             let straight = [
                 [node_lng[edge.a as usize], node_lng[edge.b as usize]],
@@ -4145,6 +4581,14 @@ fn topology(args: &Args) -> Fallible<Base> {
         "ferryDroppedUnsnapped": ferry_dropped_unsnapped,
         "ferryDroppedSameNode": ferry_dropped_same_node,
         "ferryDroppedDuplicate": ferry_dropped_duplicate,
+        "transitStations": transit_stations,
+        "transitStationsUnsnapped": transit_stations_unsnapped,
+        "transitPlatformNodes": transit_platform_nodes,
+        "transitAccessEdges": transit_access_edges,
+        "transitBoardEdges": transit_board_edges,
+        "transitRideEdges": transit_ride_edges,
+        "transitDroppedPatterns": transit_dropped_patterns,
+        "transitRoutes": transit_routes.len(),
         "names": names.len(),
         "alleyKm": alley_reach.total_km,
         "alleyOffComponentKm": alley_reach.off_component_km,
@@ -4182,6 +4626,9 @@ fn topology(args: &Args) -> Fallible<Base> {
         geometry_polys,
         names,
         ferry_side_table,
+        transit_routes,
+        transit_board_table: transit_board_names,
+        transit_ride_table: transit_ride_names,
         stranded_ways,
         stats,
         csr,
@@ -4219,7 +4666,7 @@ fn edge_polylines(base: &Base) -> Vec<Vec<binfmt::Coord>> {
     base.edges
         .iter()
         .map(|edge| {
-            if edge.kind == KIND_FERRY {
+            if timed_kind(edge.kind) {
                 Vec::new()
             } else if edge.geom == NO_GEOMETRY {
                 vec![
@@ -4308,6 +4755,13 @@ fn bake(
         .iter()
         .map(|edge| f64::from(edge.length))
         .collect();
+    // A ferry stays walkable here, as it was before the transit kinds existed: it is long enough
+    // that no fan-out reaches across one, and saying otherwise would move bytes for nothing.
+    let edge_walkable: Vec<bool> = base
+        .edges
+        .iter()
+        .map(|edge| !matches!(edge.kind, KIND_ACCESS | KIND_BOARD | KIND_RIDE))
+        .collect();
     let meters_per_unit_lat = METERS_PER_DEGREE_LAT * base.scale;
     let meters_per_unit_lng =
         METERS_PER_DEGREE_LAT * base.origin_lat.to_radians().cos() * base.scale;
@@ -4319,6 +4773,7 @@ fn bake(
         edge_a: &edge_a,
         edge_b: &edge_b,
         edge_len_m: &edge_len_m,
+        edge_walkable: &edge_walkable,
         origin_lng: base.origin_lng,
         origin_lat: base.origin_lat,
         scale: base.scale,
@@ -4622,6 +5077,9 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
         geometry_polys,
         names,
         ferry_side_table,
+        transit_routes,
+        transit_board_table,
+        transit_ride_table,
         stranded_ways,
         csr,
         adjacency,
@@ -4716,10 +5174,10 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
                 geometry_polys[edge.geom as usize].0.len() as u16,
             )
         };
-        // A ferry carries a u16 duration in bytes 20-21 (edge.cover is its low byte, edge.half_offset
-        // its high byte), so the 254 cover clamp — which keeps a real edge's client maxCover < 1 —
-        // applies only to the cover-bearing kinds.
-        let cover = if edge.kind == KIND_FERRY {
+        // A ferry or a transit edge carries a u16 duration in bytes 20-21 (edge.cover is its low
+        // byte, edge.half_offset its high byte), so the 254 cover clamp — which keeps a real edge's
+        // client maxCover < 1 — applies only to the cover-bearing kinds.
+        let cover = if timed_kind(edge.kind) {
             edge.cover
         } else if edge.cover > 254 {
             cover_clamped += 1;
@@ -4738,9 +5196,9 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
         bytes[record + 22] = (edge.kind & KIND_MASK) | (edge.side << SIDE_SHIFT);
         bytes[record + 23] = edge.flags;
         // The attribute bytes (v5 scenic, v6 direct canopy): a ferry passes no landmark, art,
-        // highway or commercial frontage and walks under no crown, so it keeps the record's default
-        // zeros; every walking kind carries the baked attributes.
-        if edge.kind != KIND_FERRY {
+        // highway or commercial frontage and walks under no crown, and neither does a train, so both
+        // keep the record's default zeros; every walking kind carries the baked attributes.
+        if !timed_kind(edge.kind) {
             bytes[record + 24] = columns.landmark[edge_id];
             bytes[record + 25] = columns.art[edge_id];
             bytes[record + 26] = columns.highway[edge_id];
@@ -4785,6 +5243,37 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
         bytes.extend_from_slice(&edge_id.to_le_bytes());
         bytes.extend_from_slice(&a_stop_name.to_le_bytes());
         bytes.extend_from_slice(&b_stop_name.to_le_bytes());
+    }
+
+    // The transit side tables (v11), 4-aligned after the ferry table and reached through the header
+    // u32 at byte 64: the route table, then per board edge its lane id, route and stop index, then
+    // per ride edge its route. Each is a u32 count and fixed-size records, and all three are empty
+    // for a city with no transit source.
+    while bytes.len() % 4 != 0 {
+        bytes.push(0);
+    }
+    let transit_table_offset = bytes.len() as u32;
+    put_u32(&mut bytes, 64, transit_table_offset);
+    bytes.extend_from_slice(&(transit_routes.len() as u32).to_le_bytes());
+    for route in transit_routes {
+        bytes.extend_from_slice(&route.color);
+        bytes.extend_from_slice(&route.text_color);
+        bytes.extend_from_slice(&route.short_name.to_le_bytes());
+        bytes.extend_from_slice(&route.long_name.to_le_bytes());
+        bytes.extend_from_slice(&route.id_name.to_le_bytes());
+    }
+    bytes.extend_from_slice(&(transit_board_table.len() as u32).to_le_bytes());
+    for &(edge_id, lane_id, route_index, stop_index) in transit_board_table {
+        bytes.extend_from_slice(&edge_id.to_le_bytes());
+        bytes.extend_from_slice(&lane_id.to_le_bytes());
+        bytes.extend_from_slice(&route_index.to_le_bytes());
+        bytes.extend_from_slice(&stop_index.to_le_bytes());
+    }
+    bytes.extend_from_slice(&(transit_ride_table.len() as u32).to_le_bytes());
+    for &(edge_id, route_index) in transit_ride_table {
+        bytes.extend_from_slice(&edge_id.to_le_bytes());
+        bytes.extend_from_slice(&route_index.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
     }
 
     if let Some(parent) = args.out.parent() {
@@ -4881,6 +5370,149 @@ pub fn run(args: &Args, dem: Option<&mut crate::dem::Dem>) -> Fallible<Vec<u32>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Two stations the feed puts in one transfer complex, each served by a line of its own, plus a
+    // station at either end for the two lines to run to.
+    fn transfer_fixture() -> binfmt::Transit {
+        let station = |lng_units: i32, lat_units: i32, name: &str, complex: u16, surface: bool| {
+            binfmt::TransitStation {
+                lng: -73.5 + f64::from(lng_units) * 1e-6,
+                lat: 40.25 + f64::from(lat_units) * 1e-6,
+                name: name.to_string(),
+                complex,
+                surface,
+            }
+        };
+        let route = |short_name: &str| binfmt::TransitRoute {
+            color: [0, 0, 0],
+            text_color: [0xFF, 0xFF, 0xFF],
+            short_name: short_name.to_string(),
+            long_name: format!("{short_name} line"),
+            id: format!("gtfs:{short_name}"),
+        };
+        binfmt::Transit {
+            stations: vec![
+                station(100, 100, "W 4 St-Wash Sq", 7, false),
+                station(300, 100, "W 4 St-Wash Sq", 7, true),
+                station(5_000, 100, "Broadway Junction", 0, false),
+                station(5_100, 100, "Bay Ridge Av", 0, false),
+            ],
+            routes: vec![route("A"), route("B")],
+            patterns: vec![
+                binfmt::TransitPattern {
+                    lane_id: 1,
+                    route_index: 0,
+                    stops: vec![2, 0],
+                    offsets: vec![0, 600],
+                },
+                binfmt::TransitPattern {
+                    lane_id: 2,
+                    route_index: 1,
+                    stops: vec![1, 3],
+                    offsets: vec![0, 600],
+                },
+            ],
+        }
+    }
+
+    // The graph's own frame for the fixture, and two walking nodes for its stations to snap to.
+    fn transfer_graph() -> (Vec<i32>, Vec<i32>) {
+        (vec![0, 5_000], vec![0, 0])
+    }
+
+    #[test]
+    fn one_complex_takes_one_station_node_at_its_members_centroid() {
+        let (mut node_lng, mut node_lat) = transfer_graph();
+        let mut edges: Vec<V2Edge> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+        let built = append_transit(
+            &transfer_fixture(),
+            &mut node_lng,
+            &mut node_lat,
+            &mut edges,
+            &mut names,
+            2,
+            -73.5,
+            40.25,
+            1e-6,
+            (0.0848, 0.11132),
+        );
+
+        assert_eq!(built.stations, 3, "the complex is one node, not two");
+        let station_node = u32::try_from(2).expect("the first node past the pavement");
+        assert_eq!(node_lng[station_node as usize], 200);
+        assert_eq!(node_lat[station_node as usize], 100);
+        let into_station = edges
+            .iter()
+            .find(|edge| edge.a == station_node && edge.kind == KIND_ACCESS)
+            .expect("the walk in from the pavement");
+        assert_eq!(into_station.b, 0, "the nearer of the two walking nodes");
+        assert_eq!(
+            u16::from(into_station.cover) | (u16::from(into_station.half_offset) << 8),
+            UNDERGROUND_ACCESS_SECONDS,
+            "a complex with an underground member is entered down a stair"
+        );
+        assert_eq!(
+            names[into_station.name_id as usize], "W 4 St-Wash Sq",
+            "the name its members share"
+        );
+    }
+
+    #[test]
+    fn a_transfer_inside_a_complex_is_an_alight_and_a_board() {
+        let (mut node_lng, mut node_lat) = transfer_graph();
+        let mut edges: Vec<V2Edge> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+        let built = append_transit(
+            &transfer_fixture(),
+            &mut node_lng,
+            &mut node_lat,
+            &mut edges,
+            &mut names,
+            2,
+            -73.5,
+            40.25,
+            1e-6,
+            (0.0848, 0.11132),
+        );
+
+        // The platform the A line's second stop is, and the one the B line's first stop is: one
+        // rider's arrival and departure at the two halves of the complex.
+        let platform_of = |lane: u32, stop: u16| -> u32 {
+            let (board, _, _, _) = *built
+                .board_table
+                .iter()
+                .find(|&&(_, lane_id, _, stop_index)| lane_id == lane && stop_index == stop)
+                .expect("the pattern's board edge");
+            edges[board as usize].b
+        };
+        let arrived = platform_of(1, 1);
+        let departing = platform_of(2, 0);
+        assert_ne!(arrived, departing);
+        assert_eq!(
+            (node_lng[arrived as usize], node_lng[departing as usize]),
+            (100, 300),
+            "each platform stands on the stop its own line calls at"
+        );
+
+        let alight = edges
+            .iter()
+            .find(|edge| edge.a == arrived && edge.kind == KIND_ACCESS)
+            .expect("the way off the arriving platform");
+        let board = edges
+            .iter()
+            .find(|edge| edge.b == departing && edge.kind == KIND_BOARD)
+            .expect("the way onto the departing platform");
+        assert_eq!(
+            alight.b, board.a,
+            "the alight lands on the very node the next board leaves from"
+        );
+        assert_eq!(
+            u16::from(alight.cover) | (u16::from(alight.half_offset) << 8),
+            ALIGHT_SECONDS,
+            "and it costs a step off the train, not a walk to the street"
+        );
+    }
 
     fn keyed(source_id: u32, side: u8) -> V2Edge {
         V2Edge {
@@ -5548,6 +6180,15 @@ mod tests {
                 "Broadway".to_owned(),
             ],
             ferry_side_table: vec![(7, 2, 3)],
+            transit_routes: vec![TransitRouteRecord {
+                color: [51, 52, 53],
+                text_color: [54, 55, 56],
+                short_name: 57,
+                long_name: 58,
+                id_name: 59,
+            }],
+            transit_board_table: vec![(61, 62, 63, 4)],
+            transit_ride_table: vec![(64, 65)],
             stranded_ways: vec![41, 42],
             stats: serde_json::json!({"edges": 2, "nodes": 3}),
             csr,

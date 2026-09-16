@@ -22,6 +22,10 @@ export interface City {
   name: string;
   bounds: CityBounds;
   center: LatLng;
+  // The IANA zone the city keeps time in. Every published timetable is written in it, so a walker
+  // reading one from another zone resolves the hour, the weekday and the service day through this
+  // and never through the browser's own offset.
+  timeZone: string;
   // The overlays this city offers, in switcher order. A city without a pyramid simply omits it, so a
   // shared link naming an overlay the active city lacks drops that one rather than breaking.
   overlays: readonly OverlayId[];
@@ -102,6 +106,13 @@ const MAX_FERRY_WAIT_BY_CITY: Record<string, number> = {
   sf: 150 * 60,
 };
 
+// Authored here rather than derived from the bounds: a coordinate does not carry a zone, and a wrong
+// guess shows up as the wrong trains rather than as an error.
+const TIME_ZONE_BY_CITY: Record<string, string> = {
+  nyc: "America/New_York",
+  sf: "America/Los_Angeles",
+};
+
 export const CITIES: readonly City[] = manifest.cities.map((city) => ({
   id: city.id,
   name: city.name,
@@ -110,6 +121,7 @@ export const CITIES: readonly City[] = manifest.cities.map((city) => ({
     lat: (city.bounds.north + city.bounds.south) / 2,
     lng: (city.bounds.east + city.bounds.west) / 2,
   },
+  timeZone: TIME_ZONE_BY_CITY[city.id] ?? "America/New_York",
   overlays: OVERLAYS_BY_CITY[city.id] ?? [],
   sidewalkInsetMeters: city.streets.sidewalkInsetMeters,
   maxFerryWaitSeconds: MAX_FERRY_WAIT_BY_CITY[city.id],

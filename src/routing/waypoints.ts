@@ -32,7 +32,7 @@ import {
   WALK_METERS_PER_SECOND,
   walkSpeedOn,
 } from "./cost";
-import { edgeKind, otherEnd, type RoutingGraph } from "./graph";
+import { edgeKind, isTransitEdge, otherEnd, type RoutingGraph } from "./graph";
 import { NodeHeap } from "./node-heap";
 import { type RouteStep, stepFrom, stepSeconds } from "./search";
 
@@ -273,8 +273,11 @@ class ProxyExplorer {
       const to = csr[node + 1];
       for (let slot = csr[node]; slot < to; slot += 1) {
         const edge = adjacency[slot];
-        if (edgeKind(this.graph, edge) === "ferry") {
-          continue; // the proxy walks; it cannot put anyone on a boat
+        if (
+          edgeKind(this.graph, edge) === "ferry" ||
+          isTransitEdge(this.graph, edge)
+        ) {
+          continue; // the proxy walks; it cannot put anyone on a boat or a train
         }
         const neighbour = otherEnd(this.graph, edge, node);
         // What PROXY_WEIGHTS price this edge at, written out: every scenic factor is 1 at those

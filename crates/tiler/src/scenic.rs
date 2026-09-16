@@ -58,6 +58,10 @@ pub struct Network<'a> {
     pub edge_a: &'a [u32],
     pub edge_b: &'a [u32],
     pub edge_len_m: &'a [f64],
+    /// Whether an edge is one a walker uses. The fan-out below walks the graph, and the graph now
+    /// holds a transit topology: a station's board edge is zero metres long, so without this a
+    /// landmark beside one station would deposit its discount on the pavement beside the next.
+    pub edge_walkable: &'a [bool],
     pub origin_lng: f64,
     pub origin_lat: f64,
     pub scale: f64,
@@ -79,6 +83,19 @@ impl Network<'_> {
             f64::from(self.node_x[node as usize]) * self.mpu_lng,
             f64::from(self.node_y[node as usize]) * self.mpu_lat,
         )
+    }
+
+    /// A node a walker can stand on: one with a walking edge on it. A station and its platforms
+    /// carry nothing but transit edges, and a POI that snapped onto one would fan out into a dead
+    /// end and deposit its discount on nothing.
+    fn walkable_nodes(&self) -> Vec<bool> {
+        (0..self.node_count())
+            .map(|node| {
+                self.adjacency[self.csr[node] as usize..self.csr[node + 1] as usize]
+                    .iter()
+                    .any(|&edge| self.edge_walkable[edge as usize])
+            })
+            .collect()
     }
 
     fn coord_metres(&self, coord: Coord) -> (f64, f64) {
@@ -112,10 +129,15 @@ impl PartialOrd for HeapItem {
     }
 }
 
-/// A grid of node ids in metre space, cells `cell_meters` on a side, for a nearest-node snap.
+/// A grid of the WALKABLE node ids in metre space, cells `cell_meters` on a side, for a
+/// nearest-node snap.
 fn node_grid(net: &Network, cell_meters: f64) -> HashMap<(i32, i32), Vec<u32>> {
+    let walkable = net.walkable_nodes();
     let mut grid: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
-    for node in 0..net.node_count() {
+    for (node, &is_walkable) in walkable.iter().enumerate().take(net.node_count()) {
+        if !is_walkable {
+            continue;
+        }
         let (x, y) = net.node_metres(node as u32);
         grid.entry((
             (x / cell_meters).floor() as i32,
@@ -189,6 +211,9 @@ pub fn poi_amenity(net: &Network, params: &PoiParams, pois: &[Coord]) -> (Vec<u8
             let end = net.csr[node as usize + 1] as usize;
             for &edge in &net.adjacency[base..end] {
                 let edge = edge as usize;
+                if !net.edge_walkable[edge] {
+                    continue;
+                }
                 // Deposit once per POI, keyed on the edge's near end (both ends give the same min).
                 if edge_stamp[edge] != stamp {
                     edge_stamp[edge] = stamp;

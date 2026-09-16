@@ -23,7 +23,11 @@ import { join } from "node:path";
 import { constants, gunzipSync, gzipSync } from "node:zlib";
 import { cityById } from "../src/cities";
 import type { OverlayId } from "../src/overlays/registry";
-import { decodeGraph, type GraphIdentity } from "../src/routing/graph";
+import {
+  decodeGraph,
+  edgeKind,
+  type GraphIdentity,
+} from "../src/routing/graph";
 import { decodePois } from "../src/routing/pois";
 import { prettifyStreetName } from "../src/routing/street-names";
 import {
@@ -1077,6 +1081,12 @@ async function graphStreets(
   const seen = new Set<number>();
   const streets: GraphStreet[] = [];
   for (let edge = 0; edge < graph.edgeCount; edge += 1) {
+    // Only the pavement has a street name. A ferry edge is named after its route and a rail edge
+    // after its line or its station, so indexing every named edge put "A" and "Times Sq-42 St" in
+    // the street list, each pointing at a platform node nobody walks to.
+    if (edgeKind(graph, edge) !== "sidewalk" && !graph.edgeGeomCount[edge]) {
+      continue;
+    }
     const nameId = graph.edgeNameId[edge];
     const name = graph.names[nameId];
     if (name === undefined || name === "" || seen.has(nameId)) {

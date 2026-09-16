@@ -9,6 +9,10 @@ import { effSeconds, type RouteWeights, rawSeconds } from "./cost";
 import { decodeSchedule, resolveTimetable } from "./ferry-schedule";
 import type { RoutingGraph } from "./graph";
 
+// The fixtures below build their instants with the local Date constructor, so their timetables are
+// read in the runner's own zone.
+const LOCAL_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
 const KIND_FERRY = 4;
 const NORTH = "North Terminal";
 const SOUTH = "South Terminal";
@@ -137,7 +141,7 @@ function timetableAt(
   const [hour, minute] = clock.split(":").map(Number);
   // 2026-08-12 is a Wednesday, inside the fixture's Monday-to-Friday service.
   const date = new Date(2026, 7, 12, hour, minute);
-  graph.ferries = resolveTimetable(graph, record, date);
+  graph.ferries = resolveTimetable(graph, record, date, LOCAL_ZONE);
   return graph;
 }
 
@@ -232,7 +236,12 @@ test("a day the service does not run falls back to no sailings", () => {
   ]);
   const { record } = decodeSchedule(encodeTimetable(built, 20260101, 0));
   // 2026-08-15 is a Saturday; the fixture's only service is Monday to Friday.
-  graph.ferries = resolveTimetable(graph, record, new Date(2026, 7, 15, 8, 0));
+  graph.ferries = resolveTimetable(
+    graph,
+    record,
+    new Date(2026, 7, 15, 8, 0),
+    LOCAL_ZONE,
+  );
   expect(rawSeconds(graph, 0, 0, 0)).toBe(Number.POSITIVE_INFINITY);
 });
 
@@ -250,7 +259,7 @@ test("the departure instant is continuous, not snapped to the clock slider's ste
     new Date(2026, 7, 12, 9, 3, 20),
     new Date(2026, 7, 12, 9, 4, 0),
   ].map((departure) => {
-    graph.ferries = resolveTimetable(graph, record, departure);
+    graph.ferries = resolveTimetable(graph, record, departure, LOCAL_ZONE);
     return rawSeconds(graph, 0, 0, 0) - 25 * 60; // less the crossing, leaving the wait
   });
   expect(waits).toEqual([7 * 60, 3 * 60 + 40, 3 * 60]);
@@ -278,12 +287,22 @@ test("a run that only sails at weekends is unavailable on a weekday, not average
   const graph = graphOf(600);
   // Wednesday: the lane exists, so the edge is covered — but nothing sails, and it must read as no
   // boat rather than falling back to the baked 600 s, which would put a Saturday ferry on a Wednesday.
-  graph.ferries = resolveTimetable(graph, record, new Date(2026, 7, 12, 8, 0));
+  graph.ferries = resolveTimetable(
+    graph,
+    record,
+    new Date(2026, 7, 12, 8, 0),
+    LOCAL_ZONE,
+  );
   expect(graph.ferries.covers(0)).toBe(true);
   expect(rawSeconds(graph, 0, 0, 0)).toBe(Number.POSITIVE_INFINITY);
 
   // Saturday: the same lane sails.
-  graph.ferries = resolveTimetable(graph, record, new Date(2026, 7, 15, 8, 0));
+  graph.ferries = resolveTimetable(
+    graph,
+    record,
+    new Date(2026, 7, 15, 8, 0),
+    LOCAL_ZONE,
+  );
   expect(rawSeconds(graph, 0, 0, 0)).toBeCloseTo(25 * 60, 6);
 });
 
@@ -295,7 +314,12 @@ test("an edge whose terminals name no lane keeps the graph's baked figure", () =
   const graph = graphOf(600);
   // A terminal the feed renamed: no lane matches, so the timetable declines to speak for this edge.
   graph.ferryEndpointNames.set(0, { a: "Old Pier", b: SOUTH });
-  graph.ferries = resolveTimetable(graph, record, new Date(2026, 7, 12, 8, 0));
+  graph.ferries = resolveTimetable(
+    graph,
+    record,
+    new Date(2026, 7, 12, 8, 0),
+    LOCAL_ZONE,
+  );
   expect(graph.ferries.covers(0)).toBe(false);
   expect(rawSeconds(graph, 0, 0, 0)).toBe(600);
 });
@@ -345,7 +369,12 @@ test("staying on the same boat costs nothing at the piers it calls at", () => {
   (graph.ferryEdges as Uint32Array) = Uint32Array.from([0, 1]);
   graph.ferryEndpointNames.set(0, { a: NORTH, b: "Middle Terminal" });
   graph.ferryEndpointNames.set(1, { a: "Middle Terminal", b: SOUTH });
-  graph.ferries = resolveTimetable(graph, record, new Date(2026, 7, 12, 8, 50));
+  graph.ferries = resolveTimetable(
+    graph,
+    record,
+    new Date(2026, 7, 12, 8, 50),
+    LOCAL_ZONE,
+  );
 
   const first = rawSeconds(graph, 0, 0, 0); // 10 min wait + 20 min crossing
   expect(first).toBeCloseTo(10 * 60 + 20 * 60, 6);

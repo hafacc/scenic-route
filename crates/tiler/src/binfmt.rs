@@ -15,6 +15,7 @@ pub const STREET_FORMAT: u16 = 6; // v6 adds the per-side sidewalk bits to the r
 pub const PATH_FORMAT: u16 = 1; // OSM pedestrian/park ways: STRT's layout, magic "PATH"
 pub const SIDEWALK_FORMAT: u16 = 1; // OSM sidewalk/crossing/traffic-island ways: STRT's layout, magic "SWLK"
 pub const FERRY_FORMAT: u16 = 2; // the time-independent NYC ferry graph, magic "FERR"; v2 adds a route name id
+pub const TRANSIT_FORMAT: u16 = 1; // the rail topology the router rides, magic "TRNS"
 pub const LANDMARK_FORMAT: u16 = 1; // scenic POI points, the shared point layout, magic "LMRK"
 pub const ART_FORMAT: u16 = 1; // public-art POI points, the shared point layout, magic "ARTW"
 pub const HIGHWAY_FORMAT: u16 = 1; // highway/elevated-rail nuisance lines, the LAND polygon layout, magic "HWAY"
@@ -56,6 +57,21 @@ impl Cursor<'_> {
             shift += 7;
             if byte & 0x80 == 0 {
                 return ((value >> 1) as i32) ^ -((value & 1) as i32);
+            }
+        }
+    }
+
+    // Plain LEB128, no zigzag: the TRNS pattern-stop blob's two non-negative numbers.
+    fn unsigned_varint(&mut self) -> u32 {
+        let mut value: u32 = 0;
+        let mut shift: u32 = 0;
+        loop {
+            let byte = self.bytes[self.offset];
+            self.offset += 1;
+            value |= u32::from(byte & 0x7f).wrapping_shl(shift);
+            shift += 7;
+            if byte & 0x80 == 0 {
+                return value;
             }
         }
     }
@@ -725,6 +741,166 @@ pub fn read_ferries(path: &Path) -> Fallible<Ferries> {
     Ok(Ferries { stops, segments })
 }
 
+/// One station of the rail topology: the point the graph snaps to the pavement, and what it is
+/// called. `surface` is a stop entered off the kerb rather than down a stair, which is the whole of
+/// what separates a Muni shelter from a subway mezzanine and is why the two cost different access.
+/// `complex` is the agency's own transfer complex, 0 where the feed puts a station in none; the
+/// graph gives one node to each complex, so a change of train inside one never reaches the street.
+pub struct TransitStation {
+    pub lng: f64,
+    pub lat: f64,
+    pub name: String,
+    pub complex: u16,
+    pub surface: bool,
+}
+
+/// One route as its feed publishes it, colours included, so the client can draw a ride in the
+/// livery a rider expects.
+pub struct TransitRoute {
+    pub color: [u8; 3],
+    pub text_color: [u8; 3],
+    pub short_name: String,
+    pub long_name: String,
+    pub id: String,
+}
+
+/// One (route, direction, ordered stop list) a route actually runs. `stops` indexes `stations` and
+/// `offsets` is the seconds since the pattern's first stop, so the ride between two consecutive
+/// stops is the difference of their offsets. The record's GTFS direction is left in the file: the
+/// lane id already separates the two directions.
+pub struct TransitPattern {
+    pub lane_id: u32,
+    pub route_index: u16,
+    pub stops: Vec<u32>,
+    pub offsets: Vec<u32>,
+}
+
+pub struct Transit {
+    pub stations: Vec<TransitStation>,
+    pub routes: Vec<TransitRoute>,
+    pub patterns: Vec<TransitPattern>,
+}
+
+/// TRNS v1: the rail topology the graph pass bakes into stations, platforms and rides. A 56-byte
+/// header, a station table, a route table, a pattern table, a varint pattern-stop blob (per stop a
+/// station index and the seconds since the previous stop, both plain LEB128) and a GRPH-shaped name
+/// table. `decodeTopology` in scripts/transit.ts is the reference decoder; layout:
+/// scripts/README.md.
+pub fn read_transit(path: &Path) -> Fallible<Transit> {
+    const STATION_BYTES: usize = 16;
+    const ROUTE_BYTES: usize = 12;
+    const PATTERN_BYTES: usize = 16;
+    const SURFACE_FLAG: u8 = 1 << 0;
+
+    let bytes = fs::read(path)?;
+    check_magic(&bytes, "TRNS", TRANSIT_FORMAT, path)?;
+    let header_bytes = usize::from(u16_at(&bytes, 6));
+    let station_count = u32_at(&bytes, 8) as usize;
+    let route_count = u32_at(&bytes, 12) as usize;
+    let pattern_count = u32_at(&bytes, 16) as usize;
+    let stop_blob_bytes = u32_at(&bytes, 20) as usize;
+    let origin_lng = f64_at(&bytes, 24);
+    let origin_lat = f64_at(&bytes, 32);
+    let scale = f64_at(&bytes, 40);
+    let name_offset = u32_at(&bytes, 48) as usize;
+    let total = u32_at(&bytes, 52) as usize;
+    if bytes.len() != total {
+        return Err(format!(
+            "{} is {} bytes, not the {total} its header claims",
+            path.display(),
+            bytes.len()
+        )
+        .into());
+    }
+
+    // The name table: a u32 count, then (count + 1) u32 byte offsets into the trailing UTF-8 blob.
+    let name_count = u32_at(&bytes, name_offset) as usize;
+    let blob = name_offset + 4 + 4 * (name_count + 1);
+    let mut names: Vec<String> = Vec::with_capacity(name_count);
+    for index in 0..name_count {
+        let start = blob + u32_at(&bytes, name_offset + 4 + 4 * index) as usize;
+        let end = blob + u32_at(&bytes, name_offset + 8 + 4 * index) as usize;
+        if end > bytes.len() || start > end {
+            return Err(format!("{}: name {index} runs off the file", path.display()).into());
+        }
+        names.push(String::from_utf8_lossy(&bytes[start..end]).into_owned());
+    }
+    let name = |id: usize| names.get(id).cloned().unwrap_or_default();
+
+    let station_table = header_bytes;
+    let mut stations = Vec::with_capacity(station_count);
+    for index in 0..station_count {
+        let record = station_table + index * STATION_BYTES;
+        stations.push(TransitStation {
+            lng: origin_lng + f64::from(i32_at(&bytes, record)) * scale,
+            lat: origin_lat + f64::from(i32_at(&bytes, record + 4)) * scale,
+            name: name(u32_at(&bytes, record + 8) as usize),
+            complex: u16_at(&bytes, record + 12),
+            surface: bytes[record + 14] & SURFACE_FLAG != 0,
+        });
+    }
+
+    let route_table = station_table + station_count * STATION_BYTES;
+    let mut routes = Vec::with_capacity(route_count);
+    for index in 0..route_count {
+        let record = route_table + index * ROUTE_BYTES;
+        routes.push(TransitRoute {
+            color: [bytes[record], bytes[record + 1], bytes[record + 2]],
+            text_color: [bytes[record + 3], bytes[record + 4], bytes[record + 5]],
+            short_name: name(usize::from(u16_at(&bytes, record + 6))),
+            long_name: name(usize::from(u16_at(&bytes, record + 8))),
+            id: name(usize::from(u16_at(&bytes, record + 10))),
+        });
+    }
+
+    let pattern_table = route_table + route_count * ROUTE_BYTES;
+    let stop_blob = pattern_table + pattern_count * PATTERN_BYTES;
+    if stop_blob + stop_blob_bytes != name_offset {
+        return Err(format!(
+            "{}: the pattern-stop blob does not run up to the name table",
+            path.display()
+        )
+        .into());
+    }
+    let mut patterns = Vec::with_capacity(pattern_count);
+    for index in 0..pattern_count {
+        let record = pattern_table + index * PATTERN_BYTES;
+        let stop_count = usize::from(u16_at(&bytes, record + 8));
+        let mut cursor = Cursor {
+            bytes: &bytes,
+            offset: stop_blob + u32_at(&bytes, record + 12) as usize,
+        };
+        let mut stops = Vec::with_capacity(stop_count);
+        let mut offsets = Vec::with_capacity(stop_count);
+        let mut elapsed = 0u32;
+        for _ in 0..stop_count {
+            let station = cursor.unsigned_varint();
+            if station as usize >= station_count {
+                return Err(format!(
+                    "{}: pattern {index} rides to station {station} of {station_count}",
+                    path.display()
+                )
+                .into());
+            }
+            elapsed += cursor.unsigned_varint();
+            stops.push(station);
+            offsets.push(elapsed);
+        }
+        patterns.push(TransitPattern {
+            lane_id: u32_at(&bytes, record),
+            route_index: u16_at(&bytes, record + 4),
+            stops,
+            offsets,
+        });
+    }
+
+    Ok(Transit {
+        stations,
+        routes,
+        patterns,
+    })
+}
+
 pub fn zigzag(value: i64) -> u64 {
     ((value << 1) ^ (value >> 63)) as u64
 }
@@ -736,4 +912,152 @@ pub fn write_varint(bytes: &mut Vec<u8>, value: u64) {
         remaining >>= 7;
     }
     bytes.push(remaining as u8);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TRNS as scripts/transit.ts writes it, small enough to read by eye: two stations, one route,
+    // one pattern riding both. Written here rather than committed so a layout change breaks the
+    // encoder and this decoder against each other rather than against a stale file.
+    fn transit_fixture() -> Vec<u8> {
+        const HEADER: usize = 56;
+        let names = ["Court Sq", "Bergen St", "G", "Crosstown", "gtfs:G"];
+        let mut stations = Vec::new();
+        for (index, (x, y, name_id, complex, flags)) in [
+            (1_000i32, 2_000i32, 0u32, 3u16, 0u8),
+            (4_000, 6_000, 1, 0, 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(stations.len(), index * 16);
+            stations.extend_from_slice(&x.to_le_bytes());
+            stations.extend_from_slice(&y.to_le_bytes());
+            stations.extend_from_slice(&name_id.to_le_bytes());
+            stations.extend_from_slice(&complex.to_le_bytes());
+            stations.push(flags);
+            stations.push(0);
+        }
+
+        let mut routes = vec![0x11, 0x22, 0x33, 0xEE, 0xDD, 0xCC];
+        routes.extend_from_slice(&2u16.to_le_bytes());
+        routes.extend_from_slice(&3u16.to_le_bytes());
+        routes.extend_from_slice(&4u16.to_le_bytes());
+
+        // Two stops: station 0 at 0 s, station 1 at 300 s. Plain LEB128, so 300 is two bytes.
+        let stop_blob = vec![0, 0, 1, 0xAC, 0x02, 0, 0, 0];
+
+        let mut patterns = Vec::new();
+        patterns.extend_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        patterns.extend_from_slice(&0u16.to_le_bytes());
+        patterns.push(1);
+        patterns.push(0);
+        patterns.extend_from_slice(&2u16.to_le_bytes());
+        patterns.extend_from_slice(&0u16.to_le_bytes());
+        patterns.extend_from_slice(&0u32.to_le_bytes());
+
+        let mut name_table = (names.len() as u32).to_le_bytes().to_vec();
+        let mut at = 0u32;
+        for name in names {
+            name_table.extend_from_slice(&at.to_le_bytes());
+            at += name.len() as u32;
+        }
+        name_table.extend_from_slice(&at.to_le_bytes());
+        for name in names {
+            name_table.extend_from_slice(name.as_bytes());
+        }
+
+        let name_offset = HEADER + stations.len() + routes.len() + patterns.len() + stop_blob.len();
+        let total = name_offset + name_table.len();
+        let mut bytes = Vec::with_capacity(total);
+        bytes.extend_from_slice(b"TRNS");
+        bytes.extend_from_slice(&TRANSIT_FORMAT.to_le_bytes());
+        bytes.extend_from_slice(&(HEADER as u16).to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&(stop_blob.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(-73.5f64).to_le_bytes());
+        bytes.extend_from_slice(&40.25f64.to_le_bytes());
+        bytes.extend_from_slice(&1e-6f64.to_le_bytes());
+        bytes.extend_from_slice(&(name_offset as u32).to_le_bytes());
+        bytes.extend_from_slice(&(total as u32).to_le_bytes());
+        bytes.extend_from_slice(&stations);
+        bytes.extend_from_slice(&routes);
+        bytes.extend_from_slice(&patterns);
+        bytes.extend_from_slice(&stop_blob);
+        bytes.extend_from_slice(&name_table);
+        assert_eq!(bytes.len(), total);
+        bytes
+    }
+
+    #[test]
+    fn a_transit_topology_reads_back_what_the_ingest_wrote() {
+        let directory = std::env::temp_dir().join("tiler-trns-fixture");
+        fs::create_dir_all(&directory).expect("a scratch directory");
+        let path = directory.join("fixture.bin");
+        fs::write(&path, transit_fixture()).expect("the fixture");
+
+        let transit = read_transit(&path).expect("a topology");
+
+        assert_eq!(transit.stations.len(), 2);
+        assert_eq!(transit.stations[0].name, "Court Sq");
+        assert_eq!(transit.stations[0].complex, 3);
+        assert_eq!(transit.stations[1].complex, 0);
+        assert!(!transit.stations[0].surface);
+        assert!(transit.stations[1].surface);
+        assert!((transit.stations[1].lng - -73.496).abs() < 1e-9);
+        assert!((transit.stations[1].lat - 40.256).abs() < 1e-9);
+        assert_eq!(transit.routes.len(), 1);
+        assert_eq!(transit.routes[0].color, [0x11, 0x22, 0x33]);
+        assert_eq!(transit.routes[0].text_color, [0xEE, 0xDD, 0xCC]);
+        assert_eq!(transit.routes[0].short_name, "G");
+        assert_eq!(transit.routes[0].long_name, "Crosstown");
+        assert_eq!(transit.routes[0].id, "gtfs:G");
+        assert_eq!(transit.patterns.len(), 1);
+        assert_eq!(transit.patterns[0].lane_id, 0xDEAD_BEEF);
+        assert_eq!(transit.patterns[0].stops, vec![0, 1]);
+        assert_eq!(transit.patterns[0].offsets, vec![0, 300]);
+
+        fs::remove_file(&path).expect("the fixture removed");
+    }
+
+    /// The committed artifacts themselves, which is the only thing that proves this reader and the
+    /// TypeScript encoder agree about a real file rather than about a fixture written twice.
+    #[test]
+    fn the_committed_topologies_decode() {
+        let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/transit");
+        for city in ["nyc", "sf"] {
+            let path = data.join(format!("{city}.bin"));
+            if !path.exists() {
+                continue; // a checkout without the committed source, e.g. a sparse CI clone
+            }
+            let transit = read_transit(&path).expect("a topology");
+            assert!(transit.stations.len() > 100, "{city} has stations");
+            assert!(transit.routes.len() > 5, "{city} has routes");
+            assert!(transit.patterns.len() > 20, "{city} has patterns");
+            assert!(
+                transit
+                    .stations
+                    .iter()
+                    .all(|station| !station.name.is_empty()),
+                "{city} names every station"
+            );
+            for pattern in &transit.patterns {
+                assert!(pattern.stops.len() >= 2, "{city} pattern rides somewhere");
+                assert_eq!(pattern.stops.len(), pattern.offsets.len());
+                assert_eq!(pattern.offsets[0], 0, "{city} pattern starts at zero");
+                assert!(
+                    pattern.offsets.windows(2).all(|pair| pair[0] <= pair[1]),
+                    "{city} pattern never rides backwards"
+                );
+                assert!(
+                    usize::from(pattern.route_index) < transit.routes.len(),
+                    "{city} pattern names a route"
+                );
+            }
+        }
+    }
 }

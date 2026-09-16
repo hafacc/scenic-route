@@ -1,7 +1,7 @@
 // The client's view of the routing graph baked by the graph pass. Layout: scripts/README.md
-// (magic GRPH, v10 — the sidewalk graph with inert ferry edges). Fixed sections are viewed in place
-// over the fetched buffer; the strided edge records are copied once into parallel typed arrays so
-// the search loop touches only flat arrays.
+// (magic GRPH, v11 — the sidewalk graph with inert ferry and transit edges). Fixed sections are
+// viewed in place over the fetched buffer; the strided edge records are copied once into parallel
+// typed arrays so the search loop touches only flat arrays.
 
 import { cityById } from "../cities";
 import type { FerryTimetable } from "./ferry-schedule";
@@ -18,6 +18,12 @@ const SIDE_SHIFT = 3;
 const SIDE_MASK = 0x7;
 const KIND_CROSSING = 1;
 const KIND_FERRY = 4;
+// The three transit kinds: the walk in and out of a station, the step onto a pattern's platform
+// (whose wait the timetable answers at route time, so it bakes no duration), and one platform to the
+// next. Nothing routes over them yet — the search skips them until the transit cost lands.
+const KIND_ACCESS = 5;
+const KIND_BOARD = 6;
+const KIND_RIDE = 7;
 // flags byte bit 2 marks a sidewalk that lies to the right of its stored geometry direction.
 const GEOMETRY_RIGHT_FLAG = 0x4;
 
@@ -57,10 +63,11 @@ export function edgeDurableKey(graph: RoutingGraph, edge: number): number {
   }
 }
 
-// The nodes standing in a roadway rather than on pavement: those whose every edge is a crossing. A
-// marked crossing of a divided street is drawn as several ways chained through the islands between
-// them, so these are the joints inside one crossing. Charging a wait per crossing EDGE would bill a
-// wide avenue two or three times for a single wait.
+// The nodes standing in a roadway rather than on pavement: those whose every walking edge is a
+// crossing. A marked crossing of a divided street is drawn as several ways chained through the
+// islands between them, so these are the joints inside one crossing. Charging a wait per crossing
+// EDGE would bill a wide avenue two or three times for a single wait. Transit edges do not count:
+// a station whose access edge happens to land on a traffic island does not pave it.
 export function markMidRoadwayNodes(
   nodeCount: number,
   csr: Uint32Array,
@@ -71,17 +78,30 @@ export function markMidRoadwayNodes(
   for (let node = 0; node < nodeCount; node += 1) {
     const from = csr[node];
     const to = csr[node + 1];
-    let allCrossings = to > from;
+    let walking = 0;
+    let allCrossings = true;
     for (let slot = from; slot < to && allCrossings; slot += 1) {
-      allCrossings =
-        (edgeKindSide[adjacency[slot]] & KIND_MASK) === KIND_CROSSING;
+      const kind = edgeKindSide[adjacency[slot]] & KIND_MASK;
+      if (kind === KIND_ACCESS || kind === KIND_BOARD || kind === KIND_RIDE) {
+        continue;
+      }
+      walking += 1;
+      allCrossings = kind === KIND_CROSSING;
     }
-    midRoadway[node] = allCrossings ? 1 : 0;
+    midRoadway[node] = allCrossings && walking > 0 ? 1 : 0;
   }
   return midRoadway;
 }
 
-export type EdgeKind = "sidewalk" | "crossing" | "link" | "path" | "ferry";
+export type EdgeKind =
+  | "sidewalk"
+  | "crossing"
+  | "link"
+  | "path"
+  | "ferry"
+  | "access"
+  | "board"
+  | "ride";
 export type SideLabel = "north" | "east" | "south" | "west" | null;
 
 const EDGE_KINDS: readonly EdgeKind[] = [
@@ -90,7 +110,15 @@ const EDGE_KINDS: readonly EdgeKind[] = [
   "link",
   "path",
   "ferry",
+  "access",
+  "board",
+  "ride",
 ];
+const TRANSIT_KINDS: ReadonlySet<EdgeKind> = new Set<EdgeKind>([
+  "access",
+  "board",
+  "ride",
+]);
 const SIDE_LABELS: readonly SideLabel[] = [
   null,
   "north",
@@ -192,19 +220,48 @@ export interface RoutingGraph extends GraphIdentity {
   // 0 for every other kind. What a ferry costs when `ferries` is null.
   edgeDurationSeconds: Float32Array;
   ferryEdges: Uint32Array; // ids of the ferry edges, for the A* ferry-credit heuristic
+  // The transit topology baked into the graph (GRPH v11): the ids of every access, board and ride
+  // edge, and the board subset on its own. Nothing routes over them yet — `isTransitEdge` is what
+  // the search skips on — so they are inert exactly as a ferry is with its gate closed.
+  transitEdges: Uint32Array;
+  boardEdges: Uint32Array;
+  // Every route the city's transit topology carries, in the order the side table lists them, which
+  // is the order `routeOf` indexes.
+  transitRoutes: TransitRoute[];
   minFerrySecPerMetre: number; // min over ferry edges of duration/length, Infinity when there are none
+  // The same figure for the two transit kinds that carry their seconds in the graph, and the floor
+  // the A* heuristic keeps under the transit credit. Infinity when the city has no rail.
+  minRideSecPerMetre: number;
+  minAccessSecPerMetre: number;
   edgeFlags: Uint8Array; // bit0 structure, bit1 steps, bit2 geometry-right (sidewalks), bit3 OSM-sourced
   names: string[];
   geometry: Uint8Array;
   // Per ferry edge, its two terminal stop names at the node-a and node-b ends (aligned to
   // edgeNodeA/edgeNodeB). The route name is the edge's own name (`edgeName`).
   ferryEndpointNames: Map<number, { a: string; b: string }>;
+  // Per board edge, the lane (route, direction, stop pattern) the daily timetable is keyed by, and
+  // per board and ride edge, the route it runs. `laneOf` and `routeOf` read these.
+  transitLaneOf: Map<number, number>;
+  transitRouteOf: Map<number, number>;
+}
+
+// One transit route as the graph carries it: what a rider calls it, the corridor it runs, its feed
+// id (the same id the display artifact uses, so the two join on it) and the published livery as CSS
+// colours.
+export interface TransitRoute {
+  shortName: string;
+  longName: string;
+  id: string;
+  color: string;
+  textColor: string;
 }
 
 const MAGIC = "GRPH";
 // Exported so a fixture cannot drift from them: a test writing its own header must write these.
-export const FORMAT_VERSION = 10;
-const HEADER_BYTES = 64;
+export const FORMAT_VERSION = 11;
+// v11 grew the header to 80 for the transit side table's offset at byte 64. Exported for the same
+// reason the two above are: a fixture writing its own header must write this one.
+export const HEADER_BYTES = 80;
 // v10 grew the record by 4: byte 36 the industrial attribute, then 37 the historic one, which took
 // the first of its three reserved zeros without a version bump. A graph written before that bake
 // reads byte 37 back as 0 on every edge, so its max is 0 and its slider gates itself off.
@@ -244,6 +301,7 @@ export function decodeGraph(
   const geometryOffset = view.getUint32(52, true);
   const geometryLength = view.getUint32(56, true);
   const ferryNameTableOffset = view.getUint32(60, true);
+  const transitTableOffset = view.getUint32(64, true);
 
   // Fixed sections run back to back after the header, each starting 4-byte aligned. They are
   // viewed in place; the quantized coordinates, components, and CSR need no copy.
@@ -282,6 +340,8 @@ export function decodeGraph(
   const edgeAscent = new Uint8Array(edgeCount);
   const edgeDescent = new Uint8Array(edgeCount);
   const ferryEdges: number[] = [];
+  const transitEdges: number[] = [];
+  const boardEdges: number[] = [];
   let maxCoverByte = 0;
   let maxLandmarkByte = 0;
   let maxArtByte = 0;
@@ -291,6 +351,8 @@ export function decodeGraph(
   let maxDirectCanopyByte = 0;
   let maxReliefByte = 0;
   let minFerrySecPerMetre = Number.POSITIVE_INFINITY;
+  let minRideSecPerMetre = Number.POSITIVE_INFINITY;
+  let minAccessSecPerMetre = Number.POSITIVE_INFINITY;
   for (let edge = 0; edge < edgeCount; edge++) {
     const record = offset + edge * EDGE_RECORD_BYTES;
     edgeNodeA[edge] = view.getUint32(record, true);
@@ -302,7 +364,8 @@ export function decodeGraph(
     const kindSide = bytes[record + 22];
     edgeKindSide[edge] = kindSide;
     edgeFlags[edge] = bytes[record + 23];
-    if ((kindSide & KIND_MASK) === KIND_FERRY) {
+    const kind = kindSide & KIND_MASK;
+    if (kind === KIND_FERRY) {
       // A ferry carries no cover and no half-offset; bytes 20-21 are a u16 crossing-plus-wait
       // duration. Cover stays 0 so it never lifts maxCover (the cost heuristic's floor).
       const duration = view.getUint16(record + 20, true);
@@ -311,6 +374,27 @@ export function decodeGraph(
       const length = edgeLength[edge];
       if (length > 0) {
         minFerrySecPerMetre = Math.min(minFerrySecPerMetre, duration / length);
+      }
+    } else if (
+      kind === KIND_ACCESS ||
+      kind === KIND_BOARD ||
+      kind === KIND_RIDE
+    ) {
+      // The transit kinds carry their seconds in the same two bytes, and leave cover at 0 for the
+      // same reason. A board edge's is 0: its wait comes from the timetable, not from the graph.
+      const duration = view.getUint16(record + 20, true);
+      edgeDurationSeconds[edge] = duration;
+      transitEdges.push(edge);
+      const length = edgeLength[edge];
+      if (kind === KIND_BOARD) {
+        boardEdges.push(edge);
+      } else if (length > 0 && kind === KIND_RIDE) {
+        minRideSecPerMetre = Math.min(minRideSecPerMetre, duration / length);
+      } else if (length > 0) {
+        minAccessSecPerMetre = Math.min(
+          minAccessSecPerMetre,
+          duration / length,
+        );
       }
     } else {
       edgeCover[edge] = bytes[record + 20];
@@ -355,6 +439,12 @@ export function decodeGraph(
   const ferryEndpointNames = decodeFerryEndpointNames(
     buffer,
     ferryNameTableOffset,
+    names,
+  );
+
+  const { transitRoutes, transitLaneOf, transitRouteOf } = decodeTransitTables(
+    buffer,
+    transitTableOffset,
     names,
   );
 
@@ -412,10 +502,17 @@ export function decodeGraph(
     edgeDurationSeconds,
     ferryEdges: Uint32Array.from(ferryEdges),
     minFerrySecPerMetre,
+    minRideSecPerMetre,
+    minAccessSecPerMetre,
     edgeFlags,
     names,
     geometry,
     ferryEndpointNames,
+    transitEdges: Uint32Array.from(transitEdges),
+    boardEdges: Uint32Array.from(boardEdges),
+    transitRoutes,
+    transitLaneOf,
+    transitRouteOf,
   };
 }
 
@@ -461,6 +558,84 @@ function decodeFerryEndpointNames(
     map.set(edge, { a: names[aId] ?? "", b: names[bId] ?? "" });
   }
   return map;
+}
+
+// The transit side tables (the byte-64 offset, 4-aligned after the ferry table): a u32 count and a
+// 12-byte record per route (RGB, text RGB, three u16 name ids), then a u32 count and a 12-byte
+// record per board edge (edge id, lane id, route index, pad), then a u32 count and an 8-byte record
+// per ride edge (edge id, route index, pad). All three are empty for a city with no transit source.
+function decodeTransitTables(
+  buffer: ArrayBuffer,
+  tableOffset: number,
+  names: string[],
+): {
+  transitRoutes: TransitRoute[];
+  transitLaneOf: Map<number, number>;
+  transitRouteOf: Map<number, number>;
+} {
+  const transitRoutes: TransitRoute[] = [];
+  const transitLaneOf = new Map<number, number>();
+  const transitRouteOf = new Map<number, number>();
+  if (tableOffset === 0 || tableOffset + 4 > buffer.byteLength) {
+    return { transitRoutes, transitLaneOf, transitRouteOf };
+  }
+  const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  const hex = (at: number): string =>
+    `#${[bytes[at], bytes[at + 1], bytes[at + 2]]
+      .map((channel) => channel.toString(16).padStart(2, "0"))
+      .join("")}`;
+  const routeCount = view.getUint32(tableOffset, true);
+  let at = tableOffset + 4;
+  for (let index = 0; index < routeCount; index++) {
+    transitRoutes.push({
+      color: hex(at),
+      textColor: hex(at + 3),
+      shortName: names[view.getUint16(at + 6, true)] ?? "",
+      longName: names[view.getUint16(at + 8, true)] ?? "",
+      id: names[view.getUint16(at + 10, true)] ?? "",
+    });
+    at += 12;
+  }
+  const boardCount = view.getUint32(at, true);
+  at += 4;
+  for (let index = 0; index < boardCount; index++) {
+    const edge = view.getUint32(at, true);
+    transitLaneOf.set(edge, view.getUint32(at + 4, true));
+    transitRouteOf.set(edge, view.getUint16(at + 8, true));
+    at += 12;
+  }
+  const rideCount = view.getUint32(at, true);
+  at += 4;
+  for (let index = 0; index < rideCount; index++) {
+    transitRouteOf.set(view.getUint32(at, true), view.getUint16(at + 4, true));
+    at += 8;
+  }
+  return { transitRoutes, transitLaneOf, transitRouteOf };
+}
+
+// The lane the daily timetable answers this board edge against — a (route, direction, stop pattern),
+// hashed by the ingest so a graph and a timetable written days apart still agree. -1 for every edge
+// that is not a board edge.
+export function laneOf(graph: RoutingGraph, edge: number): number {
+  return graph.transitLaneOf.get(edge) ?? -1;
+}
+
+// The route a board or ride edge runs, or null for anything else — an access edge included, since
+// the walk in and out of a station belongs to no one line.
+export function routeOf(
+  graph: RoutingGraph,
+  edge: number,
+): TransitRoute | null {
+  const index = graph.transitRouteOf.get(edge);
+  return index === undefined ? null : (graph.transitRoutes[index] ?? null);
+}
+
+// Is this edge part of the transit topology rather than the walking network? The search skips these
+// wholesale: the graph carries the stations, platforms and rides, and the cost model that prices
+// them does not exist yet, so no route may use one.
+export function isTransitEdge(graph: RoutingGraph, edge: number): boolean {
+  return TRANSIT_KINDS.has(edgeKind(graph, edge));
 }
 
 export function edgeKind(graph: RoutingGraph, edge: number): EdgeKind {

@@ -18,7 +18,7 @@
 // Layout: scripts/README.md.
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import {
@@ -31,6 +31,18 @@ import {
 } from "./ferries";
 import { writeVarint } from "./geometry";
 import { fetchGtfsZip, type GtfsFeed, parseGtfs } from "./gtfs";
+import {
+  CURRENT_LAST_DAY,
+  collectServices,
+  dayNumber,
+  dayString,
+  type Exception,
+  encodeExceptions,
+  encodeServices,
+  localDay,
+  publishRecord,
+  type Service,
+} from "./schedule-record";
 
 // NOT public/ferries/ — that is the tile build's own output for the drawn ferry lines, gitignored
 // and rebuilt by a deploy. This artifact is committed and rebuilt daily, so it lives beside the shed
@@ -41,18 +53,11 @@ export const SCHEDULE_DIR = join(PUBLIC_DIR, "ferry-schedule");
 export const SCHEDULE_MAGIC = "FSCH";
 export const SCHEDULE_FORMAT = 1;
 const HEADER_BYTES = 40;
-const SERVICE_BYTES = 12;
-const EXCEPTION_BYTES = 8;
 const LANE_BYTES = 16;
-const CURRENT_LAST_DAY = 0; // a record's lastDay while it is the one in effect
 const NO_ROUTE_NAME = 0xffff;
 // Joins a lane's parts into a map key. NUL because a GTFS stop or route name may contain any
 // printable character, spaces and punctuation included, but never this one.
 const KEY_SEPARATOR = "\u0000";
-
-// GTFS calendar_dates exception types.
-const EXCEPTION_ADDED = 1;
-const EXCEPTION_REMOVED = 2;
 
 // One (origin, destination, route, service) departure list. Directional on purpose: a timetable is
 // not symmetric, and the reverse leg is what a destination drag re-solves against. Splitting by
@@ -69,59 +74,10 @@ interface Lane {
   departures: { at: number; crossing: number }[];
 }
 
-// A GTFS service as the client re-derives it: the weekday mask and date range from calendar.txt, and
-// the individual days calendar_dates.txt adds or removes.
-interface Service {
-  key: string; // `${feedId}:${serviceId}`, so the two feeds' service ids cannot collide
-  mask: number; // bit 0 Monday .. bit 6 Sunday
-  startDay: number; // YYYYMMDD
-  endDay: number;
-}
-
-interface Exception {
-  serviceKey: string;
-  day: number; // YYYYMMDD
-  type: number;
-}
-
 export interface Timetable {
   lanes: Lane[];
   services: Service[];
   exceptions: Exception[];
-}
-
-const WEEKDAY_COLUMNS = [
-  "monday",
-  "tuesday",
-  "wednesday",
-  "thursday",
-  "friday",
-  "saturday",
-  "sunday",
-] as const;
-
-// A "YYYY-MM-DD" day as the YYYYMMDD integer the artifact stores. Ordered as an integer exactly as
-// it is as a date, so a range check is a pair of comparisons.
-export function dayNumber(day: string): number {
-  return Number(day.replaceAll("-", ""));
-}
-
-export function dayString(day: number): string {
-  const text = String(day);
-  return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
-}
-
-// The day before `day`, so a superseded record's range can be closed the day the new one opens.
-function previousDay(day: number): number {
-  const date = new Date(
-    Date.UTC(
-      Math.floor(day / 10000),
-      (Math.floor(day / 100) % 100) - 1,
-      day % 100,
-    ),
-  );
-  date.setUTCDate(date.getUTCDate() - 1);
-  return dayNumber(date.toISOString().slice(0, 10));
 }
 
 // One feed's ferry trips, cut into consecutive-stop departures and folded into the shared lanes.
@@ -242,64 +198,6 @@ function consolidate(
   }
 }
 
-// The calendars behind the services the lanes actually use. A service named only by calendar_dates
-// (no calendar.txt row) still needs a row to be indexable, and gets a zero mask — which never matches
-// a weekday, so only its exception days ever turn it on. That is what an exceptions-only service is.
-function collectServices(
-  feeds: { source: FeedSource; feed: GtfsFeed }[],
-  usedServices: Set<string>,
-): { services: Service[]; exceptions: Exception[] } {
-  const services = new Map<string, Service>();
-  const exceptions: Exception[] = [];
-
-  for (const { source, feed } of feeds) {
-    for (const row of feed.calendar) {
-      const key = `${source.id}:${row.service_id}`;
-      if (!usedServices.has(key)) {
-        continue;
-      }
-      let mask = 0;
-      WEEKDAY_COLUMNS.forEach((column, bit) => {
-        if (row[column] === "1") {
-          mask |= 1 << bit;
-        }
-      });
-      services.set(key, {
-        key,
-        mask,
-        startDay: Number(row.start_date),
-        endDay: Number(row.end_date),
-      });
-    }
-    for (const row of feed.calendarDates) {
-      const key = `${source.id}:${row.service_id}`;
-      const day = Number(row.date);
-      const type = Number(row.exception_type);
-      if (
-        !usedServices.has(key) ||
-        !Number.isFinite(day) ||
-        (type !== EXCEPTION_ADDED && type !== EXCEPTION_REMOVED)
-      ) {
-        continue;
-      }
-      exceptions.push({ serviceKey: key, day, type });
-      // An exception applies whatever the calendar range says, so a service named only here needs a
-      // row only to exist and be indexable — a zero mask never matches a weekday, which is exactly
-      // what an exceptions-only service is.
-      if (!services.has(key)) {
-        services.set(key, { key, mask: 0, startDay: 0, endDay: 0 });
-      }
-    }
-  }
-
-  return {
-    services: [...services.values()].sort((left, right) =>
-      left.key < right.key ? -1 : 1,
-    ),
-    exceptions,
-  };
-}
-
 // `excluded` defaults to nothing so a caller building a timetable out of feeds it wrote itself — the
 // tests do — need not name a city's exclusions to say it has none.
 export function buildTimetable(
@@ -312,7 +210,10 @@ export function buildTimetable(
   for (const { source, feed } of feeds) {
     consolidate(feed, source.id, excluded, lanes, usedServices, stopOfName);
   }
-  const { services, exceptions } = collectServices(feeds, usedServices);
+  const { services, exceptions } = collectServices(
+    feeds.map(({ source, feed }) => ({ feedId: source.id, feed })),
+    usedServices,
+  );
 
   // Everything is ordered before it is written: the record's bytes have to be a pure function of the
   // feeds, or an unchanged day would look like a schedule change to the daily job.
@@ -329,12 +230,6 @@ export function buildTimetable(
   const ordered = [...lanes.entries()]
     .sort(([left], [right]) => (left < right ? -1 : 1))
     .map(([, lane]) => lane);
-  exceptions.sort(
-    (left, right) =>
-      left.day - right.day ||
-      (left.serviceKey < right.serviceKey ? -1 : 1) ||
-      left.type - right.type,
-  );
 
   return { lanes: ordered, services, exceptions };
 }
@@ -389,27 +284,8 @@ export function encodeTimetable(
   }
   const departureBlob = Uint8Array.from(departureBytes);
 
-  const serviceTable = new Uint8Array(services.length * SERVICE_BYTES);
-  const serviceView = new DataView(serviceTable.buffer);
-  services.forEach((service, index) => {
-    const record = index * SERVICE_BYTES;
-    serviceView.setUint32(record, service.startDay, true);
-    serviceView.setUint32(record + 4, service.endDay, true);
-    serviceView.setUint8(record + 8, service.mask);
-  });
-
-  const exceptionTable = new Uint8Array(exceptions.length * EXCEPTION_BYTES);
-  const exceptionView = new DataView(exceptionTable.buffer);
-  exceptions.forEach((exception, index) => {
-    const record = index * EXCEPTION_BYTES;
-    exceptionView.setUint32(record, exception.day, true);
-    exceptionView.setUint16(
-      record + 4,
-      serviceIndex.get(exception.serviceKey) ?? 0,
-      true,
-    );
-    exceptionView.setUint8(record + 6, exception.type);
-  });
+  const serviceTable = encodeServices(services);
+  const exceptionTable = encodeExceptions(exceptions, serviceIndex);
 
   const laneTable = new Uint8Array(lanes.length * LANE_BYTES);
   const laneView = new DataView(laneTable.buffer);
@@ -481,30 +357,6 @@ export function encodeTimetable(
   return bytes;
 }
 
-// Everything past the header — the part that depends only on the feeds. Comparing this is what tells
-// a schedule change from a run on another day: the header carries the day range, which moves on its
-// own whenever a change is recorded.
-function bodyOf(record: Uint8Array): Uint8Array {
-  return record.subarray(HEADER_BYTES);
-}
-
-function sameBody(left: Uint8Array, right: Uint8Array): boolean {
-  const leftBody = bodyOf(left);
-  const rightBody = bodyOf(right);
-  return (
-    leftBody.length === rightBody.length &&
-    leftBody.every((byte, index) => byte === rightBody[index])
-  );
-}
-
-async function readIfPresent(path: string): Promise<Uint8Array | null> {
-  try {
-    return new Uint8Array(await readFile(path));
-  } catch {
-    return null;
-  }
-}
-
 export interface ScheduleUpdate {
   changed: boolean;
   firstDay: number;
@@ -532,53 +384,15 @@ export async function updateFerrySchedule(
 
   const timetable = buildTimetable(loaded, excludedStopNames(cityId));
   const day = dayNumber(today);
-  const currentPath = join(SCHEDULE_DIR, `${cityId}.bin`);
-  const pastPath = join(SCHEDULE_DIR, `${cityId}-past.bin`);
-  const standing = await readIfPresent(currentPath);
-  const candidate = encodeTimetable(timetable, day, CURRENT_LAST_DAY);
+  const { changed, firstDay, record } = await publishRecord({
+    directory: SCHEDULE_DIR,
+    cityId,
+    candidate: encodeTimetable(timetable, day, CURRENT_LAST_DAY),
+    headerBytes: HEADER_BYTES,
+    today: day,
+    label: "ferry-schedule",
+  });
 
-  let record = candidate;
-  let changed = true;
-  if (standing && sameBody(standing, candidate)) {
-    // Unchanged: keep the standing record exactly as it is, first day and all. Rewriting it with
-    // today's date would make every run a commit.
-    record = standing;
-    changed = false;
-  } else if (standing) {
-    const standingFirst = new DataView(
-      standing.buffer,
-      standing.byteOffset,
-      standing.byteLength,
-    ).getUint32(8, true);
-    const closesOn = previousDay(day);
-    if (standingFirst > closesOn) {
-      // The standing record took effect today and is already being replaced — the feed moved twice in
-      // one day, or a run is being redone. It covered no completed day, so there is nothing to keep:
-      // closing it would append a record whose range runs backwards and which no day can ever match.
-      console.error(
-        `ferry-schedule: replacing today's timetable in place (took effect ${dayString(standingFirst)})`,
-      );
-    } else {
-      const closed = new Uint8Array(standing);
-      new DataView(closed.buffer).setUint32(12, closesOn, true);
-      const past = (await readIfPresent(pastPath)) ?? new Uint8Array(0);
-      const appended = new Uint8Array(past.length + closed.length);
-      appended.set(past, 0);
-      appended.set(closed, past.length);
-      await writeFile(pastPath, appended);
-      console.error(
-        `ferry-schedule: retired the timetable of ${dayString(standingFirst)}` +
-          `..${dayString(closesOn)}`,
-      );
-    }
-  }
-
-  await writeFile(currentPath, record);
-  const firstDay = new DataView(
-    record.buffer,
-    record.byteOffset,
-    record.byteLength,
-  ).getUint32(8, true);
   const departures = timetable.lanes.reduce(
     (sum, lane) => sum + lane.departures.length,
     0,
@@ -597,14 +411,6 @@ export async function updateFerrySchedule(
     bytes: record.length,
     sha256: createHash("sha256").update(record).digest("hex"),
   };
-}
-
-// The LOCAL day, not `toISOString()`'s UTC one: a run after 8pm ET would otherwise open the new
-// timetable on tomorrow's date and leave today with no record covering it.
-function localDay(date: Date): string {
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 // One city with `--city`, otherwise every city that has ferries — which is what the daily job runs,

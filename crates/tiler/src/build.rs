@@ -51,6 +51,7 @@ use crate::{
 enum Source {
     Sidewalks,
     Ferries,
+    Transit,
     Landmarks,
     Art,
     Highways,
@@ -62,9 +63,10 @@ enum Source {
 impl Source {
     /// Every variant, so `key_space_files` can decide about each one by name and a new source
     /// cannot slip past it.
-    const ALL: [Source; 8] = [
+    const ALL: [Source; 9] = [
         Source::Sidewalks,
         Source::Ferries,
+        Source::Transit,
         Source::Landmarks,
         Source::Art,
         Source::Highways,
@@ -77,6 +79,7 @@ impl Source {
         match self {
             Source::Sidewalks => "sidewalks",
             Source::Ferries => "ferries",
+            Source::Transit => "transit",
             Source::Landmarks => "landmarks",
             Source::Art => "art",
             Source::Highways => "highways",
@@ -951,7 +954,7 @@ impl<'a> Stamps<'a> {
         );
         for source in Source::ALL {
             let topology = match source {
-                Source::Sidewalks | Source::Ferries => true,
+                Source::Sidewalks | Source::Ferries | Source::Transit => true,
                 // Each of these bakes one column over edges that were final before it ran, so it
                 // keys that column and stays out of the base.
                 Source::Landmarks
@@ -1812,6 +1815,7 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
                     .map(|layer| plan.data.join("paths").join(&layer.file)),
                 sidewalks: planned.source(&plan.data, Source::Sidewalks),
                 ferries: planned.source(&plan.data, Source::Ferries),
+                transit: planned.source(&plan.data, Source::Transit),
                 landmarks: planned.source(&plan.data, Source::Landmarks),
                 art: planned.source(&plan.data, Source::Art),
                 highways: planned.source(&plan.data, Source::Highways),
@@ -1946,8 +1950,9 @@ impl Plan {
     /// arguments the build assembles above, built here by the same expressions, and everything else
     /// that call takes is argued out:
     ///
-    /// - ferries carry `NO_SOURCE_ID` and are appended after the walking sort and the node renumber,
-    ///   so `assign_ordinals` skips them and no earlier edge moves;
+    /// - ferries and the transit stations, platforms and rides carry `NO_SOURCE_ID` and are appended
+    ///   after the walking sort and the node renumber, so `assign_ordinals` skips them and no
+    ///   earlier edge moves;
     /// - landmarks, art, highways, the commercial lines, the industrial lots and the historic
     ///   districts are each one per-edge attribute byte, read after the last edge is pushed;
     /// - the buildings and the sun grid drive the SHDE bake, which runs after the graph blob is
@@ -1970,6 +1975,7 @@ impl Plan {
             files.push(match source {
                 Source::Sidewalks => planned.source(&self.data, source),
                 Source::Ferries
+                | Source::Transit
                 | Source::Landmarks
                 | Source::Art
                 | Source::Highways

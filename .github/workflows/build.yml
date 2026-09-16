@@ -11,6 +11,7 @@ on:
     paths-ignore:
       - "public/sheds/**"
       - "public/ferry-schedule/**"
+      - "public/transit-schedule/**"
       - "public/addresses/**"
       - "public/search/**"
   pull_request:
