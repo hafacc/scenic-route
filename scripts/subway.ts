@@ -553,5 +553,9 @@ export async function ingestSubway(cityId: string): Promise<SourceFile> {
 }
 
 if (import.meta.main) {
-  await ingestSubway(process.argv[2] ?? "nyc");
+  // The first argument that is not a flag: the cache flags belong to scripts/cache.ts.
+  const city = process.argv
+    .slice(2)
+    .find((argument) => !argument.startsWith("--"));
+  await ingestSubway(city ?? "nyc");
 }

@@ -104,7 +104,7 @@ export async function* featurePages<Feature>({
     const page =
       cacheName === null
         ? await read()
-        : await cached(`${cacheName}-${offset}`, url, read, true);
+        : await cached(`${cacheName}-${offset}`, url, read, { quiet: true });
     yield page;
     if (page.length < pageSize) {
       return;

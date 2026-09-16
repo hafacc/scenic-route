@@ -16,6 +16,10 @@ const BROWSER_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const MAX_ATTEMPTS = 3;
+// The feeds are the one cached source that goes stale on its own: an agency posts a new zip every
+// few weeks and the calendar in the old one runs out, so a timetable built off a month-old copy is
+// built off an expired calendar. `--offline` (or OFFLINE=1) takes the cached copy whatever its age.
+const FEED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const RETRY_BASE_MS = 2_000;
 const RETRY_CAP_MS = 30_000;
 
@@ -68,17 +72,22 @@ async function download(url: string): Promise<Uint8Array> {
   }
 }
 
-// Downloads a feed zip once and keeps it in .cache/ as base64 (the cache stores JSON, so the raw
-// bytes ride as a string). The ingest also freezes the returned bytes under data/ferries/, so a
+// Downloads a feed zip and keeps it in .cache/ as base64 (the cache stores JSON, so the raw bytes
+// ride as a string), for a week. The ingest also freezes the returned bytes under data/ferries/, so a
 // later time-of-day pass can re-derive from the exact feeds this build read.
 export async function fetchGtfsZip(
   name: string,
   url: string,
 ): Promise<Uint8Array> {
-  const base64 = await cached(name, url, async () => {
-    console.error(`  ${name}: downloading ${url}`);
-    return Buffer.from(await download(url)).toString("base64");
-  });
+  const base64 = await cached(
+    name,
+    url,
+    async () => {
+      console.error(`  ${name}: downloading ${url}`);
+      return Buffer.from(await download(url)).toString("base64");
+    },
+    { maxAgeMs: FEED_MAX_AGE_MS },
+  );
   return new Uint8Array(Buffer.from(base64, "base64"));
 }
 
@@ -89,10 +98,15 @@ export async function fetchGtfsZipFile(
   name: string,
   url: string,
 ): Promise<Uint8Array> {
-  const path = await cachedFile(name, url, async () => {
-    console.error(`  ${name}: downloading ${url}`);
-    return await download(url);
-  });
+  const path = await cachedFile(
+    name,
+    url,
+    async () => {
+      console.error(`  ${name}: downloading ${url}`);
+      return await download(url);
+    },
+    { maxAgeMs: FEED_MAX_AGE_MS },
+  );
   return new Uint8Array(await readFile(path));
 }
 

@@ -1138,7 +1138,7 @@ async function geocodeBatches<Key>(
           fetchFeatures<GeoJsonFeature<Record<string, string>>>(service, {
             body,
           }),
-        true,
+        { quiet: true },
       )),
     );
   }
