@@ -2,8 +2,9 @@
 // geometry and its stations as data/subway/nyc.bin (magic SBWY) — every route's polylines together
 // with the colour and the names the MTA publishes for it, and every station with the set of routes
 // that genuinely serve it, so a renderer can draw one route at a time, and one marker per station,
-// and know what to paint them without a second file. Display only: this is a walking router, nothing
-// here enters the routing graph or any of its inputs. Layout: scripts/README.md.
+// and know what to paint them without a second file. Display only: nothing here enters the routing
+// graph or any of its inputs — the rail a route rides is scripts/transit.ts's TRNS blob, baked from
+// this same feed. Layout: scripts/README.md.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";

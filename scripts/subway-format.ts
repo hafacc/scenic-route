@@ -6,7 +6,7 @@
 // Both cities' ingests write through this: New York's (scripts/subway.ts) reads one feed, San
 // Francisco's (scripts/subway-sf.ts) two, and what they share is everything downstream of the feed.
 
-import { COORD_SCALE, writeVarint, zigzag } from "./geometry";
+import { COORD_SCALE, haversineMeters, writeVarint, zigzag } from "./geometry";
 import type { GtfsFeed } from "./gtfs";
 import type { Coord } from "./socrata";
 
@@ -151,6 +151,61 @@ export function transferComplexes(
     complexes.set(station, id);
   }
   return complexes;
+}
+
+// How far apart two same-named stops can stand and still be one station. A terminal's several kerbs,
+// and the two ends of a long platform, arrive as separate stops in every feed here.
+export const STATION_MERGE_METERS = 100;
+
+// Same-named points chained into clusters, each within STATION_MERGE_METERS of another member.
+// Single-link, so a row of kerbs strung along a block joins up; what a cluster becomes — a station
+// marker, a routing station, the key its stops are remapped onto — is the caller's business.
+export function clusterByName<Point extends Coord & { name: string }>(
+  points: readonly Point[],
+): Point[][] {
+  const byName = new Map<string, Point[]>();
+  for (const point of points) {
+    const group = byName.get(point.name);
+    if (group) {
+      group.push(point);
+    } else {
+      byName.set(point.name, [point]);
+    }
+  }
+
+  const clusters: Point[][] = [];
+  for (const group of byName.values()) {
+    const taken = new Array<boolean>(group.length).fill(false);
+    for (let seed = 0; seed < group.length; seed++) {
+      if (taken[seed]) {
+        continue;
+      }
+      taken[seed] = true;
+      const cluster = [group[seed]];
+      for (let member = 0; member < cluster.length; member++) {
+        for (let other = 0; other < group.length; other++) {
+          if (
+            !taken[other] &&
+            haversineMeters(cluster[member], group[other]) <=
+              STATION_MERGE_METERS
+          ) {
+            taken[other] = true;
+            cluster.push(group[other]);
+          }
+        }
+      }
+      clusters.push(cluster);
+    }
+  }
+  return clusters;
+}
+
+// Where a cluster of stops stands, as the one point the merged station is drawn and routed at.
+export function centroid(points: readonly Coord[]): Coord {
+  return {
+    lat: points.reduce((sum, one) => sum + one.lat, 0) / points.length,
+    lng: points.reduce((sum, one) => sum + one.lng, 0) / points.length,
+  };
 }
 
 // The first complex id no station in `complexes` uses, so the next feed's ids do not collide with

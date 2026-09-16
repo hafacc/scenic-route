@@ -4,7 +4,7 @@
 // back to the surrounding street component together) and makes a cross-harbour query fail
 // honestly rather than snapping across the water.
 
-import { edgeKind, edgePath, type RoutingGraph } from "./graph";
+import { edgeKind, edgePath, isTransitEdge, type RoutingGraph } from "./graph";
 
 export const SNAP_RADIUS_METERS = 300;
 
@@ -54,11 +54,18 @@ export function buildSnapIndex(graph: RoutingGraph): SnapIndex {
   const buckets = new Map<number, number[]>();
   const cursor = { offset: 0 };
   for (let edge = 0; edge < graph.edgeCount; edge++) {
-    // You never start a walk mid-crosswalk, on a corner link, or aboard a ferry, so those kinds are
-    // left out of the index entirely — the geometry-less ones (crossings, links, straight ferries)
-    // would also have no polyline to index.
+    // You never start a walk mid-crosswalk, on a corner link, aboard a ferry or on a platform, so
+    // those kinds are left out of the index entirely — the geometry-less ones (crossings, links,
+    // straight ferries and every transit edge) would also have no polyline to index. Leaving the
+    // transit kinds out is also what keeps a walker from ever being snapped onto a station or a
+    // platform node: a snap names an edge, so an edge nothing indexes is a node nothing reaches.
     const kind = edgeKind(graph, edge);
-    if (kind === "crossing" || kind === "link" || kind === "ferry") {
+    if (
+      kind === "crossing" ||
+      kind === "link" ||
+      kind === "ferry" ||
+      isTransitEdge(graph, edge)
+    ) {
       continue;
     }
     cursor.offset = graph.edgeGeomOffset[edge];

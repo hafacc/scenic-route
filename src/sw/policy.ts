@@ -13,11 +13,11 @@ import { APP_PAGES, MODES_PAGE, SHELL_EXTRAS } from "../pages";
 // must never be able to evict it.
 export type Store = "shell" | "routing" | "overlay";
 
-// The two artifacts a daily job rewrites in place on the default branch, read straight from raw
-// rather than out of the deploy so a walk today is not costed against last week's timetable.
+// The artifacts a daily job rewrites in place on the default branch, read straight from raw rather
+// than out of the deploy so a walk today is not costed against last week's timetable.
 const FEED_HOST = "raw.githubusercontent.com";
 const FEED_PREFIX = "/hafaio/scenic-route/main/public/";
-const FEED_DIRS = ["sheds/", "ferry-schedule/"];
+const FEED_DIRS = ["sheds/", "ferry-schedule/", "transit-schedule/"];
 
 // The basemap, served from Protomaps' hosted API rather than out of the deploy: a planet is far too
 // large to ship, and the whole point of the switch away from CARTO is that these MAY be kept — their

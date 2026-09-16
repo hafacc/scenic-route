@@ -182,6 +182,7 @@ fn run() -> Fallible<()> {
                 paths: Some(paths),
                 sidewalks: Some(sidewalks),
                 ferries: None,
+                transit: None,
                 landmarks: None,
                 art: None,
                 highways: None,
