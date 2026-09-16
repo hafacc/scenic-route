@@ -18,7 +18,7 @@ import ResultList, {
 //
 // It opens where the route panel opens and wears the same card, because the two are the same kind of
 // thing — a place to type where you want to go — and they share the slot: the app closes one when it
-// opens the other (components/map-app.tsx), so the copied classes below never have to stack.
+// opens the other (components/map-shell.tsx), so the copied classes below never have to stack.
 //
 // The rows, and the one row that stands in for them, are the route fields' own (components/
 // result-list.tsx), so the same index reads the same way in both. What is not shared is the

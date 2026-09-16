@@ -11,6 +11,7 @@ import {
   type Filed,
   fileRequest,
   isGraph,
+  pageFor,
   type Store,
   shadeKey,
 } from "./policy";
@@ -250,7 +251,7 @@ async function serveWorkerScript(event: FetchEventLike): Promise<Response> {
 async function serve(event: FetchEventLike, filed: Filed): Promise<Response> {
   const { request } = event;
   if (filed.store === "shell" && request.mode === "navigate") {
-    return await servePage(request);
+    return await servePage(request, filed.path);
   }
   const cache = await caches.open(STORES[filed.store]);
   if (filed.fresh) {
@@ -373,10 +374,10 @@ async function evict(which: Store, cap: number): Promise<void> {
 // while the address bar asks for the directory and a share link asks for it with a `#at=...` on the
 // end; all three are the same page. Nothing here is written back — the precache owns the shell, and
 // caching navigations would file one copy of it per share link.
-async function servePage(request: Request): Promise<Response> {
+async function servePage(request: Request, path: string): Promise<Response> {
   const cache = await caches.open(STORES.shell);
   const page = await cache.match(
-    new URL("index.html", scope.registration.scope).href,
+    new URL(pageFor(path), scope.registration.scope).href,
   );
   return page ?? (await fetch(request));
 }

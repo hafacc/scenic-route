@@ -1,7 +1,14 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { FiX } from "react-icons/fi";
 import {
   activeCity,
@@ -34,46 +41,19 @@ import {
   reverseGeocode,
   searchAddress,
 } from "../src/geocode";
-import {
-  applyExclusivity,
-  isOverlayId,
-  OVERLAYS,
-  type OverlayId,
-} from "../src/overlays/registry";
+import { OVERLAYS, type OverlayId } from "../src/overlays/registry";
 import type { Pin, PinDraft } from "../src/pin";
 import {
-  getPinnedTime,
   getResolvedDate,
   setCustomDay,
   setCustomHour,
   subscribeRouteTime,
 } from "../src/route-time/store";
 import { RouteContexts } from "../src/routing/contexts";
-import {
-  DEFAULT_ART_WEIGHT,
-  DEFAULT_COMMERCIAL_WEIGHT,
-  DEFAULT_FERRY_WEIGHT,
-  DEFAULT_HIGHWAY_WEIGHT,
-  DEFAULT_HILL_WEIGHT,
-  DEFAULT_HISTORIC_WEIGHT,
-  DEFAULT_INDUSTRIAL_WEIGHT,
-  DEFAULT_LANDMARK_WEIGHT,
-  DEFAULT_SHADE_WEIGHT,
-  DEFAULT_SHELTER_WEIGHT,
-  DEFAULT_TREE_WEIGHT,
-  MAX_FERRY_WEIGHT,
-  MAX_HIGHWAY_WEIGHT,
-  MAX_HILL_WEIGHT,
-  MAX_INDUSTRIAL_WEIGHT,
-  MAX_SHADE_WEIGHT,
-  MAX_SHELTER_WEIGHT,
-  MAX_TREE_WEIGHT,
-  type RouteWeights,
-} from "../src/routing/cost";
-import { buildDirections } from "../src/routing/directions";
-import type { FactorKey, GateKey } from "../src/routing/factors";
+import type { RouteWeights } from "../src/routing/cost";
+import { buildDirections, type Maneuver } from "../src/routing/directions";
 import { loadGraph, type RoutingGraph } from "../src/routing/graph";
-import { navProgress } from "../src/routing/nav-progress";
+import { type NavProgress, navProgress } from "../src/routing/nav-progress";
 import { loadPois, type PoiSet, passedPois } from "../src/routing/pois";
 import { routerClient } from "../src/routing/router-client";
 import type { RouteResult } from "../src/routing/search";
@@ -86,10 +66,6 @@ import {
   warmNameIndex,
 } from "../src/search/name-search";
 import {
-  settings as storedSettings,
-  updateSettings,
-} from "../src/settings/store";
-import {
   startSettingsSync,
   stopSettingsSync,
 } from "../src/settings/sync-session";
@@ -97,33 +73,23 @@ import { sharedDestinationText, withoutShareParams } from "../src/share-target";
 import {
   type Camera,
   decodeDestQuery,
-  decodeRoute,
   decodeView,
-  encodeRoute,
-  encodeView,
-  formatHash,
   hashParams,
   type LatLng,
-  type RouteUrlState,
+  type PlaceUrlState,
   withoutDestQuery,
 } from "../src/url-state";
 import AboutDialog from "./about-dialog";
 import { CityProvider } from "./city-context";
 import FollowToggle from "./follow-toggle";
-import GoogleMapsButton from "./google-maps-button";
 import LayerLegend from "./layer-legend";
 import type { DestPrefill } from "./location-field";
 import type { MapTarget, PickMode, SearchPin } from "./map";
 import PinEditor from "./pin-editor";
-import RoutePanel from "./route-panel";
 import SearchControl from "./search-control";
-import SettingsDialog from "./settings-dialog";
 import SignInDialog from "./sign-in-dialog";
-import Toolbar from "./toolbar";
-import UrlSync from "./url-sync";
 import { useHashFlag, useHashSection } from "./use-hash-flag";
 import { useStandalone } from "./use-install";
-import { useSettings } from "./use-settings";
 
 // leaflet touches `window` at module load, so the map must be client-only
 const MapView = dynamic(() => import("./map"), {
@@ -140,7 +106,7 @@ export type AuthState =
   | { kind: "signedOut" }
   | { kind: "signedIn"; info: AuthInfo };
 
-type RouteState =
+export type RouteState =
   | { kind: "idle" }
   | { kind: "loading" } // graph fetch or search in flight
   // The graph travels WITH the result. Directions are built by indexing a result's edge numbers into
@@ -150,7 +116,6 @@ type RouteState =
   | { kind: "ready"; result: RouteResult; graph: RoutingGraph }
   | { kind: "error"; message: string };
 
-const OVERLAY_KEY = "scenic-route:overlay";
 const RESNAP_METERS = 25; // a followed location must drift this far before the route recomputes
 // Street level, where the first fix frames you. Matches what the map's own follow camera zooms to.
 const LOCATED_ZOOM = 16;
@@ -183,58 +148,6 @@ function loadRouting(
     });
   routingPromises.set(cityId, request);
   return request;
-}
-
-// The weights the settings document holds, each falling back to its default. These are what a URL key
-// overrides and what a missing one leaves in place.
-function storedWeights(): RouteWeights {
-  const { weights, allowFerries, allowSheds, allowCrossings } =
-    storedSettings();
-  const read = (key: FactorKey, fallback: number, min: number, max: number) => {
-    const stored = weights[key];
-    return stored === undefined
-      ? fallback
-      : Math.min(max, Math.max(min, stored));
-  };
-  return {
-    tree: read("tree", DEFAULT_TREE_WEIGHT, 0, MAX_TREE_WEIGHT),
-    ferry: read("ferry", DEFAULT_FERRY_WEIGHT, 0, MAX_FERRY_WEIGHT),
-    landmark: read("landmark", DEFAULT_LANDMARK_WEIGHT, 0, 1),
-    art: read("art", DEFAULT_ART_WEIGHT, 0, 1),
-    highway: read("highway", DEFAULT_HIGHWAY_WEIGHT, 0, MAX_HIGHWAY_WEIGHT),
-    hill: read("hill", DEFAULT_HILL_WEIGHT, 0, MAX_HILL_WEIGHT),
-    commercial: read("commercial", DEFAULT_COMMERCIAL_WEIGHT, 0, 1),
-    industrial: read(
-      "industrial",
-      DEFAULT_INDUSTRIAL_WEIGHT,
-      0,
-      MAX_INDUSTRIAL_WEIGHT,
-    ),
-    historic: read("historic", DEFAULT_HISTORIC_WEIGHT, 0, 1),
-    shade: read(
-      "shade",
-      DEFAULT_SHADE_WEIGHT,
-      -MAX_SHADE_WEIGHT,
-      MAX_SHADE_WEIGHT,
-    ),
-    shelter: read("shelter", DEFAULT_SHELTER_WEIGHT, 0, MAX_SHELTER_WEIGHT),
-    allowFerries,
-    allowSheds,
-    allowCrossings,
-  };
-}
-
-// The panel's slider and the settings page's move the same value, so both persist through here. A
-// weight nobody has moved stays out of the document and keeps its built-in default.
-function persistWeight(key: FactorKey, weight: number): void {
-  updateSettings({ weights: { ...storedSettings().weights, [key]: weight } });
-}
-
-// The persisted overlay ids, or null when nothing was ever stored (which keeps the canopy default).
-// An empty stored string is a deliberate "all off".
-function storedOverlays(): string[] | null {
-  const stored = window.localStorage.getItem(OVERLAY_KEY);
-  return stored === null ? null : stored.split(",");
 }
 
 function metersBetween(
@@ -275,7 +188,106 @@ type Editing =
   | { mode: "edit"; pin: Pin }
   | null;
 
-export default function MapApp() {
+// An endpoint as the shell holds it: a point plus whatever name it has been given.
+export interface Endpoint extends LatLng {
+  label: string | null;
+}
+
+// Which controls this city's own graph can answer. Read off the graph rather than authored per city,
+// so it cannot drift from what the sliders cost against.
+export interface Capabilities {
+  relief: boolean;
+  ferries: boolean;
+  commercial: boolean;
+  industrial: boolean;
+  historic: boolean;
+  landmarks: boolean;
+  art: boolean;
+  sheds: boolean;
+}
+
+// Everything a deck — Explorer's controls, and Modes' — renders from. The shell owns all of it: the
+// city, the endpoints, the route and the clock are the same question whichever deck is asking, and
+// the deck adds only its own way of putting the question (weights, or a mode).
+export interface ShellDeck {
+  city: City;
+  auth: AuthState;
+  pinCount: number;
+  refreshingClaims: boolean;
+  onSignIn: () => void;
+  onSignOut: () => void | Promise<void>;
+  onRefreshClaims: () => void | Promise<void>;
+  onAbout: () => void;
+  onSelectCity: (city: City) => void;
+  onLogHere: () => void;
+  logHereDisabled: boolean;
+  logHereBusy: boolean;
+  logHereHint: string | null;
+  // The settings dialog is deep-linked from the hash, so which section is open is the shell's, even
+  // though the dialog itself is a deck's to render.
+  settingsSection: string | null;
+  onSettings: (section: string | null) => void;
+  syncingAs: string | null;
+  // Read at share time rather than passed as a value: a pan must not re-render the deck.
+  camera: () => Camera | null;
+  // Whether the link at load has been read, so a deck's hash writer may start.
+  hashApplied: boolean;
+
+  routingOpen: boolean;
+  onToggleRouting: () => void;
+  manualStart: Endpoint | null;
+  dest: Endpoint | null;
+  searchPin: SearchPin | null;
+  destPrefill: DestPrefill | null;
+  hasLiveLocation: boolean;
+  // What the reader asked for rather than what we snapped it to, for the Google Maps export.
+  exportOrigin: LatLng | null;
+  pickTarget: "start" | "dest" | null;
+  routeState: RouteState;
+  capabilities: Capabilities;
+  shadeDataLost: boolean;
+  directions: Maneuver[] | null;
+  progress: NavProgress | null;
+  directionsOpen: boolean;
+  minimized: boolean;
+  onToggleDirections: () => void;
+  onToggleMinimize: () => void;
+  onStartSelect: (result: GeocodeResult) => void;
+  onDestSelect: (result: GeocodeResult) => void;
+  onStartClear: () => void;
+  onDestClear: () => void;
+  onSwap: () => void;
+  onArmStart: () => void;
+  onArmDest: () => void;
+}
+
+// What a deck renders, in the two places the shell's own chrome divides: `controls` are its buttons
+// at the top, under the floating layer keys; `panels` are its bottom card and dialogs, over them and
+// over the search. Two slots rather than one because the shell's own chrome sits between them, and
+// none of it carries a z-index that would sort it out on its own.
+export interface Deck {
+  controls: ReactNode;
+  panels: ReactNode;
+}
+
+interface MapShellProps {
+  // The cost context the deck is asking for a route with.
+  weights: RouteWeights;
+  // What is drawn over the basemap. The shell mounts them and keys them; choosing them is the deck's.
+  activeOverlays: ReadonlySet<OverlayId>;
+  // The link at load, handed to the deck for its own keys — Explorer's weights, Modes' mode — which
+  // it applies in the same commit as the shell's, and which answers with the keys both shells share.
+  // Called once, so its identity has to be stable.
+  onLink: (params: URLSearchParams) => PlaceUrlState;
+  deck: (shell: ShellDeck) => Deck;
+}
+
+export default function MapShell({
+  weights,
+  activeOverlays,
+  onLink,
+  deck,
+}: MapShellProps) {
   const [auth, setAuth] = useState<AuthState>({ kind: "loading" });
   const [pins, setPins] = useState<Pin[]>([]);
   const [editing, setEditing] = useState<Editing>(null);
@@ -291,19 +303,11 @@ export default function MapApp() {
   // another city switches to it rather than leaving the previous city's data drawn under a view it
   // does not cover.
   const [city, setCity] = useState<City>(DEFAULT_CITY);
-  // The overlays drawn over the basemap, a freely-combinable set (tree genus is the one exception —
-  // it goes solo). The canopy cover is the only content a signed-out visitor has, so it starts on.
-  // Hydrated from the URL hash or localStorage below; an empty set hides every overlay.
-  const [activeOverlays, setActiveOverlays] = useState<ReadonlySet<OverlayId>>(
-    () => new Set<OverlayId>(["canopy"]),
-  );
   const [signingIn, setSigningIn] = useState<boolean>(false);
   // Bound to the URL hash so About is deep-linkable (#about) and the back button closes it.
-  const settings = useSettings();
   const [aboutOpen, setAboutOpen] = useHashFlag("about");
   // Carries WHICH group was asked for, so the layers menu can land the reader on the layers.
   const [settingsSection, setSettingsSection] = useHashSection("settings");
-  const settingsOpen = settingsSection !== null;
   const [locationError, setLocationError] = useState<
     "denied" | "unavailable" | null
   >(null);
@@ -346,48 +350,12 @@ export default function MapApp() {
   // What that query resolved to when it resolved to nothing certain: the words go into the
   // destination box with their candidates under them, and the reader picks.
   const [destPrefill, setDestPrefill] = useState<DestPrefill | null>(null);
-  const [treeWeight, setTreeWeight] = useState<number>(DEFAULT_TREE_WEIGHT);
-  // Ferry preference and gate, driven by the route panel's slider and toggle. Both restore from
-  // localStorage below so a reload keeps the setting.
-  const [ferryWeight, setFerryWeight] = useState<number>(DEFAULT_FERRY_WEIGHT);
-  const [allowFerries, setAllowFerries] = useState<boolean>(true);
-  // The other scenic factors: landmark and public-art discounts and the highway/rail penalty. Held
-  // here at their defaults (their sliders land in a later pass), restored from localStorage below.
-  const [landmarkWeight, setLandmarkWeight] = useState<number>(
-    DEFAULT_LANDMARK_WEIGHT,
-  );
-  const [artWeight, setArtWeight] = useState<number>(DEFAULT_ART_WEIGHT);
-  const [highwayWeight, setHighwayWeight] = useState<number>(
-    DEFAULT_HIGHWAY_WEIGHT,
-  );
-  const [hillWeight, setHillWeight] = useState<number>(DEFAULT_HILL_WEIGHT);
-  const [commercialWeight, setCommercialWeight] = useState<number>(
-    DEFAULT_COMMERCIAL_WEIGHT,
-  );
-  const [industrialWeight, setIndustrialWeight] = useState<number>(
-    DEFAULT_INDUSTRIAL_WEIGHT,
-  );
-  const [historicWeight, setHistoricWeight] = useState<number>(
-    DEFAULT_HISTORIC_WEIGHT,
-  );
-  // The signed sun/shade preference (−1 = prefer shade, +1 = prefer sun, 0 = off). `routeTimeTick` fires
-  // as the resolved time (the global clock) moves, so the route re-costs against the sun's new
-  // position.
-  const [shadeWeight, setShadeWeight] = useState<number>(DEFAULT_SHADE_WEIGHT);
   // Whether the last attempt to build the sun/shade field failed. The graph is fetched once and its
   // own maxima gate the other sliders (`capabilities`); this artifact is refetched every time the
   // clock moves, so it can go missing with the graph perfectly healthy — and then the slider sits
   // there moving nothing, which is what this is for.
   const [shadeDataLost, setShadeDataLost] = useState<boolean>(false);
   const [routeTimeTick, setRouteTimeTick] = useState<number>(0);
-  // Rain shelter (decks plus canopy) and the scaffolding gate. Both read the same per-edge shed
-  // coverage, which only changes with the picked DAY, so a clock tick re-aims its sun rather than
-  // rebuilding it.
-  const [shelterWeight, setShelterWeight] = useState<number>(
-    DEFAULT_SHELTER_WEIGHT,
-  );
-  const [allowSheds, setAllowSheds] = useState<boolean>(true);
-  const [allowCrossings, setAllowCrossings] = useState<boolean>(false);
   // The decoded graph, kept so directions can be rebuilt from a route without a re-fetch.
   const [routingGraph, setRoutingGraph] = useState<RoutingGraph | null>(null);
   // The landmark and public-art points, loaded once directions are in use, so the turn-by-turn can
@@ -473,6 +441,14 @@ export default function MapApp() {
         ? "deferred"
         : "off";
 
+  // The four weights that decide whether the clock matters, read out one by one: the deck hands in a
+  // fresh object whenever any weight moves, and depending on that would resubscribe on every drag.
+  const {
+    shade: shadeWeight,
+    shelter: shelterWeight,
+    allowSheds,
+    allowFerries,
+  } = weights;
   // While anything the route reads moves with the clock, follow it: each tick re-costs the route
   // against the sun's new position and against the sailing a ferry terminal is next offering, and a
   // tick that lands on a new day also restands the scaffolding. The store only ticks in "now" mode or
@@ -713,47 +689,14 @@ export default function MapApp() {
     setTarget({ ...picked.center, zoom: CITY_ZOOM });
   }, []);
 
-  // Toggle one overlay. Tree genus is exclusive: turning it on clears the rest, and turning on any
-  // normal layer clears it — so the dense per-genus recolouring never fights the other overlays.
-  const handleToggleOverlay = useCallback((id: OverlayId) => {
-    setActiveOverlays((current) => {
-      const next = new Set(current);
-      const isExclusive = (candidate: OverlayId): boolean =>
-        OVERLAYS.find((overlay) => overlay.id === candidate)?.exclusive ??
-        false;
-      if (next.has(id)) {
-        next.delete(id);
-      } else if (isExclusive(id)) {
-        next.clear();
-        next.add(id);
-      } else {
-        next.add(id);
-        for (const other of next) {
-          if (isExclusive(other)) {
-            next.delete(other);
-          }
-        }
-      }
-      window.localStorage.setItem(OVERLAY_KEY, [...next].join(","));
-      return next;
-    });
-  }, []);
-
   // Assigned during render, not in an effect: the layers below read it while their own effects run,
   // which is before any effect of this component would have fired. Idempotent, so a repeated render
   // cannot leave it wrong.
   setActiveCity(city);
 
-  // Switching city swaps the whole layer set, so anything the new city does not offer goes off rather
-  // than staying lit with no data behind it, and the landmark and art points are dropped so the new
-  // city's are fetched instead of the old city's names surviving the move.
+  // Switching city drops the landmark and art points so the new city's are fetched instead of the
+  // old city's names surviving the move.
   useEffect(() => {
-    setActiveOverlays((current) => {
-      const kept = new Set(
-        [...current].filter((id) => city.overlays.includes(id)),
-      );
-      return kept.size === current.size ? current : kept;
-    });
     setPoiSets(null);
     // The graph says which controls this city can answer, so holding the old one leaves sliders lit
     // for data the new city does not have — the hill slider stayed enabled in New York after San
@@ -793,19 +736,6 @@ export default function MapApp() {
       releaseNameIndex();
     }
   }, [routingOpen, searchOpen, city]);
-
-  // Taking a layer out of the menu turns it off, the same way switching city does: a layer drawn on
-  // the map with no row to turn it off by is a state the reader cannot get out of. Putting it back in
-  // the menu leaves it off rather than lighting it again — hiding is a decision about the menu, and
-  // guessing that it was also a decision to look at the layer again would be putting something on the
-  // map nobody asked for.
-  useEffect(() => {
-    const hidden = new Set(settings.hiddenLayers);
-    setActiveOverlays((current) => {
-      const kept = new Set([...current].filter((id) => !hidden.has(id)));
-      return kept.size === current.size ? current : kept;
-    });
-  }, [settings.hiddenLayers]);
 
   // stable identity for a long-lived map listener; functional updater keeps disengage idempotent
   const handleDisengageFollow = useCallback(() => {
@@ -868,7 +798,7 @@ export default function MapApp() {
   //
   // The scaffolding gate is the exception: sheds are fetched separately from the graph, so it asks
   // the city's overlay list, where a city with no shed feed omits the layer.
-  const capabilities = useMemo(
+  const capabilities: Capabilities = useMemo(
     () => ({
       relief: (routingGraph?.maxRelief ?? 0) > 0,
       ferries: (routingGraph?.ferryEdges.length ?? 0) > 0,
@@ -885,42 +815,6 @@ export default function MapApp() {
       sheds: city.overlays.includes("scaffolding"),
     }),
     [routingGraph, city],
-  );
-
-  // The cost context every search runs against, and what the URL and the share link carry.
-  const weights: RouteWeights = useMemo(
-    () => ({
-      tree: treeWeight,
-      ferry: ferryWeight,
-      landmark: landmarkWeight,
-      art: artWeight,
-      highway: highwayWeight,
-      hill: hillWeight,
-      commercial: commercialWeight,
-      industrial: industrialWeight,
-      historic: historicWeight,
-      shade: shadeWeight,
-      shelter: shelterWeight,
-      allowFerries,
-      allowSheds,
-      allowCrossings,
-    }),
-    [
-      allowCrossings,
-      treeWeight,
-      ferryWeight,
-      landmarkWeight,
-      artWeight,
-      highwayWeight,
-      hillWeight,
-      commercialWeight,
-      industrialWeight,
-      historicWeight,
-      shadeWeight,
-      shelterWeight,
-      allowFerries,
-      allowSheds,
-    ],
   );
 
   // Live recompute: whenever a resolvable start and a destination both exist, (re)find the route,
@@ -1103,107 +997,6 @@ export default function MapApp() {
     setRoutingOpen(false);
   }, []);
 
-  const handleTreeWeight = useCallback((weight: number) => {
-    setTreeWeight(weight);
-    persistWeight("tree", weight);
-  }, []);
-
-  const handleFerryWeight = useCallback((weight: number) => {
-    setFerryWeight(weight);
-    persistWeight("ferry", weight);
-  }, []);
-
-  const handleLandmarkWeight = useCallback((weight: number) => {
-    setLandmarkWeight(weight);
-    persistWeight("landmark", weight);
-  }, []);
-
-  const handleArtWeight = useCallback((weight: number) => {
-    setArtWeight(weight);
-    persistWeight("art", weight);
-  }, []);
-
-  const handleHillWeight = useCallback((weight: number) => {
-    setHillWeight(weight);
-    persistWeight("hill", weight);
-  }, []);
-
-  const handleHighwayWeight = useCallback((weight: number) => {
-    setHighwayWeight(weight);
-    persistWeight("highway", weight);
-  }, []);
-
-  const handleCommercialWeight = useCallback((weight: number) => {
-    setCommercialWeight(weight);
-    persistWeight("commercial", weight);
-  }, []);
-
-  const handleIndustrialWeight = useCallback((weight: number) => {
-    setIndustrialWeight(weight);
-    persistWeight("industrial", weight);
-  }, []);
-
-  const handleHistoricWeight = useCallback((weight: number) => {
-    setHistoricWeight(weight);
-    persistWeight("historic", weight);
-  }, []);
-
-  const handleShadeWeight = useCallback((weight: number) => {
-    setShadeWeight(weight);
-    persistWeight("shade", weight);
-  }, []);
-
-  const handleShelterWeight = useCallback((weight: number) => {
-    setShelterWeight(weight);
-    persistWeight("shelter", weight);
-  }, []);
-
-  // The three switches, by key rather than a callback each: they are a table now (src/routing/
-  // factors.tsx), and a callback each would be a fourth place to add a line every time one is added.
-  const handleGate = useCallback((key: GateKey, on: boolean) => {
-    const setters: Record<GateKey, (on: boolean) => void> = {
-      allowFerries: setAllowFerries,
-      allowSheds: setAllowSheds,
-      allowCrossings: setAllowCrossings,
-    };
-    setters[key](on);
-    updateSettings({ [key]: on });
-  }, []);
-
-  // The settings page edits the same weights the panel does, and sends a key and a value rather than
-  // carrying a callback per factor.
-  const handleWeight = useCallback(
-    (key: FactorKey, weight: number) => {
-      const setters: Record<FactorKey, (weight: number) => void> = {
-        tree: handleTreeWeight,
-        ferry: handleFerryWeight,
-        landmark: handleLandmarkWeight,
-        art: handleArtWeight,
-        highway: handleHighwayWeight,
-        hill: handleHillWeight,
-        commercial: handleCommercialWeight,
-        industrial: handleIndustrialWeight,
-        historic: handleHistoricWeight,
-        shade: handleShadeWeight,
-        shelter: handleShelterWeight,
-      };
-      setters[key](weight);
-    },
-    [
-      handleTreeWeight,
-      handleFerryWeight,
-      handleLandmarkWeight,
-      handleArtWeight,
-      handleHighwayWeight,
-      handleHillWeight,
-      handleCommercialWeight,
-      handleIndustrialWeight,
-      handleHistoricWeight,
-      handleShadeWeight,
-      handleShelterWeight,
-    ],
-  );
-
   // Answering the destination box — by picking a row, by clearing it, or by tapping the map — retires
   // any query a link arrived with: the reader has said what they want, and a lookup still running for
   // words they have moved past must not overwrite it.
@@ -1367,29 +1160,7 @@ export default function MapApp() {
   // rewrites it out from under itself.
   useEffect(() => {
     const params = hashParams(window.location.hash);
-    const stored: RouteUrlState = {
-      start: null,
-      dest: null,
-      pin: null,
-      weights: storedWeights(),
-      customHour: null,
-      customDay: null,
-    };
-    const route = decodeRoute(params, stored);
-    setTreeWeight(route.weights.tree);
-    setFerryWeight(route.weights.ferry);
-    setLandmarkWeight(route.weights.landmark);
-    setArtWeight(route.weights.art);
-    setHighwayWeight(route.weights.highway);
-    setHillWeight(route.weights.hill);
-    setCommercialWeight(route.weights.commercial);
-    setIndustrialWeight(route.weights.industrial);
-    setHistoricWeight(route.weights.historic);
-    setShadeWeight(route.weights.shade);
-    setShelterWeight(route.weights.shelter);
-    setAllowFerries(route.weights.allowFerries);
-    setAllowSheds(route.weights.allowSheds);
-    setAllowCrossings(route.weights.allowCrossings);
+    const route = onLink(params);
     if (route.customHour !== null) {
       setCustomHour(route.customHour);
     }
@@ -1439,15 +1210,6 @@ export default function MapApp() {
     if (linked) {
       setCity(linked);
     }
-    const overlays = view.overlays ?? storedOverlays();
-    if (overlays) {
-      // unknown ids (a stale "trees" from before the canopy switch) are dropped, and a set that
-      // names an exclusive layer alongside others is cut back to it — the invariant the toggle
-      // handler keeps has to hold however the set arrives
-      setActiveOverlays(
-        new Set(applyExclusivity(overlays.filter(isOverlayId))),
-      );
-    }
     if (view.camera) {
       setInitialCamera(view.camera);
       setPreframedDest(route.dest);
@@ -1464,7 +1226,7 @@ export default function MapApp() {
     }
     hashAppliedRef.current = true;
     setHashApplied(true);
-  }, [applyPick]);
+  }, [applyPick, onLink]);
 
   // A destination named in words rather than as a point: the `q` key of a shared link, or the text
   // Android's share sheet hands the installed app. Both land here because both say the same thing,
@@ -1582,30 +1344,7 @@ export default function MapApp() {
   // because the camera is tracked in a ref: a pan must not re-render the app.
   const mapCentre = useCallback(() => cameraRef.current?.center ?? null, []);
 
-  // The link the share button copies: the route the hash already carries, plus the camera and overlay
-  // set, which live in a URL only here.
-  const composeShareUrl = useCallback((): string => {
-    const { hour, day } = getPinnedTime();
-    const params = encodeRoute({
-      start: manualStart,
-      dest,
-      pin: searchPin,
-      weights,
-      customHour: hour,
-      customDay: day,
-    });
-    if (cameraRef.current) {
-      for (const [key, value] of encodeView(
-        cameraRef.current,
-        [...activeOverlays],
-        city.id,
-      )) {
-        params.append(key, value);
-      }
-    }
-    const { origin, pathname, search } = window.location;
-    return `${origin}${pathname}${search}${formatHash(params)}`;
-  }, [manualStart, dest, searchPin, weights, activeOverlays, city]);
+  const camera = useCallback((): Camera | null => cameraRef.current, []);
 
   // A map tap sets the effective pick target's location; with nothing armed and a destination already
   // set, it does nothing.
@@ -1906,6 +1645,54 @@ export default function MapApp() {
   // endpoints resolve and the search lands.
   const routeDest = dest ? { lat: dest.lat, lng: dest.lng } : null;
 
+  const shell: ShellDeck = {
+    city,
+    auth,
+    pinCount: pins.length,
+    refreshingClaims: refreshing,
+    onSignIn: handleSignIn,
+    onSignOut: handleSignOut,
+    onRefreshClaims: handleRefreshClaims,
+    onAbout: () => setAboutOpen(true),
+    onSelectCity: handleSelectCity,
+    onLogHere: handleLogHere,
+    logHereDisabled: userLocation === null,
+    logHereBusy: logging,
+    logHereHint: locationHint,
+    settingsSection,
+    onSettings: setSettingsSection,
+    syncingAs: auth.kind === "signedIn" ? auth.info.user.email : null,
+    camera,
+    hashApplied,
+    routingOpen,
+    onToggleRouting: handleToggleRouting,
+    manualStart,
+    dest,
+    searchPin,
+    destPrefill,
+    hasLiveLocation: routableLocation !== null,
+    exportOrigin,
+    pickTarget: effectivePickTarget,
+    routeState,
+    capabilities,
+    shadeDataLost,
+    directions,
+    progress,
+    directionsOpen,
+    minimized: panelMinimized,
+    onToggleDirections: handleToggleDirections,
+    onToggleMinimize: handleToggleMinimize,
+    onStartSelect: handleStartSelect,
+    onDestSelect: handleDestSelect,
+    onStartClear: handleClearStart,
+    onDestClear: handleClearDest,
+    onSwap: handleSwapEndpoints,
+    onArmStart: handleArmStart,
+    onArmDest: handleArmDest,
+  };
+
+  const { controls, panels } = deck(shell);
+
   return (
     <CityProvider value={city}>
       <main className="relative h-dvh w-full overflow-hidden">
@@ -1934,34 +1721,7 @@ export default function MapApp() {
           onEndpointDrag={handleEndpointDrag}
           onPinSelect={handlePinSelect}
         />
-        <Toolbar
-          auth={auth}
-          pinCount={pins.length}
-          city={city}
-          activeOverlays={activeOverlays}
-          routing={routingOpen}
-          refreshingClaims={refreshing}
-          onToggleOverlay={handleToggleOverlay}
-          onToggleRouting={handleToggleRouting}
-          onSignIn={handleSignIn}
-          onSignOut={handleSignOut}
-          onRefreshClaims={handleRefreshClaims}
-          onAbout={() => setAboutOpen(true)}
-          onSettings={(section) => setSettingsSection(section ?? "")}
-          onLogHere={handleLogHere}
-          logHereDisabled={userLocation === null}
-          logHereBusy={logging}
-          logHereHint={locationHint}
-          onSelectCity={handleSelectCity}
-          composeShareUrl={composeShareUrl}
-        />
-        <UrlSync
-          start={manualStart}
-          dest={dest}
-          pin={searchPin}
-          weights={weights}
-          enabled={hashApplied}
-        />
+        {controls}
         <FollowToggle active={followLive} onToggle={handleToggleFollow} />
         {/* the active overlays' floating keys; bottom-left keeps them clear of the toolbar, follow
           toggle, attribution, and the centered route and search panels */}
@@ -2000,93 +1760,7 @@ export default function MapApp() {
           onDirections={handleToggleRouting}
           onClear={handleSearchPinRemove}
         />
-        {routingOpen ? (
-          <RoutePanel
-            city={city}
-            exportAction={
-              resultGraph && routeResult && exportOrigin && dest ? (
-                <GoogleMapsButton
-                  graph={resultGraph}
-                  route={routeResult}
-                  weights={weights}
-                  start={exportOrigin}
-                  dest={dest}
-                />
-              ) : null
-            }
-            destPrefill={destPrefill}
-            startLabel={
-              manualStart
-                ? manualStart.label
-                : routableLocation
-                  ? "My location"
-                  : null
-            }
-            destLabel={dest?.label ?? null}
-            startSet={manualStart !== null}
-            destSet={dest !== null}
-            needsStart={(manualStart ?? routableLocation) === null}
-            hasLiveLocation={routableLocation !== null}
-            pickTarget={effectivePickTarget}
-            status={routeState.kind}
-            errorMessage={
-              routeState.kind === "error" ? routeState.message : null
-            }
-            summary={
-              routeState.kind === "ready"
-                ? {
-                    walkMeters: routeState.result.walkMeters,
-                    travelSeconds: routeState.result.travelSeconds,
-                    factors: routeState.result.factors,
-                  }
-                : null
-            }
-            treeWeight={treeWeight}
-            ferryWeight={ferryWeight}
-            allowFerries={allowFerries}
-            landmarkWeight={landmarkWeight}
-            artWeight={artWeight}
-            highwayWeight={highwayWeight}
-            hillWeight={hillWeight}
-            capabilities={capabilities}
-            commercialWeight={commercialWeight}
-            industrialWeight={industrialWeight}
-            historicWeight={historicWeight}
-            shadeWeight={shadeWeight}
-            shadeDataLost={shadeDataLost}
-            shelterWeight={shelterWeight}
-            allowSheds={allowSheds}
-            allowCrossings={allowCrossings}
-            directions={directions}
-            progress={progress}
-            directionsOpen={directionsOpen}
-            minimized={panelMinimized}
-            onTreeWeight={handleTreeWeight}
-            onFerryWeight={handleFerryWeight}
-            onLandmarkWeight={handleLandmarkWeight}
-            onArtWeight={handleArtWeight}
-            onHighwayWeight={handleHighwayWeight}
-            onHillWeight={handleHillWeight}
-            onCommercialWeight={handleCommercialWeight}
-            onIndustrialWeight={handleIndustrialWeight}
-            onHistoricWeight={handleHistoricWeight}
-            onShadeWeight={handleShadeWeight}
-            onShelterWeight={handleShelterWeight}
-            onGate={handleGate}
-            onStartSelect={handleStartSelect}
-            onDestSelect={handleDestSelect}
-            onStartClear={handleClearStart}
-            onDestClear={handleClearDest}
-            onSwap={handleSwapEndpoints}
-            onUseCurrentLocation={handleClearStart}
-            onArmStart={handleArmStart}
-            onArmDest={handleArmDest}
-            onToggleDirections={handleToggleDirections}
-            onToggleMinimize={handleToggleMinimize}
-            onSettings={(section) => setSettingsSection(section ?? "")}
-            onClose={handleToggleRouting}
-          />
-        ) : null}
+        {panels}
         {editing ? (
           <PinEditor
             target={editing.mode === "create" ? editing.draft : editing.pin}
@@ -2098,16 +1772,6 @@ export default function MapApp() {
         ) : null}
         {signingIn ? <SignInDialog onClose={handleCloseSignIn} /> : null}
         {aboutOpen ? <AboutDialog onClose={() => setAboutOpen(false)} /> : null}
-        {settingsOpen ? (
-          <SettingsDialog
-            weights={weights}
-            onWeight={handleWeight}
-            onGate={handleGate}
-            syncingAs={auth.kind === "signedIn" ? auth.info.user.email : null}
-            section={settingsSection}
-            onClose={() => setSettingsSection(null)}
-          />
-        ) : null}
       </main>
     </CityProvider>
   );

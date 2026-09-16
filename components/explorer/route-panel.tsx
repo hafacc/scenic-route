@@ -27,13 +27,13 @@ import {
   MdTurnSlightRight,
   MdUTurnLeft,
 } from "react-icons/md";
-import type { City } from "../src/cities";
-import type { GeocodeResult } from "../src/geocode";
+import type { City } from "../../src/cities";
+import type { GeocodeResult } from "../../src/geocode";
 import {
   formatDistance,
   formatDuration,
   type Maneuver,
-} from "../src/routing/directions";
+} from "../../src/routing/directions";
 import {
   FACTORS,
   type Factor,
@@ -43,12 +43,12 @@ import {
   factorReading,
   GATES,
   type GateKey,
-} from "../src/routing/factors";
-import type { NavProgress } from "../src/routing/nav-progress";
-import type { RouteFactors } from "../src/routing/search";
-import { factorRunOrder } from "../src/settings/store";
-import LocationField, { type DestPrefill } from "./location-field";
-import { useSettings } from "./use-settings";
+} from "../../src/routing/factors";
+import type { NavProgress } from "../../src/routing/nav-progress";
+import type { RouteFactors } from "../../src/routing/search";
+import { factorRunOrder } from "../../src/settings/store";
+import LocationField, { type DestPrefill } from "../location-field";
+import { useSettings } from "../use-settings";
 
 interface RoutePanelProps {
   city: City; // the endpoint fields name it when they have no match to show
