@@ -411,5 +411,9 @@ async function ingestSubwaySf(cityId: string): Promise<void> {
 }
 
 if (import.meta.main) {
-  await ingestSubwaySf(process.argv[2] ?? "sf");
+  // The first argument that is not a flag: the cache flags belong to scripts/cache.ts.
+  const city = process.argv
+    .slice(2)
+    .find((argument) => !argument.startsWith("--"));
+  await ingestSubwaySf(city ?? "sf");
 }

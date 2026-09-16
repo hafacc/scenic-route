@@ -417,7 +417,14 @@ export async function updateFerrySchedule(
 // so adding a ferry city needs no change to the workflow. One `today` for the whole run, so two
 // cities whose feeds both moved open their new records on the same day even across midnight.
 if (import.meta.main) {
-  const { values } = parseArgs({ options: { city: { type: "string" } } });
+  // The cache flags are declared so parseArgs does not reject them; scripts/cache.ts reads argv itself.
+  const { values } = parseArgs({
+    options: {
+      city: { type: "string" },
+      offline: { type: "boolean" },
+      refresh: { type: "boolean" },
+    },
+  });
   const cities = values.city === undefined ? FERRY_CITIES : [values.city];
   const today = localDay(new Date());
   for (const cityId of cities) {
