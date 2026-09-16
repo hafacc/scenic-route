@@ -11,6 +11,7 @@ import {
 import {
   MAX_COMMERCIAL_WEIGHT,
   MAX_INDUSTRIAL_WEIGHT,
+  MAX_SHELTER_WEIGHT,
   MAX_TRANSIT_WEIGHT,
   MAX_TREE_WEIGHT,
   minMultiplier,
@@ -269,7 +270,7 @@ function planOn(
   });
 }
 
-test("the fixture's corridors win where they were designed to", () => {
+test("the fixture's corridors win where they were designed to", async () => {
   const fixture = buildFixture();
   const route = (weights: RouteWeights): string =>
     fixture.corridorOf(
@@ -300,7 +301,7 @@ const alongLatitude = (lat: number, east = 0.01): RouteResult =>
     },
   }) as RouteResult;
 
-test("two routes are as far apart as the ground between them", () => {
+test("two routes are as far apart as the ground between them", async () => {
   const fixture = buildFixture();
   const direct = findRoute(
     fixture.graph,
@@ -331,17 +332,17 @@ test("two routes are as far apart as the ground between them", () => {
 
 // The property the old grid rasterisation was built to keep, and the floor under the threshold: the
 // two pavements of one street are one route.
-test("opposite sidewalks of one street are the same walk", () => {
+test("opposite sidewalks of one street are the same walk", async () => {
   const apart = routeDistanceMeters(alongLatitude(0), alongLatitude(0.00018));
 
   expect(apart).toBeCloseTo(20, 0);
   expect(apart).toBeLessThan(DIFFERENT_METERS / 2);
 });
 
-test("the sweep finds the corridor that is cheapest only in a band", () => {
+test("the sweep finds the corridor that is cheapest only in a band", async () => {
   const fixture = buildFixture();
   const found: string[] = [];
-  planRoutes({
+  await planRoutes({
     weights: MODE_WEIGHTS,
     search: (candidate) =>
       findRoute(fixture.graph, fixture.start, fixture.dest, candidate),
@@ -353,10 +354,10 @@ test("the sweep finds the corridor that is cheapest only in a band", () => {
   expect(found).toContain("canopy");
 });
 
-test("the first breakpoint above the fastest route is the shallow corridor", () => {
+test("the first breakpoint above the fastest route is the shallow corridor", async () => {
   const fixture = buildFixture();
   const seen: RouteWeights[] = [];
-  const plan = planOn(fixture, MODE_WEIGHTS, seen);
+  const plan = await planOn(fixture, MODE_WEIGHTS, seen);
   const corridors = plan.routes.map((route) =>
     fixture.corridorOf(route.result),
   );
@@ -371,9 +372,9 @@ test("the first breakpoint above the fastest route is the shallow corridor", () 
   expect(scales.at(-1)).toBeLessThan(0.12);
 });
 
-test("dropping a factor finds the route only that factor was hiding", () => {
+test("dropping a factor finds the route only that factor was hiding", async () => {
   const fixture = buildFixture();
-  const plan = planOn(fixture, MODE_WEIGHTS);
+  const plan = await planOn(fixture, MODE_WEIGHTS);
   const corridors = plan.routes.map((route) =>
     fixture.corridorOf(route.result),
   );
@@ -383,10 +384,10 @@ test("dropping a factor finds the route only that factor was hiding", () => {
   expect(new Set(corridors).size).toBe(corridors.length);
 });
 
-test("a plan stays inside its search budget and repeats no weight vector", () => {
+test("a plan stays inside its search budget and repeats no weight vector", async () => {
   const fixture = buildFixture();
   const seen: RouteWeights[] = [];
-  const plan = planOn(fixture, MODE_WEIGHTS, seen);
+  const plan = await planOn(fixture, MODE_WEIGHTS, seen);
   // 1 max + 1 fastest + 4 sweep + 4 bisection + 3 drops; four routes, so no per-factor bisection.
   expect(plan.searches).toBe(13);
   expect(seen.length).toBe(plan.searches);
@@ -394,9 +395,9 @@ test("a plan stays inside its search budget and repeats no weight vector", () =>
   expect(new Set(keys).size).toBe(keys.length);
 });
 
-test("cards are the max-scenic route, the direct one and what differs from both", () => {
+test("cards are the max-scenic route, the direct one and what differs from both", async () => {
   const fixture = buildFixture();
-  const plan = planOn(fixture, MODE_WEIGHTS);
+  const plan = await planOn(fixture, MODE_WEIGHTS);
   expect(plan.routes.length).toBe(4);
   const deep = plan.routes.find(
     (route) => fixture.corridorOf(route.result) === "deep",
@@ -424,7 +425,7 @@ test("cards are the max-scenic route, the direct one and what differs from both"
   }
 });
 
-test("two cards worth the same scenery are read shortest first", () => {
+test("two cards worth the same scenery are read shortest first", async () => {
   const card = (scenicScore: number, travelSeconds: number) => ({
     result: { travelSeconds } as RouteResult,
     scenicScore,
@@ -434,10 +435,10 @@ test("two cards worth the same scenery are read shortest first", () => {
   expect(CARD_ORDER(card(0.5, 300), card(0.5, 900))).toBeLessThan(0);
 });
 
-test("selection stops rather than offering a route that is not different", () => {
+test("selection stops rather than offering a route that is not different", async () => {
   const fixture = buildFixture();
   // One factor, one corridor worth taking: nothing else clears the threshold against the two kept.
-  const plan = planOn(fixture, weightsOf({ tree: MAX_TREE_WEIGHT }));
+  const plan = await planOn(fixture, weightsOf({ tree: MAX_TREE_WEIGHT }));
   expect(plan.routes.length).toBeLessThan(4);
   expect(plan.routes.length).toBeGreaterThanOrEqual(2);
   for (const route of plan.routes) {
@@ -445,9 +446,9 @@ test("selection stops rather than offering a route that is not different", () =>
   }
 });
 
-test("the scenic score and the colour factor say what a card has", () => {
+test("the scenic score and the colour factor say what a card has", async () => {
   const fixture = buildFixture();
-  const plan = planOn(fixture, MODE_WEIGHTS);
+  const plan = await planOn(fixture, MODE_WEIGHTS);
   const scoreOf = (corridor: string): number =>
     plan.routes.find((route) => fixture.corridorOf(route.result) === corridor)!
       .scenicScore;
@@ -476,11 +477,11 @@ test("the scenic score and the colour factor say what a card has", () => {
 // a route that wins both at 0 and at the mode's weight wins at every point between, and asking there
 // can only return it again. The sweep still moves every scenic weight together, which is a different
 // line through the space and does find other routes.
-test("a factor whose drop changed nothing is never asked for in between", () => {
+test("a factor whose drop changed nothing is never asked for in between", async () => {
   const fixture = buildFixture();
   const seen: RouteWeights[] = [];
   // With no commercial weight the shops corridor never wins, so every drop reproduces R_max.
-  const plan = planOn(
+  const plan = await planOn(
     fixture,
     weightsOf({ tree: MAX_TREE_WEIGHT, industrial: MAX_INDUSTRIAL_WEIGHT }),
     seen,
@@ -495,8 +496,8 @@ test("a factor whose drop changed nothing is never asked for in between", () => 
   expect(plan.routes.length).toBeLessThan(4);
 });
 
-test("a search that finds nothing plans nothing", () => {
-  const plan = planRoutes({
+test("a search that finds nothing plans nothing", async () => {
+  const plan = await planRoutes({
     weights: MODE_WEIGHTS,
     search: () => null,
     minMultiplier: () => 1,
@@ -508,7 +509,7 @@ test("a search that finds nothing plans nothing", () => {
 // The sweep's zero end is what every scenic card is compared against, and that has to be the fastest
 // WALK. Transit is a PENALTY, so scaling it toward zero along with the discounts made the baseline
 // the most train-happy route there is, and the quickest way on foot was never asked for at all.
-test("the sweep's baseline is the fastest walk, not the ride", () => {
+test("the sweep's baseline is the fastest walk, not the ride", async () => {
   const graph = transitGraph(undefined, { detours: true });
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
   const start = snapAtNode(graph, 0, WEST_SIDEWALK);
@@ -524,7 +525,7 @@ test("the sweep's baseline is the fastest walk, not the ride", () => {
     transitWeights({ allowTransit: false }),
   );
   const asked: RouteWeights[] = [];
-  const plan = planRoutes({
+  const plan = await planRoutes({
     weights: mode,
     search: (candidate) => {
       asked.push(candidate);
@@ -551,7 +552,7 @@ test("the sweep's baseline is the fastest walk, not the ride", () => {
 // The baseline is the fastest WALK, not the fastest trip: it still carries the mode's transit
 // penalty, which can have it leave the train a stop early and walk the rest. So the trip with
 // nothing priced at all is asked for outright, and it is what the least scenic card offers.
-test("the fastest trip is asked for even where the mode charges a ride", () => {
+test("the fastest trip is asked for even where the mode charges a ride", async () => {
   const graph = transitGraph(undefined, { detours: true });
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
   const start = snapAtNode(graph, 0, WEST_SIDEWALK);
@@ -564,7 +565,7 @@ test("the fastest trip is asked for even where the mode charges a ride", () => {
   ) as RouteResult;
   const asked: RouteWeights[] = [];
   const found: RouteResult[] = [];
-  const plan = planRoutes({
+  const plan = await planRoutes({
     weights: transitWeights({
       tree: MAX_TREE_WEIGHT,
       transit: MAX_TRANSIT_WEIGHT,
@@ -596,13 +597,13 @@ test("the fastest trip is asked for even where the mode charges a ride", () => {
 // The planner needs no special case for the rail: transit is a weight like any other, so backing it
 // off is one of the per-factor drops the sweep already makes, and the route that comes back is the
 // "take the subway" card.
-test("dropping the transit penalty is what offers the ride", () => {
+test("dropping the transit penalty is what offers the ride", async () => {
   const graph = transitGraph();
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
   const start = snapAtNode(graph, 0, WEST_SIDEWALK);
   const dest = snapAtNode(graph, 2, EAST_SIDEWALK);
   const asked: RouteWeights[] = [];
-  const plan = planRoutes({
+  const plan = await planRoutes({
     weights: transitWeights({ transit: MAX_TRANSIT_WEIGHT }),
     search: (candidate) => {
       asked.push(candidate);
@@ -629,14 +630,14 @@ test("dropping the transit penalty is what offers the ride", () => {
 // outright, every route it found would be the same ride. Whether the walk it finds earns a card is
 // the dominance rule's business, not this one's — here the ride is quicker and the mode prices
 // nothing the walk has, so it does not.
-test("a mode that prices no ride is still offered the walk", () => {
+test("a mode that prices no ride is still offered the walk", async () => {
   const graph = transitGraph();
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
   const start = snapAtNode(graph, 0, WEST_SIDEWALK);
   const dest = snapAtNode(graph, 2, EAST_SIDEWALK);
   const asked: RouteWeights[] = [];
   const found: RouteResult[] = [];
-  const plan = planRoutes({
+  const plan = await planRoutes({
     weights: transitWeights({ transit: 0 }),
     search: (candidate) => {
       asked.push(candidate);
@@ -656,7 +657,7 @@ test("a mode that prices no ride is still offered the walk", () => {
 });
 
 // And a mode whose route walks anyway is not charged a search to be told so.
-test("the walking candidate is not asked for when nothing rides", () => {
+test("the walking candidate is not asked for when nothing rides", async () => {
   const fixture = buildFixture();
   const asked: RouteWeights[] = [];
   planOn(fixture, weightsOf({ tree: MAX_TREE_WEIGHT }), asked);
@@ -666,14 +667,14 @@ test("the walking candidate is not asked for when nothing rides", () => {
 // The surface-only candidate: a route that rides is offered the walk that stays on the ground the
 // whole way, with the boats and the trains barred together. No back-off axis can reach it — barring
 // a crossing is a switch, not a weight — so it is asked for outright.
-test("a route that rides is offered the walk that stays on the surface", () => {
+test("a route that rides is offered the walk that stays on the surface", async () => {
   const graph = transitGraph();
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
   const start = snapAtNode(graph, 0, WEST_SIDEWALK);
   const dest = snapAtNode(graph, 2, EAST_SIDEWALK);
   const asked: RouteWeights[] = [];
   const found: RouteResult[] = [];
-  planRoutes({
+  await planRoutes({
     weights: transitWeights({ transit: 0 }),
     search: (candidate) => {
       asked.push(candidate);
@@ -776,10 +777,10 @@ function planOverPool(
 
 // A shorter walk is time a route spends earning nothing: ten minutes wholly under a canopy is a
 // perfect SHARE and less tree than half an hour half in the open.
-test("the score is the time spent on a factor, not the share of the trip", () => {
+test("the score is the time spent on a factor, not the share of the trip", async () => {
   const wholly = treeWalk(1, 600, 600, 0);
   const longer = treeWalk(2, 1800, 900, 1000);
-  const plan = planOverPool([wholly, longer]);
+  const plan = await planOverPool([wholly, longer]);
   expect(edgesOf(plan)).toEqual([1, 2]);
   const scoreOf = (edge: number): number =>
     plan.routes.find((route) => route.result.steps[0].edge === edge)!
@@ -791,14 +792,14 @@ test("the score is the time spent on a factor, not the share of the trip", () =>
   expect(plan.routes[0].result.steps[0].edge).toBe(2);
 });
 
-const edgesOf = (plan: ReturnType<typeof planRoutes>): number[] =>
+const edgesOf = (plan: Awaited<ReturnType<typeof planRoutes>>): number[] =>
   plan.routes.map((route) => route.result.steps[0].edge).sort();
 
 // Furthest-from-chosen takes the far route first, and against that one nothing else clears the
 // floor: the better plan is the pair it blocks, which is why the set is enumerated rather than
 // built up. The far route runs 1000 m from the max-scenic one but only 39 m and 43 m from the two
 // routes that are 78 m apart from each other.
-test("the set of cards is the best one, not the one furthest-first builds", () => {
+test("the set of cards is the best one, not the one furthest-first builds", async () => {
   const maxScenic = twoHalves(1, 600, 0, 0);
   const far = twoHalves(2, 500, 1000, 1000);
   const pair = [twoHalves(3, 700, 920, 1000), twoHalves(4, 800, 1000, 912)];
@@ -812,20 +813,20 @@ test("the set of cards is the best one, not the one furthest-first builds", () =
     DIFFERENT_METERS,
   );
 
-  const plan = planOverPool([maxScenic, far, ...pair]);
+  const plan = await planOverPool([maxScenic, far, ...pair]);
   expect(edgesOf(plan)).toEqual([1, 3, 4]);
 });
 
 // And the floor is what the largest set is measured against: draw that same pair together and no
 // three routes are all different walks, so the plan is the two that are.
-test("no set of cards is offered whose closest pair is under the floor", () => {
+test("no set of cards is offered whose closest pair is under the floor", async () => {
   const maxScenic = twoHalves(1, 600, 0, 0);
   const far = twoHalves(2, 500, 1000, 1000);
   const near = [twoHalves(3, 700, 960, 1000), twoHalves(4, 800, 1000, 980)];
 
   expect(routeDistanceMeters(near[0], near[1])).toBeLessThan(DIFFERENT_METERS);
 
-  const plan = planOverPool([maxScenic, far, ...near]);
+  const plan = await planOverPool([maxScenic, far, ...near]);
   expect(edgesOf(plan)).toEqual([1, 2]);
 });
 
@@ -898,6 +899,32 @@ test("the quickest trip is a card with nothing to its name", async () => {
 
   const plan = await planOverPool([...walks, ride]);
   expect(edgesOf(plan)).toEqual([1, 2, 3, 4]);
+});
+
+// And the slow trip is a card when it is worth the time: Rain prices shelter, which a ride has all
+// of and a walk in the open none of, so the ride leads on score and no faster walk covers it.
+test("a slower trip is a card when it is worth more", async () => {
+  const sheltered = (
+    edge: number,
+    travelSeconds: number,
+    shelterSeconds: number,
+    north: number,
+  ): RouteResult =>
+    ({
+      ...twoHalves(edge, travelSeconds, north, north),
+      factors: { shelter: shelterSeconds / travelSeconds },
+      factorSeconds: { shelter: shelterSeconds },
+    }) as unknown as RouteResult;
+
+  const ride = riding(sheltered(1, 1500, 1500, 400), "A");
+  const walk = sheltered(2, 1200, 0, 0);
+
+  const plan = await planOverPool(
+    [ride, walk],
+    weightsOf({ shelter: MAX_SHELTER_WEIGHT }),
+  );
+  expect(edgesOf(plan)).toEqual([1, 2]);
+  expect(plan.routes[0].result.steps[0].edge).toBe(1);
 });
 
 // Both ends of the front are there by construction, which is why the planner keeps no case for
@@ -997,7 +1024,7 @@ function randomPool(seed: number): {
   return { separations, travelSeconds };
 }
 
-test("the search over sets finds what enumerating every set finds", () => {
+test("the search over sets finds what enumerating every set finds", async () => {
   let visited = 0;
   let enumerated = 0;
   for (let seed = 1; seed <= 50; seed++) {
