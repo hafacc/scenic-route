@@ -17,10 +17,10 @@ import { encodeSheds } from "../../scripts/shed-encode";
 import {
   EDGE_RECORD_BYTES,
   FORMAT_VERSION as GRAPH_FORMAT_VERSION,
+  HEADER_BYTES,
 } from "./graph";
 
 const LAST_DAY = 3136;
-const HEADER_BYTES = 64;
 const NODE_COUNT = 2;
 const KIND_SIDEWALK = 0;
 const SIDE_SHIFT = 3;

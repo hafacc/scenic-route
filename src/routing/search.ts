@@ -28,6 +28,7 @@ import {
   edgeName,
   edgePath,
   edgeSideLabel,
+  isTransitEdge,
   otherEnd,
   type RoutingGraph,
   type SideLabel,
@@ -519,6 +520,11 @@ export function findRoute(
       if (!weights.allowFerries && edgeKind(graph, edge) === "ferry") {
         continue;
       }
+      // The stations, platforms and rides GRPH v11 carries have no cost model yet, so nothing may
+      // route over one: skipping them here is what makes them inert.
+      if (isTransitEdge(graph, edge)) {
+        continue;
+      }
       const neighbour = otherEnd(graph, edge, node);
       const relaxed =
         distance[node] + effSeconds(graph, edge, weights, elapsed[node], node);
@@ -759,6 +765,9 @@ export class RouteSolver {
         const edge = graph.adjacency[slot];
         if (!this.weights.allowFerries && edgeKind(graph, edge) === "ferry") {
           continue;
+        }
+        if (isTransitEdge(graph, edge)) {
+          continue; // inert until the transit cost lands, as above
         }
         const neighbour = otherEnd(graph, edge, node);
         if (this.closed[neighbour] === 1) {

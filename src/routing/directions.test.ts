@@ -70,6 +70,9 @@ function makeResult(graph: RoutingGraph, specs: ReadonlyArray<EdgeSpec>) {
     link: 2,
     path: 3,
     ferry: 4,
+    access: 5,
+    board: 6,
+    ride: 7,
   };
   // The name table and per-edge name id back edgeName(), which the ferry maneuver reads for its
   // route; the ferry endpoint map carries the two terminal names per ferry edge.

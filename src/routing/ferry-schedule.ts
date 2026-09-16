@@ -13,18 +13,28 @@
 // Layout: scripts/README.md.
 
 import { type Cursor, readUnsignedVarint } from "../tiles/varint";
-import { artifactUrl } from "./artifact-base";
 import type { RoutingGraph } from "./graph";
+import {
+  dayNumber,
+  decodeExceptions,
+  decodeServices,
+  EXCEPTION_BYTES,
+  SERVICE_BYTES,
+  type ServiceCalendar,
+  secondsOfDay,
+  serviceDays,
+  shiftedDay,
+  timeZoneOf,
+} from "./schedule-days";
+import { scheduleReader } from "./schedule-records";
+
+export { dayNumber };
 
 const MAGIC = "FSCH";
 const FORMAT_VERSION = 1;
 const HEADER_BYTES = 40;
-const SERVICE_BYTES = 12;
-const EXCEPTION_BYTES = 8;
 const LANE_BYTES = 16;
 const NO_ROUTE_NAME = 0xffff;
-const SECONDS_PER_DAY = 86_400;
-const EXCEPTION_ADDED = 1;
 
 // Where the timetable comes from: `public/ferry-schedule/` on `main`, which the daily job commits to,
 // read over raw.githubusercontent.com rather than out of the deploy — the same reasoning as the shed
@@ -85,45 +95,13 @@ interface Lane {
   sailings: { at: number; crossing: number }[];
 }
 
-interface Service {
-  mask: number; // bit 0 Monday .. bit 6 Sunday
-  startDay: number; // YYYYMMDD
-  endDay: number;
-}
-
 // One decoded FSCH record: the timetable plus the day range it was in effect for.
 export interface ScheduleRecord {
   firstDay: number;
   lastDay: number; // 0 while this is the timetable in effect
-  services: Service[];
+  services: ServiceCalendar[];
   exceptions: { day: number; service: number; type: number }[];
   lanes: Lane[];
-}
-
-export function dayNumber(day: string): number {
-  return Number(day.replaceAll("-", ""));
-}
-
-// The local day `offset` days from `date`, as YYYYMMDD.
-function shiftedDay(date: Date, offset: number): number {
-  const shifted = new Date(
-    date.getFullYear(),
-    date.getMonth(),
-    date.getDate() + offset,
-  );
-  const month = String(shifted.getMonth() + 1).padStart(2, "0");
-  const day = String(shifted.getDate()).padStart(2, "0");
-  return Number(`${shifted.getFullYear()}${month}${day}`);
-}
-
-// Monday-first weekday bit of a YYYYMMDD day, matching the mask the artifact writes.
-function weekdayBit(day: number): number {
-  const date = new Date(
-    Math.floor(day / 10000),
-    (Math.floor(day / 100) % 100) - 1,
-    day % 100,
-  );
-  return (date.getDay() + 6) % 7;
 }
 
 export function decodeSchedule(
@@ -163,26 +141,9 @@ export function decodeSchedule(
   }
 
   const serviceOffset = offset + HEADER_BYTES;
-  const services: Service[] = [];
-  for (let index = 0; index < serviceCount; index++) {
-    const record = serviceOffset + index * SERVICE_BYTES;
-    services.push({
-      startDay: view.getUint32(record, true),
-      endDay: view.getUint32(record + 4, true),
-      mask: view.getUint8(record + 8),
-    });
-  }
-
+  const services = decodeServices(view, serviceOffset, serviceCount);
   const exceptionOffset = serviceOffset + serviceCount * SERVICE_BYTES;
-  const exceptions: ScheduleRecord["exceptions"] = [];
-  for (let index = 0; index < exceptionCount; index++) {
-    const record = exceptionOffset + index * EXCEPTION_BYTES;
-    exceptions.push({
-      day: view.getUint32(record, true),
-      service: view.getUint16(record + 4, true),
-      type: view.getUint8(record + 6),
-    });
-  }
+  const exceptions = decodeExceptions(view, exceptionOffset, exceptionCount);
 
   const laneOffset = exceptionOffset + exceptionCount * EXCEPTION_BYTES;
   const departureOffset = laneOffset + laneCount * LANE_BYTES;
@@ -217,32 +178,6 @@ export function decodeSchedule(
     record: { firstDay, lastDay, services, exceptions, lanes },
     nextOffset: offset + recordBytes,
   };
-}
-
-// The services running on one day: the calendar's weekday mask inside its date range, then
-// calendar_dates' own additions and removals, which apply whatever the range says.
-function servicesOn(record: ScheduleRecord, day: number): Set<number> {
-  const bit = weekdayBit(day);
-  const active = new Set<number>();
-  record.services.forEach((service, index) => {
-    if (
-      service.startDay <= day &&
-      day <= service.endDay &&
-      (service.mask & (1 << bit)) !== 0
-    ) {
-      active.add(index);
-    }
-  });
-  for (const exception of record.exceptions) {
-    if (exception.day === day) {
-      if (exception.type === EXCEPTION_ADDED) {
-        active.add(exception.service);
-      } else {
-        active.delete(exception.service);
-      }
-    }
-  }
-  return active;
 }
 
 class ResolvedTimetable implements FerryTimetable {
@@ -373,15 +308,9 @@ export function resolveTimetable(
   graph: RoutingGraph,
   record: ScheduleRecord,
   date: Date,
+  timeZone: string,
 ): FerryTimetable {
-  const days = [-1, 0, 1].map((offset) => {
-    const day = shiftedDay(date, offset);
-    return {
-      day,
-      offset: offset * SECONDS_PER_DAY,
-      services: servicesOn(record, day),
-    };
-  });
+  const days = serviceDays(record.services, record.exceptions, date, timeZone);
 
   // Every directed stop pair the record names, whatever service it runs on.
   const scheduled = new Set(
@@ -417,8 +346,7 @@ export function resolveTimetable(
     minRide.set(edge, leastCrossing(forward, backward));
   }
 
-  const departureSecondsOfDay =
-    date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds();
+  const departureSecondsOfDay = secondsOfDay(date, timeZone);
   return new ResolvedTimetable(
     departureSecondsOfDay,
     covered,
@@ -435,73 +363,16 @@ export async function computeFerrySchedule(
   cityId: string,
   date: Date,
 ): Promise<void> {
-  const record = await loadScheduleRecord(cityId, shiftedDay(date, 0));
-  graph.ferries = record ? resolveTimetable(graph, record, date) : null;
-}
-
-// Both files are fetched once per city and kept. The route re-resolves on every clock tick — once a
-// minute while tracking "now" — and the artifact does not change under a session, so without this the
-// timetable would be re-downloaded every minute a route is on screen.
-const currentRecords = new Map<string, Promise<ScheduleRecord | null>>();
-const pastFiles = new Map<string, Promise<Uint8Array | null>>();
-
-function cached<Value>(
-  store: Map<string, Promise<Value>>,
-  key: string,
-  load: () => Promise<Value>,
-): Promise<Value> {
-  const existing = store.get(key);
-  if (existing) {
-    return existing;
-  }
-  // A failed load is dropped rather than remembered, so a network blip does not disable the
-  // timetable for the rest of the session.
-  const request = load().catch((error: unknown) => {
-    store.delete(key);
-    throw error;
-  });
-  store.set(key, request);
-  return request;
-}
-
-export async function loadScheduleRecord(
-  cityId: string,
-  day: number,
-): Promise<ScheduleRecord | null> {
-  const current = await cached(currentRecords, cityId, () =>
-    fetchRecord(`${SCHEDULE_BASE}/${cityId}.bin`),
+  const timeZone = timeZoneOf(cityId);
+  const record = await loadScheduleRecord(
+    cityId,
+    shiftedDay(date, 0, timeZone),
   );
-  if (!current) {
-    return null;
-  } else if (day >= current.firstDay) {
-    return current;
-  }
-  // Only a day before the standing timetable took effect pays for the history file.
-  const bytes = await cached(pastFiles, cityId, async () => {
-    const response = await fetch(
-      artifactUrl(`${SCHEDULE_BASE}/${cityId}-past.bin`),
-    );
-    return response.ok ? new Uint8Array(await response.arrayBuffer()) : null;
-  });
-  if (!bytes) {
-    return null;
-  }
-  let offset = 0;
-  while (offset < bytes.length) {
-    const { record, nextOffset } = decodeSchedule(bytes, offset);
-    if (record.firstDay <= day && day <= record.lastDay) {
-      return record;
-    }
-    offset = nextOffset;
-  }
-  return null;
+  graph.ferries = record
+    ? resolveTimetable(graph, record, date, timeZone)
+    : null;
 }
 
-async function fetchRecord(path: string): Promise<ScheduleRecord | null> {
-  const response = await fetch(artifactUrl(path));
-  if (!response.ok) {
-    return null;
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  return decodeSchedule(bytes).record;
-}
+// The two published files, read through the shared reader: which record was in effect on a day is
+// the same question of both artifacts, asked of this one's own directory and decoder.
+export const loadScheduleRecord = scheduleReader(SCHEDULE_BASE, decodeSchedule);

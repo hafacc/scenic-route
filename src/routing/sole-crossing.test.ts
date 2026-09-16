@@ -30,6 +30,10 @@ import { decodeSchedule, resolveTimetable } from "./ferry-schedule";
 import type { RoutingGraph } from "./graph";
 import { findRoute, type RouteResult } from "./search";
 
+// The fixtures below build their instants with the local Date constructor, so their timetables are
+// read in the runner's own zone.
+const LOCAL_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
 const WEST_TERMINAL = "West Ferry Building";
 const EAST_TERMINAL = "East Ferry Terminal";
 
@@ -153,6 +157,7 @@ function departingAt(clock: string): RoutingGraph {
     graph,
     record,
     new Date(2026, 7, 12, hour, minute),
+    LOCAL_ZONE,
   );
   return graph;
 }

@@ -2,8 +2,9 @@
 // rail as data/subway/sf.bin — the same SBWY blob New York's subway ships as (scripts/subway.ts),
 // so one client format covers both cities. Two feeds rather than one: Muni and BART are separate
 // agencies, and 511.org's regional feed, which would carry both, needs an API key this pipeline does
-// not hold. Display only: this is a walking router, nothing here enters the routing graph or any of
-// its inputs. Layout: scripts/README.md.
+// not hold. Display only: nothing here enters the routing graph or any of its inputs — the rail a
+// route rides is scripts/transit.ts's TRNS blob, baked from these same feeds. Layout:
+// scripts/README.md.
 //
 // The whole of both feeds is drawn, and NOTHING here is clipped to the region. Every other source in
 // this pipeline is cut at the land mask (scripts/land.ts), because every other source is walked on:
@@ -19,7 +20,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { haversineMeters } from "./geometry";
 import {
   fetchGtfsZipFile,
   type GtfsFeed,
@@ -28,7 +28,9 @@ import {
 } from "./gtfs";
 import type { Coord } from "./socrata";
 import {
+  centroid,
   chooseLines,
+  clusterByName,
   encodeSubway,
   nextComplexId,
   parseColor,
@@ -68,14 +70,6 @@ const BART_ROUTE_TYPE = "1";
 // here; the spec's white-on-black beats inventing one.
 const DEFAULT_ROUTE_COLOR = "FFFFFF";
 const DEFAULT_TEXT_COLOR = "000000";
-
-// How close two same-named stops have to be to be one station marker. Muni's feed carries no
-// `parent_station` column at all — the column New York's ingest collapses a station's platforms
-// with — and it publishes one stop per kerb, so an intersection served both ways is two stops of the
-// same name a median apart: 149 of the 152 same-named rail pairs are within 100 m and 76 of them
-// within 25 m. The three left out are genuinely different stops sharing a name (19th Ave & Randolph
-// St is three stops over 245 m), which is exactly what this must not merge.
-const STATION_MERGE_METERS = 100;
 
 // A route as its feed describes it, before the variant selection decides what is drawn. `routeIds`
 // is plural because BART splits each line into a northbound and a southbound route_id.
@@ -284,51 +278,19 @@ function feedStations(
 // marker; run over both agencies together, so a Muni stop and a BART entrance of the same name at the
 // same corner are one station on the map, which is what a rider sees.
 function mergeStations(stations: readonly TransitStation[]): TransitStation[] {
-  const byName = new Map<string, TransitStation[]>();
-  for (const station of stations) {
-    const group = byName.get(station.name);
-    if (group) {
-      group.push(station);
-    } else {
-      byName.set(station.name, [station]);
-    }
-  }
-
-  const merged: TransitStation[] = [];
-  for (const group of byName.values()) {
-    const taken = new Array<boolean>(group.length).fill(false);
-    for (let seed = 0; seed < group.length; seed++) {
-      if (taken[seed]) {
-        continue;
-      }
-      taken[seed] = true;
-      const cluster = [group[seed]];
-      for (let member = 0; member < cluster.length; member++) {
-        for (let other = 0; other < group.length; other++) {
-          if (
-            !taken[other] &&
-            haversineMeters(cluster[member], group[other]) <=
-              STATION_MERGE_METERS
-          ) {
-            taken[other] = true;
-            cluster.push(group[other]);
-          }
-        }
-      }
-      // The lowest complex any member is in, or 0 when none of them is in one — which is every
-      // marker in this city today, since neither feed names a transfer between two stations.
-      const ids = cluster
-        .map(({ complex }) => complex)
-        .filter((complex) => complex !== 0);
-      merged.push({
-        lat: cluster.reduce((sum, one) => sum + one.lat, 0) / cluster.length,
-        lng: cluster.reduce((sum, one) => sum + one.lng, 0) / cluster.length,
-        name: group[seed].name,
-        routeMask: cluster.reduce((mask, one) => mask | one.routeMask, 0),
-        complex: ids.length === 0 ? 0 : Math.min(...ids),
-      });
-    }
-  }
+  const merged = clusterByName(stations).map((cluster) => {
+    // The lowest complex any member is in, or 0 when none of them is in one — which is every
+    // marker in this city today, since neither feed names a transfer between two stations.
+    const ids = cluster
+      .map(({ complex }) => complex)
+      .filter((complex) => complex !== 0);
+    return {
+      ...centroid(cluster),
+      name: cluster[0].name,
+      routeMask: cluster.reduce((mask, one) => mask | one.routeMask, 0),
+      complex: ids.length === 0 ? 0 : Math.min(...ids),
+    };
+  });
 
   // Sorted south to north, then west to east, then by name — the order the point sources are written
   // in, and one a renderer can index into.

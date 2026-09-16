@@ -53,6 +53,7 @@ const GRAPH_CACHE_DIR = join(ROOT, ".build", "graph-cache");
 const CONVENTION_SOURCES = [
   "sidewalks",
   "ferries",
+  "transit",
   "landmarks",
   "art",
   "highways",

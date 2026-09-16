@@ -8,7 +8,7 @@
 // route-metrics.test.ts and then run over thousands of sampled real trips in
 // tests/route-sampling.test.ts — the same shape as the graph invariants.
 
-import { edgePath, otherEnd, type RoutingGraph } from "./graph";
+import { edgePath, isTransitEdge, otherEnd, type RoutingGraph } from "./graph";
 import type { RouteResult } from "./search";
 import { haversineMeters } from "./snap";
 
@@ -69,8 +69,12 @@ function reachableWithout(
     const distance = best.get(node) ?? 0;
     for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
       const edge = graph.adjacency[slot];
-      if (edge === banned[0] || edge === banned[1]) {
-        continue;
+      if (
+        edge === banned[0] ||
+        edge === banned[1] ||
+        isTransitEdge(graph, edge)
+      ) {
+        continue; // the way round a reversal is a walk, never a ride
       }
       const relaxed = distance + graph.edgeLength[edge];
       const neighbour = otherEnd(graph, edge, node);

@@ -252,6 +252,13 @@ function buildRuns(graph: RoutingGraph, steps: RouteStep[]): Run[] {
       }
       continue;
     }
+    if (
+      step.kind === "access" ||
+      step.kind === "board" ||
+      step.kind === "ride"
+    ) {
+      continue; // no route rides yet: the transit kinds are in the graph and inert
+    }
     if (step.kind === "link") {
       if (current) {
         current.lengthMeters += step.lengthMeters;
