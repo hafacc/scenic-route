@@ -75,8 +75,8 @@ function stops(...hexes: string[]): readonly Rgb[] {
 // far stronger against a dark ground than a light one, and Tailwind's teals — picked to hold their
 // own on white — come out as neon on a night map, which is a lot of shouting for a field that covers
 // most of the city.
-const CANOPY_STOPS: Record<ThemeName, readonly Rgb[]> = {
-  light: stops(
+export const CANOPY_HEX: Record<ThemeName, readonly string[]> = {
+  light: [
     "#ccfbf1",
     "#99f6e4",
     "#5eead4",
@@ -84,8 +84,8 @@ const CANOPY_STOPS: Record<ThemeName, readonly Rgb[]> = {
     "#14b8a6",
     "#0d9488",
     "#0f766e",
-  ),
-  dark: stops(
+  ],
+  dark: [
     "#1c4b47",
     "#23625c",
     "#2d7a71",
@@ -93,7 +93,12 @@ const CANOPY_STOPS: Record<ThemeName, readonly Rgb[]> = {
     "#4dada0",
     "#6cc6b8",
     "#94ded1",
-  ),
+  ],
+};
+
+const CANOPY_STOPS: Record<ThemeName, readonly Rgb[]> = {
+  light: stops(...CANOPY_HEX.light),
+  dark: stops(...CANOPY_HEX.dark),
 };
 
 // The hypsometric ramp a paper topographic map tints its contour bands with, low to high.

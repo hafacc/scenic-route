@@ -13,7 +13,7 @@ export const OTHER_GENUS_ID = 11;
 // of a few stays legible instead of collapsing into mud, plus a neutral grey for "Other". Order
 // is genus rank and carries no meaning; what matters is that adjacent hues on the wheel differ
 // enough that no pair averages back onto a third.
-const PALETTE: readonly string[] = [
+export const GENUS_HEX: readonly string[] = [
   "#e15759", // red
   "#f28e2b", // orange
   "#edc948", // yellow
@@ -28,7 +28,7 @@ const PALETTE: readonly string[] = [
   "#9ca3af", // Other — neutral medium grey
 ];
 
-export const GENUS_COLORS: readonly Rgb[] = PALETTE.map(hexToRgb);
+export const GENUS_COLORS: readonly Rgb[] = GENUS_HEX.map(hexToRgb);
 
 export const GENUS_COUNT = GENUS_COLORS.length;
 

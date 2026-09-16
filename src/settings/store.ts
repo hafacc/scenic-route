@@ -1,5 +1,14 @@
 "use client";
 
+import {
+  DEFAULT_MODE,
+  DEFAULT_TOGGLES,
+  HILLS_VALUES,
+  isModeId,
+  type ModeId,
+  SUN_VALUES,
+  type Toggles,
+} from "../modes/modes";
 import { OVERLAYS, type OverlayId } from "../overlays/registry";
 import {
   FACTORS,
@@ -39,6 +48,9 @@ export interface Settings {
   // Factors the reader has taken out of the route panel: no slider and no summary chip. Their
   // weights still price the route, so the panel counts the non-zero ones and says so.
   hiddenFactors: readonly FactorKey[];
+  // Which mode the Modes page opens in, and where its three switches are left.
+  mode: ModeId;
+  toggles: Toggles;
   // The gates taken out of the panel's header. Same bargain as a hidden factor: the gate keeps
   // gating, so a hidden one that is CLOSED is counted alongside them.
   hiddenGates: readonly GateKey[];
@@ -62,6 +74,8 @@ export const DEFAULT_SETTINGS: Settings = {
   factorOrder: [],
   hiddenFactors: [],
   hiddenGates: [],
+  mode: DEFAULT_MODE.id,
+  toggles: DEFAULT_TOGGLES,
   coverage: DEFAULT_COVERAGE,
   updatedAt: {},
 };
@@ -153,6 +167,26 @@ function allowCrossingsIn(stored: Partial<Settings>): boolean {
   }
 }
 
+// A mode this build does not offer reads as the default, the way a stale overlay id is dropped.
+function storedMode(value: unknown): ModeId {
+  return typeof value === "string" && isModeId(value) ? value : DEFAULT_MODE.id;
+}
+
+// Per switch, so a spelling this build cannot read costs that one switch its position, not all three.
+function storedToggles(value: unknown): Toggles {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return DEFAULT_TOGGLES;
+  } else {
+    const { sun, hills, ferries } = value as Partial<Toggles>;
+    return {
+      sun: SUN_VALUES.find((state) => state === sun) ?? DEFAULT_TOGGLES.sun,
+      hills:
+        HILLS_VALUES.find((state) => state === hills) ?? DEFAULT_TOGGLES.hills,
+      ferries: typeof ferries === "boolean" ? ferries : DEFAULT_TOGGLES.ferries,
+    };
+  }
+}
+
 function stamps(value: unknown): Record<string, number> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return {};
@@ -234,6 +268,8 @@ export function settingsFrom(
       factorOrder: factorKeys(stored.factorOrder),
       hiddenFactors: factorKeys(hiddenFactors),
       hiddenGates: gateKeys(stored.hiddenGates),
+      mode: storedMode(stored.mode),
+      toggles: storedToggles(stored.toggles),
       coverage: COVERAGE.some(({ id }) => id === stored.coverage)
         ? (stored.coverage as string)
         : DEFAULT_COVERAGE,
@@ -330,8 +366,10 @@ export function settings(): Settings {
 }
 
 // Every change is stamped, so a device that has been offline can be merged rather than overwritten.
-// Weights are stamped per factor: two devices tuning two different sliders is the ordinary case, and
-// stamping the whole map would make one of them lose the other's.
+// Weights are stamped per factor, and the Modes switches per switch: two devices moving two
+// different ones is the ordinary case, and stamping the whole map or the whole set of switches would
+// make one of them lose the other's. Both are written as a whole object by callers who change one
+// key of it, so what was actually touched is read off the values rather than off the patch.
 function stamped(patch: Partial<Settings>, at: number): Record<string, number> {
   const marks: Record<string, number> = {};
   for (const [field, value] of Object.entries(patch)) {
@@ -340,6 +378,12 @@ function stamped(patch: Partial<Settings>, at: number): Record<string, number> {
       for (const [key, weight] of Object.entries(value as object)) {
         if (weight !== current.weights[key as FactorKey]) {
           marks[`weights.${key}`] = at;
+        }
+      }
+    } else if (field === "toggles") {
+      for (const [key, state] of Object.entries(value as object)) {
+        if (state !== current.toggles[key as keyof Toggles]) {
+          marks[`toggles.${key}`] = at;
         }
       }
     } else {

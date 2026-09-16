@@ -91,3 +91,37 @@ test("every gate reaches the other device, not just the two the list was born wi
     );
   }
 });
+
+test("the mode and the toggles reach the other device", () => {
+  const local = settings({
+    mode: "rain",
+    toggles: { sun: "sun", hills: "any", ferries: true },
+    updatedAt: { mode: 100, "toggles.sun": 900 },
+  });
+  const remote = settings({
+    mode: "historic",
+    toggles: { sun: "shade", hills: "none", ferries: false },
+    updatedAt: { mode: 400, "toggles.sun": 200 },
+  });
+  const merged = mergeSettings(local, remote);
+  expect(merged.mode).toBe("historic"); // the other device chose it later
+  expect(merged.toggles.sun).toBe("sun"); // this one set that switch later
+});
+
+// The row sets one switch at a time, so stamping all three together made two devices moving two
+// different switches last-writer-wins over the whole set.
+test("two devices moving two different switches both keep theirs", () => {
+  const local = settings({
+    toggles: { sun: "shade", hills: "any", ferries: true },
+    updatedAt: { "toggles.sun": 500 },
+  });
+  const remote = settings({
+    toggles: { sun: "sun", hills: "any", ferries: false },
+    updatedAt: { "toggles.ferries": 700 },
+  });
+  expect(mergeSettings(local, remote).toggles).toEqual({
+    sun: "shade",
+    hills: "any",
+    ferries: false,
+  });
+});

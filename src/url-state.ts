@@ -6,6 +6,15 @@
 // ninth factor lands.
 
 import {
+  DEFAULT_MODE,
+  DEFAULT_TOGGLES,
+  HILLS_VALUES,
+  isModeId,
+  type ModeId,
+  SUN_VALUES,
+  type Toggles,
+} from "./modes/modes";
+import {
   DEFAULT_ART_WEIGHT,
   DEFAULT_COMMERCIAL_WEIGHT,
   DEFAULT_FERRY_WEIGHT,
@@ -37,16 +46,28 @@ export interface LatLng {
   lng: number;
 }
 
-export interface RouteUrlState {
+// What both shells say the same way, in the same keys.
+export interface PlaceUrlState {
   start: LatLng | null; // a manually set start; null means the live location
   dest: LatLng | null;
   // A place the reader looked up and left on the map. Not an endpoint: it carries no route and no
   // name, because the point is the index's own and the same local lookup that names `from`/`to`
   // names this back.
   pin: LatLng | null;
-  weights: RouteWeights;
   customHour: number | null; // null tracks the wall clock
   customDay: string | null; // "YYYY-MM-DD"; null is today
+}
+
+// Explorer's: a weight per factor, set by hand.
+export interface RouteUrlState extends PlaceUrlState {
+  weights: RouteWeights;
+}
+
+// Modes': one chosen mode instead of Explorer's eleven weight keys.
+export interface ModeUrlState extends PlaceUrlState {
+  mode: ModeId; // an unknown one reads as the default
+  alt: number | null; // the chosen route card, by index; null while none is
+  toggles: Toggles;
 }
 
 export interface Camera {
@@ -82,13 +103,24 @@ export const DEFAULT_WEIGHTS: RouteWeights = {
   allowCrossings: false,
 };
 
-export const DEFAULT_ROUTE_STATE: RouteUrlState = {
+const DEFAULT_PLACE_STATE: PlaceUrlState = {
   start: null,
   dest: null,
   pin: null,
-  weights: DEFAULT_WEIGHTS,
   customHour: null,
   customDay: null,
+};
+
+export const DEFAULT_ROUTE_STATE: RouteUrlState = {
+  ...DEFAULT_PLACE_STATE,
+  weights: DEFAULT_WEIGHTS,
+};
+
+export const DEFAULT_MODE_STATE: ModeUrlState = {
+  ...DEFAULT_PLACE_STATE,
+  mode: DEFAULT_MODE.id,
+  alt: null,
+  toggles: DEFAULT_TOGGLES,
 };
 
 // A destination named in words — "205 East Houston" — instead of as a point. It sits in the hash
@@ -144,18 +176,30 @@ const WEIGHT_PARAMS: readonly WeightParam[] = [
 ];
 
 // Every key this module owns, so a rewrite can clear its own and leave the rest (the About flag today,
-// a future version's keys) untouched.
-const ROUTE_KEYS: readonly string[] = [
+// a future version's keys) untouched. Both shells' keys are cleared together, or a stale `mode=`
+// rides along on the next link shared from Explorer.
+const PLACE_KEYS: readonly string[] = [
   "from",
   "to",
   "pin",
   DEST_QUERY_KEY,
+  "time",
+  "date",
+];
+const ROUTE_KEYS: readonly string[] = [
+  ...PLACE_KEYS,
   ...WEIGHT_PARAMS.map((param) => param.key),
   "ferries",
   "sheds",
   "crossings",
-  "time",
-  "date",
+];
+const MODE_KEYS: readonly string[] = [
+  ...PLACE_KEYS,
+  "mode",
+  "alt",
+  "sun",
+  "hills",
+  "ferries", // Explorer's gate key, same encoding
 ];
 const VIEW_KEYS: readonly string[] = ["at", "layers", "city"];
 
@@ -207,6 +251,64 @@ function parseNumber(
   return Number.isFinite(value) ? clamp(value, min, max) : fallback;
 }
 
+function parseChoice<Value extends string>(
+  text: string | null,
+  values: readonly Value[],
+  fallback: Value,
+): Value {
+  return values.find((value) => value === text) ?? fallback;
+}
+
+function decodePlace(
+  params: URLSearchParams,
+  defaults: PlaceUrlState,
+): PlaceUrlState {
+  const hour = params.get("time");
+  const day = params.get("date");
+  return {
+    start: parsePoint(params.get("from")) ?? defaults.start,
+    dest: parsePoint(params.get("to")) ?? defaults.dest,
+    pin: parsePoint(params.get("pin")) ?? defaults.pin,
+    customHour:
+      hour === null ? defaults.customHour : parseNumber(hour, 0, 24, 12),
+    customDay: day !== null && DAY_PATTERN.test(day) ? day : defaults.customDay,
+  };
+}
+
+function encodePoints(params: URLSearchParams, state: PlaceUrlState): void {
+  if (state.start) {
+    params.set("from", formatPoint(state.start));
+  }
+  if (state.dest) {
+    params.set("to", formatPoint(state.dest));
+  }
+  if (state.pin) {
+    params.set("pin", formatPoint(state.pin));
+  }
+}
+
+function encodeClock(params: URLSearchParams, state: PlaceUrlState): void {
+  if (state.customHour !== null) {
+    params.set("time", String(round(state.customHour, WEIGHT_DIGITS)));
+  }
+  if (state.customDay !== null) {
+    params.set("date", state.customDay);
+  }
+}
+
+// Not clamped to the number of cards: nothing here knows how many a plan returned.
+function parseIndex(
+  text: string | null,
+  fallback: number | null,
+): number | null {
+  if (text === null) {
+    return fallback;
+  } else {
+    const index = Number(text);
+    return Number.isInteger(index) && index >= 0 ? index : fallback;
+  }
+}
+
 // `defaults` is what a missing key falls back to — the persisted preferences at load, so a link that
 // names only a destination leaves the visitor's own slider settings in place.
 export function decodeRoute(
@@ -238,30 +340,12 @@ export function decodeRoute(
     crossings === "0" || crossings === "1"
       ? true
       : defaults.weights.allowCrossings;
-  const hour = params.get("time");
-  const day = params.get("date");
-  return {
-    start: parsePoint(params.get("from")) ?? defaults.start,
-    dest: parsePoint(params.get("to")) ?? defaults.dest,
-    pin: parsePoint(params.get("pin")) ?? defaults.pin,
-    weights,
-    customHour:
-      hour === null ? defaults.customHour : parseNumber(hour, 0, 24, 12),
-    customDay: day !== null && DAY_PATTERN.test(day) ? day : defaults.customDay,
-  };
+  return { ...decodePlace(params, defaults), weights };
 }
 
 export function encodeRoute(state: RouteUrlState): URLSearchParams {
   const params = new URLSearchParams();
-  if (state.start) {
-    params.set("from", formatPoint(state.start));
-  }
-  if (state.dest) {
-    params.set("to", formatPoint(state.dest));
-  }
-  if (state.pin) {
-    params.set("pin", formatPoint(state.pin));
-  }
+  encodePoints(params, state);
   for (const { key, field } of WEIGHT_PARAMS) {
     const value = round(state.weights[field], WEIGHT_DIGITS);
     if (value !== round(DEFAULT_WEIGHTS[field], WEIGHT_DIGITS)) {
@@ -277,11 +361,59 @@ export function encodeRoute(state: RouteUrlState): URLSearchParams {
   if (state.weights.allowCrossings) {
     params.set("crossings", "1");
   }
-  if (state.customHour !== null) {
-    params.set("time", String(round(state.customHour, WEIGHT_DIGITS)));
+  encodeClock(params, state);
+  return params;
+}
+
+export function decodeModes(
+  params: URLSearchParams,
+  defaults: ModeUrlState = DEFAULT_MODE_STATE,
+): ModeUrlState {
+  const mode = params.get("mode");
+  return {
+    ...decodePlace(params, defaults),
+    // Modes always routes at now, so a pinned clock is not one of its keys — a link carrying
+    // Explorer's leaves the wall clock alone here rather than freezing this page at someone
+    // else's hour.
+    customHour: null,
+    customDay: null,
+    mode: mode !== null && isModeId(mode) ? mode : defaults.mode,
+    alt: parseIndex(params.get("alt"), defaults.alt),
+    toggles: {
+      sun: parseChoice(params.get("sun"), SUN_VALUES, defaults.toggles.sun),
+      hills: parseChoice(
+        params.get("hills"),
+        HILLS_VALUES,
+        defaults.toggles.hills,
+      ),
+      ferries: params.has("ferries")
+        ? params.get("ferries") !== "0"
+        : defaults.toggles.ferries,
+    },
+  };
+}
+
+export function encodeModes(state: ModeUrlState): URLSearchParams {
+  const params = new URLSearchParams();
+  encodePoints(params, state);
+  // A card index names one card of one plan, and the reader this link opens for fills in every key
+  // it leaves out from THEIR settings — another mode, another sun, another answer to hills. So a
+  // link that pins a card pins the whole question it was an answer to, defaults and all.
+  const pinned = state.alt !== null;
+  if (pinned || state.mode !== DEFAULT_MODE.id) {
+    params.set("mode", state.mode);
   }
-  if (state.customDay !== null) {
-    params.set("date", state.customDay);
+  if (state.alt !== null) {
+    params.set("alt", String(state.alt));
+  }
+  if (pinned || state.toggles.sun !== DEFAULT_TOGGLES.sun) {
+    params.set("sun", state.toggles.sun);
+  }
+  if (pinned || state.toggles.hills !== DEFAULT_TOGGLES.hills) {
+    params.set("hills", state.toggles.hills);
+  }
+  if (pinned || !state.toggles.ferries) {
+    params.set("ferries", state.toggles.ferries ? "1" : "0");
   }
   return params;
 }
@@ -347,11 +479,19 @@ export function formatHash(params: URLSearchParams): string {
 // the About flag or a key a future version added.
 export function replaceOwnKeys(hash: string, next: URLSearchParams): string {
   const params = hashParams(hash);
-  for (const key of [...ROUTE_KEYS, ...VIEW_KEYS]) {
+  for (const key of [...ROUTE_KEYS, ...MODE_KEYS, ...VIEW_KEYS]) {
     params.delete(key);
   }
   for (const [key, value] of next) {
     params.append(key, value);
   }
   return formatHash(params);
+}
+
+// The path is the page's own, so the basePath the Pages deploy injects is kept.
+export function shareUrl(
+  page: { origin: string; pathname: string; search: string },
+  params: URLSearchParams,
+): string {
+  return `${page.origin}${page.pathname}${page.search}${formatHash(params)}`;
 }

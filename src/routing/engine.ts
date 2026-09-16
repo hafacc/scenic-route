@@ -1,11 +1,12 @@
 // The router itself, with everything one search needs held together: the decoded graphs, their
 // route-time fields, the weight-bracket cache and the live drag solver. It runs inside the routing
-// worker and knows nothing about messages, so a caller there — the drag protocol today, phase 4's
-// planner next — can prepare a city once and then search it synchronously as many times as it likes.
+// worker and knows nothing about messages, so a caller there — the drag protocol, the planner — can
+// prepare a city once and then search it synchronously as many times as it likes.
 
 import { cityById } from "../cities";
 import { type ContextSync, type RouteClock, RouteContexts } from "./contexts";
-import type { RouteWeights } from "./cost";
+import { maxShelter, type RouteWeights } from "./cost";
+import type { FactorKey } from "./factors";
 import type { RoutingGraph } from "./graph";
 import { type CachedRoute, RouteCache } from "./route-cache";
 import {
@@ -15,6 +16,23 @@ import {
   reverseResult,
 } from "./search";
 import type { Snap } from "./snap";
+
+// The greatest each scored factor reaches anywhere on this graph, which is what a card's lead over
+// the others is measured against. Only the discounts are scored, so the penalties are left out and
+// read as 1. Shade and shelter come off the route-time fields, so `prepare` has to have run.
+export function graphFactorMax(
+  graph: RoutingGraph,
+): Partial<Record<FactorKey, number>> {
+  return {
+    tree: graph.maxCover,
+    landmark: graph.maxLandmark,
+    art: graph.maxArt,
+    commercial: graph.maxCommercial,
+    historic: graph.maxHistoric,
+    shade: graph.shade ? graph.shade.maxAbs : 0,
+    shelter: maxShelter(graph),
+  };
+}
 
 export class RoutingEngine {
   // Kept per city, as the page keeps its own: switching and coming back must not re-decode 600k edges.
@@ -37,8 +55,6 @@ export class RoutingEngine {
     }
   }
 
-  // Point the engine at a city and bring its route-time fields up to the clock. Everything cached
-  // against a field this rebuilds is dropped, so every search after it sees one settled context.
   async prepare(
     cityId: string,
     clock: RouteClock,
@@ -65,13 +81,11 @@ export class RoutingEngine {
     return this.prepared;
   }
 
-  // One search over the prepared graph and its fields, straight through the cost model. Synchronous
-  // and uncached: this is what a plan calls once per weight vector.
+  // Uncached, unlike route(): a plan calls this once per weight vector.
   search(start: Snap, dest: Snap, weights: RouteWeights): RouteResult | null {
     return findRoute(this.graph, start, dest, weights);
   }
 
-  // The same search behind the weight brackets, for a single route being re-costed as a slider moves.
   route(start: Snap, dest: Snap, weights: RouteWeights): CachedRoute {
     return this.cache.route(this.graph, start, dest, weights);
   }
@@ -89,9 +103,7 @@ export class RoutingEngine {
     this.dragSolver = null;
   }
 
-  // One frame of an endpoint drag: an incremental solver rooted at the held endpoint answers the
-  // moving one approximately, reusing its settled search across the gesture's frames. A start drag
-  // solves backward from the destination, so its answer is reversed before it is drawn.
+  // The solver is rooted at the held endpoint and reused across the gesture's frames.
   dragMove(
     anchor: Snap,
     moving: Snap,
