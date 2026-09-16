@@ -75,6 +75,29 @@ const NODES: readonly [number, number][] = [
   [EAST_X, STATION_Y], // 6 the east platform
 ];
 
+// The longest board edge New York has: inside a transfer complex the station node is the members'
+// centroid and the platform stands on its own stop, a passage away. Opt-in, since every other test
+// here wants the platforms where their stations are.
+export const PLATFORM_SETBACK_METERS = 251;
+const PLATFORM_SETBACK_UNITS = Math.round(
+  PLATFORM_SETBACK_METERS /
+    haversineMeters(ORIGIN_LAT, ORIGIN_LNG, ORIGIN_LAT, ORIGIN_LNG + SCALE),
+);
+
+// Both platforms drawn back along the line toward each other, so each board edge spans the setback
+// and the ride between them shortens by two of them.
+const SETBACK_NODES: readonly (readonly [number, number])[] = NODES.map(
+  (point, node): readonly [number, number] => {
+    if (node === 5) {
+      return [PLATFORM_SETBACK_UNITS, STATION_Y];
+    } else if (node === 6) {
+      return [EAST_X - PLATFORM_SETBACK_UNITS, STATION_Y];
+    } else {
+      return point;
+    }
+  },
+);
+
 interface EdgeSpec {
   a: number;
   b: number;
@@ -320,9 +343,13 @@ function graphBytes(
 // `lanes` overrides which lane each board edge departs against, for the unscheduled-lane case.
 export function transitGraph(
   lanes: readonly number[] = BOARD_TABLE.map(([, lane]) => lane),
-  { detours = false }: { detours?: boolean } = {},
+  {
+    detours = false,
+    setback = false,
+  }: { detours?: boolean; setback?: boolean } = {},
 ): RoutingGraph {
-  const nodes = detours ? [...NODES, ...DETOUR_NODES] : NODES;
+  const placed = setback ? SETBACK_NODES : NODES;
+  const nodes = detours ? [...placed, ...DETOUR_NODES] : placed;
   const edges = detours ? [...EDGES, ...DETOUR_EDGES] : EDGES;
   return decodeGraph(graphBytes(lanes, nodes, edges), {
     hash: "0",
