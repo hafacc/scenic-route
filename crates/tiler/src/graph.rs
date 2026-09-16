@@ -211,6 +211,17 @@ const FERRY_SNAP_RADIUS_METERS: f64 = 250.0;
 // as far for its pavement as a pier does. Entrance geometry is the later refinement that would let
 // this shrink.
 const TRANSIT_SNAP_RADIUS_METERS: f64 = 250.0;
+// How near a walking edge stands to a station's own point to be one of its ways in. A station gets a
+// door on every such edge, not only the nearest: which edge is nearest is an accident of a few
+// metres, and a lone door on the far side of an avenue sends every walk out of the station up to the
+// crossing and back.
+const TRANSIT_ENTRANCE_RADIUS_METERS: f64 = 40.0;
+// Enough doors for both sides of an avenue and the street a station stands on, few enough that a
+// complex does not fan out into dozens of edges the search relaxes at every visit.
+const TRANSIT_ENTRANCES_MAX: usize = 6;
+// What the walk along an access edge costs on top of the base below, so a station reached across a
+// car park costs the crossing of it. Mirrors WALK_METERS_PER_SECOND in src/routing/walk-speed.ts.
+const ACCESS_WALK_METERS_PER_SECOND: f64 = 1.3;
 // What the walk in and out of a station costs, baked rather than measured: down a stair, along a
 // mezzanine and through a gate for a station the feed models as an enclosed place, and a step off
 // the kerb for one it models as a stop on the pavement. The way out is the shorter one either way —
@@ -218,6 +229,25 @@ const TRANSIT_SNAP_RADIUS_METERS: f64 = 250.0;
 const UNDERGROUND_ACCESS_SECONDS: u16 = 90;
 const SURFACE_ACCESS_SECONDS: u16 = 30;
 const ALIGHT_SECONDS: u16 = SURFACE_ACCESS_SECONDS;
+// A lift is called, waited for and ridden, and it must not undercut the stair beside it. No dataset
+// measures this one.
+const ELEVATOR_ACCESS_SECONDS: u16 = 150;
+// The flag bits an ACCESS edge carries, and nothing else does. The low five are the walking flags —
+// one of which decides for the whole graph whether it has tunnels — so a door takes the high three.
+// A graph written before them reads 0, which is a two-way stair, exactly as it behaved.
+//
+// Bit 5 is GRPH_BUILDING_RIGHT's, deliberately: that one is internal and masked out at the write, so
+// no record carries both, and a door is not a walking edge in any case. The written-bit test holds
+// all six apart.
+const ACCESS_EXIT_ONLY: u8 = 1 << 5;
+const ACCESS_ENTRY_ONLY: u8 = 1 << 6;
+// The one kind whose wording and whose cost differ from a stair; an escalator, a ramp, a station
+// house and a passage all read as a stair.
+const ACCESS_ELEVATOR: u8 = 1 << 7;
+// The one flag bit a RIDE edge carries: this ride is the free step from a stop's arrival node onto
+// its boarding node, which is a rider staying on the train. A ride carries no walking flag and no
+// door bit, so it borrows one; the edge's kind is what tells the two meanings apart.
+const RIDE_STAY_ABOARD: u8 = 1 << 6;
 // The seam radius: how far from where a corner would be placed OSM's own corner may stand and still
 // be that corner. A fan corner sits one averaged half-offset out along the gap bisector, and OSM's
 // kerb ramp sits at the true corner of the roadway, so the two differ by the difference between the
@@ -654,10 +684,103 @@ fn flags_leaving(edge: &Edge, node: u32) -> u8 {
     }
 }
 
+/// One position a polyline is asked to be cut at: how far along it the cut falls, and the point it
+/// stands at where the caller has one of its own. A station door is the foot of a real
+/// perpendicular and brings its point; a corner cut has only a distance, and the point is
+/// interpolated along the segment it lands in.
+struct CutAt {
+    along: f64,
+    point: Option<(i32, i32)>,
+}
+
+/// A polyline with a set of cuts woven into it: every original vertex in order, plus each cut that
+/// did not land within `SPLIT_MERGE_METERS` of a vertex, or of a cut already woven in — the same
+/// merge `conflate::apply_splits` makes on the CSCL side, so neither routine sheds a sliver.
+///
+/// Both of the graph's cuts take their pieces from this. What they do with the pieces differs — one
+/// builds contracted edges with kerb flags, the other divides a finished V2 edge and hands each
+/// door the node it joins — but where a piece begins and ends does not.
+struct WovenCuts {
+    x: Vec<i32>,
+    y: Vec<i32>,
+    /// The distance along the parent at each woven vertex, so `last` is the parent's own length.
+    along: Vec<f64>,
+    /// Per given cut, the woven vertex it became or joined. An END vertex means the cut landed on a
+    /// node the polyline already had, which is no cut at all.
+    vertex_of_cut: Vec<usize>,
+    /// The interior woven vertices a piece boundary falls on, ascending. Empty where every cut
+    /// landed on an end and the parent stays whole.
+    boundaries: Vec<usize>,
+}
+
+fn weave_cuts(
+    poly_x: &[i32],
+    poly_y: &[i32],
+    cuts: &[CutAt],
+    meters_per_unit: (f64, f64),
+) -> WovenCuts {
+    let along = association::cumulative_meters(poly_x, poly_y, meters_per_unit);
+    let mut woven: Vec<(f64, i32, i32, bool)> = (0..poly_x.len())
+        .map(|vertex| (along[vertex], poly_x[vertex], poly_y[vertex], false))
+        .collect();
+    let mut vertex_of_cut: Vec<usize> = vec![0; cuts.len()];
+    for (index, cut) in cuts.iter().enumerate() {
+        let nearest = (0..woven.len())
+            .min_by(|&left, &right| {
+                (woven[left].0 - cut.along)
+                    .abs()
+                    .total_cmp(&(woven[right].0 - cut.along).abs())
+            })
+            .expect("a non-empty polyline");
+        if (woven[nearest].0 - cut.along).abs() <= SPLIT_MERGE_METERS {
+            // Never at an end: that node exists already, and cutting there would shed an empty piece.
+            if nearest != 0 && nearest != woven.len() - 1 {
+                woven[nearest].3 = true;
+            }
+            vertex_of_cut[index] = nearest;
+            continue;
+        }
+        let after = woven
+            .iter()
+            .position(|entry| entry.0 > cut.along)
+            .expect("a cut inside the polyline");
+        let point = cut.point.unwrap_or_else(|| {
+            let span = woven[after].0 - woven[after - 1].0;
+            let param = if span > 0.0 {
+                (cut.along - woven[after - 1].0) / span
+            } else {
+                0.0
+            };
+            let lerp = |from: i32, to: i32| {
+                round_half_up(f64::from(from) + param * f64::from(to - from)) as i32
+            };
+            (
+                lerp(woven[after - 1].1, woven[after].1),
+                lerp(woven[after - 1].2, woven[after].2),
+            )
+        });
+        woven.insert(after, (cut.along, point.0, point.1, true));
+        // The insertion moved every woven vertex from here on, and earlier cuts hold those indices.
+        for held in &mut vertex_of_cut[..index] {
+            if *held >= after {
+                *held += 1;
+            }
+        }
+        vertex_of_cut[index] = after;
+    }
+    WovenCuts {
+        boundaries: (1..woven.len().saturating_sub(1))
+            .filter(|&vertex| woven[vertex].3)
+            .collect(),
+        x: woven.iter().map(|entry| entry.1).collect(),
+        y: woven.iter().map(|entry| entry.2).collect(),
+        along: woven.iter().map(|entry| entry.0).collect(),
+        vertex_of_cut,
+    }
+}
+
 /// Cut one contracted edge at a set of interior positions, dividing the stored length by each
-/// piece's share of the parent's geodesic length and interning a node at every cut. A position
-/// within `SPLIT_MERGE_METERS` of an existing vertex, or of a cut already taken, joins it rather
-/// than shedding a sliver — the same merge `conflate::apply_splits` makes on the CSCL side.
+/// piece's share of the parent's geodesic length and interning a node at every cut.
 fn cut_edge_at(
     edge: &Edge,
     cuts: &[f64],
@@ -665,84 +788,38 @@ fn cut_edge_at(
     merged_y: &mut Vec<i32>,
     meters_per_unit: (f64, f64),
 ) -> Vec<Edge> {
-    let along = association::cumulative_meters(&edge.poly_x, &edge.poly_y, meters_per_unit);
-    let full = along.last().copied().unwrap_or(0.0);
-    let last = edge.poly_x.len() - 1;
-
-    // The woven vertex list: every original vertex, plus each cut that did not land on one, each
-    // flagged with whether a piece boundary falls there.
-    let mut woven: Vec<(f64, i32, i32, bool)> = (0..=last)
-        .map(|vertex| {
-            (
-                along[vertex],
-                edge.poly_x[vertex],
-                edge.poly_y[vertex],
-                false,
-            )
-        })
-        .collect();
-    for &cut in cuts {
-        let nearest = (0..woven.len())
-            .min_by(|&left, &right| {
-                (woven[left].0 - cut)
-                    .abs()
-                    .total_cmp(&(woven[right].0 - cut).abs())
-            })
-            .expect("a non-empty polyline");
-        if (woven[nearest].0 - cut).abs() <= SPLIT_MERGE_METERS {
-            // Never at an end: that node exists already, and cutting there would shed an empty piece.
-            if nearest != 0 && nearest != woven.len() - 1 {
-                woven[nearest].3 = true;
-            }
-            continue;
-        }
-        let after = woven
+    let woven = weave_cuts(
+        &edge.poly_x,
+        &edge.poly_y,
+        &cuts
             .iter()
-            .position(|entry| entry.0 > cut)
-            .expect("a cut inside the polyline");
-        let span = woven[after].0 - woven[after - 1].0;
-        let param = if span > 0.0 {
-            (cut - woven[after - 1].0) / span
-        } else {
-            0.0
-        };
-        let lerp = |from: i32, to: i32| {
-            round_half_up(f64::from(from) + param * f64::from(to - from)) as i32
-        };
-        let point_x = lerp(woven[after - 1].1, woven[after].1);
-        let point_y = lerp(woven[after - 1].2, woven[after].2);
-        woven.insert(after, (cut, point_x, point_y, true));
-    }
-    if woven.iter().all(|entry| !entry.3) {
+            .map(|&along| CutAt { along, point: None })
+            .collect::<Vec<CutAt>>(),
+        meters_per_unit,
+    );
+    if woven.boundaries.is_empty() {
         return vec![Edge { ..clone_edge(edge) }];
     }
+    let full = woven.along.last().copied().unwrap_or(0.0);
+    let last = woven.x.len() - 1;
 
     let mut pieces: Vec<Edge> = Vec::new();
     let mut start = 0usize;
     let mut start_node = edge.a;
-    for boundary in 1..woven.len() {
-        if !woven[boundary].3 && boundary != woven.len() - 1 {
-            continue;
-        }
-        let poly_x: Vec<i32> = woven[start..=boundary]
-            .iter()
-            .map(|entry| entry.1)
-            .collect();
-        let poly_y: Vec<i32> = woven[start..=boundary]
-            .iter()
-            .map(|entry| entry.2)
-            .collect();
+    for &boundary in woven.boundaries.iter().chain(std::iter::once(&last)) {
+        let poly_x: Vec<i32> = woven.x[start..=boundary].to_vec();
+        let poly_y: Vec<i32> = woven.y[start..=boundary].to_vec();
         let span = conflate::polyline_meters(&poly_x, &poly_y, meters_per_unit);
         let length = if full > 0.0 {
             (f64::from(edge.length) * span / full) as f32
         } else {
             edge.length
         };
-        let end_node = if boundary == woven.len() - 1 {
+        let end_node = if boundary == last {
             edge.b
         } else {
-            merged_x.push(woven[boundary].1);
-            merged_y.push(woven[boundary].2);
+            merged_x.push(woven.x[boundary]);
+            merged_y.push(woven.y[boundary]);
             (merged_x.len() - 1) as u32
         };
         pieces.push(Edge {
@@ -752,7 +829,7 @@ fn cut_edge_at(
             poly_y,
             length,
             kerb_a: edge.kerb_a && start == 0,
-            kerb_b: edge.kerb_b && boundary == woven.len() - 1,
+            kerb_b: edge.kerb_b && boundary == last,
             ..clone_edge(edge)
         });
         start = boundary;
@@ -1680,6 +1757,7 @@ fn transit_edge(
     kind: u8,
     seconds: u16,
     name_id: u16,
+    flags: u8,
     origin_lng: f64,
     origin_lat: f64,
     scale: f64,
@@ -1694,26 +1772,39 @@ fn transit_edge(
         name_id,
         kind,
         side: SIDE_NONE,
-        flags: 0,
+        flags,
         source_id: NO_SOURCE_ID,
     }
 }
 
-/// One station node's worth of the topology: where it stands, what it is called and whether a rider
-/// reaches it off the kerb rather than down a stair.
+/// One station node's worth of the topology: where it stands, what it is called, whether a rider
+/// reaches it off the kerb rather than down a stair, and where its members stand. The members'
+/// points are the platforms and doors the feed gives, so they are where the pavement is looked for;
+/// the node itself is their centroid, which for a complex is inside the block.
 struct StationGroup {
     lng: f64,
     lat: f64,
     name: String,
     surface: bool,
+    member_points: Vec<(f64, f64)>,
+    /// One station node, or two — side 0 and side 1 — where the agency publishes no free crossover:
+    /// a rider who goes down the wrong stair walks back up and crosses the street, and two nodes
+    /// with no edge between them is exactly that.
+    sides: usize,
+    /// The published ways in, indexed into the topology's entrance table.
+    entrances: Vec<usize>,
 }
 
-/// The station nodes the graph gets, and for each station of the topology the group it joins: one
-/// group per transfer complex, one per station the feed puts in no complex. A group stands at its
+/// The station groups the graph gets, and for each station of the topology the one it joins: one
+/// group per transfer complex, one per station the feed puts in no complex, and one node per group
+/// unless the agency publishes no free crossover through it. A group stands at its
 /// members' centroid, takes the name most of them carry, and is only a kerbside stop where every
 /// member is one. Giving a whole complex a single node is what makes a change of train there an
 /// alight and a board rather than a walk out to the pavement and back in through another door.
-fn station_groups(stations: &[binfmt::TransitStation]) -> (Vec<StationGroup>, Vec<usize>) {
+fn station_groups(
+    stations: &[binfmt::TransitStation],
+    entrances: &[binfmt::TransitEntrance],
+) -> (Vec<StationGroup>, Vec<usize>) {
     let mut group_of_complex: HashMap<u16, usize> = HashMap::new();
     let mut members: Vec<Vec<usize>> = Vec::new();
     let mut group_of_station: Vec<usize> = Vec::with_capacity(stations.len());
@@ -1730,10 +1821,15 @@ fn station_groups(stations: &[binfmt::TransitStation]) -> (Vec<StationGroup>, Ve
         members[group].push(index);
         group_of_station.push(group);
     }
+    let mut entrances_of_group: Vec<Vec<usize>> = vec![Vec::new(); members.len()];
+    for (index, entrance) in entrances.iter().enumerate() {
+        entrances_of_group[group_of_station[usize::from(entrance.station)]].push(index);
+    }
 
     let groups = members
         .iter()
-        .map(|member| {
+        .zip(entrances_of_group)
+        .map(|(member, entrances)| {
             let mut counts: HashMap<&str, usize> = HashMap::new();
             for &station in member {
                 *counts.entry(stations[station].name.as_str()).or_insert(0) += 1;
@@ -1751,49 +1847,405 @@ fn station_groups(stations: &[binfmt::TransitStation]) -> (Vec<StationGroup>, Ve
                 lat: member.iter().map(|&one| stations[one].lat).sum::<f64>() / count,
                 name: commonest.0.to_string(),
                 surface: member.iter().all(|&one| stations[one].surface),
+                member_points: member
+                    .iter()
+                    .map(|&one| (stations[one].lng, stations[one].lat))
+                    .collect(),
+                // A complex keeps one node whatever its members say: a transfer inside it is free,
+                // and the flag is only ever set on a station standing on its own.
+                sides: if member.len() == 1 && stations[member[0]].split {
+                    2
+                } else {
+                    1
+                },
+                entrances,
             }
         })
         .collect();
     (groups, group_of_station)
 }
 
-/// What the transit pass appended, for the build log and for the graph's two transit side tables.
+/// Where one member station meets the pavement: the walking edge its own point projects onto, the
+/// foot of that perpendicular, and how far along that edge's polyline the foot falls.
+struct PavementFoot {
+    edge: u32,
+    along: f64,
+    point: (i32, i32),
+}
+
+/// The pavement a station point reaches: every sidewalk or path whose perpendicular foot lies within
+/// TRANSIT_ENTRANCE_RADIUS_METERS of it — one foot per edge, the nearest — and failing all of them
+/// the single nearest edge within TRANSIT_SNAP_RADIUS_METERS. Ranked on the perpendicular in the
+/// quantized metre frame and confirmed on the great circle, nearest first, each with its metres.
+/// Empty when the point stands out of reach of any walking edge at all. `nearest_only` asks for that
+/// single nearest edge whatever the distance: a published entrance is a street door already, so the
+/// pavement it opens onto is the one under it and not the one across the road.
+#[allow(clippy::too_many_arguments)]
+fn pavement_feet(
+    point: (i32, i32),
+    nearest_only: bool,
+    grid: &conflate::SegmentGrid,
+    candidates: &[u32],
+    v2_edges: &[V2Edge],
+    geometry_polys: &[(Vec<i32>, Vec<i32>)],
+    origin_lng: f64,
+    origin_lat: f64,
+    scale: f64,
+    meters_per_unit: (f64, f64),
+) -> Vec<(f64, PavementFoot)> {
+    let polyline_of = |edge: u32| -> &(Vec<i32>, Vec<i32>) {
+        &geometry_polys[v2_edges[edge as usize].geom as usize]
+    };
+    // One projection: how far off it is, the edge, and where on that edge it landed.
+    #[derive(Clone, Copy)]
+    struct Nearest {
+        metres: f64,
+        edge: u32,
+        vertex: usize,
+        param: f64,
+        point: (i32, i32),
+    }
+    let nearer = |left: &Nearest, right: &Nearest| -> bool {
+        // The edge id breaks a tie: the grid hands back the cells in the order they were filled, and
+        // the two pieces meeting at a corner do stand the same distance from a point beside it.
+        left.metres < right.metres || (left.metres == right.metres && left.edge < right.edge)
+    };
+    let mut doors: HashMap<u32, Nearest> = HashMap::new();
+    let mut nearest: Option<Nearest> = None;
+    for (candidate, vertex) in grid.nearby(point, TRANSIT_SNAP_RADIUS_METERS, meters_per_unit) {
+        let edge = candidates[candidate as usize];
+        let (poly_x, poly_y) = polyline_of(edge);
+        let vertex = vertex as usize;
+        let (metres, param, projected) = conflate::project(
+            point,
+            (poly_x[vertex], poly_y[vertex]),
+            (poly_x[vertex + 1], poly_y[vertex + 1]),
+            meters_per_unit,
+        );
+        if metres > TRANSIT_SNAP_RADIUS_METERS {
+            continue;
+        }
+        let standing = Nearest {
+            metres,
+            edge,
+            vertex,
+            param,
+            point: projected,
+        };
+        let beats_all = nearest.is_none_or(|incumbent| nearer(&standing, &incumbent));
+        let beats_its_edge = !nearest_only
+            && doors
+                .get(&edge)
+                .is_none_or(|incumbent| nearer(&standing, incumbent));
+        if !beats_all && !beats_its_edge {
+            continue;
+        }
+        let reach = great_circle(
+            point.0,
+            point.1,
+            projected.0,
+            projected.1,
+            origin_lng,
+            origin_lat,
+            scale,
+        );
+        if reach > TRANSIT_SNAP_RADIUS_METERS {
+            continue;
+        }
+        if beats_all {
+            nearest = Some(standing);
+        }
+        if beats_its_edge && reach <= TRANSIT_ENTRANCE_RADIUS_METERS {
+            doors.insert(edge, standing);
+        }
+    }
+
+    let mut kept: Vec<Nearest> = if doors.is_empty() {
+        nearest.into_iter().collect()
+    } else {
+        doors.into_values().collect()
+    };
+    kept.sort_by(|left, right| {
+        left.metres
+            .total_cmp(&right.metres)
+            .then(left.edge.cmp(&right.edge))
+    });
+    kept.into_iter()
+        .map(|door| {
+            let (poly_x, poly_y) = polyline_of(door.edge);
+            (
+                door.metres,
+                PavementFoot {
+                    edge: door.edge,
+                    along: conflate::along_at(
+                        poly_x,
+                        poly_y,
+                        door.vertex,
+                        door.param,
+                        meters_per_unit,
+                    ),
+                    point: door.point,
+                },
+            )
+        })
+        .collect()
+}
+
+/// One way into a station group before the pavement is cut: the foot it stands on, the side nodes
+/// it reaches as a bit per side, what the descent costs before the walk out to it, the flag bits
+/// the access edge will carry, and the street it opens onto.
+struct DoorRequest {
+    foot: usize,
+    sides: u8,
+    base: u16,
+    flags: u8,
+    street: (u16, u8),
+}
+
+/// The doors of one side that landed on a single walking node with the same kind and the same
+/// directions, collapsed into the one way in the graph draws there.
+struct JoinedDoor {
+    node: u32,
+    base: u16,
+    kind: u8,
+    entry: bool,
+    exit: bool,
+    street: (u16, u8),
+}
+
+/// The two nodes one platform side of a station stands on: the one its doors lead in to, and the one
+/// they lead out of.
+struct StationSide {
+    entry: u32,
+    exit: u32,
+}
+
+/// The street a door opens onto: the name and the side of the walking edge its foot landed on, read
+/// before that edge is cut — every piece of the cut carries both, so the answer does not depend on
+/// which piece the door ends up joining.
+fn door_street(v2_edges: &[V2Edge], foot: &PavementFoot) -> (u16, u8) {
+    let edge = &v2_edges[foot.edge as usize];
+    (edge.name_id, edge.side)
+}
+
+/// What the descent costs before the walk out to the door. A stop the feed models as a kerbside
+/// shelter is a step off the pavement whatever it is built of.
+fn entrance_base(surface: bool, kind: binfmt::EntranceKind) -> u16 {
+    if surface {
+        SURFACE_ACCESS_SECONDS
+    } else if kind == binfmt::EntranceKind::Elevator {
+        ELEVATOR_ACCESS_SECONDS
+    } else {
+        UNDERGROUND_ACCESS_SECONDS
+    }
+}
+
+fn entrance_flags(entrance: &binfmt::TransitEntrance) -> u8 {
+    let mut flags = 0u8;
+    if !entrance.entry {
+        flags |= ACCESS_EXIT_ONLY;
+    }
+    if !entrance.exit {
+        flags |= ACCESS_ENTRY_ONLY;
+    }
+    if entrance.kind == binfmt::EntranceKind::Elevator {
+        flags |= ACCESS_ELEVATOR;
+    }
+    flags
+}
+
+/// Cut every walking edge a station foot landed on, in place: the edge keeps its first piece, the
+/// rest are appended, and each piece carries the parent's attributes and its share of the parent's
+/// length. Gives back the node each foot joins — the node its cut became, or an end of the edge when
+/// the foot fell within `conflate::SPLIT_MERGE_METERS` of it — and how many cuts were made.
+///
+/// Every foot was projected onto the geometry as it stood before any of this, so an edge two of them
+/// landed on is cut at both and the result does not depend on the order the stations are visited.
+#[allow(clippy::too_many_arguments)]
+fn cut_pavement_at_feet(
+    feet: &[PavementFoot],
+    node_lng: &mut Vec<i32>,
+    node_lat: &mut Vec<i32>,
+    v2_edges: &mut Vec<V2Edge>,
+    geometry_polys: &mut Vec<(Vec<i32>, Vec<i32>)>,
+    origin_lng: f64,
+    origin_lat: f64,
+    scale: f64,
+    meters_per_unit: (f64, f64),
+) -> (Vec<u32>, usize) {
+    let mut feet_of_edge: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (index, foot) in feet.iter().enumerate() {
+        feet_of_edge.entry(foot.edge).or_default().push(index);
+    }
+    let mut node_of_foot: Vec<u32> = vec![u32::MAX; feet.len()];
+    let mut cuts_made = 0usize;
+    // In edge order: a hash map hands its keys back in an order seeded per process, and the nodes
+    // and edges made below are numbered as they are made.
+    let mut cut_edges: Vec<u32> = feet_of_edge.keys().copied().collect();
+    cut_edges.sort_unstable();
+    for edge_id in cut_edges {
+        let mut indices = feet_of_edge.remove(&edge_id).expect("the edge's own feet");
+        indices.sort_by(|&left, &right| feet[left].along.total_cmp(&feet[right].along));
+        let parent = v2_edges[edge_id as usize].clone();
+        let (poly_x, poly_y) = geometry_polys[parent.geom as usize].clone();
+        let woven = weave_cuts(
+            &poly_x,
+            &poly_y,
+            &indices
+                .iter()
+                .map(|&index| CutAt {
+                    along: feet[index].along,
+                    point: Some(feet[index].point),
+                })
+                .collect::<Vec<CutAt>>(),
+            meters_per_unit,
+        );
+        let last = woven.x.len() - 1;
+
+        // A node per cut, numbered along the parent; a foot that landed on an end of it joins the
+        // node standing there already.
+        let mut node_of_vertex: HashMap<usize, u32> =
+            HashMap::with_capacity(woven.boundaries.len());
+        for &boundary in &woven.boundaries {
+            node_of_vertex.insert(boundary, node_lng.len() as u32);
+            node_lng.push(woven.x[boundary]);
+            node_lat.push(woven.y[boundary]);
+        }
+        for (&index, &vertex) in indices.iter().zip(&woven.vertex_of_cut) {
+            node_of_foot[index] = if vertex == 0 {
+                parent.a
+            } else if vertex == last {
+                parent.b
+            } else {
+                node_of_vertex[&vertex]
+            };
+        }
+        if woven.boundaries.is_empty() {
+            continue;
+        }
+
+        let full = conflate::polyline_meters(&woven.x, &woven.y, meters_per_unit);
+        let mut start = 0usize;
+        for (piece, &end) in woven
+            .boundaries
+            .iter()
+            .chain(std::iter::once(&last))
+            .enumerate()
+        {
+            let piece_x = woven.x[start..=end].to_vec();
+            let piece_y = woven.y[start..=end].to_vec();
+            let node_a = match node_of_vertex.get(&start) {
+                Some(&node) => node,
+                None => parent.a,
+            };
+            let node_b = match node_of_vertex.get(&end) {
+                Some(&node) => node,
+                None => parent.b,
+            };
+            let share = if full > 0.0 {
+                (f64::from(parent.length)
+                    * conflate::polyline_meters(&piece_x, &piece_y, meters_per_unit)
+                    / full) as f32
+            } else {
+                parent.length
+            };
+            let straight = node_distance(
+                node_lng, node_lat, node_a, node_b, origin_lng, origin_lat, scale,
+            ) as f32;
+            let length = share.max(straight);
+            if piece == 0 {
+                geometry_polys[parent.geom as usize] = (piece_x, piece_y);
+                let edge = &mut v2_edges[edge_id as usize];
+                edge.b = node_b;
+                edge.length = length;
+            } else {
+                let geom = geometry_polys.len() as u32;
+                geometry_polys.push((piece_x, piece_y));
+                v2_edges.push(V2Edge {
+                    a: node_a,
+                    b: node_b,
+                    length,
+                    geom,
+                    ..parent.clone()
+                });
+            }
+            start = end;
+        }
+        cuts_made += woven.boundaries.len();
+    }
+    (node_of_foot, cuts_made)
+}
+
+/// What the transit pass appended, for the build log and for the graph's transit side tables.
 #[derive(Default)]
 struct TransitBuild {
+    /// The station NODES, which is two per platform side — a way in and a way out — so twice the
+    /// groups, and twice again for every station split in two.
     stations: usize,
     unsnapped: usize,
+    /// The groups that got a pair of nodes per platform side.
+    split_stations: usize,
+    /// The published entrances that found pavement and became doors.
+    entrances: usize,
+    /// The groups no published entrance can be entered by, which took the station point's own doors.
+    fallback_stations: usize,
+    /// The groups a side of which had no way IN, and so stand on one node after all.
+    collapsed_stations: usize,
+    /// The access edges that join a station node to the pavement, which the total below also
+    /// counts: one per direction per door per side, so more than one per station node.
+    street_doors: usize,
+    /// The exit-to-entry edges, one per station node pair, that a change of train crosses.
+    transfer_edges: usize,
+    /// The cuts those joins made in the walking network, each one a new mid-block node.
+    pavement_cuts: usize,
+    /// The platform NODES, which is two per stop of every pattern — one boarded from and one
+    /// alighted from — so twice the board edges.
     platform_nodes: usize,
     access_edges: usize,
     board_edges: usize,
     ride_edges: usize,
+    /// The arrival-to-boarding edges, one per platform, that a rider staying on the train crosses.
+    stay_aboard_edges: usize,
     dropped_patterns: usize,
     routes: Vec<TransitRouteRecord>,
     /// Per board edge its lane id, route index and stop index along the pattern, and per ride edge
     /// its route index — the two side tables, in edge-id order.
     board_table: Vec<(u32, u32, u16, u16)>,
     ride_table: Vec<(u32, u16)>,
+    /// Per door the street it stands on and which side of it, as the walking edge it was cut into
+    /// carries them. The maneuver names the door by this rather than by the step a route happens to
+    /// approach it along, which is the cross street at a corner and nothing at all across a crossing.
+    door_table: Vec<(u32, u16, u8)>,
 }
 
 /// Transit: the rail topology, on the ferries' terms and one step further. A ferry rides between two
 /// walking nodes; a train rides between nodes of its own, because a rider's wait belongs to one
-/// pattern and not to the station. So each station group becomes a node joined to the pavement by an
-/// access edge, each stop of each pattern becomes a platform node, and the ride is platform to
-/// platform. Every one of these edges is appended after the walking renumber, exactly as the ferries
-/// are, so no walking edge or node moves.
+/// pattern and not to the station. So each station group becomes a PAIR of nodes per platform side,
+/// each stop of each pattern becomes a PAIR of platform nodes, and the ride runs one stop's boarding
+/// node to the next stop's arrival node. Every one of these edges is appended after the walking
+/// renumber, exactly as the ferries are, so no walking edge or node moves.
+///
+/// Both pairs are what keep a station from being a way through the block. A rider walks in at the
+/// side's ENTRY node and out at its EXIT node, every door being one-way into the one or out of the
+/// other; boards leave the entry, alights land on the exit, and the only edge between the two runs
+/// exit to entry. So a door in and straight out again — which a single node made a free underpass,
+/// dearer only than whatever the street above it cost — cannot be walked, and a change of train,
+/// which is an alight onto the exit and a board off the entry, still can. The platform's own pair
+/// closes the same passage one level down: a board lands on the BOARDING node and an alight leaves
+/// the ARRIVAL node, so the cheapest way across a platform is a ride of at least one stop.
 #[allow(clippy::too_many_arguments)]
 fn append_transit(
     transit: &binfmt::Transit,
     node_lng: &mut Vec<i32>,
     node_lat: &mut Vec<i32>,
     v2_edges: &mut Vec<V2Edge>,
+    geometry_polys: &mut Vec<(Vec<i32>, Vec<i32>)>,
     all_names: &mut Vec<String>,
-    walking_node_count: usize,
     origin_lng: f64,
     origin_lat: f64,
     scale: f64,
     meters_per_unit: (f64, f64),
 ) -> TransitBuild {
-    let (meters_per_unit_lng, meters_per_unit_lat) = meters_per_unit;
     let quantize_x = |lng: f64| ((lng - origin_lng) / scale).round() as i32;
     let quantize_y = |lat: f64| ((lat - origin_lat) / scale).round() as i32;
     let mut built = TransitBuild::default();
@@ -1808,70 +2260,291 @@ fn append_transit(
         });
     }
 
-    // Each station group snaps to its nearest walking node, ranked in the equirectangular frame the
-    // whole pass quantizes in and confirmed on the great circle — the ferries' linear scan over a
-    // few hundred stops rather than a spatial index, which at a few hundred groups is still under a
-    // second and has nothing to go stale.
-    let (groups, group_of_station) = station_groups(&transit.stations);
-    let mut group_node: Vec<Option<u32>> = Vec::with_capacity(groups.len());
+    // A station meets the pavement at its published entrances: each one projects onto the walking
+    // edge under it, that edge is cut there, and the side nodes the entrance serves join the cut. A
+    // station the agency publishes no entrance for falls back to its own point projected onto every
+    // edge within TRANSIT_ENTRANCE_RADIUS_METERS, which is a door in the middle of the block rather
+    // than whichever corner the snap happened to find.
+    let (groups, group_of_station) = station_groups(&transit.stations, &transit.entrances);
+    let candidates: Vec<u32> = v2_edges
+        .iter()
+        .enumerate()
+        .filter(|(_, edge)| {
+            matches!(edge.kind, KIND_SIDEWALK | KIND_PATH) && edge.geom != NO_GEOMETRY
+        })
+        .map(|(edge_id, _)| edge_id as u32)
+        .collect();
+    let grid = conflate::SegmentGrid::new(
+        candidates.iter().map(|&edge_id| {
+            let (poly_x, poly_y) = &geometry_polys[v2_edges[edge_id as usize].geom as usize];
+            (&poly_x[..], &poly_y[..])
+        }),
+        meters_per_unit,
+    );
+    let mut feet: Vec<PavementFoot> = Vec::new();
+    let mut doors_of_group: Vec<Vec<DoorRequest>> = Vec::with_capacity(groups.len());
     for group in &groups {
-        let group_x = quantize_x(group.lng);
-        let group_y = quantize_y(group.lat);
-        let mut nearest: Option<(u32, f64)> = None;
-        for node in 0..walking_node_count {
-            let away_x = f64::from(node_lng[node] - group_x) * meters_per_unit_lng;
-            let away_y = f64::from(node_lat[node] - group_y) * meters_per_unit_lat;
-            let square = away_x * away_x + away_y * away_y;
-            if nearest.is_none_or(|(_, best)| square < best) {
-                nearest = Some((node as u32, square));
+        let both_sides: u8 = if group.sides == 2 { 0b11 } else { 0b01 };
+        let mut doors: Vec<DoorRequest> = Vec::new();
+        // The sides a rider can get IN by. An exit-only stair is no way to a platform, so a side
+        // with nothing else is a side whose trains cannot be boarded — 145 St on the Lenox line
+        // publishes four doors for its northbound platform and every one of them opens outwards.
+        let mut served: u8 = 0;
+        for &entrance_index in &group.entrances {
+            let entrance = &transit.entrances[entrance_index];
+            // A station standing on one node takes every door it has, whatever side the entrance
+            // names: there is only one platform to reach.
+            let sides = if group.sides == 2 {
+                entrance.sides & both_sides
+            } else {
+                both_sides
+            };
+            if sides == 0 {
+                continue;
             }
-        }
-        let walking = nearest.filter(|&(node, _)| {
-            great_circle(
-                group_x,
-                group_y,
-                node_lng[node as usize],
-                node_lat[node as usize],
+            let point = (quantize_x(entrance.lng), quantize_y(entrance.lat));
+            let landed = pavement_feet(
+                point,
+                true,
+                &grid,
+                &candidates,
+                v2_edges,
+                geometry_polys,
                 origin_lng,
                 origin_lat,
                 scale,
-            ) <= TRANSIT_SNAP_RADIUS_METERS
-        });
-        match walking {
-            Some((walking_node, _)) => {
-                let station_id = node_lng.len() as u32;
-                node_lng.push(group_x);
-                node_lat.push(group_y);
-                let name_id = intern_name(all_names, &mut interned, &group.name);
-                let seconds = if group.surface {
-                    SURFACE_ACCESS_SECONDS
-                } else {
-                    UNDERGROUND_ACCESS_SECONDS
-                };
+                meters_per_unit,
+            );
+            let Some((_, foot)) = landed.into_iter().next() else {
+                continue;
+            };
+            let flags = entrance_flags(entrance);
+            let street = door_street(v2_edges, &foot);
+            feet.push(foot);
+            doors.push(DoorRequest {
+                foot: feet.len() - 1,
+                sides,
+                base: entrance_base(group.surface, entrance.kind),
+                flags,
+                street,
+            });
+            if flags & ACCESS_EXIT_ONLY == 0 {
+                served |= sides;
+            }
+            built.entrances += 1;
+        }
+
+        // A group no published door can be walked INTO takes the station point's own doors: a
+        // station the agency lists none for, and one whose every listed door opens outwards. A
+        // split group with one side served and one not does NOT — inventing doors round the
+        // station point puts six two-way stairs on pavement the agency publishes none on, the far
+        // side's among them, which is how Aqueduct Racetrack grew a six-door node no train reaches.
+        // That group stands on the served node instead, which the collapse below does.
+        let missing = if served == 0 { both_sides } else { 0 };
+        if missing != 0 {
+            let mut found: Vec<(f64, PavementFoot)> = Vec::new();
+            for &(member_lng, member_lat) in &group.member_points {
+                let point = (quantize_x(member_lng), quantize_y(member_lat));
+                found.extend(pavement_feet(
+                    point,
+                    false,
+                    &grid,
+                    &candidates,
+                    v2_edges,
+                    geometry_polys,
+                    origin_lng,
+                    origin_lat,
+                    scale,
+                    meters_per_unit,
+                ));
+            }
+            // Nearest first across the whole group, so a complex whose members share a corner spends
+            // its six on the six nearest doors rather than on whichever member was read first.
+            found.sort_by(|left, right| {
+                left.0
+                    .total_cmp(&right.0)
+                    .then(left.1.edge.cmp(&right.1.edge))
+            });
+            found.truncate(TRANSIT_ENTRANCES_MAX);
+            if !found.is_empty() {
+                built.fallback_stations += 1;
+            }
+            let base = entrance_base(group.surface, binfmt::EntranceKind::Stair);
+            for (_, foot) in found {
+                let street = door_street(v2_edges, &foot);
+                feet.push(foot);
+                doors.push(DoorRequest {
+                    foot: feet.len() - 1,
+                    sides: missing,
+                    base,
+                    flags: 0,
+                    street,
+                });
+            }
+        }
+        doors_of_group.push(doors);
+    }
+    let (node_of_foot, pavement_cuts) = cut_pavement_at_feet(
+        &feet,
+        node_lng,
+        node_lat,
+        v2_edges,
+        geometry_polys,
+        origin_lng,
+        origin_lat,
+        scale,
+        meters_per_unit,
+    );
+    built.pavement_cuts = pavement_cuts;
+
+    let mut group_nodes: Vec<Vec<StationSide>> = Vec::with_capacity(groups.len());
+    for (group, doors) in groups.iter().zip(&doors_of_group) {
+        if doors.is_empty() {
+            built.unsnapped += 1;
+            eprintln!(
+                "tiler graph: transit station \"{}\" ({:.6}, {:.6}) has no walking edge within {TRANSIT_SNAP_RADIUS_METERS:.0} m; dropping it",
+                group.name, group.lng, group.lat
+            );
+            group_nodes.push(Vec::new());
+        } else {
+            // A side with no way in would be a platform a rider could leave and never board, so the
+            // group stands on the one node it had before the split — which carries every door the
+            // group has, the far side's included, and is a walk across the street the rider makes.
+            let enterable = |side: usize| {
+                doors
+                    .iter()
+                    .any(|door| door.sides & (1 << side) != 0 && door.flags & ACCESS_EXIT_ONLY == 0)
+            };
+            let sides = if group.sides == 2 && (0..2).all(enterable) {
+                2
+            } else {
+                1
+            };
+            if sides == 2 {
+                built.split_stations += 1;
+            } else if group.sides == 2 {
+                built.collapsed_stations += 1;
+            }
+            let name_id = intern_name(all_names, &mut interned, &group.name);
+            let first_node = node_lng.len() as u32;
+            for _ in 0..2 * sides {
+                node_lng.push(quantize_x(group.lng));
+                node_lat.push(quantize_y(group.lat));
+            }
+            let places: Vec<StationSide> = (0..sides as u32)
+                .map(|side| StationSide {
+                    entry: first_node + 2 * side,
+                    exit: first_node + 2 * side + 1,
+                })
+                .collect();
+            for (side, place) in places.iter().enumerate() {
+                // Two entrances that landed on one walking node with the same directions and the
+                // same kind are one way in, at the cheaper of their two bases. Differing in either
+                // they stay apart: a lift beside an exit-only stair is not a cheap two-way lift.
+                let mut joined: Vec<JoinedDoor> = Vec::new();
+                for door in doors {
+                    if sides == 2 && door.sides & (1 << side) == 0 {
+                        continue;
+                    }
+                    let walking_node = node_of_foot[door.foot];
+                    let entry = door.flags & ACCESS_EXIT_ONLY == 0;
+                    let exit = door.flags & ACCESS_ENTRY_ONLY == 0;
+                    let kind = door.flags & ACCESS_ELEVATOR;
+                    match joined.iter_mut().find(|held| {
+                        held.node == walking_node
+                            && held.kind == kind
+                            && held.entry == entry
+                            && held.exit == exit
+                    }) {
+                        Some(held) => {
+                            if door.base < held.base {
+                                held.base = door.base;
+                                held.street = door.street;
+                            }
+                        }
+                        None => joined.push(JoinedDoor {
+                            node: walking_node,
+                            base: door.base,
+                            kind,
+                            entry,
+                            exit,
+                            street: door.street,
+                        }),
+                    }
+                }
+                joined.sort_unstable_by_key(|door| {
+                    (door.node, door.kind, door.entry, door.exit, door.base)
+                });
+                for door in joined {
+                    // The base is the stair and the gate; the rest is the walk out to this door,
+                    // taken from the station node so that it is the edge's own length — for a lone
+                    // station that IS the perpendicular, and for a complex, whose node stands at its
+                    // members' centroid, it is the longer and honest figure.
+                    let metres = node_distance(
+                        node_lng,
+                        node_lat,
+                        place.entry,
+                        door.node,
+                        origin_lng,
+                        origin_lat,
+                        scale,
+                    );
+                    let walk = (metres / ACCESS_WALK_METERS_PER_SECOND).round();
+                    let seconds = (f64::from(door.base) + walk).min(f64::from(u16::MAX)) as u16;
+                    // A two-way door is two edges, because the way in and the way out land on nodes
+                    // of their own. Each keeps the flag that says which it is.
+                    for (station_id, flag) in [
+                        (place.entry, ACCESS_ENTRY_ONLY),
+                        (place.exit, ACCESS_EXIT_ONLY),
+                    ] {
+                        if (flag == ACCESS_ENTRY_ONLY && !door.entry)
+                            || (flag == ACCESS_EXIT_ONLY && !door.exit)
+                        {
+                            continue;
+                        }
+                        let edge_id = v2_edges.len() as u32;
+                        v2_edges.push(transit_edge(
+                            node_lng,
+                            node_lat,
+                            station_id,
+                            door.node,
+                            KIND_ACCESS,
+                            seconds,
+                            name_id,
+                            door.kind | flag,
+                            origin_lng,
+                            origin_lat,
+                            scale,
+                        ));
+                        let (street_name, street_side) = door.street;
+                        if street_name != UNNAMED {
+                            built.door_table.push((edge_id, street_name, street_side));
+                        }
+                        built.access_edges += 1;
+                        built.street_doors += 1;
+                    }
+                }
+                // The change of train: off one platform onto this side's exit, over to its entry,
+                // and onto the next. It costs nothing, the wait being what the boarding prices, and
+                // it runs one way, so no walk reaches a door through it.
                 v2_edges.push(transit_edge(
                     node_lng,
                     node_lat,
-                    station_id,
-                    walking_node,
+                    place.exit,
+                    place.entry,
                     KIND_ACCESS,
-                    seconds,
+                    0,
                     name_id,
+                    ACCESS_EXIT_ONLY,
                     origin_lng,
                     origin_lat,
                     scale,
                 ));
                 built.access_edges += 1;
-                built.stations += 1;
-                group_node.push(Some(station_id));
+                built.transfer_edges += 1;
+                built.stations += 2;
             }
-            None => {
-                built.unsnapped += 1;
-                eprintln!(
-                    "tiler graph: transit station \"{}\" ({:.6}, {:.6}) has no walking node within {TRANSIT_SNAP_RADIUS_METERS:.0} m; dropping it",
-                    group.name, group.lng, group.lat
-                );
-                group_node.push(None);
-            }
+            group_nodes.push(places);
         }
     }
 
@@ -1882,7 +2555,7 @@ fn append_transit(
         // The stop index kept beside each of them is the one the TIMETABLE counts in — the position
         // in the pattern as the feed wrote it — so a snap that dropped a station cannot slide the
         // rest of the line onto the wrong departures.
-        let kept: Vec<(u32, (i32, i32), u32, u16)> = pattern
+        let kept: Vec<(&StationSide, (i32, i32), u32, u16)> = pattern
             .stops
             .iter()
             .zip(&pattern.offsets)
@@ -1890,8 +2563,12 @@ fn append_transit(
             .filter_map(|(index, (&stop, &offset))| {
                 let station = &transit.stations[stop as usize];
                 let point = (quantize_x(station.lng), quantize_y(station.lat));
-                group_node[group_of_station[stop as usize]]
-                    .map(|node| (node, point, offset, index as u16))
+                // A split station boards this pattern from the nodes of its own direction, which is
+                // the platform side at every feed here; one pair takes every direction.
+                let places = &group_nodes[group_of_station[stop as usize]];
+                places
+                    .get(usize::from(pattern.direction) % places.len().max(1))
+                    .map(|place| (place, point, offset, index as u16))
             })
             .collect();
         if kept.len() < 2 {
@@ -1900,50 +2577,84 @@ fn append_transit(
         }
         let route = &transit.routes[usize::from(pattern.route_index)];
         let route_name = intern_name(all_names, &mut interned, &route.short_name);
-        let mut previous: Option<(u32, u32)> = None; // the last platform node and its offset
-        for &(station_id, (platform_x, platform_y), offset, stop_index) in &kept {
+        let mut previous: Option<(u32, u32)> = None; // the last boarding node and its offset
+        for &(place, (platform_x, platform_y), offset, stop_index) in &kept {
             // The platform stands at the stop the feed gives this pattern, not on the station node:
             // a complex's node is its members' centroid, and a ride drawn from there would start a
             // couple of hundred metres off the track. The board and the alight carry that passage.
-            let platform = node_lng.len() as u32;
+            //
+            // It stands on TWO nodes at that point, the way a station side does: the BOARDING node,
+            // which the board lands on and the ride out leaves, and the ARRIVAL node, which the ride
+            // in lands on and the alight leaves, with the free one-way stay-aboard edge between
+            // them. So a rider cannot board and step straight off again to cross the block for the
+            // price of a wait, which one platform node let them do.
+            let boarding = node_lng.len() as u32;
             node_lng.push(platform_x);
             node_lat.push(platform_y);
-            built.platform_nodes += 1;
+            let arrival = node_lng.len() as u32;
+            node_lng.push(platform_x);
+            node_lat.push(platform_y);
+            built.platform_nodes += 2;
             let board = v2_edges.len() as u32;
             v2_edges.push(transit_edge(
-                node_lng, node_lat, station_id, platform, KIND_BOARD, 0, route_name, origin_lng,
-                origin_lat, scale,
+                node_lng,
+                node_lat,
+                place.entry,
+                boarding,
+                KIND_BOARD,
+                0,
+                route_name,
+                0,
+                origin_lng,
+                origin_lat,
+                scale,
             ));
             built
                 .board_table
                 .push((board, pattern.lane_id, pattern.route_index, stop_index));
             built.board_edges += 1;
             // The way out, which the timetable has nothing to say about: a fixed walk back up to the
-            // station, of the access kind and carrying no route.
+            // station's exit node, of the access kind and carrying no route.
             v2_edges.push(transit_edge(
                 node_lng,
                 node_lat,
-                platform,
-                station_id,
+                arrival,
+                place.exit,
                 KIND_ACCESS,
                 ALIGHT_SECONDS,
                 UNNAMED,
+                0,
                 origin_lng,
                 origin_lat,
                 scale,
             ));
             built.access_edges += 1;
-            if let Some((from_platform, from_offset)) = previous {
+            v2_edges.push(transit_edge(
+                node_lng,
+                node_lat,
+                arrival,
+                boarding,
+                KIND_RIDE,
+                0,
+                UNNAMED,
+                RIDE_STAY_ABOARD,
+                origin_lng,
+                origin_lat,
+                scale,
+            ));
+            built.stay_aboard_edges += 1;
+            if let Some((from_boarding, from_offset)) = previous {
                 let seconds = offset.saturating_sub(from_offset).min(u32::from(u16::MAX));
                 let ride = v2_edges.len() as u32;
                 v2_edges.push(transit_edge(
                     node_lng,
                     node_lat,
-                    from_platform,
-                    platform,
+                    from_boarding,
+                    arrival,
                     KIND_RIDE,
                     seconds as u16,
                     route_name,
+                    0,
                     origin_lng,
                     origin_lat,
                     scale,
@@ -1951,7 +2662,7 @@ fn append_transit(
                 built.ride_table.push((ride, pattern.route_index));
                 built.ride_edges += 1;
             }
-            previous = Some((platform, offset));
+            previous = Some((boarding, offset));
         }
     }
     built
@@ -2190,6 +2901,9 @@ struct Base {
     transit_routes: Vec<TransitRouteRecord>,
     transit_board_table: Vec<(u32, u32, u16, u16)>,
     transit_ride_table: Vec<(u32, u16)>,
+    /// And per access edge that is a street door, the name id of the street it opens onto and which
+    /// side of that street it stands on.
+    transit_door_table: Vec<(u32, u16, u8)>,
     stranded_ways: Vec<u32>,
     /// What the pass reports about the network it built, bar the two figures the write itself
     /// measures. A build whose base came off the cache prints the same line, every number in it
@@ -2294,6 +3008,12 @@ impl Base {
             out.u32(edge_id);
             out.u16(route_index);
         }
+        out.usize(self.transit_door_table.len());
+        for &(edge_id, street_name, side) in &self.transit_door_table {
+            out.u32(edge_id);
+            out.u16(street_name);
+            out.u8(side);
+        }
         out.usize(self.stranded_ways.len());
         for way in &self.stranded_ways {
             out.u32(*way);
@@ -2384,6 +3104,11 @@ impl Base {
         for _ in 0..ride_count {
             transit_ride_table.push((input.u32()?, input.u16()?));
         }
+        let door_count = input.usize()?;
+        let mut transit_door_table = Vec::with_capacity(door_count);
+        for _ in 0..door_count {
+            transit_door_table.push((input.u32()?, input.u16()?, input.u8()?));
+        }
         let stranded_count = input.usize()?;
         let mut stranded_ways = Vec::with_capacity(stranded_count);
         for _ in 0..stranded_count {
@@ -2409,6 +3134,7 @@ impl Base {
             transit_routes,
             transit_board_table,
             transit_ride_table,
+            transit_door_table,
             stranded_ways,
             stats,
             csr,
@@ -4140,10 +4866,19 @@ fn topology(args: &Args) -> Fallible<Base> {
     let TransitBuild {
         stations: transit_stations,
         unsnapped: transit_stations_unsnapped,
+        split_stations: transit_split_stations,
+        collapsed_stations: transit_collapsed_stations,
+        entrances: transit_station_entrances,
+        fallback_stations: transit_fallback_stations,
+        transfer_edges: transit_transfer_edges,
+        door_table: transit_door_names,
+        street_doors: transit_street_doors,
+        pavement_cuts: transit_pavement_cuts,
         platform_nodes: transit_platform_nodes,
         access_edges: transit_access_edges,
         board_edges: transit_board_edges,
         ride_edges: transit_ride_edges,
+        stay_aboard_edges: transit_stay_aboard_edges,
         dropped_patterns: transit_dropped_patterns,
         routes: transit_routes,
         board_table: transit_board_names,
@@ -4154,8 +4889,8 @@ fn topology(args: &Args) -> Fallible<Base> {
             &mut node_lng,
             &mut node_lat,
             &mut v2_edges,
+            &mut geometry_polys,
             &mut all_names,
-            node_count,
             origin_lng,
             origin_lat,
             scale,
@@ -4231,6 +4966,11 @@ fn topology(args: &Args) -> Fallible<Base> {
         .map(|&(edge_id, a_stop_name, b_stop_name)| {
             (edge_id, name_remap[&a_stop_name], name_remap[&b_stop_name])
         })
+        .collect();
+    // A door's street name is some walking edge's own, so the compaction kept it; only the id moved.
+    let transit_door_table: Vec<(u32, u16, u8)> = transit_door_names
+        .iter()
+        .map(|&(edge_id, street_name, side)| (edge_id, name_remap[&street_name], side))
         .collect();
     let transit_routes: Vec<TransitRouteRecord> = transit_routes
         .iter()
@@ -4608,10 +5348,18 @@ fn topology(args: &Args) -> Fallible<Base> {
         "ferryDroppedDuplicate": ferry_dropped_duplicate,
         "transitStations": transit_stations,
         "transitStationsUnsnapped": transit_stations_unsnapped,
+        "transitSplitStations": transit_split_stations,
+        "transitCollapsedStations": transit_collapsed_stations,
+        "transitTransferEdges": transit_transfer_edges,
         "transitPlatformNodes": transit_platform_nodes,
+        "transitStationEntrances": transit_station_entrances,
+        "transitFallbackStations": transit_fallback_stations,
+        "transitStreetDoors": transit_street_doors,
+        "transitPavementCuts": transit_pavement_cuts,
         "transitAccessEdges": transit_access_edges,
         "transitBoardEdges": transit_board_edges,
         "transitRideEdges": transit_ride_edges,
+        "transitStayAboardEdges": transit_stay_aboard_edges,
         "transitDroppedPatterns": transit_dropped_patterns,
         "transitRoutes": transit_routes.len(),
         "names": names.len(),
@@ -4654,6 +5402,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         transit_routes,
         transit_board_table: transit_board_names,
         transit_ride_table: transit_ride_names,
+        transit_door_table,
         stranded_ways,
         stats,
         csr,
@@ -5247,6 +5996,7 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
         transit_routes,
         transit_board_table,
         transit_ride_table,
+        transit_door_table,
         stranded_ways,
         csr,
         adjacency,
@@ -5389,8 +6139,10 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
     }
 
     // The transit side tables: the route table, then per board edge its lane id, route and stop
-    // index, then per ride edge its route. Each is a u32 count and fixed-size records, and all
-    // three are empty for a city with no transit source.
+    // index, then per ride edge its route, then per street door the street it opens onto. Each is a
+    // u32 count and fixed-size records, and all four are empty for a city with no transit source.
+    // The door table came last and after a graph that shipped without it, so a reader that runs out
+    // of section before reaching it reads the doors as unnamed, exactly as that graph behaved.
     let mut transit_table: Vec<u8> = Vec::new();
     transit_table.extend_from_slice(&(transit_routes.len() as u32).to_le_bytes());
     for route in transit_routes {
@@ -5412,6 +6164,13 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
         transit_table.extend_from_slice(&edge_id.to_le_bytes());
         transit_table.extend_from_slice(&route_index.to_le_bytes());
         transit_table.extend_from_slice(&0u16.to_le_bytes());
+    }
+    transit_table.extend_from_slice(&(transit_door_table.len() as u32).to_le_bytes());
+    for &(edge_id, street_name, side) in transit_door_table {
+        transit_table.extend_from_slice(&edge_id.to_le_bytes());
+        transit_table.extend_from_slice(&street_name.to_le_bytes());
+        transit_table.push(side);
+        transit_table.push(0); // pad, to keep the record 8 bytes
     }
 
     let mut layout = Layout::new();
@@ -5707,7 +6466,9 @@ mod tests {
     }
 
     // Two of the bits the record spends are stamped late, from state the proto carries on other
-    // bits: one reused by accident would have a sidewalk claim to be a tunnel.
+    // bits: one reused by accident would have a sidewalk claim to be a tunnel. The three door bits
+    // are written on an access edge, where none of the walking bits applies, but they are read off
+    // the same byte — so they have to stand clear of every bit a record spends.
     #[test]
     fn the_written_flag_bits_are_all_different() {
         let written = [
@@ -5716,6 +6477,9 @@ mod tests {
             FLAG_GEOMETRY_RIGHT,
             GRPH_OSM,
             GRPH_TUNNEL,
+            ACCESS_EXIT_ONLY,
+            ACCESS_ENTRY_ONLY,
+            ACCESS_ELEVATOR,
         ];
         for (index, bit) in written.iter().enumerate() {
             assert_eq!(bit.count_ones(), 1, "{bit:#04x} is not one bit");
@@ -5728,6 +6492,12 @@ mod tests {
         for internal in [GRPH_PATHLIKE, GRPH_BUILDING_RIGHT] {
             assert_eq!(internal & (GRPH_STRUCTURE | GRPH_STEPS | GRPH_TUNNEL), 0);
         }
+        // Bit 5 is the one deliberate reuse: GRPH_BUILDING_RIGHT never reaches a record, so the
+        // door bit has it to itself there, and this is what says nothing else moved onto it.
+        assert_eq!(ACCESS_EXIT_ONLY, GRPH_BUILDING_RIGHT);
+        // A ride edge carries no walking flag and no door bit, so its own flag borrows a door's; the
+        // kind is what tells them apart, on both sides of the file, and this says which it borrows.
+        assert_eq!(RIDE_STAY_ABOARD, ACCESS_ENTRY_ONLY);
     }
 
     // Two stations the feed puts in one transfer complex, each served by a line of its own, plus a
@@ -5740,6 +6510,7 @@ mod tests {
                 name: name.to_string(),
                 complex,
                 surface,
+                split: false,
             }
         };
         let route = |short_name: &str| binfmt::TransitRoute {
@@ -5756,17 +6527,20 @@ mod tests {
                 station(5_000, 100, "Broadway Junction", 0, false),
                 station(5_100, 100, "Bay Ridge Av", 0, false),
             ],
+            entrances: Vec::new(),
             routes: vec![route("A"), route("B")],
             patterns: vec![
                 binfmt::TransitPattern {
                     lane_id: 1,
                     route_index: 0,
+                    direction: 0,
                     stops: vec![2, 0],
                     offsets: vec![0, 600],
                 },
                 binfmt::TransitPattern {
                     lane_id: 2,
                     route_index: 1,
+                    direction: 0,
                     stops: vec![1, 3],
                     offsets: vec![0, 600],
                 },
@@ -5774,66 +6548,781 @@ mod tests {
         }
     }
 
-    // The graph's own frame for the fixture, and two walking nodes for its stations to snap to.
-    fn transfer_graph() -> (Vec<i32>, Vec<i32>) {
-        (vec![0, 5_000], vec![0, 0])
+    // The pavement's own name, which every door cut into it takes as the street it opens onto. It is
+    // name 0 because `run_transit_on` seeds the table with it, as the real pass arrives with every
+    // walking name already interned.
+    const PAVEMENT_NAME: u16 = 0;
+    const PAVEMENT_STREET: &str = "Flatbush Av";
+
+    // The graph's own frame for the fixture: one OSM sidewalk running 850 m east from node 0 to
+    // node 1, which is the pavement every station below projects onto.
+    fn transfer_graph() -> PavementGraph {
+        let sidewalk = V2Edge {
+            a: 0,
+            b: 1,
+            length: 850.0,
+            geom: 0,
+            cover: 7,
+            half_offset: 3,
+            name_id: PAVEMENT_NAME,
+            kind: KIND_SIDEWALK,
+            side: SIDE_NORTH,
+            flags: GRPH_OSM,
+            source_id: 41,
+        };
+        (
+            vec![0, 10_000],
+            vec![0, 0],
+            vec![sidewalk],
+            vec![(vec![0, 10_000], vec![0, 0])],
+        )
     }
 
-    #[test]
-    fn one_complex_takes_one_station_node_at_its_members_centroid() {
-        let (mut node_lng, mut node_lat) = transfer_graph();
-        let mut edges: Vec<V2Edge> = Vec::new();
-        let mut names: Vec<String> = Vec::new();
+    struct TransitRun {
+        node_lng: Vec<i32>,
+        node_lat: Vec<i32>,
+        edges: Vec<V2Edge>,
+        geometry_polys: Vec<(Vec<i32>, Vec<i32>)>,
+        names: Vec<String>,
+        built: TransitBuild,
+    }
+
+    // The same pavement laid out several times over, one row per given offset north of the frame's
+    // origin: the two sides of an avenue, or enough of them to run past the cap on a station's doors.
+    fn parallel_pavements(rows: &[i32]) -> PavementGraph {
+        let (mut node_lng, mut node_lat) = (Vec::new(), Vec::new());
+        let (mut edges, mut geometry_polys) = (Vec::new(), Vec::new());
+        for &row in rows {
+            let node_a = node_lng.len() as u32;
+            node_lng.extend_from_slice(&[0, 10_000]);
+            node_lat.extend_from_slice(&[row, row]);
+            geometry_polys.push((vec![0, 10_000], vec![row, row]));
+            edges.push(V2Edge {
+                a: node_a,
+                b: node_a + 1,
+                geom: geometry_polys.len() as u32 - 1,
+                ..transfer_graph().2[0].clone()
+            });
+        }
+        (node_lng, node_lat, edges, geometry_polys)
+    }
+
+    type PavementGraph = (Vec<i32>, Vec<i32>, Vec<V2Edge>, Vec<(Vec<i32>, Vec<i32>)>);
+
+    fn run_transit_on(graph: PavementGraph, transit: &binfmt::Transit) -> TransitRun {
+        let (mut node_lng, mut node_lat, mut edges, mut geometry_polys) = graph;
+        let mut names: Vec<String> = vec![PAVEMENT_STREET.to_string()];
         let built = append_transit(
-            &transfer_fixture(),
+            transit,
             &mut node_lng,
             &mut node_lat,
             &mut edges,
+            &mut geometry_polys,
             &mut names,
-            2,
             -73.5,
             40.25,
             1e-6,
             (0.0848, 0.11132),
         );
+        TransitRun {
+            node_lng,
+            node_lat,
+            edges,
+            geometry_polys,
+            names,
+            built,
+        }
+    }
 
-        assert_eq!(built.stations, 3, "the complex is one node, not two");
-        let station_node = u32::try_from(2).expect("the first node past the pavement");
-        assert_eq!(node_lng[station_node as usize], 200);
-        assert_eq!(node_lat[station_node as usize], 100);
-        let into_station = edges
+    fn run_transit(transit: &binfmt::Transit) -> TransitRun {
+        run_transit_on(transfer_graph(), transit)
+    }
+
+    // One underground station standing north of the sidewalk, at the given offset from node 0.
+    fn lone_station(lng_units: i32, lat_units: i32) -> binfmt::Transit {
+        binfmt::Transit {
+            stations: vec![binfmt::TransitStation {
+                lng: -73.5 + f64::from(lng_units) * 1e-6,
+                lat: 40.25 + f64::from(lat_units) * 1e-6,
+                name: "Nevins St".to_string(),
+                complex: 0,
+                surface: false,
+                split: false,
+            }],
+            entrances: Vec::new(),
+            routes: Vec::new(),
+            patterns: Vec::new(),
+        }
+    }
+
+    fn access_edges_from(edges: &[V2Edge], station: u32) -> Vec<V2Edge> {
+        edges
             .iter()
-            .find(|edge| edge.a == station_node && edge.kind == KIND_ACCESS)
-            .expect("the walk in from the pavement");
-        assert_eq!(into_station.b, 0, "the nearer of the two walking nodes");
+            .filter(|edge| edge.a == station && edge.kind == KIND_ACCESS)
+            .cloned()
+            .collect()
+    }
+
+    // The doors hung off one station node: its access edges, less the one that runs to the side's
+    // own entry node, which is the change of train rather than a way to the street.
+    fn doors_from(run: &TransitRun, station: u32, entry: u32) -> Vec<V2Edge> {
+        access_edges_from(&run.edges, station)
+            .into_iter()
+            .filter(|edge| edge.b != entry)
+            .collect()
+    }
+
+    fn baked_seconds(edge: &V2Edge) -> u16 {
+        u16::from(edge.cover) | (u16::from(edge.half_offset) << 8)
+    }
+
+    #[test]
+    fn a_station_cuts_the_pavement_at_the_foot_of_its_perpendicular() {
+        let run = run_transit(&lone_station(4_000, 100));
+
+        assert_eq!(run.built.pavement_cuts, 1);
         assert_eq!(
-            u16::from(into_station.cover) | (u16::from(into_station.half_offset) << 8),
-            UNDERGROUND_ACCESS_SECONDS,
-            "a complex with an underground member is entered down a stair"
+            run.built.street_doors, 2,
+            "the one door, as a way in and a way out"
+        );
+        let foot = 2u32;
+        assert_eq!(
+            (run.node_lng[foot as usize], run.node_lat[foot as usize]),
+            (4_000, 0),
+            "the cut stands at the foot of the perpendicular, mid-block"
+        );
+        let (head, tail) = (&run.edges[0], &run.edges[1]);
+        assert_eq!((head.a, head.b), (0, foot));
+        assert_eq!((tail.a, tail.b), (foot, 1));
+        for piece in [head, tail] {
+            assert_eq!(
+                (piece.kind, piece.side, piece.source_id, piece.cover),
+                (KIND_SIDEWALK, SIDE_NORTH, 41, 7),
+                "both halves are the sidewalk they were cut from"
+            );
+        }
+        assert!(
+            (head.length + tail.length - 850.0).abs() < 1.0,
+            "the halves share out the parent's length: {} and {}",
+            head.length,
+            tail.length
         );
         assert_eq!(
-            names[into_station.name_id as usize], "W 4 St-Wash Sq",
-            "the name its members share"
+            run.geometry_polys[head.geom as usize],
+            (vec![0, 4_000], vec![0, 0])
+        );
+        assert_eq!(
+            run.geometry_polys[tail.geom as usize],
+            (vec![4_000, 10_000], vec![0, 0])
+        );
+
+        let (entry, exit) = station_sides(&run, "Nevins St")[0];
+        let inward = doors_from(&run, entry, entry);
+        assert_eq!(inward.len(), 1, "one way in, at the cut");
+        assert_eq!(inward[0].b, foot);
+        assert_eq!(inward[0].flags, ACCESS_ENTRY_ONLY);
+        assert!(
+            (inward[0].length - 11.1).abs() < 0.2,
+            "the access edge is the perpendicular itself: {}",
+            inward[0].length
+        );
+        assert_eq!(
+            baked_seconds(&inward[0]),
+            UNDERGROUND_ACCESS_SECONDS + 9,
+            "the stair and the gate, plus the 11 m walk at 1.3 m/s"
+        );
+        let outward = doors_from(&run, exit, entry);
+        assert_eq!(outward.len(), 1);
+        assert_eq!((outward[0].b, outward[0].flags), (foot, ACCESS_EXIT_ONLY));
+    }
+
+    // The underpass: with one node per station a walk could go down one stair and up another, which
+    // is a way through the block for the price of two doors — and the router took it wherever the
+    // street above cost more. The entry and the exit are what make it impossible.
+    #[test]
+    fn a_station_is_a_way_in_and_a_way_out_and_not_a_way_through() {
+        let run = run_transit_on(parallel_pavements(&[0, 300]), &lone_station(4_000, 150));
+
+        let (entry, exit) = station_sides(&run, "Nevins St")[0];
+        assert_eq!(run.built.stations, 2, "a way in and a way out");
+        for door in doors_from(&run, entry, entry) {
+            assert_eq!(
+                door.flags, ACCESS_ENTRY_ONLY,
+                "every door of the entry is in"
+            );
+        }
+        for door in doors_from(&run, exit, entry) {
+            assert_eq!(
+                door.flags, ACCESS_EXIT_ONLY,
+                "and every door of the exit out"
+            );
+        }
+        assert!(
+            !run.edges
+                .iter()
+                .any(|edge| edge.a == entry && edge.b == exit),
+            "nothing leaves the entry for the exit, so no walk passes through the station"
+        );
+        let transfer: Vec<&V2Edge> = run
+            .edges
+            .iter()
+            .filter(|edge| edge.a == exit && edge.b == entry)
+            .collect();
+        assert_eq!(transfer.len(), 1, "one edge back, for a change of train");
+        assert_eq!(
+            (
+                transfer[0].kind,
+                baked_seconds(transfer[0]),
+                transfer[0].flags
+            ),
+            (KIND_ACCESS, 0, ACCESS_EXIT_ONLY),
+            "free, and walkable only out of the exit"
+        );
+    }
+
+    #[test]
+    fn a_station_between_two_pavements_gets_a_door_on_each() {
+        // 150 units of latitude is about 17 m, so the station stands within the entrance radius of
+        // the pavement either side of it — the two sides of an avenue its platforms run under.
+        let run = run_transit_on(parallel_pavements(&[0, 300]), &lone_station(4_000, 150));
+
+        assert_eq!(
+            run.built.street_doors, 4,
+            "one door on each side, each in and out"
+        );
+        assert_eq!(run.built.pavement_cuts, 2);
+        let (entry, _) = station_sides(&run, "Nevins St")[0];
+        let doors = doors_from(&run, entry, entry);
+        let rows: Vec<i32> = doors
+            .iter()
+            .map(|edge| run.node_lat[edge.b as usize])
+            .collect();
+        assert_eq!(rows, vec![0, 300], "one foot on each pavement");
+        for edge in &doors {
+            assert_eq!(run.node_lng[edge.b as usize], 4_000);
+        }
+    }
+
+    // What the door table is for: the maneuver names the street the door itself stands on, which the
+    // route's own approach step is only sometimes on.
+    #[test]
+    fn every_door_records_the_street_it_opens_onto() {
+        let run = run_transit_on(parallel_pavements(&[0, 300]), &lone_station(4_000, 150));
+
+        let doors: Vec<u32> = run
+            .edges
+            .iter()
+            .enumerate()
+            .filter(|(_, edge)| edge.kind == KIND_ACCESS && edge.name_id != UNNAMED)
+            .map(|(edge_id, _)| edge_id as u32)
+            .collect();
+        let streets: Vec<(u32, u16, u8)> = run.built.door_table.clone();
+        assert_eq!(
+            streets.len(),
+            doors.len() - 1,
+            "every door but the change of train, which stands on no street"
+        );
+        for &(edge_id, street, side) in &streets {
+            assert_eq!(
+                run.names[street as usize], PAVEMENT_STREET,
+                "the name of the pavement the door was cut into"
+            );
+            assert_eq!(side, SIDE_NORTH, "and the side of it that pavement lies on");
+            assert_eq!(run.edges[edge_id as usize].kind, KIND_ACCESS);
+        }
+    }
+
+    #[test]
+    fn a_station_takes_no_more_doors_than_the_cap() {
+        let rows: Vec<i32> = (0..8).map(|row| row * 50).collect();
+        let run = run_transit_on(parallel_pavements(&rows), &lone_station(4_000, 175));
+
+        assert_eq!(run.built.street_doors, 2 * TRANSIT_ENTRANCES_MAX);
+        assert_eq!(run.built.pavement_cuts, TRANSIT_ENTRANCES_MAX);
+        let (entry, _) = station_sides(&run, "Nevins St")[0];
+        let rows: Vec<i32> = doors_from(&run, entry, entry)
+            .iter()
+            .map(|edge| run.node_lat[edge.b as usize])
+            .collect();
+        assert_eq!(
+            rows,
+            vec![50, 100, 150, 200, 250, 300],
+            "the six nearest pavements, and not the two farthest"
+        );
+    }
+
+    #[test]
+    fn a_foot_beside_a_corner_reuses_it() {
+        let run = run_transit(&lone_station(0, 100));
+
+        assert_eq!(run.built.pavement_cuts, 0, "a corner is already a node");
+        let (entry, _) = station_sides(&run, "Nevins St")[0];
+        let doors = doors_from(&run, entry, entry);
+        assert_eq!(doors.len(), 1);
+        assert_eq!(doors[0].b, 0, "the corner the foot landed on");
+        assert_eq!(
+            run.edges[0].b, 1,
+            "and the sidewalk it stands on is left whole"
+        );
+    }
+
+    #[test]
+    fn a_station_out_of_reach_of_the_pavement_is_dropped() {
+        let run = run_transit(&lone_station(4_000, 5_000));
+
+        assert_eq!(run.built.stations, 0);
+        assert_eq!(run.built.unsnapped, 1);
+        assert_eq!(run.built.street_doors, 0);
+        assert_eq!(run.edges.len(), 1, "the sidewalk, and nothing hung off it");
+    }
+
+    #[test]
+    fn one_complex_takes_one_station_node_at_its_members_centroid() {
+        let run = run_transit(&transfer_fixture());
+
+        assert_eq!(
+            run.built.stations, 6,
+            "the complex is one pair of nodes, not two"
+        );
+        assert_eq!(
+            run.built.pavement_cuts, 4,
+            "one cut per member station of the four"
+        );
+        // The four cuts are numbered along the sidewalk, then the station nodes in feed order.
+        let (entry, _) = station_sides(&run, "W 4 St-Wash Sq")[0];
+        assert_eq!(entry, 6);
+        assert_eq!(run.node_lng[entry as usize], 200);
+        assert_eq!(run.node_lat[entry as usize], 100);
+        let doors = doors_from(&run, entry, entry);
+        assert_eq!(
+            doors.len(),
+            2,
+            "each member of the complex brings its own way in"
+        );
+        let feet: Vec<i32> = doors
+            .iter()
+            .map(|edge| run.node_lng[edge.b as usize])
+            .collect();
+        assert_eq!(
+            feet,
+            vec![100, 300],
+            "one under each member, not one corner for both"
+        );
+        for edge in &doors {
+            assert!(
+                baked_seconds(edge) > UNDERGROUND_ACCESS_SECONDS,
+                "the walk out to the door is charged on top of the stair"
+            );
+            assert_eq!(
+                run.names[edge.name_id as usize], "W 4 St-Wash Sq",
+                "the name its members share"
+            );
+        }
+    }
+
+    fn entrance(
+        lng_units: i32,
+        lat_units: i32,
+        station: u16,
+        sides: u8,
+        kind: binfmt::EntranceKind,
+        entry: bool,
+        exit: bool,
+    ) -> binfmt::TransitEntrance {
+        binfmt::TransitEntrance {
+            lng: -73.5 + f64::from(lng_units) * 1e-6,
+            lat: 40.25 + f64::from(lat_units) * 1e-6,
+            station,
+            sides,
+            kind,
+            entry,
+            exit,
+        }
+    }
+
+    // A station the agency publishes no free crossover for, standing between the two pavements of an
+    // avenue, with a stair onto each; one line runs through it in both directions, and a second
+    // station down the road is what the two patterns ride to.
+    fn split_fixture(entrances: Vec<binfmt::TransitEntrance>) -> binfmt::Transit {
+        let station = |lng_units: i32, name: &str, split: bool| binfmt::TransitStation {
+            lng: -73.5 + f64::from(lng_units) * 1e-6,
+            lat: 40.25 + 150.0 * 1e-6,
+            name: name.to_string(),
+            complex: 0,
+            surface: false,
+            split,
+        };
+        binfmt::Transit {
+            stations: vec![
+                station(4_000, "Nevins St", true),
+                station(8_000, "Atlantic Av", false),
+            ],
+            entrances,
+            routes: vec![binfmt::TransitRoute {
+                color: [0, 0, 0],
+                text_color: [0xFF, 0xFF, 0xFF],
+                short_name: "2".to_string(),
+                long_name: "2 line".to_string(),
+                id: "gtfs:2".to_string(),
+            }],
+            patterns: vec![
+                binfmt::TransitPattern {
+                    lane_id: 1,
+                    route_index: 0,
+                    direction: 0,
+                    stops: vec![1, 0],
+                    offsets: vec![0, 300],
+                },
+                binfmt::TransitPattern {
+                    lane_id: 2,
+                    route_index: 0,
+                    direction: 1,
+                    stops: vec![0, 1],
+                    offsets: vec![0, 300],
+                },
+            ],
+        }
+    }
+
+    // The station nodes one station's name hangs off, in the order they were made. Every one of them
+    // carries the name on an edge leaving it — the doors in or out, and failing those the change of
+    // train — which is how the client finds them too.
+    fn named_station_nodes(run: &TransitRun, name: &str) -> Vec<u32> {
+        let mut nodes: Vec<u32> = run
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.kind == KIND_ACCESS
+                    && edge.name_id != UNNAMED
+                    && run.names[edge.name_id as usize] == name
+            })
+            .map(|edge| edge.a)
+            .collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        nodes
+    }
+
+    // Those nodes as the (entry, exit) pair of each platform side, side 0 first.
+    fn station_sides(run: &TransitRun, name: &str) -> Vec<(u32, u32)> {
+        let nodes = named_station_nodes(run, name);
+        assert_eq!(nodes.len() % 2, 0, "a station node is one of a pair");
+        nodes.chunks(2).map(|pair| (pair[0], pair[1])).collect()
+    }
+
+    // The arrival node paired with a boarding node: the far end of the stay-aboard edge that runs
+    // into it. The alight hangs off this one, never off the node a board lands on.
+    fn arrival_of(run: &TransitRun, boarding: u32) -> u32 {
+        run.edges
+            .iter()
+            .find(|edge| {
+                edge.b == boarding && edge.kind == KIND_RIDE && edge.flags & RIDE_STAY_ABOARD != 0
+            })
+            .expect("the platform's stay-aboard edge")
+            .a
+    }
+
+    fn board_edge_of_lane(run: &TransitRun, lane: u32, stop: u16) -> &V2Edge {
+        let (board, _, _, _) = *run
+            .built
+            .board_table
+            .iter()
+            .find(|&&(_, lane_id, _, stop_index)| lane_id == lane && stop_index == stop)
+            .expect("the lane's board edge");
+        &run.edges[board as usize]
+    }
+
+    #[test]
+    fn a_split_station_boards_and_alights_on_the_side_of_its_own_direction() {
+        let run = run_transit_on(
+            parallel_pavements(&[0, 300]),
+            &split_fixture(vec![
+                entrance(4_000, 20, 0, 0b01, binfmt::EntranceKind::Stair, true, true),
+                entrance(4_000, 280, 0, 0b10, binfmt::EntranceKind::Stair, true, true),
+            ]),
+        );
+
+        assert_eq!(run.built.split_stations, 1);
+        assert_eq!(run.built.collapsed_stations, 0);
+        assert_eq!(
+            run.built.entrances, 2,
+            "both published stairs found pavement"
+        );
+        assert_eq!(run.built.fallback_stations, 1, "only the second station");
+        let sides = station_sides(&run, "Nevins St");
+        assert_eq!(sides.len(), 2, "one pair of nodes per platform side");
+        let rows_of = |station: u32, entry: u32| -> Vec<i32> {
+            let mut rows: Vec<i32> = doors_from(&run, station, entry)
+                .iter()
+                .map(|edge| run.node_lat[edge.b as usize])
+                .collect();
+            rows.sort_unstable();
+            rows
+        };
+        assert_eq!(
+            rows_of(sides[0].0, sides[0].0),
+            vec![0],
+            "side 0 opens onto the near kerb"
+        );
+        assert_eq!(
+            rows_of(sides[1].0, sides[1].0),
+            vec![300],
+            "and side 1 onto the far one, with no edge between the two"
+        );
+
+        // The northbound pattern calls at Nevins second and the southbound first.
+        for (lane, stop, side) in [(1u32, 1u16, sides[0]), (2, 0, sides[1])] {
+            let board = board_edge_of_lane(&run, lane, stop);
+            assert_eq!(board.a, side.0, "lane {lane} boards from its side's entry");
+            let alight = run
+                .edges
+                .iter()
+                .find(|edge| edge.a == arrival_of(&run, board.b) && edge.kind == KIND_ACCESS)
+                .expect("the way off the platform");
+            assert_eq!(alight.b, side.1, "and lands on its side's exit");
+        }
+        let northbound = arrival_of(&run, board_edge_of_lane(&run, 1, 1).b);
+        assert!(
+            !run.edges.iter().any(|edge| edge.a == northbound
+                && edge.kind == KIND_ACCESS
+                && (edge.b == sides[1].0 || edge.b == sides[1].1)),
+            "a rider off the northbound train cannot leave by the southbound stair"
+        );
+    }
+
+    // 145 St on the Lenox line: every door the agency publishes for one of its platforms opens
+    // outwards, so that side has no way in at all. Inventing doors round the station point would put
+    // stairs on pavement that has none; the group stands on the side that IS served instead, which
+    // is the walk across the street a rider actually makes.
+    #[test]
+    fn a_split_side_with_no_way_in_stands_on_the_side_that_has_one() {
+        let run = run_transit_on(
+            parallel_pavements(&[0, 300]),
+            &split_fixture(vec![
+                entrance(4_000, 20, 0, 0b01, binfmt::EntranceKind::Stair, true, true),
+                entrance(
+                    4_000,
+                    280,
+                    0,
+                    0b10,
+                    binfmt::EntranceKind::Stair,
+                    false,
+                    true,
+                ),
+            ]),
+        );
+
+        assert_eq!(run.built.split_stations, 0);
+        assert_eq!(run.built.collapsed_stations, 1);
+        assert_eq!(
+            run.built.fallback_stations, 1,
+            "the second station, and no invented doors here"
+        );
+        let sides = station_sides(&run, "Nevins St");
+        assert_eq!(sides.len(), 1, "one pair of nodes, not two");
+        let (entry, exit) = sides[0];
+        let rows = |station: u32| -> Vec<i32> {
+            let mut rows: Vec<i32> = doors_from(&run, station, entry)
+                .iter()
+                .map(|edge| run.node_lat[edge.b as usize])
+                .collect();
+            rows.sort_unstable();
+            rows
+        };
+        assert_eq!(rows(entry), vec![0], "the one door that opens inwards");
+        assert_eq!(
+            rows(exit),
+            vec![0, 300],
+            "and both of them as ways out, the far platform's included"
+        );
+        for lane in [1u32, 2] {
+            let stop = if lane == 1 { 1 } else { 0 };
+            assert_eq!(
+                board_edge_of_lane(&run, lane, stop).a,
+                entry,
+                "both directions board from the one node"
+            );
+        }
+    }
+
+    // And when NO side has a way in, the station takes its own doors after all: a published door
+    // that only opens outwards is no way to a platform, and a station with nothing else would be
+    // one no train could be boarded at.
+    #[test]
+    fn a_station_whose_every_door_opens_outwards_takes_doors_it_can_be_entered_by() {
+        let run = run_transit_on(
+            parallel_pavements(&[0, 300]),
+            &split_fixture(vec![
+                entrance(4_000, 20, 0, 0b01, binfmt::EntranceKind::Stair, false, true),
+                entrance(
+                    4_000,
+                    280,
+                    0,
+                    0b10,
+                    binfmt::EntranceKind::Stair,
+                    false,
+                    true,
+                ),
+            ]),
+        );
+
+        assert_eq!(
+            run.built.fallback_stations, 2,
+            "this station and the one down the road"
+        );
+        assert_eq!(run.built.split_stations, 1, "and both sides are served");
+        for (entry, _) in station_sides(&run, "Nevins St") {
+            let inward = doors_from(&run, entry, entry);
+            assert!(!inward.is_empty(), "a way in on every side");
+            for door in inward {
+                assert_eq!(door.flags, ACCESS_ENTRY_ONLY);
+            }
+        }
+    }
+
+    // Two doors on one walking node are one way in only if they are the same fixture: a lift beside
+    // an exit-only stair, merged, would be a two-way lift at the stair's cheaper base.
+    #[test]
+    fn an_exit_only_stair_beside_a_lift_stays_two_doors() {
+        let mut transit = split_fixture(vec![
+            entrance(4_000, 20, 0, 0b01, binfmt::EntranceKind::Stair, false, true),
+            entrance(
+                4_000,
+                24,
+                0,
+                0b01,
+                binfmt::EntranceKind::Elevator,
+                true,
+                true,
+            ),
+        ]);
+        transit.stations[0].split = false;
+        let run = run_transit_on(parallel_pavements(&[0, 300]), &transit);
+
+        let (entry, exit) = station_sides(&run, "Nevins St")[0];
+        let inward = doors_from(&run, entry, entry);
+        assert_eq!(inward.len(), 1, "the lift is the only way in");
+        assert_eq!(inward[0].flags, ACCESS_ELEVATOR | ACCESS_ENTRY_ONLY);
+        let outward = doors_from(&run, exit, entry);
+        assert_eq!(outward.len(), 2, "the stair and the lift, both ways out");
+        assert_eq!(
+            outward[0].b, outward[1].b,
+            "on the one walking node between them"
+        );
+        let mut bases: Vec<u16> = outward
+            .iter()
+            .map(|edge| baked_seconds(edge) - (edge.length / 1.3).round() as u16)
+            .collect();
+        bases.sort_unstable();
+        assert_eq!(
+            bases,
+            vec![UNDERGROUND_ACCESS_SECONDS, ELEVATOR_ACCESS_SECONDS],
+            "each keeps its own base; the merge never lends the stair's to the lift"
+        );
+    }
+
+    #[test]
+    fn an_exit_only_door_is_one_way_and_an_elevator_costs_the_call() {
+        let run = run_transit_on(
+            parallel_pavements(&[0, 300]),
+            &split_fixture(vec![
+                entrance(4_000, 20, 0, 0b11, binfmt::EntranceKind::Stair, false, true),
+                entrance(
+                    4_000,
+                    280,
+                    0,
+                    0b11,
+                    binfmt::EntranceKind::Elevator,
+                    true,
+                    true,
+                ),
+            ]),
+        );
+
+        let sides = station_sides(&run, "Nevins St");
+        assert_eq!(run.built.fallback_stations, 1, "both sides are served");
+        for (entry, exit) in sides {
+            let outward = doors_from(&run, exit, entry);
+            let stair = outward
+                .iter()
+                .find(|edge| run.node_lat[edge.b as usize] == 0)
+                .expect("the stair");
+            assert_eq!(
+                stair.flags, ACCESS_EXIT_ONLY,
+                "a way out of the station and not a way in"
+            );
+            assert!(
+                !doors_from(&run, entry, entry)
+                    .iter()
+                    .any(|edge| run.node_lat[edge.b as usize] == 0),
+                "and it is on no way in"
+            );
+            let lift = outward
+                .iter()
+                .find(|edge| run.node_lat[edge.b as usize] == 300)
+                .expect("the elevator");
+            assert_eq!(lift.flags, ACCESS_ELEVATOR | ACCESS_EXIT_ONLY);
+            assert_eq!(
+                baked_seconds(lift),
+                ELEVATOR_ACCESS_SECONDS + 13,
+                "the call and the ride, plus the 17 m walk at 1.3 m/s"
+            );
+        }
+    }
+
+    #[test]
+    fn a_complex_stays_one_node_whatever_its_members_say() {
+        let mut transit = transfer_fixture();
+        transit.stations[0].split = true;
+        transit.stations[1].split = true;
+        let run = run_transit_on(transfer_graph(), &transit);
+
+        assert_eq!(run.built.split_stations, 0);
+        assert_eq!(run.built.stations, 6, "the complex is still one pair");
+        assert_eq!(station_sides(&run, "W 4 St-Wash Sq").len(), 1);
+    }
+
+    #[test]
+    fn an_entrance_opens_onto_the_pavement_under_it_and_not_the_nearest_to_the_station() {
+        // The station stands beside the far pavement, its one published stair beside the near one:
+        // the door is cut where the stair is, which is the whole point of reading the entrances.
+        let mut transit = split_fixture(vec![entrance(
+            4_000,
+            10,
+            0,
+            0b11,
+            binfmt::EntranceKind::Stair,
+            true,
+            true,
+        )]);
+        transit.stations[0].split = false;
+        let run = run_transit_on(parallel_pavements(&[0, 300]), &transit);
+
+        assert_eq!(run.built.entrances, 1);
+        let (entry, _) = station_sides(&run, "Nevins St")[0];
+        let inward = doors_from(&run, entry, entry);
+        assert_eq!(
+            inward.len(),
+            1,
+            "one published door, and no fallback beside it"
+        );
+        assert_eq!(run.node_lat[inward[0].b as usize], 0);
+        assert_eq!(run.node_lng[inward[0].b as usize], 4_000);
+        assert_eq!(
+            inward[0].flags, ACCESS_ENTRY_ONLY,
+            "a two-way stair, taken inwards"
         );
     }
 
     #[test]
     fn a_transfer_inside_a_complex_is_an_alight_and_a_board() {
-        let (mut node_lng, mut node_lat) = transfer_graph();
-        let mut edges: Vec<V2Edge> = Vec::new();
-        let mut names: Vec<String> = Vec::new();
-        let built = append_transit(
-            &transfer_fixture(),
-            &mut node_lng,
-            &mut node_lat,
-            &mut edges,
-            &mut names,
-            2,
-            -73.5,
-            40.25,
-            1e-6,
-            (0.0848, 0.11132),
-        );
+        let run = run_transit(&transfer_fixture());
+        let TransitRun {
+            node_lng,
+            edges,
+            built,
+            ..
+        } = &run;
 
         // The platform the A line's second stop is, and the one the B line's first stop is: one
         // rider's arrival and departure at the two halves of the complex.
@@ -5856,21 +7345,91 @@ mod tests {
 
         let alight = edges
             .iter()
-            .find(|edge| edge.a == arrived && edge.kind == KIND_ACCESS)
+            .find(|edge| edge.a == arrival_of(&run, arrived) && edge.kind == KIND_ACCESS)
             .expect("the way off the arriving platform");
         let board = edges
             .iter()
             .find(|edge| edge.b == departing && edge.kind == KIND_BOARD)
             .expect("the way onto the departing platform");
-        assert_eq!(
-            alight.b, board.a,
-            "the alight lands on the very node the next board leaves from"
+        let (entry, exit) = station_sides(&run, "W 4 St-Wash Sq")[0];
+        assert_eq!(alight.b, exit, "the alight lands on the complex's exit");
+        assert_eq!(board.a, entry, "and the next board leaves from its entry");
+        assert!(
+            edges
+                .iter()
+                .any(|edge| edge.a == exit && edge.b == entry && edge.kind == KIND_ACCESS),
+            "with the change of train between them"
         );
         assert_eq!(
-            u16::from(alight.cover) | (u16::from(alight.half_offset) << 8),
+            baked_seconds(alight),
             ALIGHT_SECONDS,
             "and it costs a step off the train, not a walk to the street"
         );
+    }
+
+    // The platform's own pair, one level below the station's. A board lands on the BOARDING node and
+    // an alight leaves the ARRIVAL node, with a free one-way edge from the arrival onto the boarding
+    // between them: so the shortest way across a platform is a ride of at least one stop, and
+    // boarding a train to step straight off it and out of the other door is not a walk at all.
+    #[test]
+    fn a_platform_is_boarded_at_one_node_and_alighted_from_another() {
+        let run = run_transit(&transfer_fixture());
+        let boardings: HashSet<u32> = run
+            .built
+            .board_table
+            .iter()
+            .map(|&(board, _, _, _)| run.edges[board as usize].b)
+            .collect();
+        let arrivals: HashSet<u32> = boardings
+            .iter()
+            .map(|&boarding| arrival_of(&run, boarding))
+            .collect();
+        assert_eq!(boardings.len(), run.built.board_edges, "one node per board");
+        assert_eq!(arrivals.len(), boardings.len(), "and one arrival for each");
+        assert!(boardings.is_disjoint(&arrivals));
+        assert_eq!(run.built.platform_nodes, boardings.len() + arrivals.len());
+        assert_eq!(run.built.stay_aboard_edges, boardings.len());
+
+        for &boarding in &boardings {
+            let arrival = arrival_of(&run, boarding);
+            assert_eq!(
+                (
+                    run.node_lng[arrival as usize],
+                    run.node_lat[arrival as usize]
+                ),
+                (
+                    run.node_lng[boarding as usize],
+                    run.node_lat[boarding as usize]
+                ),
+                "both nodes stand on the stop the line calls at"
+            );
+            assert!(
+                !run.edges
+                    .iter()
+                    .any(|edge| edge.kind == KIND_ACCESS && edge.a == boarding),
+                "no way off the node a board lands on"
+            );
+            assert!(
+                run.edges
+                    .iter()
+                    .any(|edge| edge.kind == KIND_ACCESS && edge.a == arrival),
+                "and the alight leaves the one a ride lands on"
+            );
+        }
+
+        for edge in run.edges.iter().filter(|edge| edge.kind == KIND_RIDE) {
+            if edge.flags & RIDE_STAY_ABOARD == 0 {
+                assert!(
+                    boardings.contains(&edge.a) && arrivals.contains(&edge.b),
+                    "a ride runs one stop's boarding node to the next stop's arrival node"
+                );
+            } else {
+                assert!(
+                    arrivals.contains(&edge.a) && boardings.contains(&edge.b),
+                    "and staying aboard runs the arrival onto its own boarding, that way alone"
+                );
+            }
+        }
     }
 
     fn keyed(source_id: u32, side: u8) -> V2Edge {
@@ -6548,6 +8107,7 @@ mod tests {
             }],
             transit_board_table: vec![(61, 62, 63, 4)],
             transit_ride_table: vec![(64, 65)],
+            transit_door_table: vec![(66, 2, SIDE_EAST)],
             stranded_ways: vec![41, 42],
             stats: serde_json::json!({"edges": 2, "nodes": 3}),
             csr,

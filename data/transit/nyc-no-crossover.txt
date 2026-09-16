@@ -1,0 +1,110 @@
+# The MTA subway stations with NO FREE CROSSOVER: a rider who goes down the wrong stair has to
+# come back up, cross the street and pay again, so the routing graph gives each of these two
+# station nodes, one per direction, and hangs each entrance off the platform it actually serves.
+#
+# One GTFS parent stop id per line (the id scripts/transit.ts keys the MTA's stations by), with
+# the station's name as a comment. Curated by hand from here on: the MTA's live "Subway Entrances
+# and Exits: 2024" dataset dropped the flag, and the only published copy is the agency's retired
+# developer file StationEntrances.csv, last refreshed May 2020 —
+# https://github.com/anastasiaclark/MTA-Mass-Transit/blob/master/may2020/StationEntrances.csv
+# read 2026-09-15 (1,866 entrance rows over 474 stations; the flag never varies within a station).
+# Its stations carry no GTFS id, so each was joined to the nearest GTFS parent stop within 60 m:
+# 463 of the 474 joined, and 87 of those are flagged Free_Crossover = False.
+#
+# The 11 the join never matched, with how far the nearest GTFS parent stood: Brooklyn Bridge-City
+# Hall (IRT Lexington), which the file gives seven station points, 61-159 m; Canarsie - Rockaway
+# Parkway (BMT Canarsie), two points at 78 and 114 m; York St (IND 6 Avenue) at 184 m; and Chambers
+# St (BMT Nassau) at 107 m. Every one of them is Free_Crossover = True, so no split station was lost
+# with them — which is why this file is 87 lines of the 87 and not fewer. A station that reappears
+# here on a later read of the file has to be joined by hand.
+#
+# A station the MTA rebuilds gains or loses a crossover without anything here noticing, so edit
+# this file when that happens.
+
+L06  # 1 Av (Canarsie)
+623  # 110 St (Lexington)
+226  # 116 St (Lenox)
+622  # 116 St (Lexington)
+A16  # 116 St (8 Avenue)
+225  # 125 St (Lenox)
+224  # 135 St (Lenox)
+A14  # 135 St (8 Avenue)
+115  # 137 St-City College (Broadway-7th Ave)
+114  # 145 St (Broadway-7th Ave)
+302  # 145 St (Lenox)
+113  # 157 St (Broadway-7th Ave)
+A10  # 163 St-Amsterdam Av (8 Avenue)
+215  # 174 St (White Plains Road)
+131  # 18 St (Broadway-7th Ave)
+108  # 207 St (Broadway-7th Ave)
+107  # 215 St (Broadway-7th Ave)
+634  # 23 St-Baruch College (Lexington)
+130  # 23 St (Broadway-7th Ave)
+D18  # 23 St (6 Avenue)
+R19  # 23 St (Broadway)
+104  # 231 St (Broadway-7th Ave)
+103  # 238 St (Broadway-7th Ave)
+R35  # 25 St (4 Avenue)
+129  # 28 St (Broadway-7th Ave)
+633  # 28 St (Lexington)
+R18  # 28 St (Broadway)
+221  # 3 Av-149 St (White Plains Road)
+L05  # 3 Av (Canarsie)
+632  # 33 St (Lexington)
+G20  # 36 St (Queens Boulevard)
+G18  # 46 St (Queens Boulevard)
+R15  # 49 St (Broadway)
+126  # 50 St (Broadway-7th Ave)
+A25  # 50 St (8 Avenue)
+F07  # 75 Av (Queens Boulevard)
+627  # 77 St (Lexington)
+122  # 79 St (Broadway-7th Ave)
+R21  # 8 St-NYU (Broadway)
+121  # 86 St (Broadway-7th Ave)
+626  # 86 St (Lexington)
+H01  # Aqueduct Racetrack (Rockaway)
+636  # Astor Pl (Lexington)
+236  # Bergen St (Eastern Parkway)
+F20  # Bergen St (6 Avenue)
+245  # Beverly Rd (Nostrand)
+637  # Bleecker St (Lexington)
+F05  # Briarwood (Queens Boulevard)
+618  # Brook Av (Pelham)
+602  # Buhre Av (Pelham)
+135  # Canal St (Broadway-7th Ave)
+118  # Cathedral Pkwy (110 St) (Broadway-7th Ave)
+133  # Christopher St-Stonewall (Broadway-7th Ave)
+244  # Church Av (Nostrand)
+A44  # Clinton-Washington Avs (Fulton)
+617  # Cypress Av (Pelham)
+616  # E 143 St-St Mary's St (Pelham)
+615  # E 149 St (Pelham)
+G13  # Elmhurst Av (Queens Boulevard)
+G31  # Flushing Av (Crosstown)
+136  # Franklin St (Broadway-7th Ave)
+216  # Freeman St (White Plains Road)
+L11  # Graham Av (Canarsie)
+L12  # Grand St (Canarsie)
+L19  # Halsey St (Canarsie)
+134  # Houston St (Broadway-7th Ave)
+233  # Hoyt St (Eastern Parkway)
+220  # Jackson Av (White Plains Road)
+A47  # Kingston-Throop Avs (Fulton)
+A43  # Lafayette Av (Fulton)
+614  # Longwood Av (Pelham)
+106  # Marble Hill-225 St (Broadway-7th Ave)
+M16  # Marcy Av (Broadway Jamaica)
+234  # Nevins St (Eastern Parkway)
+246  # Newkirk Av-Little Haiti (Nostrand)
+G16  # Northern Blvd (Queens Boulevard)
+A46  # Nostrand Av (Fulton)
+R22  # Prince St (Broadway)
+219  # Prospect Av (White Plains Road)
+R34  # Prospect Av (4 Avenue)
+139  # Rector St (Broadway-7th Ave)
+R26  # Rector St (Broadway)
+217  # Simpson St (White Plains Road)
+638  # Spring St (Lexington)
+R32  # Union St (4 Avenue)
+721  # Vernon Blvd-Jackson Av (Flushing)
+243  # Winthrop St (Nostrand)

@@ -14,19 +14,28 @@
 // build. Layout: scripts/README.md.
 
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { decodeSubway } from "../src/subway/format";
 import { type Cursor, readUnsignedVarint } from "../src/tiles/varint";
 import { toSeconds } from "./ferries";
-import { COORD_SCALE, haversineMeters, writeVarint } from "./geometry";
+import {
+  COORD_SCALE,
+  EARTH_RADIUS_METERS,
+  haversineMeters,
+  UNNAMED_ID,
+  writeVarint,
+} from "./geometry";
 import {
   fetchGtfsZipFile,
   type GtfsFeed,
   type GtfsRow,
   parseGtfs,
 } from "./gtfs";
-import type { Coord } from "./socrata";
+import { fetchStationEntrances, type OsmStationEntrance } from "./overpass";
+import { type Coord, NY_STATE_OPEN_DATA } from "./socrata";
 import {
   centroid,
   clusterByName,
@@ -38,14 +47,41 @@ import {
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 export const TRANSIT_DIR = join(DATA_DIR, "transit");
+// The display ingest's artifact, which is where the drawn track comes from; scripts/subway.ts and
+// scripts/subway-sf.ts write it out of the same feeds this reads.
+const SUBWAY_DIR = join(DATA_DIR, "subway");
 
 export const TRANSIT_MAGIC = "TRNS";
-export const TRANSIT_FORMAT = 1;
-const HEADER_BYTES = 56;
+export const TRANSIT_FORMAT = 2;
+const HEADER_BYTES = 64;
 const STATION_BYTES = 16;
+const ENTRANCE_BYTES = 16;
 const ROUTE_BYTES = 12;
 const PATTERN_BYTES = 16;
 const SURFACE_FLAG = 1;
+const SPLIT_FLAG = 2;
+const ENTRY_FLAG = 1;
+const EXIT_FLAG = 2;
+
+// A `sides` mask names the directions an entrance serves, bit d for GTFS `direction_id` d. Both is
+// also what a station whose platforms a rider can walk between gets: there is one way in.
+export const NORTHBOUND_SIDE = 1;
+export const SOUTHBOUND_SIDE = 2;
+export const BOTH_SIDES = 3;
+
+// What a rider goes down, in the order the `kind` byte numbers them. The last covers every way in
+// that is a corridor rather than a descent — an easement through a building, a passage, a walkway,
+// an underpass or an overpass — because what they share is that the walk is the cost.
+export const ENTRANCE_KINDS = [
+  "stair",
+  "escalator",
+  "elevator",
+  "ramp",
+  "station house",
+  "passage",
+] as const;
+export type EntranceKind = (typeof ENTRANCE_KINDS)[number];
+
 // Joins the parts of a pattern key. NUL because a GTFS route id or stop name may carry any
 // printable character, spaces and punctuation included, but never this one.
 const KEY_SEPARATOR = "\u0000";
@@ -91,6 +127,33 @@ export interface TransitFeedSource {
   // needs one: it publishes no `parent_station`, no `location_type` and no entrances, so nothing in
   // the feed separates the Market Street and Central Subway platforms from a stop on the tarmac.
   underground: ReadonlySet<string>;
+  // The name to show a rider, where the feed's own is the platform's rather than the place's. Left
+  // out, a station is called whatever the feed calls it, which is what New York and BART want.
+  displayName?: (feedName: string) => string;
+  // Where the feed's stations are actually entered, and which of them a rider cannot cross between
+  // inside. A feed with no source of either leaves this out and its stations are entered at their
+  // own point, which is what the graph did before entrances existed.
+  entrances?: (feed: GtfsFeed) => Promise<FeedEntrances>;
+}
+
+// One way into a station as its agency publishes it, before the topology has resolved which of its
+// stations that is.
+export interface FeedEntrance extends Coord {
+  // The feed's own station id — the parent stop the agency lists the entrance against.
+  stationId: string;
+  kind: EntranceKind;
+  entry: boolean;
+  exit: boolean;
+  // Which platform it reaches, where the agency itself says so. `null` asks the right-hand rule
+  // below, which is the only answer New York has.
+  sides: number | null;
+}
+
+export interface FeedEntrances {
+  entrances: readonly FeedEntrance[];
+  // The feed's stations with no free crossover: a rider who goes down the wrong stair has to come
+  // back up, so the graph gives the station one node per direction.
+  split: ReadonlySet<string>;
 }
 
 const NO_UNDERGROUND: ReadonlySet<string> = new Set<string>();
@@ -122,6 +185,445 @@ const MUNI_UNDERGROUND: ReadonlySet<string> = new Set([
   "Yerba Buena/Moscone Station Southbound",
 ]);
 
+// What Muni writes on the end of a stop name to say which platform it is, after a slash or a space.
+const MUNI_PLATFORM_WORDS: ReadonlySet<string> = new Set([
+  "downtown",
+  "downtn",
+  "inbound",
+  "outbound",
+  "outbd",
+  "northbound",
+  "southbound",
+]);
+
+const METRO_PREFIX = "Metro ";
+const STATION_SUFFIX = " Station";
+
+// Muni names a stop for the platform it is — "Metro Castro Station/Downtown", "Van Ness Station
+// Outbound" — and the graph shows that name to a rider about to walk in, so what it carries is the
+// place: "Castro", "Van Ness". Matching still runs on the feed's own name, which is what the OSM
+// nodes, the complex join and the lane ids are all keyed by.
+export function muniStationName(feedName: string): string {
+  let display = feedName.trim();
+  if (display.startsWith(METRO_PREFIX)) {
+    display = display.slice(METRO_PREFIX.length);
+  }
+  const lastBreak = Math.max(
+    display.lastIndexOf("/"),
+    display.lastIndexOf(" "),
+  );
+  const tail = display.slice(lastBreak + 1).toLowerCase();
+  if (lastBreak > 0 && MUNI_PLATFORM_WORDS.has(tail)) {
+    display = display.slice(0, lastBreak);
+  }
+  if (display.endsWith(STATION_SUFFIX)) {
+    display = display.slice(0, -STATION_SUFFIX.length);
+  }
+  return display.trim();
+}
+
+// The MTA's own name for what a rider goes down, mapped onto the kinds above. Anything with a
+// stair in it is a stair: the stair is what a walker who cannot use the escalator beside it gets,
+// and both cost the same descent.
+const MTA_ENTRANCE_KINDS: Readonly<Record<string, EntranceKind>> = {
+  Stair: "stair",
+  "Stair/Escalator": "stair",
+  "Stair/Ramp": "stair",
+  "Stair/Ramp/Walkway": "stair",
+  Escalator: "escalator",
+  Elevator: "elevator",
+  Ramp: "ramp",
+  "Station House": "station house",
+  "Easement - Street": "passage",
+  "Easement - Passage": "passage",
+  Walkway: "passage",
+  Underpass: "passage",
+  Overpass: "passage",
+};
+
+// "Subway Entrances and Exits: 2024", the MTA's published list of every way into the system:
+// 2,120 rows over 485 stations, each carrying the GTFS parent stop it belongs to, what kind of
+// entrance it is, whether a rider may enter and leave by it, and where it stands. It says nothing
+// about which platform it reaches — no dataset does — so that is left to the rule.
+const MTA_ENTRANCE_DATASET = "i9wp-a4ja";
+const MTA_ENTRANCE_ROWS = 2_120;
+
+interface MtaEntranceRow {
+  gtfs_stop_id?: string;
+  entrance_type?: string;
+  entry_allowed?: string;
+  exit_allowed?: string;
+  entrance_latitude?: string;
+  entrance_longitude?: string;
+}
+
+// The two curated files beside the artifact, each one id or one entrance per line, `#` to the end
+// of a line a comment. Committed rather than derived because their sources are gone: see the
+// header of each.
+export function curatedLines(name: string): string[] {
+  const text = readFileSync(join(TRANSIT_DIR, name), "utf-8");
+  return text
+    .split("\n")
+    .map((line) => line.split("#")[0].trim())
+    .filter((line) => line !== "");
+}
+
+// An override's key: the station and the entrance point exactly as the MTA publishes it. Six
+// decimal places is ~0.1 m, finer than the dataset's own precision, so two entrances never collide
+// and an entrance the MTA moves simply stops matching and falls back to the rule.
+function entranceKey(stationId: string, lng: number, lat: number): string {
+  return `${stationId} ${lng.toFixed(6)} ${lat.toFixed(6)}`;
+}
+
+export function parseSideOverrides(name: string): Map<string, number> {
+  const overrides = new Map<string, number>();
+  for (const line of curatedLines(name)) {
+    const [stationId, lng, lat, side] = line.split(/\s+/);
+    const mask =
+      side === "N"
+        ? NORTHBOUND_SIDE
+        : side === "S"
+          ? SOUTHBOUND_SIDE
+          : side === "both"
+            ? BOTH_SIDES
+            : 0;
+    if (mask === 0) {
+      throw new Error(`${name}: "${line}" names no side (N, S or both)`);
+    }
+    overrides.set(entranceKey(stationId, Number(lng), Number(lat)), mask);
+  }
+  return overrides;
+}
+
+async function mtaEntrances(): Promise<FeedEntrances> {
+  const rows = await NY_STATE_OPEN_DATA.dataset<MtaEntranceRow>(
+    MTA_ENTRANCE_DATASET,
+    { $select: "*" },
+    MTA_ENTRANCE_ROWS,
+  );
+  const overrides = parseSideOverrides("nyc-entrance-sides.txt");
+  // Every override has to find its entrance. The key is the MTA's own published point to six
+  // decimals, so a dataset that moves a stair by a metre silently drops the correction and the
+  // geometric rule — which was wrong about that stair, or there would be no line for it — takes it
+  // back. There is nothing to see in the output when that happens, so it is a failure here.
+  const matched = new Set<string>();
+  const entrances: FeedEntrance[] = [];
+  for (const row of rows) {
+    // A handful of rows name two stations, for an entrance a transfer complex shares. The complex
+    // is one node in the graph whichever of its members the door hangs off, so the first is enough.
+    const stationId = (row.gtfs_stop_id ?? "").split(";")[0].trim();
+    const lat = Number(row.entrance_latitude);
+    const lng = Number(row.entrance_longitude);
+    const kind = MTA_ENTRANCE_KINDS[(row.entrance_type ?? "").trim()];
+    if (stationId === "" || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+      continue;
+    } else if (kind === undefined) {
+      console.error(`  entrance type "${row.entrance_type}": unknown, dropped`);
+      continue;
+    }
+    const key = entranceKey(stationId, lng, lat);
+    const sides = overrides.get(key);
+    if (sides !== undefined) {
+      matched.add(key);
+    }
+    entrances.push({
+      stationId,
+      lat,
+      lng,
+      kind,
+      entry: row.entry_allowed === "YES",
+      exit: row.exit_allowed === "YES",
+      sides: sides ?? null,
+    });
+  }
+  if (matched.size !== overrides.size) {
+    const lost = [...overrides.keys()].filter((key) => !matched.has(key));
+    throw new Error(
+      `nyc-entrance-sides.txt: ${lost.length} of ${overrides.size} overrides match no published` +
+        ` entrance (${lost.join("; ")}). Re-read the dataset's own coordinates for them.`,
+    );
+  }
+  return { entrances, split: new Set(curatedLines("nyc-no-crossover.txt")) };
+}
+
+// BART names its entrances in the feed itself, as `location_type=2` stops hung off their station:
+// "B2 13th St and Broadway Entrance / Exit", "Elevator Entrance / Exit", "A2 John F Foran Fwy
+// (Ramp) Entrance / Exit". Every BART station has a paid mezzanine spanning both platforms, so no
+// entrance is ever one direction's alone and no station is split.
+async function bartEntrances(feed: GtfsFeed): Promise<FeedEntrances> {
+  const entrances: FeedEntrance[] = [];
+  for (const stop of feed.stops) {
+    const stationId = (stop.parent_station ?? "").trim();
+    const lat = Number(stop.stop_lat);
+    const lng = Number(stop.stop_lon);
+    if (
+      stop.location_type !== "2" ||
+      stationId === "" ||
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng)
+    ) {
+      continue;
+    }
+    const name = (stop.stop_name ?? "").toLowerCase();
+    entrances.push({
+      stationId,
+      lat,
+      lng,
+      kind: name.includes("elevator")
+        ? "elevator"
+        : name.includes("escalator")
+          ? "escalator"
+          : name.includes("ramp")
+            ? "ramp"
+            : "stair",
+      entry: true,
+      exit: true,
+      sides: BOTH_SIDES,
+    });
+  }
+  return { entrances, split: new Set<string>() };
+}
+
+// How far apart the two halves of one underground Muni station stand, at most: the feed carries a
+// stop per direction ("/Downtown", "/Outbound") and puts them at their own platform's end, which
+// under Market Street is most of a block apart.
+const PLATFORM_ROW_METERS = 150;
+
+// How far an OSM node may stand from a station's platforms and still be a way into it. A Market
+// Street station's concourse runs the length of a block, so its far door is a long way from the
+// point the feed gives the platform.
+const OSM_ENTRANCE_METERS = 150;
+
+// How far a node that NAMES its station may stand from it. A mapper who wrote the station down has
+// said what the distance can only guess at, so the cap is there to catch a stale name rather than
+// to decide the match: Montgomery's Sansome & Sutter head house is 153 m from the platform the feed
+// gives and is unarguably a way in.
+const NAMED_ENTRANCE_METERS = 300;
+
+// What OSM writes on a door nobody may walk through: one closed for construction, one a building's
+// tenants alone may use. Neither is a way into the station.
+const CLOSED_ACCESS: ReadonlySet<string> = new Set(["no", "private"]);
+
+// A margin on the box the OSM nodes are read in, and the hundredth of a degree the box is rounded
+// out to: the query is cached by its own text, and rounding keeps a stop moving a few metres from
+// re-fetching the city.
+const ENTRANCE_BOX_MARGIN_DEGREES = 0.01;
+const ENTRANCE_BOX_STEP = 100;
+
+function outward(value: number, margin: number): number {
+  const moved = value + margin;
+  return (
+    (margin < 0
+      ? Math.floor(moved * ENTRANCE_BOX_STEP)
+      : Math.ceil(moved * ENTRANCE_BOX_STEP)) / ENTRANCE_BOX_STEP
+  );
+}
+
+function entranceBox(points: readonly Coord[]): {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
+} {
+  const lats = points.map(({ lat }) => lat);
+  const lngs = points.map(({ lng }) => lng);
+  return {
+    south: outward(Math.min(...lats), -ENTRANCE_BOX_MARGIN_DEGREES),
+    west: outward(Math.min(...lngs), -ENTRANCE_BOX_MARGIN_DEGREES),
+    north: outward(Math.max(...lats), ENTRANCE_BOX_MARGIN_DEGREES),
+    east: outward(Math.max(...lngs), ENTRANCE_BOX_MARGIN_DEGREES),
+  };
+}
+
+// One underground station as the topology will carry it: the feed splits a Metro station into a
+// stop per direction and the station table keeps them apart, so a door on the street is a way into
+// every one of them — the platforms share a mezzanine. `keys` are those stations' ids, exactly as
+// the station table keys them.
+export interface UndergroundStation {
+  keys: readonly string[];
+  names: readonly string[];
+  points: readonly Coord[];
+}
+
+// The underground Metro stops, merged into stations the way the station table merges them (same
+// name within STATION_MERGE_METERS, keyed by the lowest member id), then the directions of one
+// station chained together on distance. Nothing in the feed says two stops are one station, which
+// is why this is where it is said.
+function undergroundStations(feed: GtfsFeed): UndergroundStation[] {
+  const platforms: (Coord & { key: string; name: string })[] = [];
+  for (const stop of feed.stops) {
+    const name = stop.stop_name?.trim() ?? "";
+    const lat = Number(stop.stop_lat);
+    const lng = Number(stop.stop_lon);
+    if (
+      MUNI_UNDERGROUND.has(name) &&
+      Number.isFinite(lat) &&
+      Number.isFinite(lng)
+    ) {
+      platforms.push({ key: stop.stop_id, name, lat, lng });
+    }
+  }
+  const rows = clusterByName(platforms).map((cluster) => ({
+    ...centroid(cluster),
+    key: cluster.map(({ key }) => key).sort()[0],
+    name: cluster[0].name,
+  }));
+
+  const stations: UndergroundStation[] = [];
+  const taken = new Set<string>();
+  for (const seed of rows) {
+    if (taken.has(seed.key)) {
+      continue;
+    }
+    taken.add(seed.key);
+    const members = [seed];
+    for (let member = 0; member < members.length; member++) {
+      for (const other of rows) {
+        if (
+          !taken.has(other.key) &&
+          haversineMeters(members[member], other) <= PLATFORM_ROW_METERS
+        ) {
+          taken.add(other.key);
+          members.push(other);
+        }
+      }
+    }
+    stations.push({
+      keys: members.map(({ key }) => key),
+      names: members.map(({ name }) => name),
+      points: members.map(({ lat, lng }) => ({ lat, lng })),
+    });
+  }
+  return stations;
+}
+
+// OSM tags the descent only where it is not a stair, so a node that says nothing is one.
+function osmEntranceKind(node: OsmStationEntrance): EntranceKind {
+  if (node.elevator) {
+    return "elevator";
+  } else if (node.escalator) {
+    return "escalator";
+  } else if (node.ramp) {
+    return "ramp";
+  } else {
+    return "stair";
+  }
+}
+
+// A mapper writes the station on a node as `station_name` — "Embarcadero Station", "Van Ness",
+// "Castro" — where they write it at all; the feed calls the same places "Metro Embarcadero
+// Station", "Van Ness Station Outbound", "Metro Castro Station/Downtown". Lowercased and with the
+// word "station" dropped, what the mapper wrote is a substring of what the feed wrote. The `name`
+// tag is not this: it is the corner the door stands on ("Market & 8th St").
+function namesStation(written: string, stationName: string): boolean {
+  const wanted = written.toLowerCase().replaceAll("station", "").trim();
+  return wanted !== "" && stationName.toLowerCase().includes(wanted);
+}
+
+// Each OSM node onto the station it is a way into: the one it names where it names one and that
+// station is within NAMED_ENTRANCE_METERS, otherwise the nearest within OSM_ENTRANCE_METERS. A door
+// a rider may not walk through is returned closed and a node in reach of nothing unmatched — in San
+// Francisco the unmatched are BART's own doors, which the graph already has from BART's feed. One
+// row per direction of the matched station, because the mezzanine is shared.
+export function matchStationEntrances(
+  stations: readonly UndergroundStation[],
+  nodes: readonly OsmStationEntrance[],
+): {
+  entrances: FeedEntrance[];
+  unmatched: OsmStationEntrance[];
+  closed: OsmStationEntrance[];
+} {
+  const entrances: FeedEntrance[] = [];
+  const unmatched: OsmStationEntrance[] = [];
+  const closed: OsmStationEntrance[] = [];
+  for (const node of nodes) {
+    if (CLOSED_ACCESS.has((node.access ?? "").toLowerCase())) {
+      closed.push(node);
+      continue;
+    }
+    const written = node.stationName;
+    const reachable = stations
+      .map((station) => ({
+        station,
+        meters: Math.min(
+          ...station.points.map((point) => haversineMeters(point, node)),
+        ),
+      }))
+      .filter(({ meters }) => meters <= NAMED_ENTRANCE_METERS)
+      .sort((left, right) => left.meters - right.meters);
+    const named =
+      written === undefined
+        ? undefined
+        : reachable.find(({ station }) =>
+            station.names.some((name) => namesStation(written, name)),
+          );
+    const matched =
+      named ?? reachable.find(({ meters }) => meters <= OSM_ENTRANCE_METERS);
+    if (matched === undefined) {
+      unmatched.push(node);
+      continue;
+    }
+    for (const key of matched.station.keys) {
+      entrances.push({
+        stationId: key,
+        lat: node.lat,
+        lng: node.lng,
+        kind: osmEntranceKind(node),
+        entry: true,
+        exit: true,
+        sides: BOTH_SIDES,
+      });
+    }
+  }
+  return { entrances, unmatched, closed };
+}
+
+// Muni publishes no entrance at all — no `location_type`, no pathways, nothing — so the Metro's
+// underground stations are entered through OpenStreetMap's own `railway=subway_entrance` nodes.
+// Every Metro station has a mezzanine spanning both directions, so no door is one direction's
+// alone and no station is split. The four Market Street stations share a transfer complex with the
+// BART station under them, which the graph gives one node, so a door there joins the same node
+// whichever of the two it hangs off.
+async function muniEntrances(feed: GtfsFeed): Promise<FeedEntrances> {
+  const stations = undergroundStations(feed);
+  const { south, west, north, east } = entranceBox(
+    stations.flatMap(({ points }) => points),
+  );
+  const nodes = await fetchStationEntrances(south, west, north, east);
+  const { entrances, unmatched, closed } = matchStationEntrances(
+    stations,
+    nodes,
+  );
+  for (const node of closed) {
+    const written = node.name ?? node.stationName ?? "unnamed";
+    console.error(
+      `  OSM entrance "${written}" at ${node.lat.toFixed(6)},${node.lng.toFixed(6)}: ` +
+        `access=${node.access}, skipped`,
+    );
+  }
+  for (const node of unmatched) {
+    const written = node.stationName ?? node.name ?? "unnamed";
+    console.error(
+      `  OSM entrance "${written}" at ${node.lat.toFixed(6)},${node.lng.toFixed(6)}: ` +
+        `no Metro station within ${OSM_ENTRANCE_METERS} m, dropped`,
+    );
+  }
+  for (const station of stations) {
+    const doors = entrances.filter(
+      ({ stationId }) => stationId === station.keys[0],
+    );
+    console.error(
+      `  ${station.names.join(" + ")}: ${doors.length} OSM entrance(s)`,
+    );
+  }
+  console.error(
+    `  ${nodes.length} OSM node(s) in ${south},${west},${north},${east}, ` +
+      `${closed.length} closed, ${unmatched.length} not a Metro station's, ` +
+      `${entrances.length} entrance row(s)`,
+  );
+  return { entrances, split: new Set<string>() };
+}
+
 // Each city's rail feeds. New York: the MTA's subway zip, route_type 1 (the subway proper) and 2
 // (the Staten Island Railway) — the two the map draws. San Francisco: Muni's rail, route_type 0
 // (the Metro lines and the F streetcar) and 5 (the cable cars), plus BART; no buses in either city.
@@ -136,6 +638,7 @@ const CITY_FEEDS: Readonly<Record<string, readonly TransitFeedSource[]>> = {
       routePrefix: "",
       groupKey: (row) => row.route_id,
       underground: NO_UNDERGROUND,
+      entrances: mtaEntrances,
     },
   ],
   sf: [
@@ -148,6 +651,8 @@ const CITY_FEEDS: Readonly<Record<string, readonly TransitFeedSource[]>> = {
       routePrefix: "muni:",
       groupKey: (row) => row.route_id,
       underground: MUNI_UNDERGROUND,
+      displayName: muniStationName,
+      entrances: muniEntrances,
     },
     {
       id: "bart",
@@ -158,6 +663,7 @@ const CITY_FEEDS: Readonly<Record<string, readonly TransitFeedSource[]>> = {
       routePrefix: "bart:",
       groupKey: (row) => (row.route_short_name ?? "").split("-")[0].trim(),
       underground: NO_UNDERGROUND,
+      entrances: bartEntrances,
     },
   ],
 };
@@ -202,6 +708,20 @@ export interface TransitStation extends Coord {
   // id are one place to change trains at.
   complex: number;
   surface: boolean;
+  // No free crossover: the two directions are two separate places to stand, so the graph gives the
+  // station a node per direction and an entrance only reaches the platform it was cut for. Never
+  // set on a station sharing a complex, where a change of train never reaches the street anyway.
+  split: boolean;
+}
+
+// One way into a station, placed. `station` indexes the station table, `sides` names the directions
+// whose platform it reaches (bit d for direction d, 3 for both) and `kind` indexes ENTRANCE_KINDS.
+export interface TransitEntrance extends Coord {
+  station: number;
+  sides: number;
+  kind: EntranceKind;
+  entry: boolean;
+  exit: boolean;
 }
 
 // One route as its agency publishes it. `shortName` is what a rider says ("A", "N", "Yellow"),
@@ -237,6 +757,7 @@ export interface TransitPattern {
 
 export interface TransitTopology {
   stations: readonly TransitStation[];
+  entrances: readonly TransitEntrance[];
   routes: readonly TransitRoute[];
   patterns: readonly TransitPattern[];
 }
@@ -602,6 +1123,407 @@ interface RawPattern {
   trips: PatternTrip[];
 }
 
+// A step across the ground in metres, east and north, which is what a bearing and an entrance
+// offset are both measured in.
+export interface Bearing {
+  east: number;
+  north: number;
+}
+
+const DEGREES_TO_METERS = (Math.PI / 180) * EARTH_RADIUS_METERS;
+
+function offsetMeters(from: Coord, to: Coord): Bearing {
+  const middle = (((from.lat + to.lat) / 2) * Math.PI) / 180;
+  return {
+    east: (to.lng - from.lng) * Math.cos(middle) * DEGREES_TO_METERS,
+    north: (to.lat - from.lat) * DEGREES_TO_METERS,
+  };
+}
+
+function offsetPoint(from: Coord, offset: Bearing): Coord {
+  const middle = (from.lat * Math.PI) / 180;
+  return {
+    lng: from.lng + offset.east / (Math.cos(middle) * DEGREES_TO_METERS),
+    lat: from.lat + offset.north / DEGREES_TO_METERS,
+  };
+}
+
+function normalize(vector: Bearing): Bearing | null {
+  const length = Math.hypot(vector.east, vector.north);
+  if (length === 0) {
+    return null;
+  } else {
+    return { east: vector.east / length, north: vector.north / length };
+  }
+}
+
+// The line a station's platforms lie along: a point ON the rails and the direction a direction-0
+// train runs there.
+export interface TrackAxis {
+  origin: Coord;
+  bearing: Bearing;
+}
+
+// How far off the axis an entrance has to stand before the rule will name a side. Inside that it is
+// astride the tracks — a station house over the cut, a stair in the middle of a wide avenue — and
+// reaches both platforms.
+const AMBIGUOUS_METERS = 8;
+
+// New York's railway runs right-handed, so a side platform lies under the pavement to the RIGHT of
+// its direction of travel and its stairs rise onto that pavement. The sign of the cross product of
+// the axis with the entrance's offset from it is therefore which platform the stair drops onto.
+// Nothing published says: this rule and the agency's own sign text
+// (data/transit/nyc-entrance-sides.txt) are the whole of what is known.
+export function sideMask(axis: TrackAxis, entrance: Coord): number {
+  const offset = offsetMeters(axis.origin, entrance);
+  const across =
+    axis.bearing.east * offset.north - axis.bearing.north * offset.east;
+  if (Math.abs(across) < AMBIGUOUS_METERS) {
+    return BOTH_SIDES;
+  } else if (across < 0) {
+    return NORTHBOUND_SIDE;
+  } else {
+    return SOUTHBOUND_SIDE;
+  }
+}
+
+// Which way a direction-0 train runs through each station, as a unit vector, averaged over the
+// patterns calling there: a station the line curves through averages its two legs, and a terminal
+// takes the one neighbour it has. Coarse — it is a chord between two stops half a kilometre apart —
+// so it is only ever used to point the drawn track the right way round, and as the fallback axis
+// where nothing is drawn. `null` where no direction-0 pattern calls at all.
+function rideBearings(
+  stations: readonly TransitStation[],
+  patterns: readonly TransitPattern[],
+): (Bearing | null)[] {
+  const sums: Bearing[] = stations.map(() => ({ east: 0, north: 0 }));
+  for (const pattern of patterns) {
+    if (pattern.direction !== 0) {
+      continue;
+    }
+    const last = pattern.stops.length - 1;
+    pattern.stops.forEach((station, index) => {
+      const step = normalize(
+        offsetMeters(
+          stations[pattern.stops[Math.max(0, index - 1)]],
+          stations[pattern.stops[Math.min(last, index + 1)]],
+        ),
+      );
+      if (step !== null) {
+        sums[station].east += step.east;
+        sums[station].north += step.north;
+      }
+    });
+  }
+  return sums.map(normalize);
+}
+
+// The drawn track of every route, keyed by the short and long names the routing artifact and the
+// display artifact both take from the feed's routes.txt — the SBWY blob carries no route id, and
+// those two together separate even New York's three `S` shuttles.
+export type RouteTracks = ReadonlyMap<string, readonly (readonly Coord[])[]>;
+
+export function routeKey(shortName: string, longName: string): string {
+  return [shortName, longName].join(KEY_SEPARATOR);
+}
+
+// The city's drawn track, from the display artifact the map already ships. Empty — and the rule
+// falls back to the ride bearing through the station point — for a city that has none.
+export function readRouteTracks(cityId: string): RouteTracks {
+  const path = join(SUBWAY_DIR, `${cityId}.bin`);
+  if (!existsSync(path)) {
+    console.error(`  ${path}: no drawn track; siding entrances by the ride`);
+    return new Map();
+  }
+  const file = readFileSync(path);
+  const subway = decodeSubway(
+    file.buffer.slice(
+      file.byteOffset,
+      file.byteOffset + file.byteLength,
+    ) as ArrayBuffer,
+  );
+  const tracks = new Map<string, Coord[][]>();
+  for (const line of subway.lines) {
+    const route = subway.routes[line.route];
+    if (route === undefined) {
+      continue;
+    }
+    const points: Coord[] = [];
+    for (let vertex = 0; vertex < line.lngs.length; vertex++) {
+      points.push({ lng: line.lngs[vertex], lat: line.lats[vertex] });
+    }
+    const key = routeKey(route.shortName, route.longName);
+    const drawn = tracks.get(key);
+    if (drawn) {
+      drawn.push(points);
+    } else {
+      tracks.set(key, [points]);
+    }
+  }
+  return tracks;
+}
+
+// How much track the tangent is measured over, either side of the station. A GTFS shape puts its
+// vertices a few metres apart, so the one segment the station stands beside is mostly quantization
+// noise; 25 m is a platform's worth of rail, short enough to follow a curve through a station.
+const TANGENT_METERS = 25;
+// How far a station may stand from the drawn track and still be on it. A shape the display ingest
+// cut at the city edge can leave a station with a polyline that only passes within a kilometre, and
+// a perpendicular taken off that says nothing; past this the ride through the station point is the
+// honest answer.
+const MAX_TRACK_METERS = 150;
+
+// Where the rails run past a station: the nearest point on any of its routes' drawn lines, and the
+// chord of the track about it, turned to face the way a direction-0 train goes. This is what the
+// side rule measures from. The station's OWN point will not do — the feed puts Nevins St over the
+// northeastern pavement rather than between the tracks, which pushes both of its northeastern
+// stairs onto the wrong side of the station and into the ambiguous band.
+function trackAxis(
+  station: Coord,
+  lines: readonly (readonly Coord[])[],
+  ride: Bearing,
+): TrackAxis | null {
+  let bestLine: readonly Coord[] | null = null;
+  let bestVertex = 0;
+  let bestOffset: Bearing = { east: 0, north: 0 };
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const line of lines) {
+    const local = line.map((point) => offsetMeters(station, point));
+    for (let vertex = 0; vertex + 1 < local.length; vertex++) {
+      const from = local[vertex];
+      const to = local[vertex + 1];
+      const runEast = to.east - from.east;
+      const runNorth = to.north - from.north;
+      const lengthSquared = runEast * runEast + runNorth * runNorth;
+      const along =
+        lengthSquared === 0
+          ? 0
+          : Math.min(
+              1,
+              Math.max(
+                0,
+                -(from.east * runEast + from.north * runNorth) / lengthSquared,
+              ),
+            );
+      const offset = {
+        east: from.east + along * runEast,
+        north: from.north + along * runNorth,
+      };
+      const distance = Math.hypot(offset.east, offset.north);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestLine = line;
+        bestVertex = vertex;
+        bestOffset = offset;
+      }
+    }
+  }
+  if (bestLine === null || bestDistance > MAX_TRACK_METERS) {
+    return null;
+  }
+  const line = bestLine;
+
+  const origin = offsetPoint(station, bestOffset);
+  const metersOff = (point: Coord): number => {
+    const offset = offsetMeters(origin, point);
+    return Math.hypot(offset.east, offset.north);
+  };
+  // Outward along the polyline from the segment the station stands beside, until the vertex is a
+  // tangent's length away or the line runs out.
+  const walk = (step: number): Coord => {
+    let at = step < 0 ? bestVertex : bestVertex + 1;
+    while (
+      metersOff(line[at]) < TANGENT_METERS &&
+      at + step >= 0 &&
+      at + step < line.length
+    ) {
+      at += step;
+    }
+    return line[at];
+  };
+  const chord = normalize(offsetMeters(walk(-1), walk(1)));
+  if (chord === null) {
+    return null;
+  }
+  // A drawn line is whichever direction its shape was published in, and both directions' shapes are
+  // drawn where they run apart, so the track says the axis and the ride says which end is north.
+  const forward = chord.east * ride.east + chord.north * ride.north >= 0;
+  return {
+    origin,
+    bearing: forward ? chord : { east: -chord.east, north: -chord.north },
+  };
+}
+
+// The drawn lines of every route calling at each station, which are the candidates its platforms
+// could lie along. Both directions' shapes are in there where the display ingest kept them, and the
+// nearest wins: a station stands beside its own track and not beside the express rails under the
+// next avenue.
+function drawnLinesByStation(
+  stations: readonly TransitStation[],
+  routes: readonly TransitRoute[],
+  patterns: readonly TransitPattern[],
+  tracks: RouteTracks,
+): (readonly Coord[])[][] {
+  const perStation: (readonly Coord[])[][] = stations.map(() => []);
+  const seen = stations.map(() => new Set<number>());
+  for (const pattern of patterns) {
+    const route = routes[pattern.routeIndex];
+    const drawn =
+      route === undefined
+        ? undefined
+        : tracks.get(routeKey(route.shortName, route.longName));
+    if (drawn === undefined) {
+      continue;
+    }
+    for (const station of pattern.stops) {
+      if (!seen[station].has(pattern.routeIndex)) {
+        seen[station].add(pattern.routeIndex);
+        perStation[station].push(...drawn);
+      }
+    }
+  }
+  return perStation;
+}
+
+// What the placement made of the entrance sources, for the ingest log.
+export interface EntranceCounts {
+  // Station ids an entrance or a no-crossover flag names that the topology carries no station for:
+  // a station no kept pattern calls at, or one renamed since the source was published.
+  unmatched: string[];
+  dropped: number; // the entrances standing at those stations
+  split: number; // stations given a node per direction
+  // Flagged no-crossover but inside a transfer complex, which is one node whatever its members say.
+  splitInComplex: string[];
+  // Entrances sided against drawn track rather than against the ride through the station point.
+  sidedByTrack: number;
+}
+
+// Every feed's entrances, read before the build so the build itself stays synchronous — the daily
+// timetable rebuilds the topology too, and it has no business reading a Socrata dataset to do it.
+export async function loadEntrances(
+  loaded: readonly LoadedFeed[],
+): Promise<Map<string, FeedEntrances>> {
+  const byFeed = new Map<string, FeedEntrances>();
+  for (const { source, feed } of loaded) {
+    if (source.entrances !== undefined) {
+      console.error(`transit: reading ${source.name} entrances`);
+      byFeed.set(source.id, await source.entrances(feed));
+    }
+  }
+  return byFeed;
+}
+
+// The entrances onto the built stations, and the split flags onto the stations themselves. Runs
+// after the patterns because the side rule is a sign against the northbound ride.
+function placeEntrances(
+  loaded: readonly LoadedFeed[],
+  byFeed: ReadonlyMap<string, FeedEntrances>,
+  stations: TransitStation[],
+  stationIndexOf: ReadonlyMap<string, number>,
+  routes: readonly TransitRoute[],
+  patterns: readonly TransitPattern[],
+  tracks: RouteTracks,
+): { entrances: TransitEntrance[]; counts: EntranceCounts } {
+  // A complex id is set on every station its feed lists in transfers.txt, most of them only
+  // transferring to themselves, so what makes a station part of a complex is SHARING its id.
+  const complexSize = new Map<number, number>();
+  for (const { complex } of stations) {
+    if (complex !== 0) {
+      complexSize.set(complex, (complexSize.get(complex) ?? 0) + 1);
+    }
+  }
+
+  const unmatched = new Set<string>();
+  const splitInComplex: string[] = [];
+  for (const { source } of loaded) {
+    for (const stationId of byFeed.get(source.id)?.split ?? []) {
+      const index = stationIndexOf.get(`${source.id}:${stationId}`);
+      if (index === undefined) {
+        unmatched.add(`${source.id}:${stationId}`);
+      } else if ((complexSize.get(stations[index].complex) ?? 0) > 1) {
+        splitInComplex.push(stations[index].name);
+      } else {
+        stations[index].split = true;
+      }
+    }
+  }
+
+  // Only a split station is ever asked which platform a stair drops onto, and there are 86 of them
+  // against 496 stations, so the nearest point on the track is looked up when one comes up rather
+  // than for the whole city.
+  const bearings = rideBearings(stations, patterns);
+  const drawnFor = drawnLinesByStation(stations, routes, patterns, tracks);
+  const axes = new Map<number, { axis: TrackAxis; drawn: boolean } | null>();
+  const axisOf = (
+    index: number,
+  ): { axis: TrackAxis; drawn: boolean } | null => {
+    const known = axes.get(index);
+    if (known !== undefined) {
+      return known;
+    }
+    const ride = bearings[index];
+    const station = stations[index];
+    const drawn =
+      ride === null ? null : trackAxis(station, drawnFor[index], ride);
+    let found: { axis: TrackAxis; drawn: boolean } | null = null;
+    if (drawn !== null) {
+      found = { axis: drawn, drawn: true };
+    } else if (ride !== null) {
+      found = { axis: { origin: station, bearing: ride }, drawn: false };
+    }
+    axes.set(index, found);
+    return found;
+  };
+
+  const entrances: TransitEntrance[] = [];
+  let dropped = 0;
+  let onTrack = 0;
+  for (const { source } of loaded) {
+    for (const entrance of byFeed.get(source.id)?.entrances ?? []) {
+      const index = stationIndexOf.get(`${source.id}:${entrance.stationId}`);
+      if (index === undefined) {
+        unmatched.add(`${source.id}:${entrance.stationId}`);
+        dropped += 1;
+        continue;
+      }
+      // A station a rider can cross between inside has one way in whichever stair they take, so the
+      // rule is only ever asked about a split one.
+      const found = stations[index].split ? axisOf(index) : null;
+      if (found?.drawn) {
+        onTrack += 1;
+      }
+      entrances.push({
+        lat: entrance.lat,
+        lng: entrance.lng,
+        station: index,
+        sides:
+          entrance.sides ??
+          (found === null ? BOTH_SIDES : sideMask(found.axis, entrance)),
+        kind: entrance.kind,
+        entry: entrance.entry,
+        exit: entrance.exit,
+      });
+    }
+  }
+  entrances.sort(
+    (left, right) =>
+      left.station - right.station ||
+      left.lng - right.lng ||
+      left.lat - right.lat,
+  );
+
+  return {
+    entrances,
+    counts: {
+      unmatched: [...unmatched].sort(),
+      dropped,
+      split: stations.filter((station) => station.split).length,
+      splitInComplex,
+      sidedByTrack: onTrack,
+    },
+  };
+}
+
 // Every station, route and stop pattern the city's feeds describe. Both artifacts are built from
 // this one function, so the topology the graph is cut from and the timetable it departs against
 // cannot describe different patterns.
@@ -610,9 +1532,16 @@ export function buildTopology(
   // The daily timetable passes 0: it emits bands for the lanes the COMMITTED topology carries, and a
   // pattern this run would have thrown away is exactly the one whose trips it must still find.
   minPatternShare: number = MIN_PATTERN_SHARE,
+  // From `loadEntrances`. Left out — by the timetable, and by a city whose feeds publish none — the
+  // topology carries no entrance and no station is split.
+  feedEntrances: ReadonlyMap<string, FeedEntrances> = new Map(),
+  // From `readRouteTracks`. Left out, an entrance is sided against the ride through the station
+  // point, which is coarser but never unavailable.
+  tracks: RouteTracks = new Map(),
 ): {
   topology: TransitTopology;
   counts: PatternCounts;
+  entranceCounts: EntranceCounts;
 } {
   // Every feed's routes first and together, so the table can be ordered by id and a trip can be
   // pointed at its place in it: the artifact has no display order to keep, unlike SBWY's route mask,
@@ -691,14 +1620,21 @@ export function buildTopology(
   const stationIndexOf = new Map(
     rawStations.map((station, index) => [station.key, index]),
   );
+  const displayNameOf = new Map(
+    loaded.map(({ source }) => [source.id, source.displayName]),
+  );
   const stations: TransitStation[] = rawStations.map(
-    ({ lat, lng, name, complex, surface }) => ({
-      lat,
-      lng,
-      name,
-      complex,
-      surface,
-    }),
+    ({ key, lat, lng, name, complex, surface }) => {
+      const display = displayNameOf.get(feedOfKey.get(key) ?? "");
+      return {
+        lat,
+        lng,
+        name: display === undefined ? name : display(name),
+        complex,
+        surface,
+        split: false,
+      };
+    },
   );
 
   const raw = new Map<string, RawPattern>();
@@ -743,7 +1679,9 @@ export function buildTopology(
           continue;
         }
         stops.push(index);
-        stopNames.push(stations[index].name);
+        // The feed's own name, not the one a rider is shown: a lane id has to mean the same thing
+        // to a timetable built days later, and renaming a station for display must not move it.
+        stopNames.push(rawStations[index].name);
         offsets.push(at - departure);
       }
       if (broken || stops.length < 2) {
@@ -850,9 +1788,20 @@ export function buildTopology(
   // and neither's order may depend on the other's tables.
   patterns.sort((left, right) => left.laneId - right.laneId);
 
+  const { entrances, counts: entranceCounts } = placeEntrances(
+    loaded,
+    feedEntrances,
+    stations,
+    stationIndexOf,
+    routes,
+    patterns,
+    tracks,
+  );
+
   return {
-    topology: { stations, routes, patterns },
+    topology: { stations, entrances, routes, patterns },
     counts: { raw: raw.size, kept: patterns.length, droppedTrips },
+    entranceCounts,
   };
 }
 
@@ -860,7 +1809,12 @@ export function buildTopology(
 // table. Little-endian throughout; coordinates quantized to COORD_SCALE about a south-west origin,
 // exactly the shared codec.
 export function encodeTopology(topology: TransitTopology): Uint8Array {
-  const { stations, routes, patterns } = topology;
+  const { stations, entrances, routes, patterns } = topology;
+  if (stations.length > 0xffff) {
+    throw new Error(
+      `${stations.length} stations: an entrance's station is a u16`,
+    );
+  }
 
   let originLng = Number.POSITIVE_INFINITY;
   let originLat = Number.POSITIVE_INFINITY;
@@ -927,7 +1881,35 @@ export function encodeTopology(topology: TransitTopology): Uint8Array {
     );
     stationView.setUint32(record + 8, nameIndex.get(station.name) ?? 0, true);
     stationView.setUint16(record + 12, station.complex, true);
-    stationView.setUint8(record + 14, station.surface ? SURFACE_FLAG : 0);
+    stationView.setUint8(
+      record + 14,
+      (station.surface ? SURFACE_FLAG : 0) | (station.split ? SPLIT_FLAG : 0),
+    );
+  });
+
+  const entranceTable = new Uint8Array(entrances.length * ENTRANCE_BYTES);
+  const entranceView = new DataView(entranceTable.buffer);
+  entrances.forEach((entrance, index) => {
+    const record = index * ENTRANCE_BYTES;
+    entranceView.setInt32(
+      record,
+      Math.round((entrance.lng - originLng) / COORD_SCALE),
+      true,
+    );
+    entranceView.setInt32(
+      record + 4,
+      Math.round((entrance.lat - originLat) / COORD_SCALE),
+      true,
+    );
+    entranceView.setUint16(record + 8, entrance.station, true);
+    entranceView.setUint8(record + 10, entrance.sides);
+    entranceView.setUint8(record + 11, ENTRANCE_KINDS.indexOf(entrance.kind));
+    entranceView.setUint8(
+      record + 12,
+      (entrance.entry ? ENTRY_FLAG : 0) | (entrance.exit ? EXIT_FLAG : 0),
+    );
+    // The name slot a door's own wording would go in, which nothing writes yet.
+    entranceView.setUint16(record + 14, UNNAMED_ID, true);
   });
 
   const routeTable = new Uint8Array(routes.length * ROUTE_BYTES);
@@ -973,7 +1955,8 @@ export function encodeTopology(topology: TransitTopology): Uint8Array {
   });
 
   const stationOffset = HEADER_BYTES;
-  const routeOffset = stationOffset + stationTable.length;
+  const entranceOffset = stationOffset + stationTable.length;
+  const routeOffset = entranceOffset + entranceTable.length;
   const patternOffset = routeOffset + routeTable.length;
   const stopOffset = patternOffset + patternTable.length;
   const nameOffset = stopOffset + stopBlob.length;
@@ -995,7 +1978,9 @@ export function encodeTopology(topology: TransitTopology): Uint8Array {
   view.setFloat64(40, COORD_SCALE, true);
   view.setUint32(48, nameOffset, true);
   view.setUint32(52, total, true);
+  view.setUint32(56, entrances.length, true);
   bytes.set(stationTable, stationOffset);
+  bytes.set(entranceTable, entranceOffset);
   bytes.set(routeTable, routeOffset);
   bytes.set(patternTable, patternOffset);
   bytes.set(stopBlob, stopOffset);
@@ -1015,6 +2000,7 @@ export function decodeTopology(bytes: Uint8Array): TransitTopology {
   const stationCount = view.getUint32(8, true);
   const routeCount = view.getUint32(12, true);
   const patternCount = view.getUint32(16, true);
+  const entranceCount = view.getUint32(56, true);
   const originLng = view.getFloat64(24, true);
   const originLat = view.getFloat64(32, true);
   const scale = view.getFloat64(40, true);
@@ -1042,10 +2028,27 @@ export function decodeTopology(bytes: Uint8Array): TransitTopology {
       name: names[view.getUint32(record + 8, true)] ?? "",
       complex: view.getUint16(record + 12, true),
       surface: (view.getUint8(record + 14) & SURFACE_FLAG) !== 0,
+      split: (view.getUint8(record + 14) & SPLIT_FLAG) !== 0,
     });
   }
 
-  const routeOffset = stationOffset + stationCount * STATION_BYTES;
+  const entranceOffset = stationOffset + stationCount * STATION_BYTES;
+  const entrances: TransitEntrance[] = [];
+  for (let index = 0; index < entranceCount; index++) {
+    const record = entranceOffset + index * ENTRANCE_BYTES;
+    const flags = view.getUint8(record + 12);
+    entrances.push({
+      lng: originLng + view.getInt32(record, true) * scale,
+      lat: originLat + view.getInt32(record + 4, true) * scale,
+      station: view.getUint16(record + 8, true),
+      sides: view.getUint8(record + 10),
+      kind: ENTRANCE_KINDS[view.getUint8(record + 11)],
+      entry: (flags & ENTRY_FLAG) !== 0,
+      exit: (flags & EXIT_FLAG) !== 0,
+    });
+  }
+
+  const routeOffset = entranceOffset + entranceCount * ENTRANCE_BYTES;
   const routes: TransitRoute[] = [];
   for (let index = 0; index < routeCount; index++) {
     const record = routeOffset + index * ROUTE_BYTES;
@@ -1093,18 +2096,23 @@ export function decodeTopology(bytes: Uint8Array): TransitTopology {
     });
   }
 
-  return { stations, routes, patterns };
+  return { stations, entrances, routes, patterns };
 }
 
 export async function buildTransit(cityId: string): Promise<void> {
   const started = performance.now();
   await mkdir(TRANSIT_DIR, { recursive: true });
   const loaded = await loadFeeds(cityId);
-  const { topology, counts } = buildTopology(loaded);
+  const { topology, counts, entranceCounts } = buildTopology(
+    loaded,
+    MIN_PATTERN_SHARE,
+    await loadEntrances(loaded),
+    readRouteTracks(cityId),
+  );
   const bytes = encodeTopology(topology);
   await writeFile(join(TRANSIT_DIR, `${cityId}.bin`), bytes);
 
-  const { stations, routes, patterns } = topology;
+  const { stations, entrances, routes, patterns } = topology;
   routes.forEach((route, index) => {
     const mine = patterns.filter((pattern) => pattern.routeIndex === index);
     const stops = new Set(mine.flatMap((pattern) => [...pattern.stops]));
@@ -1116,10 +2124,25 @@ export async function buildTransit(cityId: string): Promise<void> {
   const complexes = new Set(
     stations.map(({ complex }) => complex).filter((complex) => complex !== 0),
   );
+  for (const name of entranceCounts.splitInComplex) {
+    console.error(
+      `  ${name}: no free crossover, but inside a transfer complex; kept as one station`,
+    );
+  }
+  if (entranceCounts.unmatched.length > 0) {
+    console.error(
+      `  ${entranceCounts.unmatched.length} station id(s) the feeds do not carry, ` +
+        `${entranceCounts.dropped} entrance(s) dropped: ` +
+        entranceCounts.unmatched.join(", "),
+    );
+  }
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   console.error(
     `transit: ${cityId} ${routes.length} routes, ${stations.length} stations ` +
-      `(${surface} at street level, ${complexes.size} transfer complexes), ` +
+      `(${surface} at street level, ${complexes.size} transfer complexes, ` +
+      `${entranceCounts.split} split by direction), ` +
+      `${entrances.length} entrances ` +
+      `(${entranceCounts.sidedByTrack} sided against drawn track), ` +
       `${patterns.length} of ${counts.raw} patterns kept ` +
       `(${counts.droppedTrips} trips on the dropped ones), ` +
       `${bytes.length} bytes in ${seconds}s, sha256 ` +

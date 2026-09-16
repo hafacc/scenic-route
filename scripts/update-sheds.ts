@@ -35,6 +35,12 @@
 // package.json fetches that history and pipes the snapshots in, so the clone happens before the
 // graph check below rather than after it: a run that stops on a key-space mismatch has spent a
 // shallow fetch it did not need, and writes nothing either way.
+//
+// Re-placing the artifact after a key-space move is this run with two overrides, because neither the
+// graph nor the history it needs is the one the daily job reads: SHED_GRAPH names the checkout's own
+// public/routing/nyc.bin, which no deploy has served yet, and SHED_SNAPSHOTS names the clone to walk
+// — `bun run build-sheds` over the DOB's archived deep history first, then this over the daily one
+// to bring that artifact to today.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -75,6 +81,7 @@ import {
 
 // The graph the day's new sheds are placed against has to be the one the client is running, and the
 // client runs whatever the last deploy put on Pages — not necessarily what a checkout would build.
+// SHED_GRAPH overrides that with a local file, for the re-place the header describes.
 const SITE = process.env.SHED_SITE ?? "https://hafaio.github.io/scenic-route";
 const GRAPH_URL = `${SITE}/routing/nyc.bin`;
 // Where the artifact this run carries forward comes from: the committed copy the last run pushed,
@@ -260,14 +267,20 @@ export async function updateSheds(): Promise<void> {
   // placed against: a deploy that moved a graph input without re-placing lands here, with the client
   // already showing bare pavement, and going on would replace that with the old keys re-stamped
   // under the new key space — scaffolding on whatever streets they now happen to name.
+  //
+  // It SKIPS rather than fails. The daily job runs the two timetables after this and commits all
+  // three, and between a push that moves the graph and the deploy that serves it, failing here took
+  // the timetables down with it — a day of no republished departures to save a day of no new sheds.
+  // The artifact is left exactly as it was, which is what it must be until the deploy lands.
   const graph = await loadDeployedGraph();
   const mismatch = shedGraphMismatch(artifact, graph.keyHash);
   if (mismatch !== null) {
-    throw new Error(
-      `${mismatch}. A graph-input change lands as one deploy: \`bun run build-sheds\`` +
-        " against the new graph, commit, then deploy. Re-run once the site serves the graph the" +
-        " artifact names, or rebuild if that is the stale half.",
+    console.error(
+      `  ${mismatch}; leaving the artifact alone. A graph-input change lands as one deploy:` +
+        " bun run build-sheds against the new graph, commit, then deploy. This run will pick the" +
+        " day up once the site serves the graph the artifact names.",
     );
+    return;
   }
 
   // Every day whose intervals could still change, which is every day a reappearance could still be

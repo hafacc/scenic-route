@@ -69,7 +69,7 @@ const DANGLING_DETOUR_METERS: f64 = 60.0;
 // Two CSCL split positions, or a split and an existing vertex/endpoint, within 2 m are merged to
 // one: a mid-block entrance splits the block, but an entrance beside an intersection joins the node
 // rather than shedding a 2 m sliver edge.
-const SPLIT_MERGE_METERS: f64 = 2.0;
+pub const SPLIT_MERGE_METERS: f64 = 2.0;
 // Step 7's tolerance: how far a vertex of an unanchored walking component may stand from the
 // routable network and still be standing *on* it. Like step 0 this is a coincidence test rather
 // than a reach — the two lines cross in plan view and only the noding is missing — so the distance
@@ -1679,7 +1679,7 @@ fn find(parent: &mut [u32], node: u32) -> u32 {
 
 /// The along-distance in metres to a projection at parameter `param` on sub-segment `seg` of a
 /// polyline — the prefix length to `seg` plus the fraction of that sub-segment.
-fn along_at(
+pub fn along_at(
     poly_x: &[i32],
     poly_y: &[i32],
     seg: usize,

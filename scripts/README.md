@@ -2201,7 +2201,7 @@ station-route pairs, 429 distinct names, 171,667 bytes.**
 v2 is the same file with a 16-byte station record and no complex id, which the client merged records
 by distance and name alone; nothing that reads it is deployed, so v2 is not accepted.
 
-### `data/transit/<id>.bin` — the rail topology the router rides, magic `TRNS` (v1)
+### `data/transit/<id>.bin` — the rail topology the router rides, magic `TRNS` (v2)
 
 `SBWY` above is what the map draws; this is what the router rides, and the two are built from the
 same feeds and the same route types (`scripts/transit.ts`, beside `scripts/subway.ts` and
@@ -2211,7 +2211,7 @@ pattern** a route runs, in order, with the seconds from each stop to the next. T
 pattern into a chain of platform nodes and a station into one station node, and the timetable those
 board edges depart against is `public/transit-schedule/` below.
 
-**Plain git, never LFS**, and small enough to stay that way: 29,656 bytes for New York, 19,457 for
+**Plain git, never LFS**, and small enough to stay that way: 63,564 bytes for New York, 22,446 for
 the Bay Area. No `data/` pattern in `.gitattributes` matches it, so nothing has to be excluded.
 
 A **pattern** is one (route, direction) and one ordered list of stations. A route runs several: the
@@ -2223,7 +2223,9 @@ so the value is set by what it costs against what it keeps: New York keeps 138 o
 dropping 80 that between them carry 1.3% of its trips and a third of the platform nodes (6,357 down
 to 4,084); the Bay Area keeps 81 of 96, dropping 15 that carry 0.45%.
 
-Each pattern's **lane id** is FNV-1a over its route id, its direction and the NAMES of its stations.
+Each pattern's **lane id** is FNV-1a over its route id, its direction and the NAMES of its stations,
+as the feed itself writes them rather than as a rider is shown them, so renaming a station for
+display leaves every lane where it was.
 The graph bakes those ids into its board edges and the daily timetable is keyed by them, so two
 artifacts written days apart agree without either reading the other — the same reasoning that keys
 the ferry lanes by terminal name. A pattern whose stops change gets a new id and simply has no
@@ -2238,14 +2240,93 @@ saying they are enclosed places with a way in, so New York's 496 and BART's 50 a
 Muni's are the kerb — apart from the 21 platforms of the Market Street and Central Subway stations,
 which the ingest names, because nothing in Muni's feed separates them from a stop on the tarmac.
 
-Header, 56 bytes, little-endian; coordinates quantized to `COORD_SCALE` (1e-6°) about a south-west
+**The name a rider is shown is not always the feed's.** Muni names a stop for the platform it is —
+"Metro Castro Station/Downtown", "Van Ness Station Outbound" — and the graph shows that name to
+someone about to walk in, so a Muni station loses a leading "Metro ", a trailing " Station" and the
+direction written on its end after a slash or a space: **Castro**, **Van Ness**, **Civic Center**,
+**Union Square/Market St**, **Chinatown - Rose Pak**. Only Muni's names are rewritten — BART and the
+MTA already name the place — and only for display: the OSM `station_name` test, the cross-feed
+complex join and the lane ids all still run on the feed's own text.
+
+**The entrances** are where a station is actually entered, which is not its feed's point: New York
+publishes 2,120 of them ("Subway Entrances and Exits: 2024", data.ny.gov `i9wp-a4ja`, joined to the
+GTFS parent stop by its own `gtfs_stop_id` column) and BART names 132 in its feed as
+`location_type=2` stops hung off their station. A station with no entrance row keeps the old
+behaviour — the graph enters it at its own point — which is where every kerbside Muni stop stays,
+since a kerb has no way in.
+
+**Muni publishes no entrance at all** — no `location_type`, no `pathways.txt`, nothing — so its 12
+underground Metro stations are entered through OpenStreetMap: the `railway=subway_entrance` and
+`railway=train_station_entrance` nodes in the box the Metro's platforms stand in, plus a kilometre,
+rounded out to a hundredth of a degree so a stop moving a few metres does not re-fetch the cached
+Overpass query. 63 nodes. Four carry `access=no` or `access=private` — a Van Ness door shut for
+construction, Market & Sutter, Market & 4th, and a lift reached only through the CitiGroup Center's
+lobby — and are skipped by name: a door nobody may walk through is not a way in. Each of the rest
+goes to the station whose name the mapper wrote on it as `station_name`, where it wrote one and that
+station stands within **300 m**, and otherwise to the nearest station within **150 m** — a Market
+Street concourse runs the length of a block, so its far door stands well away from the point the
+feed gives the platform. The wider cap is for the named ones alone, because a mapper who wrote the
+station down has said what the distance can only guess at: it is what picks up Montgomery's Sansome
+& Sutter head house, 153 m from the platform. The `name` tag is not the station: it is the corner
+the door stands on ("Market & 8th St"). The kind is whatever the tags say where the descent is not a
+stair (`highway=elevator`, `elevator=yes`, `entrance=elevator`, and `conveying=yes` for a moving
+stair), and a node saying nothing is a stair.
+
+Every Metro station has a mezzanine spanning both directions, so no door is one direction's alone
+and no Muni station is split. The feed carries a stop per direction and the station table keeps
+those apart, so one OSM node becomes an entrance row on each of them: **51 matched nodes, 91 rows,
+over all 12 stations**. The 8 nodes matched to nothing are BART's own doors at 16th St Mission,
+24th St Mission and Glen Park, which BART's feed already publishes, plus Market & 4th / Moscone at
+161 m, which carries no `station_name` to reach the station with. The four Market Street stations
+share a transfer complex with the BART station beneath them and the graph gives a complex one node,
+so an OSM door there joins the same node whichever of the two it hangs off: Embarcadero takes 7 OSM
+doors beside BART's 6, Montgomery 8 beside 7, Powell 10 beside 8, Civic Center 7 beside 7.
+
+**Which platform an entrance reaches is in no dataset**, and it matters at the 87 New York stations
+with **no free crossover**, where a rider who goes down the wrong stair has to come back up and
+cross the street. Those stations carry the `split` flag and the graph gives each of them one node
+per direction. Two curated files beside the artifact settle the rest, both committed because their
+sources are gone or unpublishable:
+
+- `data/transit/nyc-no-crossover.txt` — the 87 GTFS parent stop ids. The live 2024 dataset dropped
+  the flag; the only published copy is the MTA's retired `StationEntrances.csv` (May 2020), whose
+  stations were joined to the nearest GTFS parent within 60 m. Curated by hand from here on.
+- `data/transit/nyc-entrance-sides.txt` — the entrances the geometric rule gets wrong, by station
+  and published point.
+
+The rule itself: New York's railway runs right-handed, so a side platform lies under the pavement to
+the **right** of its direction of travel and its stairs rise onto it. The side is the sign of the
+cross product of the track's direction with the entrance's offset from it, and both come from the
+**drawn track** — the `SBWY` display artifact (`data/subway/<city>.bin`), joined to a route by the
+short and long names the two artifacts take from the same `routes.txt`, since `SBWY` carries no
+route id. The nearest point on the route's polyline to the station is the origin and the chord of
+the polyline over **25 m** either side of it is the axis, turned to face the way a direction-0 train
+rides (a drawn shape runs whichever way it was published). An entrance within **8 m** of that axis
+is astride the rails — a station house over the cut, a stair in the middle of a wide avenue — and
+reaches both.
+
+**Measuring from the station's own point will not do**, which is why the track is read at all: the
+feed puts Nevins St over the northeastern pavement rather than between the tracks, so both of its
+northeastern stairs came out within 8 m of a line through the station and reached both platforms,
+where the MTA's own signs send the northeastern pair to the Manhattan-bound platform alone. A
+station whose routes have no drawn shape falls back to the ride through the station point, which is
+coarser but never unavailable.
+
+Read against OpenStreetMap's own transcription of the sign text (1,031 `railway=subway_entrance`
+nodes carrying a `description`, matched within 15 m and compared with the
+`north_direction_label`/`south_direction_label` of data.ny.gov `39hk-dx4f`), the rule agrees with
+the sign on **314 of the 316** entrances the signs decide at split stations; the other 2 are the
+overrides file. BART needs none of this: every BART station has a paid mezzanine spanning both
+platforms, so its entrances serve both sides.
+
+Header, 64 bytes, little-endian; coordinates quantized to `COORD_SCALE` (1e-6°) about a south-west
 origin, exactly the shared codec:
 
 | offset | type | field |
 | --- | --- | --- |
 | 0 | u8[4] | magic `TRNS` |
-| 4 | u16 | format version = 1 |
-| 6 | u16 | header bytes = 56 |
+| 4 | u16 | format version = 2 |
+| 6 | u16 | header bytes = 64 |
 | 8 | u32 | station count S |
 | 12 | u32 | route count R |
 | 16 | u32 | pattern count P |
@@ -2255,11 +2336,13 @@ origin, exactly the shared codec:
 | 40 | f64 | coordinate scale, degrees per quantized unit |
 | 48 | u32 | name table offset, from the start of the file |
 | 52 | u32 | total bytes |
+| 56 | u32 | entrance count E |
+| 60 | u32 | pad |
 
-Then the **station table** (S × 16), the **route table** (R × 12) and the **pattern table**
-(P × 16), back to back after the header, so their offsets are implicit (`56`, `56 + 16·S` and
-`56 + 16·S + 12·R`); the pattern-stop blob follows them and the name table carries an explicit
-offset.
+Then the **station table** (S × 16), the **entrance table** (E × 16), the **route table** (R × 12)
+and the **pattern table** (P × 16), back to back after the header, so their offsets are implicit
+(`64`, `64 + 16·S`, `64 + 16·S + 16·E` and `64 + 16·S + 16·E + 12·R`); the pattern-stop blob follows
+them and the name table carries an explicit offset.
 
 Station record, 16 bytes — sorted south to north, then west to east, then by name:
 
@@ -2269,8 +2352,21 @@ Station record, 16 bytes — sorted south to north, then west to east, then by n
 | 4 | i32 | latitude, quantized |
 | 8 | u32 | station name id, an index into the name table |
 | 12 | u16 | complex id, from 1 — the component of the feed's own `transfers.txt` this station is in, or **0** where the feed publishes no station-to-station transfer |
-| 14 | u8 | flags: **bit 0 = surface**, a station entered off the pavement rather than down a stair |
+| 14 | u8 | flags: **bit 0 = surface**, a station entered off the pavement rather than down a stair; **bit 1 = split**, no free crossover, so the graph gives it a node per direction. Never set on a station sharing a complex |
 | 15 | u8 | pad |
+
+Entrance record, 16 bytes — ordered by station, then west to east:
+
+| offset | type | field |
+| --- | --- | --- |
+| 0 | i32 | longitude, quantized |
+| 4 | i32 | latitude, quantized |
+| 8 | u16 | station index |
+| 10 | u8 | sides: **bit d** = it reaches the platform of pattern direction d; **3** = both, which is every entrance of a station that is not split |
+| 11 | u8 | kind: 0 stair, 1 escalator, 2 elevator, 3 ramp, 4 station house, 5 passage (an easement, walkway, underpass or overpass — a corridor rather than a descent) |
+| 12 | u8 | flags: bit 0 = a rider may enter here, bit 1 = a rider may leave here |
+| 13 | u8 | pad |
+| 14 | u16 | name id, `0xFFFF` — the slot a door's own wording would go in, which nothing writes yet |
 
 Route record, 12 bytes — routes are ordered by id, which is the display ingest's id for the same
 line (`A`, `muni:N`, `bart:Yellow`), so the two artifacts can be joined on it:
@@ -3397,7 +3493,7 @@ entry, so the two cannot disagree about padding.
 | 11 | street name id into the name table (0xFFFF = unnamed) | u16 | E |
 | 12 | **duration seconds**: a ferry's crossing-plus-wait, or a transit edge's walk or ride; 0 for every walking kind and for a board edge, whose wait is the timetable's to answer | u16 | E |
 | 13 | kind and side: bits 0–2 kind (0 sidewalk, 1 crossing, 2 link, 3 path, 4 ferry, 5 access, 6 board, 7 ride — the last three are transit, below); bits 3–5 side (0 none, 1 N, 2 E, 3 S, 4 W) | u8 | E |
-| 14 | flags: bit0 structure, bit1 steps, bit2 **geometry-right** (this sidewalk lies right of its stored geometry direction; clear = left), bit3 **OSM** (this edge came from the conflated OSM path network), bit4 **tunnel** (under a deck rather than on one: a tunnel street, a way OSM tags `tunnel`/`covered=yes`, or a sidewalk or crossing conflated to one) | u8 | E |
+| 14 | flags: bit0 structure, bit1 steps, bit2 **geometry-right** (this sidewalk lies right of its stored geometry direction; clear = left), bit3 **OSM** (this edge came from the conflated OSM path network), bit4 **tunnel** (under a deck rather than on one: a tunnel street, a way OSM tags `tunnel`/`covered=yes`, or a sidewalk or crossing conflated to one). On an **access** edge, which carries none of the walking bits, the top three describe the door instead: bit5 **exit-only** (traversable from node a, the station, and not into it), bit6 **entry-only** (the reverse), bit7 **elevator** (a lift rather than a stair, which is also the only kind whose base seconds differ). A graph written before them reads 0, which is a two-way stair. On a **ride** edge, which carries none of either set, bit6 means **stay aboard**: this ride is the free one-way step from a stop's arrival node onto its boarding node | u8 | E |
 | 15 | cover, 0–254, this edge's own single value; 0 for a ferry and every transit kind | u8 | E |
 | 16 | landmark amenity, 0–254 (a discount attribute; 0 for a timed kind) | u8 | E |
 | 17 | public-art amenity, 0–254 (a discount attribute; 0 for a timed kind) | u8 | E |
@@ -3412,7 +3508,7 @@ entry, so the two cannot disagree about padding.
 | 26 | **source id**: the CSCL physicalid, or the OSM way id for a conflated path; `0xFFFFFFFF` = no durable identity | u32 | E |
 | 27 | **ordinal**: how many earlier edges share this edge's (source id, side) pair; 0 where there is no source id | u8 | E |
 | 28 | **ferry edge ids**, ascending — what the A* ferry credit reads (NYC 36) | u32 | F |
-| 29 | **transit edge ids**, ascending: every access, board and ride edge (NYC 12,558) | u32 | T |
+| 29 | **transit edge ids**, ascending: every access, board and ride edge, the stay-aboard edges among the rides (NYC 20,932) | u32 | T |
 | 30 | **board edge ids**, ascending: the board subset on its own, which is what the transit credit and the mode gating read (NYC 4,084) | u32 | B |
 | 31 | **name table**: `u32 count`, then (count+1) × u32 byte offsets into the following UTF-8 blob, then the blob. Only the names the kept edges reference, re-indexed; offsets make client access O(1) | | |
 | 32 | **geometry blob**: one entry per sidewalk edge (its own baked corner-to-corner offset), per path edge, and per shape-carrying ferry edge — `vertex count` (longitude, latitude) zigzag-LEB128 varint delta pairs. The **first pair is the absolute quantized position** (delta from the graph origin); the rest are from the previous vertex. Crossings, links, and straight ferry edges carry none | | |
@@ -3497,20 +3593,61 @@ route cross it.
 graph, and it is the one thing here that adds NODES. A ferry rides between two walking nodes; a train
 cannot, because a rider's wait belongs to one line running one way and not to the station. So each
 **transfer complex** becomes a node of its own — one node for the whole of Times Sq, and one per
-station where the feed publishes no complex — standing at its members' centroid and joined to its
-nearest walking node (250 m, the pier's reach — a station point is a mezzanine, not a street door) by
-an **access** edge; each stop of each stop pattern becomes a **platform** node standing on the stop
-its own line calls at; a **board** edge joins the complex's node to the platform, an access edge
-joins the platform back to it, and a **ride** edge joins one platform to the next. A transfer
-therefore needs no edge of its own, and a transfer *inside* a complex never reaches the street:
-alight, and board again. A complex with no walking node in range is dropped with a counted warning,
+station where the feed publishes no complex — standing at its members' centroid; each stop of each
+stop pattern becomes a **platform**, standing on the stop its own line calls at; a **board** edge
+joins the station node to the platform, an **access** edge joins the platform back to it, and a
+**ride** edge joins one stop's platform to the next's. A transfer therefore needs no edge of its own, and a
+transfer *inside* a complex never reaches the street: alight, and board again.
+
+Each side of a station stands on **two nodes at the one point**: the ENTRY, which every door leads in
+to and every board edge leaves from, and the EXIT, which every alight lands on and every door leads
+out of. The only edge between them runs exit → entry, free, and is the change of train. So a door in
+and a door out again is not a walk anyone can make — which on one node it was, and a station whose
+doors straddled an avenue was a free underpass the router took whenever the crossing was dearer.
+
+**Each platform stands on two nodes at the one point as well**, for the same reason one level down:
+the BOARDING node, which the board edge lands on and the ride out leaves from, and the ARRIVAL node,
+which the ride in lands on and the alight leaves from. Between them runs a free one-way **stay
+aboard** edge, arrival → boarding, which is a rider keeping their seat. So the shortest way across a
+platform is a board, a ride of at least one stop, and an alight: boarding a train to step straight
+off it at the same stop — which on one platform node bought the same underpass for the price of a
+wait, a boarding constant and 30 s — is not a path the graph contains. The stay-aboard edge is of the
+**ride** kind and carries **bit 6** of the flags byte, the bit an access edge spends on entry-only;
+the edge's kind is what tells the two meanings apart, and no side-table row or kind code moved for
+it. It carries no name, no route and no seconds, and the client (`isStayAboard` in
+`src/routing/graph.ts`) drops it from the maneuvers, from a leg's stop count and from the route line.
+
+The client marks a **platform node** — the pair of them — from the board edges' far ends and both
+ends of every ride edge, the stay-aboard edge included, since that is what tells an alight edge from
+the walk out of a station: both are access edges, and only the alight may not be walked backwards.
+
+A station **splits into two sides** — side 0 and side 1, both at the feed's own point, with no edge
+between them — where TRNS flags it as having no free crossover, which is only ever a station standing
+outside any complex. A pattern boards from and alights to the side of its GTFS `direction`, which at
+every feed here is the platform side, so going down the wrong stair costs what it costs a rider: back
+up, across the street, and in again. A side with no way IN — 145 St on the Lenox line publishes four
+doors for one of its platforms and every one of them opens outwards — would be a platform a rider
+could leave and never board, so that group stands on ONE side after all, carrying every door it has.
+
+The station meets the street at its **published entrances**: each TRNS entrance row projects onto the
+single nearest sidewalk or path (250 m, the pier's reach), that edge is cut at the foot, and an
+access edge runs from each side node the entrance's `sides` mask names to the cut — two of them for a
+two-way door, one into the entry and one out of the exit, each flagged with its direction. A group no
+published entrance can be walked INTO — a station the agency lists none for, and one whose every
+listed door opens outwards — falls back to the station's own point projected onto *every* walking
+edge within 40 m, capped at the six nearest, which is a door mid-block rather than whichever corner a
+single snap happened to find. Doors that land on one walking node with the same kind and the same
+directions are one way in, priced at the cheapest of them; a lift beside an exit-only stair stays two.
+A complex with no walking node in range is dropped with a counted warning,
 and a pattern rides straight past it, since its stop-to-stop seconds are differences of offsets from
 the pattern's first stop.
 
 All three kinds carry their **seconds in the duration column**, exactly as a ferry carries its
 crossing:
-90 s for the walk into a station the feed models as an enclosed place, 30 s into one whose every
-member is a stop on the pavement (the TRNS `surface` flag), 30 s for every walk back out, the
+90 s for the walk into a station the feed models as an enclosed place, **150 s through an
+elevator** (call, wait and ride — it must not undercut the stair beside it), 30 s into one whose
+every member is a stop on the pavement (the TRNS `surface` flag), plus in each case the walk from the
+station point out to that door at 1.3 m/s; 30 s for every walk back out, the
 pattern's own stop-to-stop figure for a ride, and **0 for a board** — what a board costs is the wait,
 which is a function of the clock and comes from `public/transit-schedule/` at route time, not from
 the graph. A board or an alight inside a complex spans the passage between two of its platforms, and
@@ -3537,12 +3674,17 @@ San Francisco stood to be re-priced by that alone.
    the graph pass adds them to the kept-name set and remaps them alongside the edge names. A later
    phase reads the destination terminal from here (`node b` when the ferry is ridden a → b).
 
-**Transit side tables** (section 34), three counted tables back to back. First the **route table**: `u32 count`, then per route 12 bytes — `u8[3]`
+**Transit side tables** (section 34), four counted tables back to back. First the **route table**: `u32 count`, then per route 12 bytes — `u8[3]`
    `route_color`, `u8[3]` `route_text_color`, and `u16` name ids for the short name, the long name
    and the feed's route id, all three into the name table and rescued into it the way the ferry
    stop names are. Then the **board table**: `u32 count`, then per board edge (`u32 edge id`, `u32`
    **lane id**, `u16 route index`, `u16` **stop index**). Then the **ride table**: `u32 count`, then
-   per ride edge (`u32 edge id`, `u16 route index`, `u16` pad). The lane id is TRNS's own — FNV-1a
+   per ride edge (`u32 edge id`, `u16 route index`, `u16` pad). Then the **door table**: `u32 count`,
+   then per street door (`u32 edge id`, `u16 street name id`, `u8 side`, `u8` pad) — the name and the
+   N/E/S/W label of the pavement that door was cut into, which is what a maneuver names it by ("by
+   the stair on the east side of Flatbush Av"). A door onto an unnamed path has no row, and neither
+   does an alight or a change of train; a graph written before the table simply ends after the ride
+   table, and a reader that runs out of section reads every door as unnamed. The lane id is TRNS's own — FNV-1a
    over the route, the direction and the station names — so the graph and a timetable published days
    later agree about which departures a board edge waits for without either reading the other. The
    stop index is this platform's position in the pattern as the FEED lists it, which is what TSCH's
