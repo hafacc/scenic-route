@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { coversACity, fileRequest, isGraph, shadeKey } from "./policy";
+import { coversACity, fileRequest, isGraph, pageFor, shadeKey } from "./policy";
 
 // A deploy under a basePath, which is the only shape that ever runs in production — the worker's
 // scope is its own directory and every path it files is relative to that.
@@ -10,10 +10,11 @@ test("the exported app goes in the shell store", () => {
     "",
     "index.html",
     "manifest.webmanifest",
+    // Reachable both as the path a link names and as the file the export wrote.
+    "explorer",
+    "explorer.html",
     "_next/static/chunks/main-abc123.js",
-    // The routing worker is one more content-hashed chunk under here, fetched by a Worker rather
-    // than by the document — the one thing in the shell whose absence offline would show up as a
-    // route that never appears rather than as a page that never loads.
+    // The routing worker is one more content-hashed chunk, fetched by a Worker not by the document.
     "_next/static/chunks/7kq3ldz9wcvbt.js",
     "icons/icon-512.png",
   ]) {
@@ -199,4 +200,12 @@ test("no outside host is cached to name a point", () => {
       SCOPE,
     ),
   ).toBeNull();
+});
+
+test("a navigation to explorer is answered by explorer's own page", () => {
+  expect(pageFor("explorer")).toBe("explorer.html");
+  expect(pageFor("explorer.html")).toBe("explorer.html");
+  for (const path of ["", "index.html", "404.html"]) {
+    expect(pageFor(path)).toBe("index.html");
+  }
 });

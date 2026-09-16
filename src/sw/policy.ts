@@ -77,9 +77,25 @@ export function coversACity(
 // is the exact opposite of what should happen.
 const KEPT_DIRS = ["routing/", "addresses/", "search/"];
 
-// The exported app itself, as against the data it reads.
-const SHELL_FILES = ["", "index.html", "404.html", "manifest.webmanifest"];
+// The exported app itself, as against the data it reads. Explorer's document is a file beside the
+// root one, not a directory index: the app's data paths are relative to the document.
+const EXPLORER_PAGE = "explorer.html";
+const SHELL_FILES = [
+  "",
+  "index.html",
+  "404.html",
+  "manifest.webmanifest",
+  "explorer",
+  EXPLORER_PAGE,
+];
 const SHELL_DIRS = ["_next/", "icons/"];
+
+// Every path but Explorer's is the root document, 404 included: it is the app's own not-found page.
+export function pageFor(path: string): string {
+  return path === "explorer" || path === EXPLORER_PAGE
+    ? EXPLORER_PAGE
+    : "index.html";
+}
 
 // One request, as the worker files it: the path relative to the worker's scope, and the store it
 // belongs in. Null for anything the worker does not handle, which it then leaves entirely alone —
