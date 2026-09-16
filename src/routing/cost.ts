@@ -858,16 +858,6 @@ export function walkSecondsCoeff(
   );
 }
 
-// The most seconds a route can save by riding ferries instead of walking their spans, bounded to the
-// two best ferries. Per ferry, shortcut = max(0, walk-time of its span - its effective time); summing
-// the two largest covers any route using <= 2 ferries (every realistic NYC ferry OD). Subtracting it
-// from the walking heuristic keeps A* admissible without letting a many-ferry fantasy path make the
-// estimate exceed the truth. Zero when ferries are barred or the graph has none.
-//
-// Against a timetable the ferry's cost depends on when the walker reaches the terminal, so the bound
-// has to be its cost at the LUCKIEST arrival: the quickest sailing, boarded with no wait at all.
-// That is looser than the truth — the credit only ever grows, which shrinks the heuristic — so the
-// estimate stays a lower bound and the search stays optimal, at the price of expanding more nodes.
 // The most seconds a route can save by riding instead of walking: per transit edge, the walking
 // floor for its span less the least that edge can cost, summed over EVERY one of them in the city.
 //
@@ -916,6 +906,22 @@ export function transitCredit(
   return credit;
 }
 
+// The most seconds a route can save by riding instead of walking the water: per ferry edge, the
+// walking floor for its chord less the least that crossing can cost, summed over EVERY ferry edge in
+// the city. Zero when ferries are barred or the graph has none.
+//
+// Why the sum is over all of them, and why it is admissible. The heuristic is
+// `coeff × straight-line − credit`, and the straight line is at most the length of any path, so it is
+// enough that the credit covers `Σ (coeff × length − cost)` over that path's edges. A walked edge's
+// term is at most 0 by the definition of `coeff`; a crossing's is what a boat is for. Every ferry
+// edge is in this sum, every term is non-negative, and the path's crossings are a subset of the
+// city's, so the sum is at least the path's saving whatever chain of hops it rides. A multi-stop line
+// is one edge per pier-to-pier hop, which is what a bound on the two largest shortcuts missed: three
+// hops can save more than the best two.
+//
+// The wait is taken as zero and the crossing priced at the quickest sailing the timetable holds — a
+// true lower bound over every departure time, and one that only makes the credit looser, so the
+// estimate stays a lower bound at the price of expanding more nodes.
 export function ferryCredit(
   graph: RoutingGraph,
   weights: RouteWeights,
@@ -925,24 +931,14 @@ export function ferryCredit(
   }
   const coeff = walkSecondsCoeff(graph, weights);
   const discount = ferryCrossingDiscount(weights);
-  let bestShortcut = 0;
-  let secondShortcut = 0;
+  let credit = 0;
   for (const edge of graph.ferryEdges) {
     const quickest = graph.ferries?.covers(edge)
       ? graph.ferries.minRideSeconds(edge)
       : graph.edgeDurationSeconds[edge];
-    const shortcut = Math.max(
-      0,
-      coeff * graph.edgeLength[edge] - quickest * discount,
-    );
-    if (shortcut > bestShortcut) {
-      secondShortcut = bestShortcut;
-      bestShortcut = shortcut;
-    } else if (shortcut > secondShortcut) {
-      secondShortcut = shortcut;
-    }
+    credit += Math.max(0, coeff * graph.edgeLength[edge] - quickest * discount);
   }
-  return bestShortcut + secondShortcut;
+  return credit;
 }
 
 // The least seconds ANY metre of the network can cost, whatever it is travelled by. The two credits
@@ -952,9 +948,10 @@ export function ferryCredit(
 // which is a lower bound on the trip in its own right — a path is at least as long as the straight
 // line, and no metre of it is cheaper than this.
 //
-// A board edge is left out. Its cost is a wait, which nothing bounds below per metre, so including
-// it would drop the floor to zero; what that costs instead is the slack of one floor's worth of the
-// passage inside a transfer complex, tens of seconds on a trip that changes trains twice.
+// A board edge that spans anything is in it too, at the boarding constant over its length: the wait
+// on top of that is at least zero, so the constant alone bounds the edge below. Most board edges
+// stand on their station and span nothing at all; the ones that do are the passage inside a transfer
+// complex, up to 251 m of it in New York.
 export function heuristicFloor(
   graph: RoutingGraph,
   weights: RouteWeights,
@@ -975,11 +972,18 @@ export function heuristicFloor(
     }
   }
   if (weights.allowTransit && graph.transit !== null) {
+    const multiplier = transitMultiplier(weights);
     floor = Math.min(
       floor,
-      graph.minRideSecPerMetre * transitMultiplier(weights),
+      graph.minRideSecPerMetre * multiplier,
       graph.minAccessSecPerMetre,
     );
+    for (const edge of graph.boardEdges) {
+      const length = graph.edgeLength[edge];
+      if (length > 0) {
+        floor = Math.min(floor, (BOARDING_SECONDS * multiplier) / length);
+      }
+    }
   }
   return floor;
 }

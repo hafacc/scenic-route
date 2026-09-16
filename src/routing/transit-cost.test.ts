@@ -9,9 +9,11 @@ import {
   BOARDING_SECONDS,
   boardSeconds,
   effSeconds,
+  heuristicFloor,
   MAX_TRANSIT_WEIGHT,
   type RouteWeights,
   rawSeconds,
+  transitMultiplier,
   WALK_METERS_PER_SECOND,
 } from "./cost";
 import { buildDirections } from "./directions";
@@ -35,6 +37,7 @@ import {
   fixtureTimetable,
   HEADWAY,
   LAST_DEPARTURE,
+  PLATFORM_SETBACK_METERS,
   RIDE_EDGE,
   RIDE_SECONDS,
   ROUTE_SHORT_NAME,
@@ -446,4 +449,28 @@ test("shelter is a mean over the trip's seconds, and a ride is all of them cover
     transitWeights({ transit: MAX_TRANSIT_WEIGHT }),
   );
   expect(walked?.factors.shelter).toBe(0);
+});
+
+test("the floor stays under a board edge that spans a transfer complex", () => {
+  const graph = transitGraph(undefined, { setback: true });
+  graph.transit = fixtureTimetable(departureAt(FIRST_DEPARTURE));
+  const length = graph.edgeLength[WEST_BOARD];
+  expect(length).toBeCloseTo(PLATFORM_SETBACK_METERS, 0);
+  for (const shelter of [0, 0.5, 0.6, 0.9]) {
+    const weights = transitWeights({ shelter });
+    // The least a board edge can cost per metre: the boarding constant, since the wait on top of it
+    // is at least zero, priced the way a ride is.
+    const cheapest = (BOARDING_SECONDS * transitMultiplier(weights)) / length;
+    expect(
+      heuristicFloor(graph, weights),
+      `shelter=${shelter}`,
+    ).toBeLessThanOrEqual(cheapest);
+  }
+  // Past half a shelter weight the passage is the cheapest metre in the graph, so the floor is it:
+  // the bound would be broken rather than merely loose if board edges were left out.
+  const strong = transitWeights({ shelter: 0.9 });
+  expect(heuristicFloor(graph, strong)).toBeCloseTo(
+    (BOARDING_SECONDS * transitMultiplier(strong)) / length,
+    9,
+  );
 });
