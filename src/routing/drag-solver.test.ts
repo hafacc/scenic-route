@@ -81,7 +81,7 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
   const edgeLength = new Float32Array(edgeCount);
   const edgeCover = new Uint8Array(edgeCount);
   const edgeKindSide = new Uint8Array(edgeCount);
-  const edgeDurationSeconds = new Float32Array(edgeCount);
+  const edgeDurationSeconds = new Uint16Array(edgeCount);
   const edgeNameId = new Uint16Array(edgeCount).fill(NAME_NONE);
   const edgeGeomOffset = new Uint32Array(edgeCount).fill(NO_GEOMETRY);
   const edgeGeomCount = new Uint16Array(edgeCount);

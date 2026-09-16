@@ -40,9 +40,9 @@ import {
 import { shedShade } from "./sheds";
 import {
   edgeGrade,
+  edgeWalkSeconds,
   maxSpeedFactor,
   WALK_METERS_PER_SECOND,
-  walkSecondsOf,
 } from "./walk-speed";
 
 // The walking-speed model lives in ./walk-speed so the graph can bake its seconds without reaching
@@ -672,17 +672,14 @@ export function rawSeconds(
   }
 }
 
-// The baked seconds to walk one whole edge, entered at `fromNode`. A partial walk — the two end
-// edges of a route — is not this: it is its own length over the edge's speed.
+// The seconds to walk one whole edge, entered at `fromNode`. A partial walk — the two end edges of
+// a route — is not this: it is its own length at the same seconds per metre.
 function walkedSeconds(
   graph: RoutingGraph,
   edge: number,
   fromNode: number,
 ): number {
-  const baked = walkSecondsOf(graph);
-  return edgeForward(graph, edge, fromNode)
-    ? baked.forward[edge]
-    : baked.backward[edge];
+  return edgeWalkSeconds(graph, edge, edgeForward(graph, edge, fromNode));
 }
 
 // Both prices of one step: what the search costs it at, and what the walker's clock advances by.

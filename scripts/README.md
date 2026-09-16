@@ -264,12 +264,12 @@ in its own band.
 | highways | OSM limited-access highways (`motorway`/`trunk` + ramps) and above-ground rail (surface, open cut, or elevated — anything not `tunnel`), via Overpass | the lines walking near is unpleasant, as polylines; a committed source, magic `HWAY` — proximity to it is a per-edge routing *penalty*; never itself routed; see "Binary layouts" |
 | buildings | **NYC**: NYC Building Footprints, Socrata `5zhs-2jue` (`feature_code=2100` with a positive `height_roof`, feet→metres). **SF**: DataSF `ynuv-fyni`, whose rows carry their own LiDAR height (`hgt_median_m`) and ground (`gnd_min_m`). **East Bay**: Overture's footprints (ODbL) with the heights `tiler ndsm` measures off the 2021 county LiDAR, merged by `scripts/east-bay-buildings.ts` | 867,920 footprints in New York and 426,509 in the Bay Area, each with its roof height; a committed source, magic `BLDG` — the walls the **building-shade** factor raises to cast shadows, for both the shade overlay pyramid and the signed per-edge shade routing bake; see "Binary layouts" and "The LiDAR building surface" |
 | landuse | NYC PLUTO, Socrata `64uk-42ks` (lots with `landuse` 1..5) | 788,591 tax lots, each with a land-use class byte; a committed source, magic `PLUT` — the commercial-vs-residential signal for the **commercial-area** overlay; see "Binary layouts" |
-| industrial | **NYC**: PLUTO's tax-lot polygons, DCP's MAPPLUTO ArcGIS FeatureServer (`services5.arcgis.com/.../MAPPLUTO/FeatureServer/0`), `LandUse = '06'`. **SF**: DataSF Land Use `c5ge-t6pj` + Zoning `3i4a-hu95`, the rule in `scripts/sf.ts`. **East Bay**: Alameda County's assessor parcels (`services5.arcgis.com/.../Parcels/FeatureServer/0`), `UseCode` in the 4xxx industrial band, plus MTC/SFEI Existing Land Use 2020 for the tax-exempt land no roll carries (`scripts/alameda.ts`) | industrial land as **polygons** — 9,295 lots in New York and 6,269 parcels in the Bay Area (2,573 in San Francisco, 3,696 in the East Bay); a committed source, magic `INDL` — drawn as an overlay so the region's industrial land can be seen, and sampled per edge into the graph's industrial-frontage penalty (GRPH byte 36). New York's geometry has to come from ArcGIS: the Socrata copy of PLUTO is lot centroids and its `geom` column is null on every row. See "Binary layouts" |
-| historic | **NYC**: LPC **Historic Districts** ArcGIS FeatureServer (`services5.arcgis.com/Oos4pNA2538iVFA1/.../Historic_Districts/FeatureServer/0`). **SF**: DataSF **Historic Districts** `63x5-g3m4`, filtered to `a10='Listed' OR a11='Listed'`. **East Bay**: Oakland's `HistoricDistrict_API_shp` and the S-7/S-20 preservation combining zones (`services.arcgis.com/9tC74aDHuml0x5Yz`); Berkeley publishes none | the designated historic districts as **polygons** — whole landmarked neighbourhoods (Park Slope, Brooklyn Heights, Greenwich Village …; Jackson Square, Telegraph Hill, Alamo Square …; Old Oakland, Preservation Park, the Lake Merritt shore …), not the individual buildings `landmarks` carries; 159 districts in New York, 89 in the Bay Area (23 in San Francisco, 66 in the East Bay); a committed source, magic `HDST` — drawn as an overlay, and sampled per edge into the graph's historic-district discount (GRPH byte 37). Each place's obvious copy is a decoy: see "Binary layouts" |
+| industrial | **NYC**: PLUTO's tax-lot polygons, DCP's MAPPLUTO ArcGIS FeatureServer (`services5.arcgis.com/.../MAPPLUTO/FeatureServer/0`), `LandUse = '06'`. **SF**: DataSF Land Use `c5ge-t6pj` + Zoning `3i4a-hu95`, the rule in `scripts/sf.ts`. **East Bay**: Alameda County's assessor parcels (`services5.arcgis.com/.../Parcels/FeatureServer/0`), `UseCode` in the 4xxx industrial band, plus MTC/SFEI Existing Land Use 2020 for the tax-exempt land no roll carries (`scripts/alameda.ts`) | industrial land as **polygons** — 9,295 lots in New York and 6,269 parcels in the Bay Area (2,573 in San Francisco, 3,696 in the East Bay); a committed source, magic `INDL` — drawn as an overlay so the region's industrial land can be seen, and sampled per edge into the graph's industrial-frontage penalty (the GRPH industrial column). New York's geometry has to come from ArcGIS: the Socrata copy of PLUTO is lot centroids and its `geom` column is null on every row. See "Binary layouts" |
+| historic | **NYC**: LPC **Historic Districts** ArcGIS FeatureServer (`services5.arcgis.com/Oos4pNA2538iVFA1/.../Historic_Districts/FeatureServer/0`). **SF**: DataSF **Historic Districts** `63x5-g3m4`, filtered to `a10='Listed' OR a11='Listed'`. **East Bay**: Oakland's `HistoricDistrict_API_shp` and the S-7/S-20 preservation combining zones (`services.arcgis.com/9tC74aDHuml0x5Yz`); Berkeley publishes none | the designated historic districts as **polygons** — whole landmarked neighbourhoods (Park Slope, Brooklyn Heights, Greenwich Village …; Jackson Square, Telegraph Hill, Alamo Square …; Old Oakland, Preservation Park, the Lake Merritt shore …), not the individual buildings `landmarks` carries; 159 districts in New York, 89 in the Bay Area (23 in San Francisco, 66 in the East Bay); a committed source, magic `HDST` — drawn as an overlay, and sampled per edge into the graph's historic-district discount (the GRPH historic column). Each place's obvious copy is a decoy: see "Binary layouts" |
 | dining | NYC Dining Out `fpeh-f7ci` + OSM `outdoor_seating` via Overpass | outdoor-dining points; a committed source, magic `DINE` — a "cute" signal for the commercial overlay |
 | openstreets | NYC DOT Open Streets `uiay-nctu` (non-school), sampled every ~10 m | Open Streets corridor points; a committed source, magic `OSTR` — a "cute" signal for the commercial overlay |
 
-The commercial overlay's per-segment signals are then precomputed at **build time** by the commercial pass (run after the chunks pass): it snaps `landuse`/`buildings`/`dining`/`openstreets` onto each street segment by *frontage* (perpendicular, projection in-span) and writes `public/commercial/{x}/{y}.bin` (magic `CMRC`, 3 bytes/segment: commercial fraction, median roof height, flags for open-street/seating), one file per `STCK` chunk, gitignored. The overlay reads those and applies the gate (>50% commercial AND low-rise AND (open-street OR seating)) client-side, so its thresholds stay tunable without a rebuild. The **same gate** also runs at build time to emit the qualifying blocks' centrelines as `public/commercial-lines/<id>.bin` (magic `CMLN`, the `HWAY` single-ring-polygon layout, gitignored), which the graph pass proximity-bakes into the per-edge commercial routing discount (GRPH byte 27).
+The commercial overlay's per-segment signals are then precomputed at **build time** by the commercial pass (run after the chunks pass): it snaps `landuse`/`buildings`/`dining`/`openstreets` onto each street segment by *frontage* (perpendicular, projection in-span) and writes `public/commercial/{x}/{y}.bin` (magic `CMRC`, 3 bytes/segment: commercial fraction, median roof height, flags for open-street/seating), one file per `STCK` chunk, gitignored. The overlay reads those and applies the gate (>50% commercial AND low-rise AND (open-street OR seating)) client-side, so its thresholds stay tunable without a rebuild. The **same gate** also runs at build time to emit the qualifying blocks' centrelines as `public/commercial-lines/<id>.bin` (magic `CMLN`, the `HWAY` single-ring-polygon layout, gitignored), which the graph pass proximity-bakes into the per-edge commercial routing discount (the GRPH commercial column).
 
 Only walkable road types are kept. Highways, ramps, driveways, ferry routes, u-turns and
 non-physical segments are not part of the network a person walks. Bridges and tunnels come in
@@ -1567,7 +1567,7 @@ Filled even-odd, so a multipolygon's inner rings punch holes; the polygons are f
 a time, so two overlapping polygons do not cancel each other out. The land mask is needed at
 ingest (the population the cover distribution is taken over), at tile time (the clip that keeps
 canopy from bleeding over water) and in the graph pass (the share of a bridge deck that is over
-water, GRPH byte 38), so it is committed rather than fused into anything.
+water, the GRPH bridge column), so it is committed rather than fused into anything.
 
 ### `data/canopy/<id>.bin` — the measured LiDAR canopy, magic `CNPY` (v2)
 
@@ -1745,7 +1745,7 @@ East Bay, 6,269 for the region, 6,276 records, 0.32 MiB.
 
 Two things read it. The client, served verbatim as `public/industrial/<id>.bin` by
 `serve-sources.ts`, fills every lot in one colour for the overlay. And the **graph pass** samples it
-into the per-edge industrial byte (GRPH byte 36, `crates/tiler/src/industrial.rs`): every edge's own
+into the per-edge industrial byte (the GRPH industrial column, `crates/tiler/src/industrial.rs`): every edge's own
 polyline is walked a metre at a time and each sample probes 15 m to either side, a side scoring half
 where its probe lands in a lot or within 12 m of one, so the byte is the length-fraction of the walk
 fronting industrial land and a street with yards on both sides reads exactly twice one with yards on
@@ -1848,7 +1848,7 @@ polygons and never asks.
 
 Two things read it. The client, served verbatim as `public/historic/<id>.bin` by
 `serve-sources.ts`, which fills every district in one colour for the overlay. And the graph pass,
-which bakes it into the per-edge historic byte (GRPH byte 37, `crates/tiler/src/historic.rs`): every
+which bakes it into the per-edge historic byte (the GRPH historic column, `crates/tiler/src/historic.rs`): every
 edge's own polyline is walked a metre at a time and each sample is tested UNDERFOOT, so the byte is
 the length-fraction of the walk that falls inside a designated district. Deliberately not
 `industrial.rs`'s sideways probes, though both read polygons — those exist because a walker is never
@@ -1869,7 +1869,7 @@ unsigned range — recover it as `decimetres / 10 − 100`. A building whose foo
 MultiPolygon expands to several polygon records, each repeating that building's height and base, so both
 regions stay parallel to the polygons. Written by `encodeBuildings`. The shade pass reads the heights
 for the shadow pyramid and the graph pass for the per-edge shade bake (the `SHDB` artifact, not the
-GRPH edge record); the base elevations are still unread — folding them in would make the casters
+GRPH columns); the base elevations are still unread — folding them in would make the casters
 terrain-aware, and bare-earth self-shadowing (hills/parks with no buildings) would need the separate
 1-ft LiDAR DEM.
 
@@ -3132,7 +3132,7 @@ This pyramid is **lossless** WebP where the canopy one is lossy: a lossy encode 
 but stores the two chroma planes at quarter resolution, measured 18-22 off, and here R and G are
 data.
 
-### `public/routing/{id}.bin` — the routing graph, magic `GRPH` (v11, derived, gitignored)
+### `public/routing/{id}.bin` — the routing graph, magic `GRPH` (v12, derived, gitignored)
 
 The graph pass contracts STRT into the graph the client routes on, then expands it into the edges a
 walker actually uses. For a city carrying a PATH layer it first **conflates** the OSM pedestrian/park
@@ -3328,73 +3328,97 @@ primary-route name, and its two terminal stop names are recorded in the byte-60 
 component. Components are labelled by size descending (0 = largest). Every edge length is at least
 its straight-line node distance (clamped up if not; `lengthClamped`). Everything little-endian.
 
-Header, 64 bytes:
+Header, 64 fixed bytes then a **section directory**, 640 bytes in all:
 
 | offset | type | field |
 | --- | --- | --- |
 | 0 | u8[4] | magic `GRPH` |
-| 4 | u16 | format version = 11 |
-| 6 | u16 | header bytes = 80 |
+| 4 | u16 | format version = 12 |
+| 6 | u16 | header bytes = 640 |
 | 8 | u32 | node count N |
 | 12 | u32 | edge count E |
 | 16 | f64 | origin longitude, degrees |
 | 24 | f64 | origin latitude, degrees |
 | 32 | f64 | coordinate scale, degrees per quantized unit (1e-6) |
 | 40 | u32 | component count |
-| 44 | u32 | name table offset, from the start of the file |
-| 48 | u32 | name table length |
-| 52 | u32 | geometry blob offset, from the start of the file |
-| 56 | u32 | geometry blob length |
-| 60 | u32 | ferry endpoint-stop-name side-table offset, from the start of the file (0-length table when the build carried no ferries) |
-| 64 | u32 | transit side-table offset, from the start of the file (all three of its tables empty when the build carried no transit) |
-| 68 | u8[12] | reserved, zero |
+| 44 | u32 | directory entries written (35) |
+| 48 | u8[8] | the column **maxima** as bytes, in order: cover, landmark, art, commercial, direct canopy, industrial, historic, bridge |
+| 56 | u16 | the greatest **relief byte-sum** (ascent + descent, 0–510) any edge carries |
+| 58 | u8 | flags: bit0 **has tunnels** (any edge carries the tunnel bit) |
+| 59 | u8[5] | reserved, zero |
+| 64 | (u32 offset, u32 byteLength, u32 column tag)[48] | the **section directory**; entries 35–47 are zero |
 
-Then the sections, back to back, each starting 4-byte aligned (zero-padded as needed so the client
-can view them as typed arrays without copying):
+The maxima are baked because both threads need them and neither can afford a pass over 640k edges to
+recover eight bytes: a slider is greyed out by them, and the A* lower bound's clip floor is taken from
+them. `maxRelief` is the only one read as a pair-sum rather than a column max, because the hill
+penalty steers by the total grade.
 
-1. **Node longitudes**: N × i32, quantized.
-2. **Node latitudes**: N × i32, quantized.
-3. **Node components**: N × u16 (+2 pad bytes when N is odd).
-4. **CSR offsets**: (N+1) × u32 — node n owns half-edges `[csr[n], csr[n+1])`.
-5. **Adjacency**: 2E × u32 — each entry an **edge id** (the neighbour is the edge's other
-   endpoint, one indirection).
-6. **Edge records**: E × 40 bytes:
+Each directory entry names one section: its byte offset from the start of the file, its length, and
+the **column tag** — FNV-1a 32 over the section's name as the table below spells it (`edgeCover`,
+`geometry`, …). Sections run in directory order, **each starting on an 8-byte boundary** and
+zero-padded to one, so a client can view any of them as a typed array in place — Float64 included. A
+section is found by its POSITION in the directory, so without the tag two same-sized columns written
+in the other order would each be read as the other and misprice every route in silence; the reader
+checks the tag of every section it takes and refuses the file instead. An entry whose offset is 0 is
+**absent** (and carries no tag), and the reader materialises the zero column of the expected count in
+its place: that is how the next per-edge attribute lands with no version bump at all (the reserved
+record bytes gave v10 and v11 the same room), and it is what lets the reader bounds-check every
+section rather than recomputing offsets and hoping. There is room for 48 and no more — the 49th
+entry's bytes are node 0's — so the writer stops the build rather than writing one. The writer
+(`Layout` in `crates/tiler/src/graph.rs`) and the test fixture writer
+(`src/routing/graph-bytes.fixture.ts`) both append through one helper that pads, tags and records the
+entry, so the two cannot disagree about padding.
 
-| offset | type | field |
-| --- | --- | --- |
-| 0 | u32 | node a |
-| 4 | u32 | node b |
-| 8 | f32 | length, metres (≥ the straight-line node distance) |
-| 12 | u32 | geometry offset within the blob; **0xFFFFFFFF = no geometry** (straight a→b) |
-| 16 | u16 | geometry vertex count (0 when no geometry) |
-| 18 | u16 | street name id into the name table (0xFFFF = unnamed) |
-| 20 | u8 | cover, 0–254, this edge's own single value (**ferry**: low byte of the u16 duration at 20–21) |
-| 21 | u8 | half-offset to the sidewalk, decimetres (sidewalk kind only; else 0) (**ferry**: high byte of the duration) |
-| 22 | u8 | kind and side: bits 0–2 kind (0 sidewalk, 1 crossing, 2 link, 3 path, 4 ferry, 5 access, 6 board, 7 ride — the last three are transit, below); bits 3–5 side (0 none, 1 N, 2 E, 3 S, 4 W) |
-| 23 | u8 | flags: bit0 structure, bit1 steps, bit2 **geometry-right** (this sidewalk lies right of its stored geometry direction; clear = left), bit3 **OSM** (this edge came from the conflated OSM path network), bit4 **tunnel** (under a deck rather than on one: a tunnel street, a way OSM tags `tunnel`/`covered=yes`, or a sidewalk or crossing conflated to one). A graph written before the tunnel bit reads it as 0 |
-| 24 | u8 | landmark amenity, 0–254 (a discount attribute; 0 for a ferry) |
-| 25 | u8 | public-art amenity, 0–254 (a discount attribute; 0 for a ferry) |
-| 26 | u8 | highway/rail nuisance, 0–254 (a penalty attribute; 0 for a ferry) |
-| 27 | u8 | commercial frontage, 0–254 (a discount attribute; 0 for a ferry) |
-| 28 | u8 | direct canopy, 0–254 (the shelter factor's input; 0 for a ferry) |
-| 29 | u32 | **source id**: the CSCL physicalid, or the OSM way id for a conflated path; `0xFFFFFFFF` = no durable identity |
-| 33 | u8 | **ordinal**: how many earlier edges share this edge's (source id, side) pair; 0 where there is no source id |
-| 34 | u8 | **ascent**, 0-254: the height this edge CLIMBS walking it a→b, summed along its polyline and divided by its length, as a fraction of 35%. That span clears the steepest street anyone walks (San Francisco's worst blocks reach about 31.5%), so nothing saturates; v7 spanned only 12%, which made every serious hill identical. 0 for a ferry and for a city with no elevation source |
-| 35 | u8 | **descent**, 0-254: the height it DROPS over the same walk, on the same scale. Walking the edge b→a swaps the two. Their SUM is the absolute grade the hill penalty reads — direction-free, because a route that avoids a hill avoids it both ways — and the two apart are what makes a descent quicker than the climb back (v9; v8 carried only the sum, in one byte). Because each clamps on its own, an edge that crests and drops can carry 70% of grade in total where the single byte pinned the pair at 35% |
+| # | section | element | count |
+| --- | --- | --- | --- |
+| 0 | node longitudes, quantized | i32 | N |
+| 1 | node latitudes, quantized | i32 | N |
+| 2 | node components | u16 | N |
+| 3 | **node mid-roadway**: 1 where every WALKING edge on the node is a crossing — a traffic island, where a walker is part way through one crossing rather than at the start of another. Baked here rather than derived because it is a pass over the whole adjacency; the client keeps `markMidRoadwayNodes` as the rule it is checked against | u8 | N |
+| 4 | CSR offsets — node n owns half-edges `[csr[n], csr[n+1])` | u32 | N+1 |
+| 5 | adjacency — each entry an **edge id** (the neighbour is the edge's other endpoint, one indirection) | u32 | 2E |
+| 6 | edge node a | u32 | E |
+| 7 | edge node b | u32 | E |
+| 8 | edge length, metres (≥ the straight-line node distance) | f32 | E |
+| 9 | geometry offset within the blob; **0xFFFFFFFF = no geometry** (straight a→b) | u32 | E |
+| 10 | geometry vertex count (0 when no geometry) | u16 | E |
+| 11 | street name id into the name table (0xFFFF = unnamed) | u16 | E |
+| 12 | **duration seconds**: a ferry's crossing-plus-wait, or a transit edge's walk or ride; 0 for every walking kind and for a board edge, whose wait is the timetable's to answer | u16 | E |
+| 13 | kind and side: bits 0–2 kind (0 sidewalk, 1 crossing, 2 link, 3 path, 4 ferry, 5 access, 6 board, 7 ride — the last three are transit, below); bits 3–5 side (0 none, 1 N, 2 E, 3 S, 4 W) | u8 | E |
+| 14 | flags: bit0 structure, bit1 steps, bit2 **geometry-right** (this sidewalk lies right of its stored geometry direction; clear = left), bit3 **OSM** (this edge came from the conflated OSM path network), bit4 **tunnel** (under a deck rather than on one: a tunnel street, a way OSM tags `tunnel`/`covered=yes`, or a sidewalk or crossing conflated to one) | u8 | E |
+| 15 | cover, 0–254, this edge's own single value; 0 for a ferry and every transit kind | u8 | E |
+| 16 | landmark amenity, 0–254 (a discount attribute; 0 for a timed kind) | u8 | E |
+| 17 | public-art amenity, 0–254 (a discount attribute; 0 for a timed kind) | u8 | E |
+| 18 | highway/rail nuisance, 0–254 (a penalty attribute; 0 for a timed kind) | u8 | E |
+| 19 | commercial frontage, 0–254 (a discount attribute; 0 for a timed kind) | u8 | E |
+| 20 | direct canopy, 0–254 (the shelter factor's input; 0 for a timed kind) | u8 | E |
+| 21 | **industrial frontage**, 0–254 (a penalty attribute; 0 for a timed kind and for an edge on a bridge or tunnel deck): the share of the edge's length running past industrial land, each side of the walk counted for half, so both sides reads twice one side. Baked from `INDL` by `crates/tiler/src/industrial.rs`; 0 across a city with no industrial source, which is what drops that city's slider | u8 | E |
+| 22 | **historic district**, 0–254 (a discount attribute; 0 for a timed kind): the share of the edge's length falling inside a designated historic district, tested underfoot rather than probed sideways. Baked from `HDST` by `crates/tiler/src/historic.rs`; 0 across a city with no district source, which is what drops that city's slider | u8 | E |
+| 23 | **bridge over water**, 0–254 (a discount attribute; 0 for a timed kind): the share of the edge's length that crosses open water on a bridge deck. An edge carrying the tunnel bit is not a deck and reads 0 outright; the rest are tested against the city's `LAND` mask, and this is the share NOT over land — which is what leaves a viaduct over a rail yard, and a tunnel nothing tagged, reading 0. Baked by `crates/tiler/src/bridge.rs` | u8 | E |
+| 24 | **ascent**, 0-254: the height this edge CLIMBS walking it a→b, summed along its polyline and divided by its length, as a fraction of 35%. That span clears the steepest street anyone walks (San Francisco's worst blocks reach about 31.5%), so nothing saturates; v7 spanned only 12%, which made every serious hill identical. 0 for a timed kind and for a city with no elevation source | u8 | E |
+| 25 | **descent**, 0-254: the height it DROPS over the same walk, on the same scale. Walking the edge b→a swaps the two. Their SUM is the absolute grade the hill penalty reads — direction-free, because a route that avoids a hill avoids it both ways — and the two apart are what makes a descent quicker than the climb back (v9; v8 carried only the sum, in one byte). Because each clamps on its own, an edge that crests and drops can carry 70% of grade in total where the single byte pinned the pair at 35% | u8 | E |
+| 26 | **source id**: the CSCL physicalid, or the OSM way id for a conflated path; `0xFFFFFFFF` = no durable identity | u32 | E |
+| 27 | **ordinal**: how many earlier edges share this edge's (source id, side) pair; 0 where there is no source id | u8 | E |
+| 28 | **ferry edge ids**, ascending — what the A* ferry credit reads (NYC 36) | u32 | F |
+| 29 | **transit edge ids**, ascending: every access, board and ride edge (NYC 12,558) | u32 | T |
+| 30 | **board edge ids**, ascending: the board subset on its own, which is what the transit credit and the mode gating read (NYC 4,084) | u32 | B |
+| 31 | **name table**: `u32 count`, then (count+1) × u32 byte offsets into the following UTF-8 blob, then the blob. Only the names the kept edges reference, re-indexed; offsets make client access O(1) | | |
+| 32 | **geometry blob**: one entry per sidewalk edge (its own baked corner-to-corner offset), per path edge, and per shape-carrying ferry edge — `vertex count` (longitude, latitude) zigzag-LEB128 varint delta pairs. The **first pair is the absolute quantized position** (delta from the graph origin); the rest are from the previous vertex. Crossings, links, and straight ferry edges carry none | | |
+| 33 | **ferry endpoint-stop-name side table** (below) | | |
+| 34 | **transit side tables** (below) | | |
 
-| 36 | u8 | **industrial frontage**, 0–254 (a penalty attribute; 0 for a ferry and for an edge on a bridge or tunnel deck): the share of the edge's length running past industrial land, each side of the walk counted for half, so both sides reads twice one side. Baked from `INDL` by `crates/tiler/src/industrial.rs`; 0 across a city with no industrial source, which is what drops that city's slider |
-| 37 | u8 | **historic district**, 0–254 (a discount attribute; 0 for a ferry): the share of the edge's length falling inside a designated historic district, tested underfoot rather than probed sideways. Baked from `HDST` by `crates/tiler/src/historic.rs`; 0 across a city with no district source, which is what drops that city's slider. It took the first of byte 36's three reserved zeros **without a version bump** — an older v10 graph reads it back as 0 everywhere, which gates the slider off rather than mispricing anything |
-| 38 | u8 | **bridge over water**, 0–254 (a discount attribute; 0 for a ferry): the share of the edge's length that crosses open water on a bridge deck. An edge carrying the tunnel bit (byte 23 bit 4) is not a deck and reads 0 outright; the rest are tested against the city's `LAND` mask, and this is the share NOT over land — which is what leaves a viaduct over a rail yard, and a tunnel nothing tagged, reading 0. Baked by `crates/tiler/src/bridge.rs`; it took the second of byte 36's three reserved zeros **without a version bump**, on the same terms byte 37 did |
-| 39 | u8 | reserved, zero. The record grew to 40 for byte 36 and the next per-edge attribute rides here without a v12 |
+The three id lists are baked for the same reason the maxima are: recovering them is a byte scan over
+every edge, on both threads, for figures the writer already had in hand.
 
-The record is 40 bytes, a multiple of the 4-byte boundary every section starts on, so the name
-table that follows it needs no padding.
+**Dropped in v12:** the half-offset byte a sidewalk carried (decimetres to the centreline it was
+offset from). Nothing outside the graph pass ever read it; re-adding it is one directory entry and no
+version bump.
 
-Bytes 29–33 carry the **durable edge key** (v6). Node and edge ids are positional — nodes are
+The source-id and ordinal columns carry the **durable edge key** (v6). Node and edge ids are positional — nodes are
 renumbered by (component, latitude, longitude) and edges by (component, min node id) — so every id
 in the file shifts when the graph is rebuilt, and nothing outside it can name an edge across two
 builds. `(source id, side, ordinal)` can: the source id is the id of the CSCL row or OSM way the
-edge's geometry came from, the side is the label already in byte 22, and the ordinal disambiguates
+edge's geometry came from, the side is the label already in the kind/side column, and the ordinal disambiguates
 within that pair. A sidewalk takes the source id of the contracted street it was offset from and its
 own N/E/S/W label; a path edge (CSCL-derived or OSM-conflated) takes its contracted edge's source id
 with side `none`. Degree-2 contraction merges several source records into one edge, and the key
@@ -3413,7 +3437,8 @@ welded at every street it crosses (the busiest sidewalk key reaches only 27, sin
 two sides share a source id). The ordinal therefore needs a whole byte, and the graph pass fails
 rather than truncating if one ever passes 255.
 
-Bytes 24–27 are the **scenic-factor attributes** baked by `scenic.rs` (v5). The landmark and art
+The landmark, art, highway and commercial columns are the **scenic-factor attributes** baked by
+`scenic.rs` (v5). The landmark and art
 bytes are a network **discount**: each POI (`LMRK`/`ARTW`) snaps to the nearest walking node and a
 bounded Dijkstra fan-out deposits a distance-decaying contribution on the edges it reaches, summed
 across POIs and saturated `1 − e^{−k·field}` (so a dense cluster stops stacking); the kernel is
@@ -3426,10 +3451,10 @@ block's own street and sidewalks. All four quantize to a 0–254 ceiling so the 
 `maxCover` already relies on); a later phase reads the discounts as `1 − w·attr` and the penalty as
 `1 + w·attr`. A ferry carries none.
 
-Byte 28 is the **direct canopy** (v6, `direct_canopy.rs`, baked when the city carries a canopy
+The direct-canopy column is (v6, `direct_canopy.rs`, baked when the city carries a canopy
 layer): the fraction of the edge's own baked polyline that lies **directly under a `CNPY` polygon**,
 on the same 0–254 ceiling and read the same `1 − w·attr` way — the canopy half of the shelter
-factor. It is *not* a second cover byte. Cover (byte 20) is the deliberately **smoothed** field the
+factor. It is *not* a second cover column. Cover is the deliberately **smoothed** field the
 overlay is coloured from — the oriented anisotropic Gaussian, σ 15 m along the road and 4 m across,
 reaching ±37.5 m — which answers "is this a leafy stretch"; a walker under the rain is asking "is
 there anything over my head *here*", and a kernel reaching most of the block cannot say. So this is
@@ -3448,10 +3473,10 @@ walking network runs through the parks. The integration costs **139.8 s** and ~1
 1.08 M polygons and 628k edges, which is why it is a cached column of its own
 (`.build/graph-cache/<city>/canopy-<key>.bin`): nothing but a re-ingested canopy pays for it twice.
 
-A **ferry edge** (kind 4) has no tree cover and no sidewalk half-offset, so bytes 20–21 instead carry
-a little-endian **u16 of crossing-plus-wait seconds** (`rawTimeSeconds`, ≤ ~2200). Its **name id**
-(byte 18) is its FERR primary-route display name, so `edgeName` labels the maneuver ("East River"),
-and its two terminal stop names ride in the byte-60 side table below. The client zeroes its cover (so
+A **ferry edge** (kind 4) has no tree cover, so it carries a **u16 of crossing-plus-wait seconds**
+(`rawTimeSeconds`, ≤ ~2200) in the duration column instead. Its **name id** is its FERR primary-route
+display name, so `edgeName` labels the maneuver ("East River"),
+and its two terminal stop names ride in the ferry endpoint side table below. The client zeroes its cover (so
 it never lifts `maxCover`) and derives `minFerrySecPerMetre` (min over ferry edges of duration ÷
 length) at decode; its terminals are ordinary walking nodes, and the merged component labels let a
 route cross it.
@@ -3470,7 +3495,8 @@ alight, and board again. A complex with no walking node in range is dropped with
 and a pattern rides straight past it, since its stop-to-stop seconds are differences of offsets from
 the pattern's first stop.
 
-All three kinds carry their **seconds in bytes 20–21**, exactly as a ferry carries its crossing:
+All three kinds carry their **seconds in the duration column**, exactly as a ferry carries its
+crossing:
 90 s for the walk into a station the feed models as an enclosed place, 30 s into one whose every
 member is a stop on the pavement (the TRNS `surface` flag), 30 s for every walk back out, the
 pattern's own stop-to-stop figure for a ride, and **0 for a board** — what a board costs is the wait,
@@ -3493,17 +3519,15 @@ discount on the pavement beside the next. And a node is mid-roadway when its eve
 crossing: a station whose access edge lands on a traffic island does not pave it, and 11 islands in
 San Francisco stood to be re-priced by that alone.
 
-9. **Ferry endpoint-stop-name side table** (at the byte-60 offset, 4-aligned after the geometry
-   blob): `u32 count`, then per ferry edge a (`u32 edge id`, `u16 a-stop name id`, `u16 b-stop name
-   id`) triple, both ids into the name table (7). The two ids are the terminal names at the edge's
+**Ferry endpoint-stop-name side table** (section 33): `u32 count`, then per ferry edge a (`u32 edge
+   id`, `u16 a-stop name id`, `u16 b-stop name id`) triple, both ids into the name table. The two ids are the terminal names at the edge's
    node-a and node-b ends, aligned to its `node a`/`node b`. These ids are **not** edge name_ids, so
    the graph pass adds them to the kept-name set and remaps them alongside the edge names. A later
    phase reads the destination terminal from here (`node b` when the ferry is ridden a → b).
 
-10. **Transit side tables** (at the byte-64 offset, 4-aligned after the ferry table), three counted
-   tables back to back. First the **route table**: `u32 count`, then per route 12 bytes — `u8[3]`
+**Transit side tables** (section 34), three counted tables back to back. First the **route table**: `u32 count`, then per route 12 bytes — `u8[3]`
    `route_color`, `u8[3]` `route_text_color`, and `u16` name ids for the short name, the long name
-   and the feed's route id, all three into the name table (7) and rescued into it the way the ferry
+   and the feed's route id, all three into the name table and rescued into it the way the ferry
    stop names are. Then the **board table**: `u32 count`, then per board edge (`u32 edge id`, `u32`
    **lane id**, `u16 route index`, `u16` **stop index**). Then the **ride table**: `u32 count`, then
    per ride edge (`u32 edge id`, `u16 route index`, `u16` pad). The lane id is TRNS's own — FNV-1a
@@ -3512,15 +3536,6 @@ San Francisco stood to be re-priced by that alone.
    stop index is this platform's position in the pattern as the FEED lists it, which is what TSCH's
    per-stop offsets are indexed by; a station the snap dropped leaves a hole in the graph's chain
    and none in that numbering.
-
-7. **Name table**: `u32 count`, then (count+1) × u32 byte offsets into the following UTF-8 blob,
-   then the blob. Only the names the kept edges reference, re-indexed; offsets make client access
-   O(1).
-8. **Geometry blob**: one entry per sidewalk edge (its own baked corner-to-corner offset), per path
-   edge, and per shape-carrying ferry edge — `vertex count` (longitude, latitude) zigzag-LEB128
-   varint delta pairs. The **first pair is the absolute quantized position** (delta from the graph
-   origin); the rest are from the previous vertex. Crossings, links, and straight ferry edges carry
-   none.
 
 A pure degree-2 cycle is emitted as a self-loop on the one node it retains. GRPH edge flags are
 distinct from the STRT record flags: a step street is bit1, and bit2 on a **sidewalk** marks the
@@ -3797,11 +3812,11 @@ stand on two pavements of different widths, and both the band and the shadow are
 **How it is measured**, all of it in `scripts/shed-map.ts`, since no dataset New York publishes
 carries a sidewalk width:
 
-- The **kerb** comes out of the graph. A sidewalk's baked polyline is its centreline offset by the
-  half-offset byte, which is half the CSCL kerb-to-kerb roadway plus the manifest's
-  `sidewalkInsetMeters` — so the kerb sits exactly that inset inboard of the polyline. The byte says
-  nothing else about the pavement: it measures the ROADWAY and stops at the kerb, and the polyline is
-  where the inset assumes the middle of the sidewalk is, not where it is.
+- The **kerb** comes out of the graph. A sidewalk's baked polyline is its centreline offset by half
+  the CSCL kerb-to-kerb roadway plus the manifest's `sidewalkInsetMeters` — so the kerb sits exactly
+  that inset inboard of the polyline. That offset says nothing else about the pavement: it measures
+  the ROADWAY and stops at the kerb, and the polyline is where the inset assumes the middle of the
+  sidewalk is, not where it is.
 - The **building line** is the tax lot the placement already measures its frontage against. For each
   candidate sidewalk the lot's street wall — the boundary samples within 2 m of the closest the lot
   comes, facing the line rather than running back off it — is projected onto the polyline and taken

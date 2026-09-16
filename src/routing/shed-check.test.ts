@@ -14,16 +14,12 @@ import { join } from "node:path";
 import { loadGraphBytes } from "../../scripts/build-sheds";
 import { checkSheds } from "../../scripts/check-sheds";
 import { encodeSheds } from "../../scripts/shed-encode";
-import {
-  EDGE_RECORD_BYTES,
-  FORMAT_VERSION as GRAPH_FORMAT_VERSION,
-  HEADER_BYTES,
-} from "./graph";
+import { encodeGraph } from "./graph-bytes.fixture";
 
 const LAST_DAY = 3136;
-const NODE_COUNT = 2;
 const KIND_SIDEWALK = 0;
-const SIDE_SHIFT = 3;
+// The edge-length column's place in the header's section directory.
+const EDGE_LENGTH_SECTION = 8;
 
 // One edge as the durable key names it, plus the length that names nothing.
 interface Edge {
@@ -42,29 +38,34 @@ const EDGES: readonly Edge[] = [
 // A GRPH file carrying exactly these edges: two nodes, no geometry, no names, no ferries. Enough
 // for `decodeGraph`, which is all the gate reads.
 function graphBytes(edges: readonly Edge[]): Uint8Array {
-  const nodes = HEADER_BYTES + NODE_COUNT * 10;
-  const csr = nodes + ((4 - (nodes % 4)) % 4);
-  const records = csr + (NODE_COUNT + 1) * 4 + edges.length * 8;
-  const names = records + edges.length * EDGE_RECORD_BYTES;
-  const bytes = new Uint8Array(names + 8);
-  const view = new DataView(bytes.buffer);
-  bytes.set(new TextEncoder().encode("GRPH"));
-  view.setUint16(4, GRAPH_FORMAT_VERSION, true);
-  view.setUint32(8, NODE_COUNT, true);
-  view.setUint32(12, edges.length, true);
-  view.setFloat64(16, -73.98, true);
-  view.setFloat64(24, 40.75, true);
-  view.setFloat64(32, 1e-6, true);
-  view.setUint32(44, names, true); // the name table: a count of zero and its one closing offset
-  view.setUint32(52, bytes.length, true); // an empty geometry blob past the end
-  for (const [index, edge] of edges.entries()) {
-    const record = records + index * EDGE_RECORD_BYTES;
-    view.setFloat32(record + 8, edge.length, true);
-    bytes[record + 22] = KIND_SIDEWALK | (edge.side << SIDE_SHIFT);
-    view.setUint32(record + 29, edge.sourceId, true);
-    bytes[record + 33] = edge.ordinal;
-  }
-  return bytes;
+  return new Uint8Array(
+    encodeGraph({
+      originLng: -73.98,
+      originLat: 40.75,
+      scale: 1e-6,
+      nodes: [
+        { qx: 0, qy: 0 },
+        { qx: 1_000, qy: 0 },
+      ],
+      edges: edges.map((edge) => ({
+        a: 0,
+        b: 1,
+        kind: KIND_SIDEWALK,
+        side: edge.side,
+        length: edge.length,
+        sourceId: edge.sourceId,
+        ordinal: edge.ordinal,
+      })),
+    }),
+  );
+}
+
+// Where the file carries its f32 lengths, which is the one column this test perturbs.
+function lengthsAt(bytes: Uint8Array): number {
+  return new DataView(bytes.buffer).getUint32(
+    64 + 8 * EDGE_LENGTH_SECTION,
+    true,
+  );
 }
 
 // A deploy on disk: the graph its build wrote, the version file beside it, and the artifact the
@@ -112,9 +113,9 @@ test("a deploy whose artifact names its own key space passes", async () => {
 test("a rebuild that moved only the lengths still passes", async () => {
   const perturbed = new Uint8Array(GRAPH);
   const view = new DataView(perturbed.buffer);
-  const records = perturbed.length - 8 - EDGES.length * EDGE_RECORD_BYTES;
+  const lengths = lengthsAt(perturbed);
   for (let edge = 0; edge < EDGES.length; edge++) {
-    const at = records + edge * EDGE_RECORD_BYTES + 8;
+    const at = lengths + edge * 4;
     const bits = new DataView(new ArrayBuffer(4));
     bits.setFloat32(0, view.getFloat32(at, true), true);
     bits.setUint32(0, bits.getUint32(0, true) + 1, true); // the next float up
