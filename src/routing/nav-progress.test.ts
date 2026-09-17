@@ -19,6 +19,7 @@ const eastLegMeters = (EAST_LNG - START_LNG) * metersPerDegreeLng;
 
 function makeManeuver(
   kind: Maneuver["kind"],
+  startMeters: number,
   lengthMeters: number,
   at: { lat: number; lng: number },
 ): Maneuver {
@@ -29,9 +30,26 @@ function makeManeuver(
     side: null,
     turn: null,
     lengthMeters,
+    startMeters,
     stepRange: [0, 0],
     at,
   };
+}
+
+// Where the walker stands after `alongMeters` of the route: up the north leg, then east from the
+// corner.
+function userAt(alongMeters: number): { lat: number; lng: number } {
+  if (alongMeters <= northLegMeters) {
+    return {
+      lat: START_LAT + alongMeters / METERS_PER_DEGREE_LAT,
+      lng: START_LNG,
+    };
+  } else {
+    return {
+      lat: CORNER_LAT,
+      lng: START_LNG + (alongMeters - northLegMeters) / metersPerDegreeLng,
+    };
+  }
 }
 
 function makeRoute(): RouteResult {
@@ -44,9 +62,31 @@ function makeRoute(): RouteResult {
 }
 
 const maneuvers: Maneuver[] = [
-  makeManeuver("start", northLegMeters, { lat: START_LAT, lng: START_LNG }),
-  makeManeuver("turn", eastLegMeters, { lat: CORNER_LAT, lng: START_LNG }),
-  makeManeuver("arrive", 0, { lat: CORNER_LAT, lng: EAST_LNG }),
+  makeManeuver("start", 0, northLegMeters, { lat: START_LAT, lng: START_LNG }),
+  makeManeuver("turn", northLegMeters, eastLegMeters, {
+    lat: CORNER_LAT,
+    lng: START_LNG,
+  }),
+  makeManeuver("arrive", northLegMeters + eastLegMeters, 0, {
+    lat: CORNER_LAT,
+    lng: EAST_LNG,
+  }),
+];
+
+// The same route with a landmark passed a third of the way up the north leg: a zero-length row
+// carrying its own position rather than the turn's.
+const landmarkMeters = northLegMeters / 3;
+const withLandmark: Maneuver[] = [
+  makeManeuver("start", 0, northLegMeters, { lat: START_LAT, lng: START_LNG }),
+  makeManeuver("landmark", landmarkMeters, 0, userAt(landmarkMeters)),
+  makeManeuver("turn", northLegMeters, eastLegMeters, {
+    lat: CORNER_LAT,
+    lng: START_LNG,
+  }),
+  makeManeuver("arrive", northLegMeters + eastLegMeters, 0, {
+    lat: CORNER_LAT,
+    lng: EAST_LNG,
+  }),
 ];
 
 test("a point near the start points at the first action with the right distance", () => {
@@ -102,4 +142,36 @@ test("a point far off the route returns null", () => {
   // ~1.1 km north of the corner, far beyond OFF_ROUTE_METERS.
   const user = { lat: CORNER_LAT + 0.01, lng: EAST_LNG };
   expect(navProgress(makeRoute(), maneuvers, user)).toBeNull();
+});
+
+test("a passed landmark does not hide the turn after it", () => {
+  const highlighted = new Set<number>();
+  const total = northLegMeters + eastLegMeters;
+  const stepCount = 40;
+  for (let step = 0; step <= stepCount; step++) {
+    const progress = navProgress(
+      makeRoute(),
+      withLandmark,
+      userAt((total * step) / stepCount),
+    );
+    if (progress) {
+      highlighted.add(progress.nextManeuver);
+    }
+  }
+  expect(highlighted.has(2)).toBe(true);
+});
+
+test("the landmark is next until it is passed, then the turn is", () => {
+  const before = navProgress(
+    makeRoute(),
+    withLandmark,
+    userAt(landmarkMeters / 2),
+  );
+  const after = navProgress(
+    makeRoute(),
+    withLandmark,
+    userAt((landmarkMeters + northLegMeters) / 2),
+  );
+  expect(before?.nextManeuver).toBe(1);
+  expect(after?.nextManeuver).toBe(2);
 });

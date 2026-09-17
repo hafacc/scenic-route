@@ -56,6 +56,9 @@ export interface Maneuver {
   side: SideLabel;
   turn: Turn;
   lengthMeters: number; // walked length this maneuver covers
+  // Along-route distance to where this maneuver begins, in the same metric as RouteStep.lengthMeters
+  // (summed graph edge lengths, not the geodesic length of the drawn polyline).
+  startMeters: number;
   durationSeconds?: number; // a ferry or rail leg's ride time, shown where a walk shows its distance
   stops?: number; // a rail leg's stop count, which is what says how long it is
   // The line ridden, in the livery the agency publishes: a ride row wears its bullet where every
@@ -555,9 +558,22 @@ function classifyTurn(delta: number): { turn: Turn; word: string } {
   return { turn: "around", word: "Turn around" };
 }
 
+// Maneuvers are assembled without their starts, since a collapsed crossing and the walk after one
+// fold their length into a row already pushed; the running sum is only right once the list is final.
+type UnplacedManeuver = Omit<Maneuver, "startMeters">;
+
+function placeManeuvers(maneuvers: readonly UnplacedManeuver[]): Maneuver[] {
+  let running = 0;
+  return maneuvers.map((maneuver) => {
+    const placed = { ...maneuver, startMeters: running };
+    running += maneuver.lengthMeters;
+    return placed;
+  });
+}
+
 // A passed POI as its own maneuver: "Pass <name>", anchored at the POI, sharing the step it is
 // nearest so the render can key on it. It carries no distance and no turn.
-function poiManeuver(poi: PassedPoi): Maneuver {
+function poiManeuver(poi: PassedPoi, startMeters: number): Maneuver {
   return {
     kind: poi.kind,
     text: `Pass ${poi.name}`,
@@ -565,6 +581,7 @@ function poiManeuver(poi: PassedPoi): Maneuver {
     side: null,
     turn: null,
     lengthMeters: 0,
+    startMeters,
     stepRange: [poi.stepIndex, poi.stepIndex],
     at: poi.at,
   };
@@ -599,11 +616,19 @@ function interleavePois(
   }
   const merged: Maneuver[] = [];
   for (let index = 0; index < maneuvers.length; index++) {
-    merged.push(maneuvers[index]);
+    const host = maneuvers[index];
+    merged.push(host);
     const bucket = following.get(index);
     if (!bucket) {
       continue;
     }
+    // navProgress stops scanning at the first start past the walker, so a POI anchored outside its
+    // host's span would truncate that scan and freeze progress: hold it inside the span.
+    const next = maneuvers[index + 1];
+    const lowest = host.startMeters;
+    const highest = next
+      ? next.startMeters
+      : host.startMeters + host.lengthMeters;
     bucket.sort((left, right) => left.alongMeters - right.alongMeters);
     const seen = new Set<string>();
     for (const poi of bucket) {
@@ -611,7 +636,9 @@ function interleavePois(
         continue;
       }
       seen.add(poi.name);
-      merged.push(poiManeuver(poi));
+      merged.push(
+        poiManeuver(poi, Math.min(highest, Math.max(lowest, poi.alongMeters))),
+      );
     }
   }
   return merged;
@@ -629,9 +656,9 @@ export function buildDirections(
   } = {},
 ): Maneuver[] {
   const runs = buildRuns(graph, result.steps, result.rides);
-  const maneuvers: Maneuver[] = [];
+  const maneuvers: UnplacedManeuver[] = [];
   if (runs.length === 0) {
-    return maneuvers;
+    return placeManeuvers(maneuvers);
   }
 
   // The last emitted walking run, for the next turn's reference bearing and the suppression check —
@@ -910,5 +937,5 @@ export function buildDirections(
     at: runEnd(finalRun),
   });
 
-  return interleavePois(maneuvers, passed);
+  return interleavePois(placeManeuvers(maneuvers), passed);
 }
