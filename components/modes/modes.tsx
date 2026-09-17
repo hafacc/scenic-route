@@ -293,8 +293,9 @@ export default function Modes() {
   // A link's own alt survives its endpoints arriving; a moved endpoint clears it.
   const endpointsRef = useRef<EndpointsKey | null>(null);
   const handleEndpoints = useCallback(
-    (key: EndpointsKey | null) => {
-      if (endpointsMoved(endpointsRef.current, key)) {
+    (key: EndpointsKey | null): boolean => {
+      const moved = endpointsMoved(endpointsRef.current, key);
+      if (moved) {
         setAlt(null);
       }
       endpointsRef.current = key;
@@ -304,6 +305,7 @@ export default function Modes() {
         setDirectionsOpen(true);
         recapture();
       }
+      return moved;
     },
     [recapture],
   );
@@ -351,11 +353,11 @@ export default function Modes() {
       tapSearch={!directionsOpen}
       liveDrag={false}
       deck={(shell) => {
-        // A mode or a switch changed with the card shrunk away replans, so there is no chosen route
-        // left to peek at: the card comes back to show the ones there are.
-        const expand = (act: () => void): void => {
-          act();
-          if (shell.minimized) {
+        // A mode, a switch or a moved endpoint with the card shrunk away replans, so there is no
+        // chosen route left to peek at: the card comes back to show the ones there are. An act that
+        // answers false retired nothing, and the bar stays where it is.
+        const expand = (act: () => boolean): void => {
+          if (act() && shell.minimized) {
             shell.onToggleMinimize();
           }
         };
@@ -372,13 +374,22 @@ export default function Modes() {
               ? cardLine(summaryOf(pending.preview))
               : null,
           directionsOpen,
-          onMode: (id: ModeId) => expand(() => handleMode(id)),
-          onToggles: (next: Toggles) => expand(() => handleToggles(next)),
+          onMode: (id: ModeId) =>
+            expand(() => {
+              handleMode(id);
+              return true;
+            }),
+          onToggles: (next: Toggles) =>
+            expand(() => {
+              handleToggles(next);
+              return true;
+            }),
           onSelect: setAlt,
           onHover: setHovered,
           onBack: handleBack,
           onClose: handleClose,
-          onEndpoints: handleEndpoints,
+          onEndpoints: (key: EndpointsKey | null) =>
+            expand(() => handleEndpoints(key)),
         };
         return {
           controls: <ModesControls shell={shell} state={state} />,

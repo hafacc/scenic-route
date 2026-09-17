@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useCallback, useEffect, useMemo } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef } from "react";
 import { modeIconHref } from "../../src/modes/favicon";
 import {
   type ModeId,
@@ -85,6 +85,13 @@ export function ModesControls({
     };
   }, [mode.color]);
 
+  // Reached through a ref because the deck rebuilds the callback every render: listing it below
+  // would refire the effect every render rather than when an end moves.
+  const endpointsRef = useRef(onEndpoints);
+  useEffect(() => {
+    endpointsRef.current = onEndpoints;
+  }, [onEndpoints]);
+
   // The two ends as separate strings so the effect can compare them without a new object every
   // render; the start is null while none has been named, which the promotion below then fills in.
   const startKey = shell.manualStart
@@ -92,8 +99,10 @@ export function ModesControls({
     : null;
   const destKey = shell.dest ? `${shell.dest.lat},${shell.dest.lng}` : null;
   useEffect(() => {
-    onEndpoints(destKey === null ? null : { start: startKey, dest: destKey });
-  }, [startKey, destKey, onEndpoints]);
+    endpointsRef.current(
+      destKey === null ? null : { start: startKey, dest: destKey },
+    );
+  }, [startKey, destKey]);
 
   // The route is already in the hash; the camera and the city live in a URL only here. The clock is
   // in neither: Modes routes at now, and `encodeModes` writes no hour.
