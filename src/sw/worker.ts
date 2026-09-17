@@ -15,6 +15,7 @@ import {
   type Store,
   shadeKey,
 } from "./policy";
+import type { ReleaseReply } from "./update";
 
 // The service worker. It owns storage policy — what may enter a cache, what evicts what, and when a
 // deploy destroys the lot — and nothing else. It never decides what to fetch: the page asks for
@@ -28,6 +29,8 @@ import {
 // cache names and the old ones go on activate; the precache list is the exported shell.
 declare const SW_VERSION: string;
 declare const SW_PRECACHE: readonly string[];
+// The owner's deploy marker, from src/sw/update.ts. Reported on request and compared by the page.
+declare const SW_RELEASE: number;
 // The cities' extents, so the basemap is kept only over ground this app can route across.
 declare const SW_CITIES: readonly {
   west: number;
@@ -47,6 +50,7 @@ interface FetchEventLike extends ExtendableEventLike {
 
 interface MessageEventLike extends ExtendableEventLike {
   data: unknown;
+  ports: readonly MessagePort[];
 }
 
 // `self` types as a Window under the app's dom lib, so the worker scope is named through globalThis
@@ -67,6 +71,7 @@ const scope = globalThis as unknown as {
   ): void;
   registration: { scope: string };
   clients: { claim(): Promise<void> };
+  skipWaiting(): Promise<void>;
 };
 
 // What each store may grow to. The shell has no cap — it is precached, bounded by the export, and
@@ -147,9 +152,11 @@ scope.addEventListener("install", (event) => {
   );
 });
 
-// Deliberately no skipWaiting: a new deploy takes over when the last tab closes, or on the installed
-// app's next launch. The cost is running one deploy behind for a session; the alternative is a
-// just-activated worker purging chunks a still-open page is about to lazily import.
+// Deliberately no skipWaiting on install: a new deploy takes over when the last tab closes, or on
+// the installed app's next launch. The cost is running one deploy behind for a session; the
+// alternative is a just-activated worker purging chunks a still-open page is about to lazily import.
+// The one way out is the reader tapping the offer a raised SW_RELEASE makes — see the message
+// handler, where the page that asks for it is also the page that reloads.
 scope.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
@@ -167,18 +174,30 @@ scope.addEventListener("activate", (event) => {
   );
 });
 
-// The page's half of the two settings the worker owns. It is told rather than asked: the worker is
-// stopped between requests, so anything it had to be woken to answer would be a round trip on the
-// settings page's first paint. See components/service-worker.tsx.
+// The page's half of the two settings the worker owns, plus the two messages the update offer is
+// made of. The settings are told rather than asked: the worker is stopped between requests, so
+// anything it had to be woken to answer would be a round trip on the settings page's first paint.
+// The marker is the one thing that has to be asked for, since only a parked worker knows its own,
+// and it answers over the port the asker sends. See components/service-worker.tsx.
 scope.addEventListener("message", (event) => {
   const message = event.data as
     | { type: "overlay-cap"; bytes: number | null }
     | { type: "clear-overlays" }
+    | { type: "release" }
+    | { type: "skip-waiting" }
     | undefined;
   if (message?.type === "overlay-cap") {
     event.waitUntil(setOverlayCap(message.bytes));
   } else if (message?.type === "clear-overlays") {
     event.waitUntil(clearOverlays());
+  } else if (message?.type === "release") {
+    const reply: ReleaseReply = { release: SW_RELEASE };
+    event.ports[0]?.postMessage(reply);
+  } else if (message?.type === "skip-waiting") {
+    // The only path to skipWaiting there is. Every open page reloads on the hand-over this starts,
+    // the one that asked and the ones that did not, because the activation behind it deletes the
+    // shell all of them are still lazily importing chunks out of.
+    event.waitUntil(scope.skipWaiting());
   }
 });
 
