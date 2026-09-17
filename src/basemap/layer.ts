@@ -34,7 +34,49 @@ export const BASEMAP_MAX_DATA_ZOOM = 15;
 export const BASEMAP_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &middot; <a href="https://protomaps.com">Protomaps</a>';
 
+// Every basemap tile request, and nothing else: what the templated URL above starts with, before the
+// first `{z}`.
+const BASEMAP_PREFIX = BASEMAP_URL.slice(0, BASEMAP_URL.indexOf("{"));
+
+let statusChecked = false;
+
+// Fail a refused tile request as itself.
+//
+// protomaps-leaflet never looks at the response status: it pipes whatever comes back straight into
+// the protobuf decoder, so a 403 or a 504 arrives as `Unimplemented type: 7` thrown over an HTML
+// error page, which names nothing that happened. The library takes no custom source and does not
+// export the decoder, so `fetch` is the only seam; requests that are not basemap tiles are handed to
+// the original untouched, and an abort still rejects as an abort, which is what tells the watcher in
+// components/basemap.tsx that the app changed its mind rather than lost the map.
+function checkTileStatus(): void {
+  // Next.js evaluates this module on the server too, where there is no map and no fetch to wrap.
+  if (statusChecked || typeof window === "undefined") {
+    return;
+  }
+  statusChecked = true;
+  const original = window.fetch.bind(window);
+  const checking: typeof fetch = (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (!url.startsWith(BASEMAP_PREFIX)) {
+      return original(input, init);
+    }
+    return original(input, init).then((response) => {
+      if (response.ok) {
+        return response;
+      } else {
+        // The key rides in the query string, so only the tile itself is named.
+        const [tile] = url.split("?");
+        throw new Error(
+          `basemap tile request failed: ${response.status} ${response.statusText} for ${tile}`,
+        );
+      }
+    });
+  };
+  window.fetch = checking;
+}
+
 export function basemapLayer(flavor: Flavor): L.Layer {
+  checkTileStatus();
   return leafletLayer({
     url: BASEMAP_URL,
     maxDataZoom: BASEMAP_MAX_DATA_ZOOM,
