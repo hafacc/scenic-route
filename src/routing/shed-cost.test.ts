@@ -46,8 +46,13 @@ const noPref = (over: Partial<RouteWeights> = {}): RouteWeights => ({
   bridge: 0,
   shade: 0,
   shelter: 0,
+  transit: 0,
   allowFerries: false,
   allowSheds: true,
+  // The fixture draws no rail, so nothing can board it, and no crossing edges, which leaves the
+  // crossing gate free either way — stated because omitting it would read as "avoid crossings".
+  allowTransit: false,
+  allowCrossings: true,
   ...over,
 });
 
@@ -56,16 +61,19 @@ interface NodeSpec {
   lng: number;
 }
 
-// A walking edge and the fractions (0..1) the cost model reads off it. `shed` is the share standing
-// under a deck; `canopy` is the unsmoothed share with a crown directly overhead; `highway` is the one
+// The fractions (0..1) the cost model reads off a walking edge. `shed` is the share standing under a
+// deck; `canopy` is the unsmoothed share with a crown directly overhead; `highway` is the one
 // nuisance attribute, the only factor that can push a metre's multiplier above 1.
-interface EdgeSpec {
-  a: number;
-  b: number;
+interface EdgeAttrs {
   cover?: number;
   canopy?: number;
   shed?: number;
   highway?: number;
+}
+
+interface EdgeSpec extends EdgeAttrs {
+  a: number;
+  b: number;
 }
 
 const byte = (fraction: number | undefined): number =>
@@ -196,8 +204,8 @@ function snapAtNode(graph: RoutingGraph, node: number, walkEdge: number): Snap {
 // and 4), plus a snap stub at each end. `upperLat`/`lowerLat` set how far each bows out, so one side
 // can be made a genuine detour of the other — the corner-cross-back a shed forces on a real block.
 function diamond(
-  upper: EdgeSpec,
-  lower: EdgeSpec,
+  upper: EdgeAttrs,
+  lower: EdgeAttrs,
   upperLat = 0.001,
   lowerLat = 0.001,
   date = JULY,

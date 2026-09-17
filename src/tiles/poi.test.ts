@@ -150,7 +150,7 @@ const params: PoiParams = {
   kind: "poi",
   url: "test",
   magic: "LMRK",
-  color: "#abc",
+  color: { light: "#abc", dark: "#abc" },
   labelAnchor: "top",
 };
 

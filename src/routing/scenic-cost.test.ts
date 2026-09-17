@@ -34,8 +34,13 @@ const noScenic = (over: Partial<RouteWeights> = {}): RouteWeights => ({
   bridge: 0,
   shade: 0,
   shelter: 0,
+  transit: 0,
   allowFerries: false,
   allowSheds: true,
+  // The fixture draws no rail, so nothing can board it, and no crossing edges, which leaves the
+  // crossing gate free either way — stated because omitting it would read as "avoid crossings".
+  allowTransit: false,
+  allowCrossings: true,
   ...over,
 });
 
@@ -44,10 +49,8 @@ interface NodeSpec {
   lng: number;
 }
 
-// A walking edge with its scenic attribute fractions (0..1); the ingest bytes are these × 255.
-interface EdgeSpec {
-  a: number;
-  b: number;
+// A walking edge's scenic attribute fractions (0..1); the ingest bytes are these × 255.
+interface EdgeAttrs {
   cover?: number;
   landmark?: number;
   art?: number;
@@ -56,6 +59,11 @@ interface EdgeSpec {
   industrial?: number;
   historic?: number;
   bridge?: number;
+}
+
+interface EdgeSpec extends EdgeAttrs {
+  a: number;
+  b: number;
 }
 
 function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
@@ -275,8 +283,8 @@ function effectiveCostOf(
 // `upperLat`/`lowerLat` set how far each bows out, so one path can be made a genuine detour of the
 // other. 0->1->3 is the "upper", 0->2->3 the "lower".
 function diamond(
-  upper: EdgeSpec,
-  lower: EdgeSpec,
+  upper: EdgeAttrs,
+  lower: EdgeAttrs,
   upperLat = 0.001,
   lowerLat = 0.001,
 ): {

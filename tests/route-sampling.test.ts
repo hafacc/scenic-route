@@ -392,7 +392,7 @@ const graph = decodeGraph(
     graphBytes.byteOffset,
     graphBytes.byteOffset + graphBytes.byteLength,
   ) as ArrayBuffer,
-  "",
+  { hash: "", keyHash: "" },
 );
 const snapIndex = buildSnapIndex(graph);
 

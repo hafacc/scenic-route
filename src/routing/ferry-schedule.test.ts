@@ -30,8 +30,13 @@ const weights = (ferry: number): RouteWeights => ({
   bridge: 0,
   shade: 0,
   shelter: 0,
+  transit: 0,
   allowFerries: true,
   allowSheds: true,
+  // The fixture draws no rail, so nothing can board it, and no crossing edges, which leaves the
+  // crossing gate free either way — stated because omitting it would read as "avoid crossings".
+  allowTransit: false,
+  allowCrossings: true,
 });
 
 // A feed with one ferry route running both ways between two terminals. `outbound` and `inbound` are
@@ -109,6 +114,7 @@ function feedOf(
     calendarDates: [],
     shapes: [],
     frequencies: [],
+    transfers: [],
   };
 }
 
