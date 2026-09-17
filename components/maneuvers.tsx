@@ -85,6 +85,24 @@ export function maneuverIcon(maneuver: Maneuver) {
   return <MdOutlineDirectionsWalk {...props} />;
 }
 
+// The dimmed rows stop exactly where the highlight begins. Asking nextManeuver rather than
+// currentManeuver is what keeps the arrive row, where the two are clamped together, from being
+// dimmed and highlighted at once.
+export function maneuverState(
+  progress: NavProgress | null,
+  index: number,
+): "passed" | "next" | "ahead" {
+  if (progress === null) {
+    return "ahead";
+  } else if (index === progress.nextManeuver) {
+    return "next";
+  } else if (index < progress.nextManeuver) {
+    return "passed";
+  } else {
+    return "ahead";
+  }
+}
+
 export function ManeuverList({
   directions,
   progress,
@@ -106,8 +124,9 @@ export function ManeuverList({
   return (
     <ol className={className}>
       {directions.map((maneuver, index) => {
-        const isNext = progress !== null && index === progress.nextManeuver;
-        const isPassed = progress !== null && index < progress.currentManeuver;
+        const state = maneuverState(progress, index);
+        const isNext = state === "next";
+        const isPassed = state === "passed";
         // Passed landmarks and artwork wear their overlay colour, so the turn-by-turn reads
         // as the same palette as the map.
         const bubbleClass =
