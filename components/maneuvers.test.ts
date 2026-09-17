@@ -15,6 +15,7 @@ function stationManeuver(overrides: Partial<Maneuver>): Maneuver {
     side: null,
     turn: null,
     lengthMeters: 20,
+    startMeters: 0,
     station: "enter",
     stepRange: [0, 1],
     at: { lat: 40.7, lng: -74 },
