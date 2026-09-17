@@ -26,6 +26,7 @@ const weights = (
   allowFerries,
   allowTransit: true,
   allowSheds: true,
+  allowCrossings: false,
 });
 
 // The cache is a memoization layer over findRoute, so the search is stubbed with a deterministic

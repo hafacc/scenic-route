@@ -15,7 +15,7 @@ import { METERS_PER_DEGREE_LAT, metersPerLng } from "../src/tiles/polylines";
 
 test("no two of New York's ferry routes swap lanes over the water they share", () => {
   const CELL_M = 60; // LANE_CELL_M, the grid ./lines counts a crossing's company over
-  const file = readFileSync(`${import.meta.dir}/../data/ferries/nyc.bin`);
+  const file = readFileSync(`${import.meta.dirname}/../data/ferries/nyc.bin`);
   const data = decodeLines(
     file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength),
     "ferr",

@@ -33,8 +33,13 @@ const noPref = (over: Partial<RouteWeights> = {}): RouteWeights => ({
   bridge: 0,
   shade: 0,
   shelter: 0,
+  transit: 0,
   allowFerries: false,
   allowSheds: true,
+  // The fixture draws no rail, so nothing can board it, and no crossing edges, which leaves the
+  // crossing gate free either way — stated because omitting it would read as "avoid crossings".
+  allowTransit: false,
+  allowCrossings: true,
   ...over,
 });
 
@@ -43,11 +48,14 @@ interface NodeSpec {
   lng: number;
 }
 
-// A walking edge with its signed shade attribute in (-1, 1); positive is net sunlit, negative shaded.
-interface EdgeSpec {
+// A walking edge's signed shade attribute in (-1, 1); positive is net sunlit, negative shaded.
+interface EdgeAttrs {
+  shade?: number;
+}
+
+interface EdgeSpec extends EdgeAttrs {
   a: number;
   b: number;
-  shade?: number;
 }
 
 function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
@@ -234,8 +242,8 @@ function effectiveCostOf(
 
 // The scenic-cost diamond: 0 -> 3 by an upper path (node 1) or a lower path (node 2), plus snap stubs.
 function diamond(
-  upper: EdgeSpec,
-  lower: EdgeSpec,
+  upper: EdgeAttrs,
+  lower: EdgeAttrs,
   upperLat = 0.001,
   lowerLat = 0.001,
 ): { graph: RoutingGraph; start: Snap; dest: Snap } {
