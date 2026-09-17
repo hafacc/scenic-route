@@ -7,6 +7,7 @@ import {
   type RoutingGraph,
   type SideLabel,
 } from "./graph";
+import type { PassedPoi } from "./pois";
 import type { RouteResult, RouteStep } from "./search";
 
 const SCALE = 1e-6;
@@ -510,4 +511,106 @@ test("an action crossing survives collapsing", () => {
   expect(collapsed.filter((m) => m.kind === "cross")).toHaveLength(1);
   expect(collapsed[1].text).toBe("Cross East 21st Street");
   expect(collapsed[2].turn).toBe("left");
+});
+
+test("starts run forward and hold a passed POI inside its host", () => {
+  // North up 5th Ave (west side), cross E 20 St, continue north (suppressed), left onto E 21 St: the
+  // first fixture's route, so the maneuvers are start(111) / cross(38) / turn(90) / arrive.
+  const graph = makeGraph([
+    [40.74, -73.99], // 0
+    [40.741, -73.99], // 1
+    [40.7412, -73.99], // 2
+    [40.742, -73.99], // 3
+    [40.742, -73.991], // 4 (due west of 3)
+  ]);
+  const result = makeResult(graph, [
+    {
+      a: 0,
+      b: 1,
+      kind: "sidewalk",
+      side: "west",
+      name: "5 AVE",
+      lengthMeters: 111,
+    },
+    {
+      a: 1,
+      b: 2,
+      kind: "crossing",
+      side: null,
+      name: "E 20 ST",
+      lengthMeters: 18,
+    },
+    {
+      a: 2,
+      b: 3,
+      kind: "sidewalk",
+      side: "west",
+      name: "5 AVE",
+      lengthMeters: 20,
+    },
+    {
+      a: 3,
+      b: 4,
+      kind: "sidewalk",
+      side: "north",
+      name: "E 21 ST",
+      lengthMeters: 90,
+    },
+  ]);
+  const passed: PassedPoi[] = [
+    {
+      name: "Flatiron Building",
+      kind: "landmark",
+      stepIndex: 0,
+      alongMeters: 60,
+      at: { lat: 40.7405, lng: -73.99 },
+    },
+    {
+      name: "Metronome",
+      kind: "art",
+      stepIndex: 3,
+      alongMeters: 189,
+      at: { lat: 40.742, lng: -73.9905 },
+    },
+    // Anchored past the end of its host's span, which the splice has to pull back in: an entry out of
+    // order would cut navProgress's scan short.
+    {
+      name: "Worth Square",
+      kind: "landmark",
+      stepIndex: 0,
+      alongMeters: 300,
+      at: { lat: 40.7408, lng: -73.99 },
+    },
+  ];
+  const maneuvers = buildDirections(graph, result, { passed });
+
+  expect(maneuvers.map((m) => m.kind)).toEqual([
+    "start",
+    "landmark",
+    "landmark",
+    "cross",
+    "turn",
+    "art",
+    "arrive",
+  ]);
+  for (let index = 1; index < maneuvers.length; index++) {
+    expect(maneuvers[index].startMeters).toBeGreaterThanOrEqual(
+      maneuvers[index - 1].startMeters,
+    );
+  }
+  expect(maneuvers.map((m) => m.startMeters)).toEqual([
+    0, 60, 111, 111, 149, 189, 239,
+  ]);
+  // Every POI row sits within the span of the maneuver it was spliced into.
+  let host = maneuvers[0];
+  for (const maneuver of maneuvers) {
+    if (maneuver.kind === "landmark" || maneuver.kind === "art") {
+      expect(maneuver.startMeters).toBeGreaterThanOrEqual(host.startMeters);
+      expect(maneuver.startMeters).toBeLessThanOrEqual(
+        host.startMeters + host.lengthMeters,
+      );
+    } else {
+      host = maneuver;
+    }
+  }
 });

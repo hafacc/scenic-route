@@ -97,20 +97,15 @@ export function navProgress(
   const alongMeters = bestAlong;
   const totalMeters = cumulative;
 
-  // Each maneuver spans a contiguous along-route interval; starts[i] is the running length before
-  // maneuver i, so maneuver i covers [starts[i], starts[i + 1]). The arrive maneuver has zero length,
-  // so its start equals the total route length.
   const lastIndex = maneuvers.length - 1;
-  const starts = new Float64Array(maneuvers.length);
-  let running = 0;
-  for (let index = 0; index < maneuvers.length; index++) {
-    starts[index] = running;
-    running += maneuvers[index].lengthMeters;
-  }
 
+  // Each maneuver carries the along-route distance at which it begins, so maneuver i covers
+  // [its start, the next one's) and the arrive row's start is the total route length. The sequence
+  // is non-decreasing rather than increasing, since a landmark row can tie with the row it sits in,
+  // which is why the scan can stop at the first row that begins past the walker.
   let currentManeuver = 0;
   for (let index = 0; index <= lastIndex; index++) {
-    if (starts[index] <= alongMeters) {
+    if (maneuvers[index].startMeters <= alongMeters) {
       currentManeuver = index;
     } else {
       break;
@@ -124,6 +119,9 @@ export function navProgress(
     offRouteMeters: bestDistance,
     currentManeuver,
     nextManeuver,
-    distanceToNextMeters: Math.max(0, starts[nextManeuver] - alongMeters),
+    distanceToNextMeters: Math.max(
+      0,
+      maneuvers[nextManeuver].startMeters - alongMeters,
+    ),
   };
 }
