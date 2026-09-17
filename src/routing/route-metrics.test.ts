@@ -10,7 +10,7 @@ import {
   detourRatio,
   longestCrossingRun,
 } from "./route-metrics";
-import type { RouteResult, RouteStep } from "./search";
+import type { RouteFactors, RouteResult, RouteStep } from "./search";
 import { haversineMeters, type Snap } from "./snap";
 
 // The three route metrics on a hand-built junction, so the whole-city run in
@@ -84,6 +84,7 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
 
   return {
     hash: "",
+    keyHash: "",
     nodeCount,
     edgeCount,
     originLng: 0,
@@ -104,6 +105,7 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
     edgeKindSide,
     edgeSourceId: new Uint32Array(edgeCount).fill(NO_SOURCE_ID),
     edgeOrdinal: new Uint8Array(edgeCount),
+    nodeMidRoadway: new Uint8Array(nodeCount),
     maxCover: 0,
     edgeLandmark: new Uint8Array(edgeCount),
     edgeArt: new Uint8Array(edgeCount),
@@ -123,12 +125,27 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
     edgeDescent: new Uint8Array(edgeCount),
     maxRelief: 0,
     maxDirectCanopy: 0,
+    walkSeconds: null,
     shade: null,
     sheds: null,
+    ferries: null,
     edgeDurationSeconds: new Uint16Array(edgeCount),
     ferryEdges: new Uint32Array(0),
     minFerrySecPerMetre: Number.POSITIVE_INFINITY,
+    // The fixture is pavement and crossings only: no rail at all.
+    transitEdges: new Uint32Array(0),
+    boardEdges: new Uint32Array(0),
+    transitRoutes: [],
+    minRideSecPerMetre: Number.POSITIVE_INFINITY,
+    minAccessSecPerMetre: Number.POSITIVE_INFINITY,
+    transitLaneOf: new Map(),
+    transitStopOf: new Map(),
+    transitRouteOf: new Map(),
+    transitDoorStreet: new Map(),
+    nodePlatform: new Uint8Array(nodeCount),
+    transit: null,
     edgeFlags: new Uint8Array(edgeCount),
+    hasTunnels: false,
     names,
     geometry: new Uint8Array(0),
     ferryEndpointNames: new Map(),
@@ -166,23 +183,32 @@ function routeOver(
     distanceMeters: 0,
     component: 0,
   });
+  // These metrics read the steps and the geometry only, so the trip is reported as costing nothing.
+  const noFactors = (): RouteFactors => ({
+    tree: 0,
+    shade: 0,
+    landmark: 0,
+    art: 0,
+    highway: 0,
+    hill: 0,
+    commercial: 0,
+    industrial: 0,
+    historic: 0,
+    bridge: 0,
+    shelter: 0,
+    ferry: 0,
+  });
   return {
     path: { lats: new Float64Array(0), lngs: new Float64Array(0) },
     steps,
     lengthMeters: steps.reduce((sum, step) => sum + step.lengthMeters, 0),
     walkMeters: steps.reduce((sum, step) => sum + step.lengthMeters, 0),
     travelSeconds: 0,
-    factors: {
-      tree: 0,
-      shade: 0,
-      landmark: 0,
-      art: 0,
-      highway: 0,
-      commercial: 0,
-      industrial: 0,
-      historic: 0,
-      bridge: 0,
-    },
+    transitSeconds: 0,
+    rides: [],
+    ferries: [],
+    factors: noFactors(),
+    factorSeconds: noFactors(),
     start: snap(
       pointOf(
         firstForward ? graph.edgeNodeA[firstEdge] : graph.edgeNodeB[firstEdge],

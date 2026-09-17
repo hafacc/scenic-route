@@ -187,7 +187,11 @@ test("a document saved before the crossings flag was inverted is turned round, n
 
 test("a gate hidden under its old name stays hidden after the rename", () => {
   const { settings } = settingsFrom(
-    { weights: {}, hiddenGates: ["fewerCrossings"] } as Partial<Settings>,
+    // Written under the old spelling, which the current Settings has no name for.
+    {
+      weights: {},
+      hiddenGates: ["fewerCrossings"],
+    } as unknown as Partial<Settings>,
     () => null,
   );
   expect(settings.hiddenGates).toEqual(["allowCrossings"]);

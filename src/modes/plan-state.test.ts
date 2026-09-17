@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Plan } from "../routing/alternatives";
 import type { RoutingGraph } from "../routing/graph";
 import type { RouteResult } from "../routing/search";
-import { ALL_FACTORS, modeById } from "./modes";
+import { ALL_FACTORS, type Mode, modeById } from "./modes";
 import {
   type LandedPlan,
   NO_PLAN,
@@ -11,16 +11,27 @@ import {
   planReducer,
 } from "./plan-state";
 
-const MODE = modeById("naturalist");
-if (MODE === null) {
-  throw new Error("the mode this test is about is gone");
+function modeOrThrow(id: string): Mode {
+  const mode = modeById(id);
+  if (mode === null) {
+    throw new Error("the mode this test is about is gone");
+  } else {
+    return mode;
+  }
 }
+
+const MODE = modeOrThrow("naturalist");
 
 // Nothing here reads a field of any of the three: the reducer only ever moves them around.
 const GRAPH = {} as RoutingGraph;
 const NOON = new Date(2026, 8, 2, 12, 0).getTime();
 const ROUTE = { travelSeconds: 600 } as RouteResult;
-const PLAN = { routes: [], bestByFactor: {}, searches: 4 } as Plan;
+const PLAN: Plan = {
+  routes: [],
+  bestByFactor: {},
+  searches: 4,
+  superseded: false,
+};
 
 function landedPlan(id: number): LandedPlan {
   return { id, graph: GRAPH, mode: MODE, available: ALL_FACTORS, plan: PLAN };

@@ -143,6 +143,7 @@ function feedOf(sailings: readonly string[]): GtfsFeed {
     calendarDates: [],
     shapes: [],
     frequencies: [],
+    transfers: [],
   };
 }
 

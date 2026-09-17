@@ -45,8 +45,13 @@ const weights = (
   bridge: 0,
   shade: 0,
   shelter: 0,
+  transit: 0,
   allowFerries,
   allowSheds: true,
+  // The fixture draws no rail, so nothing can board it, and no crossing edges, which leaves the
+  // crossing gate free either way — stated because omitting it would read as "avoid crossings".
+  allowTransit: false,
+  allowCrossings: true,
 });
 
 interface NodeSpec {
@@ -754,8 +759,11 @@ test("a start-drag anchors the sun at arrival and counts it backward", () => {
     bridge: 0,
     shade: 1,
     shelter: 0,
+    transit: 0,
     allowFerries: false,
     allowSheds: true,
+    allowTransit: false,
+    allowCrossings: true,
   };
 
   // Ground truth: a fresh forward A* from the true start reaches the fork ~900 s in and walks the

@@ -8,7 +8,7 @@ import { createDispatch } from "./dispatch";
 import { graphFactorMax, RoutingEngine } from "./engine";
 import { buildGraph, snapAtNode, weights } from "./ferry.fixture";
 import { clearEdgePathCache } from "./graph";
-import type { RouterRequest, RouterResponse } from "./protocol";
+import type { RouteRequest, RouterRequest, RouterResponse } from "./protocol";
 import { findRoute, type RouteResult } from "./search";
 
 // A real `City` must exist for this id: the engine reads the pier wait and the shade bins off one.
@@ -116,7 +116,9 @@ function fakeWorker(): {
   return { receive: (request) => dispatch.receive(request), sent };
 }
 
-function routeMessage(id: number): RouterRequest {
+function routeMessage(
+  id: number,
+): { type: "route"; id: number } & RouteRequest {
   return {
     type: "route",
     id,
