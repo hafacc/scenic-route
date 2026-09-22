@@ -107,6 +107,20 @@
    invert + hue-rotate over the whole pane, which is why dark mode had near-black streets on a
    brown ground: inverting a style turns its most important lines into its least visible ones. */
 
+/* Pinching the chrome — a toolbar, a panel, a dialog — used to zoom the whole page, which is wrong in
+   something that means to feel like an app. The viewport meta cannot say so: `maximumScale` /
+   `userScalable` make iOS swallow the pinch before Leaflet's touch handlers ever see it, which is the
+   regression #3 was filed for, so the rule lives here instead. It has to be `pan-x pan-y` and not
+   `manipulation`, which only drops the double-tap and leaves pinch-zoom intact; and it has to be on
+   the root rather than `<main>`, because every dialog is portalled straight into `<body>`. Because
+   `touch-action` composes as an INTERSECTION from the touched element up to the root, the map is
+   untouched: leaflet.css already puts `touch-action: none` on `.leaflet-container`, and none ∩ pan-x
+   pan-y is still none, so Leaflet keeps its pinch, pan and double-tap. Scrollable chrome keeps
+   panning on both axes. Only zoom goes away, and only off the map. */
+html {
+  touch-action: pan-x pan-y;
+}
+
 /* THE RULE FOR EVERY SURFACE ANCHORED TO THE VIEWPORT, stated once so the next panel someone adds
    does not have to re-derive it: the outermost VISUAL box (the card or menu, never the shared
    positioning wrapper) carries a max-height of 100dvh less its own anchor offsets and the opposite
