@@ -1,9 +1,9 @@
 # Scenic Route
 
-Nicer ways to walk across New York. The map is the app: it opens at `/` for
-everyone and routes on foot, biasing the path toward tree cover, sun or shade,
-landmarks, public art, nice commercial streets and ferries — and away from
-highways.
+Nicer ways to walk across New York and the Bay Area. The map is the app: it
+opens at `/` for everyone and routes on foot, biasing the path toward tree
+cover, sun or shade, landmarks, public art, nice commercial streets and
+ferries — and away from highways.
 
 ## Using it
 
