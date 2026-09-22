@@ -15,9 +15,9 @@
 // two counties, and the bytes are the published bytes. The zip is a single 5.9 GB member compressed
 // with Deflate64, which neither Bun, macOS's unzip nor libarchive can read.
 //
-// Licence: Pacific Veg Map, which publishes it, states "All of the map data accessible via this
+// License: Pacific Veg Map, which publishes it, states "All of the map data accessible via this
 // site is in the public domain and is freely accessible to all" (read 2026-08-27). The item's own
-// licence field carries a warranty disclaimer and no restriction.
+// license field carries a warranty disclaimer and no restriction.
 
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";

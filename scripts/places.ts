@@ -19,7 +19,7 @@
 // INTERMEDIATE artifact: the shipped search index is still being designed and will read this.
 //
 // Overture places is CDLA-Permissive-2.0, with Apache-2.0 on the rows Foursquare sourced and CC0 on
-// those from AllThePlaces; its one condition is that the licence text travels with the data
+// those from AllThePlaces; its one condition is that the license text travels with the data
 // (scripts/README.md).
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";

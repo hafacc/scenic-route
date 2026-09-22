@@ -1,8 +1,8 @@
 // `bun run scripts/dining.ts`: fetches NYC outdoor dining and writes it as data/dining/nyc.bin (magic
 // DINE) — the sidewalk/roadway café points a future "nice commercial areas" routing factor will read
 // as an outdoor-dining density, the signal for a relaxing storefront corridor (as opposed to merely
-// dense/city-y). Two sources merged: the NYC Dining Out café-licence inventory (Sidewalk|Roadway
-// permits) and OSM outdoor_seating=yes (which carries the cafés the licence set is thin on). Points
+// dense/city-y). Two sources merged: the NYC Dining Out café-license inventory (Sidewalk|Roadway
+// permits) and OSM outdoor_seating=yes (which carries the cafés the license set is thin on). Points
 // only; the commercial overlay snaps these to street segments and highlights the blocks they cluster
 // on. Layout: scripts/README.md.
 
@@ -20,9 +20,9 @@ const DATA_DIR = join(import.meta.dirname, "..", "data");
 const DINING_DIR = join(DATA_DIR, "dining");
 const DINING_MAGIC = "DINE";
 const DINING_FORMAT = 1;
-const DINING_DATASET = "fpeh-f7ci"; // Dining Out NYC sidewalk/roadway café licences
-const DINING_COUNT = 1500; // a floor; ~1,549 licences at the last refresh
-// An OSM café this close to a licensed one is the same establishment; the licence record wins.
+const DINING_DATASET = "fpeh-f7ci"; // Dining Out NYC sidewalk/roadway café licenses
+const DINING_COUNT = 1500; // a floor; ~1,549 licenses at the last refresh
+// An OSM café this close to a licensed one is the same establishment; the license record wins.
 const OSM_SEATING_DEDUP_METERS = 30;
 
 interface DiningRow {
@@ -108,7 +108,7 @@ export async function ingestDining(
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   const kib = (bytes.length / 1024).toFixed(1);
   console.error(
-    `dining: licences ${licensed.length} on land, OSM ${osmRaw.length} fetched / ${osmOnLand.length} on land / ${osm.length} kept after dedup, ${points.length} total, ${kib} KiB in ${seconds}s`,
+    `dining: licenses ${licensed.length} on land, OSM ${osmRaw.length} fetched / ${osmOnLand.length} on land / ${osm.length} kept after dedup, ${points.length} total, ${kib} KiB in ${seconds}s`,
   );
   return {
     file,

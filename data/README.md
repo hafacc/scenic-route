@@ -62,7 +62,7 @@ than from a municipal survey — the same line, drawn the same way.
 **NYC Open Data** (no OSM), so they carry no share-alike obligation — see below.
 
 `subway/sf.bin` carries no OSM either, and its two feeds are licensed rather than merely published.
-**BART**'s GTFS is public with no restriction. **SFMTA**'s comes with a licence agreement in the zip
+**BART**'s GTFS is public with no restriction. **SFMTA**'s comes with a license agreement in the zip
 that permits redistribution and derived works, forbids using Muni's or the City's trademarks, logos
 and maps, and requires every derivative to bear this notice:
 
@@ -85,7 +85,7 @@ covers with attribution alone — which the app gives, in the Leaflet attributio
 
 The **ferry** sources are not from OSM. The **Staten Island Ferry** feed is NYC DOT's, published on
 NYC Open Data terms (Local Law 11 of 2012, no usage restriction). The **NYC Ferry** feed (operated
-by Hornblower for NYCEDC, served through Connexionz) ships with **no explicit licence** in the feed —
+by Hornblower for NYCEDC, served through Connexionz) ships with **no explicit license** in the feed —
 it is a public GTFS feed published for consumption by transit apps; there is no share-alike clause,
 and the app attributes "NYC Ferry" as a courtesy. `ferries/nyc.bin` mixes the two, so it inherits
 neither OSM's ODbL nor any restriction.

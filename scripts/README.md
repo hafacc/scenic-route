@@ -368,7 +368,7 @@ cached once, about four minutes on a warm connection.
 
 **License:** public domain. Pacific Veg Map, which publishes it, states verbatim: "All of the map
 data accessible via this site is in the public domain and is freely accessible to all". The item's
-own licence field carries a warranty disclaimer and no restriction. Attribution — a courtesy, not an
+own license field carries a warranty disclaimer and no restriction. Attribution — a courtesy, not an
 obligation — is "Canopy © EBRPD / CAL FIRE / Tukman Geospatial (ALCC 1 m LiDAR)".
 
 #### The East Bay's two registers, one of them frozen
@@ -399,7 +399,7 @@ Five of the seven East Bay municipalities — Albany, Emeryville, Piedmont, Alam
 publish no register at all. The genus overlay simply thins out over them; the cover field and the
 shade do not, because neither reads these points.
 
-Neither city states a licence. Oakland's sits on its open-data hub with no terms; Berkeley's layer
+Neither city states a license. Oakland's sits on its open-data hub with no terms; Berkeley's layer
 credits Arborwell and the city's Parks and IT departments and states no restriction. Both are
 credited in the About dialog as a courtesy.
 
@@ -1649,12 +1649,12 @@ decides whether a business is in the file at all and then goes no further — a 
 reads as a database where the names read as a neighbourhood. Overlay only for now: no per-edge byte,
 so the router does not yet prefer walking past them.
 
-The sources are **curated registers**, not licence dates, and that took a survey to settle. San
+The sources are **curated registers**, not license dates, and that took a survey to settle. San
 Francisco's is the Office of Small Business's **Legacy Business Registry** (its own ArcGIS layer,
 not on DataSF's Socrata; 537 locations, an establishment date on every one, of which 271 are 50+),
 and New York's is New York **State**'s **Historic Business Preservation Registry** (321 statewide, 50
 inside the city's land mask; the city has no register of its own, only a Council bill pending since
-2018). The licence-date version of this layer is not weak but impossible, and each of these is a
+2018). The license-date version of this layer is not weak but impossible, and each of these is a
 measured fact rather than a suspicion: NYC's DCWP file covers regulated trades — home-improvement
 contractors, tobacco dealers, sightseeing guides, not diners — and holds nothing before 1994 except
 102 sentinel rows dated 1900; the State Liquor Authority's `originalissuedate` has a statewide
@@ -2778,7 +2778,7 @@ The whole S3 read is cached under `.cache/` keyed by the query itself, so a chan
 outline lands on a different entry rather than reusing the old one, and `REFRESH=1` goes back to the
 network regardless. A re-run off the cache is two seconds.
 
-**Licence.** Overture places is **CDLA-Permissive-2.0**, with **Apache-2.0** on the rows Foursquare
+**License.** Overture places is **CDLA-Permissive-2.0**, with **Apache-2.0** on the rows Foursquare
 sourced and **CC0-1.0** on those from AllThePlaces. There is no OpenStreetMap in the places theme, so
 none of this is ODbL and none of it may be merged into an artifact that is. CDLA-Permissive-2.0 asks
 one thing (§2.1): that the text of the agreement travel with the data. No share-alike, and no
@@ -4169,7 +4169,7 @@ edges, or splits onto a different side, or disappears: ordinals are handed out 0
 key and moves the pavement under it — the same street re-digitized in place, or two edges of one
 source swapping ordinals. That is what step 3 below is unconditional for: a refresh re-places the
 whole history whether or not the gate would have fired, and the gate is the backstop for the refresh
-someone forgot, not a licence to skip one.
+someone forgot, not a license to skip one.
 
 1. Re-fetch and commit the sources — `REFRESH=1 bun run build-tree-data:<city>`, plus whichever of
    `build-buildings`, `build-dining`, `build-landuse`, `build-openstreets` the refresh covers. A

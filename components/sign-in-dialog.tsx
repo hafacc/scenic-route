@@ -2,10 +2,10 @@
 
 import { FirebaseError } from "firebase/app";
 import { AuthErrorCodes } from "firebase/auth";
-import { type FormEvent, useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { type FormEvent, useState } from "react";
 import { FiLogIn, FiMapPin, FiX } from "react-icons/fi";
 import { sendPasswordReset, signIn } from "../src/firebase";
+import { Sheet } from "./sheet-shell";
 
 interface SignInDialogProps {
   onClose: () => void;
@@ -41,16 +41,6 @@ export default function SignInDialog({ onClose }: SignInDialogProps) {
   const [isBusy, setIsBusy] = useState<boolean>(false);
   const [isResetting, setIsResetting] = useState<boolean>(false);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(null);
@@ -84,107 +74,103 @@ export default function SignInDialog({ onClose }: SignInDialogProps) {
     }
   };
 
-  // Portalled to the body at a z-index above the toolbar: the toolbar that opens these sits in a
-  // stacking context of its own at z-1200, and a dialog left inside the page's layers paints under
-  // its buttons while its scrim no longer blocks them.
-  return createPortal(
-    <div className="fixed inset-0 z-[1300] flex items-end justify-center md:items-center">
-      <button
-        type="button"
-        aria-label="Close sign in"
-        onClick={onClose}
-        className="absolute inset-0 cursor-default bg-slate-950/40 backdrop-blur-sm"
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="sign-in-title"
-        className="relative max-h-[90dvh] w-full overflow-y-auto rounded-t-3xl bg-white p-6 shadow-2xl ring-1 ring-black/5 dark:bg-slate-800 dark:ring-white/10 md:max-w-sm md:rounded-3xl md:p-7"
-      >
-        <div className="flex items-start gap-3">
-          <span className="scenic-logo-pin grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-lg">
-            <FiMapPin className="h-5 w-5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <h2
-              id="sign-in-title"
-              className="text-lg font-semibold tracking-tight"
-            >
-              Scenic Route
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Sign in to drop and edit pins
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isBusy}
-            className="-m-1 grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
-            aria-label="Close"
+  return (
+    <Sheet
+      onClose={onClose}
+      closeLabel="Close sign in"
+      labelledBy="sign-in-title"
+      width="md:max-w-sm"
+    >
+      <div className="flex shrink-0 items-start gap-3">
+        <span className="scenic-logo-pin grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-lg">
+          <FiMapPin className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2
+            id="sign-in-title"
+            className="text-lg font-semibold tracking-tight"
           >
-            <FiX />
-          </button>
+            Scenic Route
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Sign in to drop and edit pins
+          </p>
         </div>
-        <form onSubmit={submit} className="mt-6 flex flex-col gap-3">
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-slate-600 dark:text-slate-300">
-              Email
-            </span>
-            <input
-              type="email"
-              required
-              autoComplete="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-brand-400 focus:bg-white focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-900 dark:focus:border-brand-500 dark:focus:bg-slate-900 dark:focus:ring-brand-500/20"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-slate-600 dark:text-slate-300">
-              Password
-            </span>
-            <input
-              type="password"
-              required
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none transition focus:border-brand-400 focus:bg-white focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-900 dark:focus:border-brand-500 dark:focus:bg-slate-900 dark:focus:ring-brand-500/20"
-            />
-          </label>
-          {error ? (
-            <div className="rounded-xl bg-rose-100 px-3 py-2 text-xs text-rose-800 dark:bg-rose-900/40 dark:text-rose-100">
-              {error}
-            </div>
-          ) : null}
-          {info ? (
-            <div className="rounded-xl bg-emerald-100 px-3 py-2 text-xs text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-100">
-              {info}
-            </div>
-          ) : null}
-          <button
-            type="submit"
-            disabled={isBusy}
-            className="mt-2 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-brand-500 to-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:from-brand-600 hover:to-brand-700 disabled:opacity-50"
-          >
-            <FiLogIn />
-            Sign in
-          </button>
-        </form>
         <button
           type="button"
-          onClick={handleReset}
-          disabled={isResetting}
-          className="mt-4 text-xs text-slate-500 underline-offset-2 hover:text-brand-600 hover:underline disabled:opacity-50 dark:text-slate-400 dark:hover:text-brand-400"
+          onClick={onClose}
+          disabled={isBusy}
+          className="-m-1 grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+          aria-label="Close"
         >
-          {isResetting ? "Sending reset link…" : "Forgot password?"}
+          <FiX />
         </button>
-        <p className="mt-4 text-[11px] text-slate-400 dark:text-slate-500">
-          Accounts are created by an admin.
-        </p>
       </div>
-    </div>,
-    document.body,
+      {/* The form is the one thing that scrolls, so the header above it and the reset link below it
+          stay put when the keyboard shortens the card. Its rows do not shrink: a squashed input is
+          worse than a scroll. */}
+      <form
+        onSubmit={submit}
+        className="mt-6 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain"
+      >
+        <label className="flex shrink-0 flex-col gap-1 text-sm">
+          <span className="font-medium text-slate-600 dark:text-slate-300">
+            Email
+          </span>
+          {/* 16px on a phone: iOS Safari zooms the whole page in on a focused control whose text
+              is any smaller, which crops the sheet it was typed into. */}
+          <input
+            type="email"
+            required
+            autoComplete="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-base outline-none transition focus:border-brand-400 focus:bg-white focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-900 dark:focus:border-brand-500 dark:focus:bg-slate-900 dark:focus:ring-brand-500/20 md:text-sm"
+          />
+        </label>
+        <label className="flex shrink-0 flex-col gap-1 text-sm">
+          <span className="font-medium text-slate-600 dark:text-slate-300">
+            Password
+          </span>
+          <input
+            type="password"
+            required
+            autoComplete="current-password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-base outline-none transition focus:border-brand-400 focus:bg-white focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-900 dark:focus:border-brand-500 dark:focus:bg-slate-900 dark:focus:ring-brand-500/20 md:text-sm"
+          />
+        </label>
+        {error ? (
+          <div className="rounded-xl bg-rose-100 px-3 py-2 text-xs text-rose-800 dark:bg-rose-900/40 dark:text-rose-100">
+            {error}
+          </div>
+        ) : null}
+        {info ? (
+          <div className="rounded-xl bg-emerald-100 px-3 py-2 text-xs text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-100">
+            {info}
+          </div>
+        ) : null}
+        <button
+          type="submit"
+          disabled={isBusy}
+          className="mt-2 inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-brand-500 to-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:from-brand-600 hover:to-brand-700 disabled:opacity-50"
+        >
+          <FiLogIn />
+          Sign in
+        </button>
+      </form>
+      <button
+        type="button"
+        onClick={handleReset}
+        disabled={isResetting}
+        className="mt-4 shrink-0 self-start text-xs text-slate-500 underline-offset-2 hover:text-brand-600 hover:underline disabled:opacity-50 dark:text-slate-400 dark:hover:text-brand-400"
+      >
+        {isResetting ? "Sending reset link…" : "Forgot password?"}
+      </button>
+      <p className="mt-4 shrink-0 text-[11px] text-slate-400 dark:text-slate-500">
+        Accounts are created by an admin.
+      </p>
+    </Sheet>
   );
 }

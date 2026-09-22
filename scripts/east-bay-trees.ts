@@ -17,7 +17,7 @@
 // feeds get, and for the same reason. `bun run scripts/east-bay-trees.ts --snapshot` is what
 // rewrites the copy; nothing in a build ever touches the live layer.
 //
-// Licences, for the record. Neither city states one. Oakland's sits on its open-data hub with no
+// Licenses, for the record. Neither city states one. Oakland's sits on its open-data hub with no
 // terms and no share-alike; Berkeley's layer credits "Arborwell. City of Berkeley Parks, Recreation
 // & Waterfront - Parks Division. City of Berkeley Information Technology Department." and states no
 // restriction. Both are credited in the About dialog as a courtesy.

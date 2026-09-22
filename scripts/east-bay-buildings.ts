@@ -8,7 +8,7 @@
 // takes the 75th percentile of the cells under each footprint, and this joins that reading back to
 // the footprint it was taken under and merges it with what Overture published.
 //
-// The footprints themselves are still Overture's — ODbL, the same licence as the OSM footways
+// The footprints themselves are still Overture's — ODbL, the same license as the OSM footways
 // already shipped — read out of its GeoParquet the way scripts/places.ts reads the places theme:
 // every row carries its own bounding box, so naming the city's box reads only the byte ranges that
 // hold it. They are clipped to the same seven municipalities scripts/alameda.ts builds the rest of
