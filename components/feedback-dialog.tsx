@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { FiCheck, FiMessageSquare, FiSend, FiX } from "react-icons/fi";
 import { sendFeedback } from "../src/firebase";
+import { Sheet } from "./sheet-shell";
 
 interface FeedbackDialogProps {
   onClose: () => void;
@@ -67,16 +67,6 @@ export default function FeedbackDialog({ onClose }: FeedbackDialogProps) {
     };
   }, []);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   const handleChange = (next: string) => {
     setText(next);
     writeDraft(next);
@@ -103,49 +93,40 @@ export default function FeedbackDialog({ onClose }: FeedbackDialogProps) {
     setSent(navigator.onLine ? "online" : "offline");
   };
 
-  // Portalled to the body because the toolbar that opens this dialog sits in a z-indexed wrapper of
-  // its own, and no z-index inside that stacking context clears the map furniture — on a phone the
-  // layer legend lands on top of the buttons and eats the taps.
-  return createPortal(
-    <div className="fixed inset-0 z-[1300] flex items-end justify-center md:items-center">
-      <button
-        type="button"
-        aria-label="Close feedback"
-        onClick={onClose}
-        className="absolute inset-0 cursor-default bg-slate-950/40 backdrop-blur-sm"
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="feedback-title"
-        className="relative max-h-[90dvh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl ring-1 ring-black/5 dark:bg-slate-800 dark:ring-white/10 md:max-w-md md:rounded-3xl md:p-6"
-      >
-        <div className="flex items-start gap-3">
-          <span className="mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-md">
-            <FiMessageSquare className="h-5 w-5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <h2
-              id="feedback-title"
-              className="text-base font-semibold text-slate-900 dark:text-slate-100"
-            >
-              Feedback
-            </h2>
-            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              Goes straight to the maintainer
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="-m-1 grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
-            aria-label="Close"
+  return (
+    <Sheet
+      onClose={onClose}
+      closeLabel="Close feedback"
+      labelledBy="feedback-title"
+      width="md:max-w-md"
+    >
+      <div className="flex shrink-0 items-start gap-3">
+        <span className="mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-md">
+          <FiMessageSquare className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2
+            id="feedback-title"
+            className="text-base font-semibold text-slate-900 dark:text-slate-100"
           >
-            <FiX />
-          </button>
+            Feedback
+          </h2>
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+            Goes straight to the maintainer
+          </p>
         </div>
-        {sent ? (
-          <>
+        <button
+          type="button"
+          onClick={onClose}
+          className="-m-1 grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+          aria-label="Close"
+        >
+          <FiX />
+        </button>
+      </div>
+      {sent ? (
+        <>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
             <div className="mt-5 flex items-center gap-2.5 text-sm text-slate-700 dark:text-slate-200">
               <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
                 <FiCheck className="h-4 w-4" />
@@ -164,25 +145,32 @@ export default function FeedbackDialog({ onClose }: FeedbackDialogProps) {
                 visits, keep the tab open until you are back online.
               </p>
             ) : null}
-            <div className="mt-5 flex justify-end">
-              <button
-                type="button"
-                onClick={onClose}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-brand-500 to-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:from-brand-600 hover:to-brand-700"
-              >
-                Done
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
+          </div>
+          <div className="mt-5 flex shrink-0 justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-brand-500 to-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:from-brand-600 hover:to-brand-700"
+            >
+              Done
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          {/* The note is the one thing that gives way: the title above it and the buttons below it
+              stay put, and the box shrinks to its floor before the sheet does — which is what keeps
+              Send reachable while a phone keyboard is up. */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
             {error ? (
-              <div className="mt-4 rounded-xl bg-rose-100 px-3 py-2 text-xs text-rose-800 dark:bg-rose-900/40 dark:text-rose-100">
+              <div className="mt-4 shrink-0 rounded-xl bg-rose-100 px-3 py-2 text-xs text-rose-800 dark:bg-rose-900/40 dark:text-rose-100">
                 {error}
               </div>
             ) : null}
-            <label className="mt-4 block">
+            <label className="mt-4 flex min-h-0 flex-col">
               <span className="sr-only">Your feedback</span>
+              {/* 16px on a phone: iOS Safari zooms the whole page in on a focused control whose
+                  text is any smaller, and this one is focused the moment the sheet opens. */}
               <textarea
                 ref={textareaRef}
                 value={text}
@@ -190,36 +178,35 @@ export default function FeedbackDialog({ onClose }: FeedbackDialogProps) {
                 placeholder="What's broken, confusing, or missing?"
                 rows={6}
                 maxLength={MAX_CHARS}
-                className="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 p-3.5 text-sm leading-relaxed text-slate-800 outline-none transition focus:border-brand-400 focus:bg-white focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-brand-500 dark:focus:bg-slate-900 dark:focus:ring-brand-500/20"
+                className="min-h-20 w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 p-3.5 text-base leading-relaxed text-slate-800 outline-none transition focus:border-brand-400 focus:bg-white focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-brand-500 dark:focus:bg-slate-900 dark:focus:ring-brand-500/20 md:text-sm"
               />
             </label>
             {used >= COUNTER_FROM ? (
-              <p className="mt-1 text-right text-xs tabular-nums text-slate-400 dark:text-slate-500">
+              <p className="mt-1 shrink-0 text-right text-xs tabular-nums text-slate-400 dark:text-slate-500">
                 {used.toLocaleString()} / {MAX_BYTES.toLocaleString()}
               </p>
             ) : null}
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded-xl px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSend}
-                disabled={!text.trim() || used > MAX_BYTES}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-brand-500 to-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:from-brand-600 hover:to-brand-700 disabled:opacity-50"
-              >
-                <FiSend />
-                Send
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>,
-    document.body,
+          </div>
+          <div className="mt-4 flex shrink-0 items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-xl px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={!text.trim() || used > MAX_BYTES}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-br from-brand-500 to-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:from-brand-600 hover:to-brand-700 disabled:opacity-50"
+            >
+              <FiSend />
+              Send
+            </button>
+          </div>
+        </>
+      )}
+    </Sheet>
   );
 }
