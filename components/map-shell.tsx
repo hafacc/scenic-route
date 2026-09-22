@@ -62,6 +62,7 @@ import {
 } from "../src/routing/contexts";
 import type { RouteWeights } from "../src/routing/cost";
 import { buildDirections, type Maneuver } from "../src/routing/directions";
+import { endpointCity } from "../src/routing/endpoint-city";
 import { loadGraph, type RoutingGraph } from "../src/routing/graph";
 import { type NavProgress, navProgress } from "../src/routing/nav-progress";
 import { loadPois, type PoiSet, passedPois } from "../src/routing/pois";
@@ -359,6 +360,10 @@ interface MapShellProps {
   onSelectLine?: (index: number) => void;
   // Which line the pointer is over, for a deck that draws it the way the chosen one is drawn.
   onHoverLine?: (index: number | null) => void;
+  // Called when the shell drops the route on its own — the city moved away from the one the
+  // endpoints were picked in — so a caller holding its own directions-open state lets go of it too.
+  // Not called from the deck's own close button: that path already knows.
+  onRoutingReset?: () => void;
   // Modes floats the overlay keys under the follow button on a phone, its card being the whole
   // bottom there; a wide screen has room for them where they have always been.
   legends?: "bottom-left" | "top-left" | "top-left-on-phone";
@@ -395,6 +400,7 @@ export default function MapShell({
   lines,
   onSelectLine,
   onHoverLine,
+  onRoutingReset,
   legends = "bottom-left",
   ownSearch = true,
   alwaysRouting = false,
@@ -579,6 +585,11 @@ export default function MapShell({
   // callback whenever its plan changes, and depending on it would search again on its own answer.
   const solveRef = useRef<MapShellProps["solve"]>(solve);
   solveRef.current = solve;
+  // Through a ref for the same reason, on the other side: the city effect below would otherwise
+  // re-run — and the caller's handler is not what should decide when a city has been left.
+  const routingResetRef =
+    useRef<MapShellProps["onRoutingReset"]>(onRoutingReset);
+  routingResetRef.current = onRoutingReset;
 
   // The armed tap answers the search box instead of the destination: the deck is still asking where
   // to go, and an answer there is a place found, not a walk begun. A start armed by hand still sets
@@ -758,9 +769,28 @@ export default function MapShell({
   const followLive =
     following && (userLocation === null || routableLocation !== null);
 
+  // Closing directions clears everything but the slider values. Its own control does this, so does
+  // opening the search, which takes the slot the panel was in, and so does the city moving away from
+  // the endpoints below. Declared here, above the effect that uses it, rather than down with the
+  // other panel handlers.
+  const closeRouting = useCallback(() => {
+    setDest(null);
+    setManualStart(null);
+    setPickTarget(null);
+    setRouteState({ kind: "idle" });
+    routedForRef.current = null;
+    // The peek bar is a way of getting a computed route out of the way, so it has no meaning over
+    // an empty panel: without this, closing directions while minimized and opening them again
+    // brings back a slim bar with nothing in it and no obvious way to see the fields.
+    setPanelMinimized(false);
+    setRoutingOpen(false);
+  }, []);
+
   // A route belongs to the city it was found in, so leaving that city ends it: its endpoints are
   // points the new city's graph cannot reach, and keeping them only turns the panel into an error
-  // about a destination nobody is still asking for. The panel stays open, asking for a new one.
+  // about a destination nobody is still asking for. Switching region is arriving somewhere new, not
+  // an open question about the city just left, so this is the whole close — the same clean slate a
+  // visitor landing in the new city gets, down to the panel a caller opened for itself.
   //
   // Stated once here rather than called from each of the four places that change city, because those
   // callers cannot tell a switch apart from the city simply arriving: the link's own city lands in
@@ -769,36 +799,33 @@ export default function MapShell({
   // the endpoints record which city they were picked in, and only a change away from THAT clears
   // them. Ordered before the search effect so it never runs a pass on endpoints from another city.
   useEffect(() => {
-    if (!dest && !manualStart) {
-      endpointCityRef.current = null;
-      return;
-    }
-    if (endpointCityRef.current === null) {
-      endpointCityRef.current = city.id;
-    } else if (endpointCityRef.current !== city.id) {
-      endpointCityRef.current = null;
-      setDest(null);
-      setManualStart(null);
-      setPickTarget(null);
-      setRouteState({ kind: "idle" });
-      routedForRef.current = null;
+    const { recorded, left } = endpointCity(
+      endpointCityRef.current,
+      city.id,
+      dest !== null || manualStart !== null,
+    );
+    endpointCityRef.current = recorded;
+    if (left) {
+      closeRouting();
       routerClient().reset();
+      routingResetRef.current?.();
     }
-  }, [city, dest, manualStart]);
+  }, [city, dest, manualStart, closeRouting]);
 
   // A searched pin belongs to the city it was found in exactly as the endpoints above do: its name
   // came out of that city's index, the other city cannot draw it, and a share link would otherwise
   // pair one city's key with the other city's point. Its own ref for the same reason theirs exists —
   // a link's city lands in the same commit as the pin it carried, which is the pin arriving rather
-  // than a switch away from it.
+  // than a switch away from it, and the same rule tells the two apart.
   const pinCityRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!searchPin) {
-      pinCityRef.current = null;
-    } else if (pinCityRef.current === null) {
-      pinCityRef.current = city.id;
-    } else if (pinCityRef.current !== city.id) {
-      pinCityRef.current = null;
+    const { recorded, left } = endpointCity(
+      pinCityRef.current,
+      city.id,
+      searchPin !== null,
+    );
+    pinCityRef.current = recorded;
+    if (left) {
       setSearchPin(null);
     }
   }, [city, searchPin]);
@@ -1144,21 +1171,6 @@ export default function MapShell({
 
   const handleToggleMinimize = useCallback(() => {
     setPanelMinimized((on) => !on);
-  }, []);
-
-  // Closing directions clears everything but the slider values. Its own control does this, and so
-  // does opening the search, which takes the slot the panel was in.
-  const closeRouting = useCallback(() => {
-    setDest(null);
-    setManualStart(null);
-    setPickTarget(null);
-    setRouteState({ kind: "idle" });
-    routedForRef.current = null;
-    // The peek bar is a way of getting a computed route out of the way, so it has no meaning over
-    // an empty panel: without this, closing directions while minimized and opening them again
-    // brings back a slim bar with nothing in it and no obvious way to see the fields.
-    setPanelMinimized(false);
-    setRoutingOpen(false);
   }, []);
 
   // Answering the destination box — by picking a row, by clearing it, or by tapping the map — retires

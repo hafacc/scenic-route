@@ -282,7 +282,10 @@ export default function Modes() {
   }, [recapture]);
 
   // Everything the directions screen was about, dropped together: the shell has already let go of
-  // the endpoints and the route by the time this runs.
+  // the endpoints and the route by the time this runs. Both the close button and the shell dropping
+  // the route on its own — a region switch, which leaves the endpoints in a city nobody is looking
+  // at — come through here, so either way the card goes back to the mode rather than to an empty
+  // directions screen.
   const handleClose = useCallback(() => {
     setDirectionsOpen(false);
     setAlt(null);
@@ -346,6 +349,7 @@ export default function Modes() {
       lines={lines}
       onSelectLine={handleSelectLine}
       onHoverLine={setHovered}
+      onRoutingReset={handleClose}
       legend={legend}
       legends="top-left-on-phone"
       ownSearch={false}
