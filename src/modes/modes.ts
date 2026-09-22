@@ -82,7 +82,7 @@ export const MODES: readonly Mode[] = [
     // The deep half of the canopy ramp; its pale end is a wash, not a line.
     palette: CANOPY_HEX.light.slice(3),
     overlays: ["canopy"],
-    weights: { tree: 1, bridge: 1, industrial: 1, transit: 1 },
+    weights: { tree: 1, bridge: 1, highway: 1, industrial: 1, transit: 1 },
     allowSheds: false,
     needs: ["tree"],
   },
