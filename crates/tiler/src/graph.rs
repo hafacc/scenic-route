@@ -77,7 +77,7 @@ const ALLEY: u8 = 10;
 const SWLK_SIDEWALK: u8 = 20;
 
 /// The two ceilings the existence gate is held to: the share of derived sidewalk km the gate
-/// dropped, and the 90th-percentile share of one half-kilometre cell's street km left with no
+/// dropped, and the 90th-percentile share of one half-kilometer cell's street km left with no
 /// pavement at all. Both bound the same failure — a STRT file whose per-side bits went unstamped
 /// reads as a region with no pavement anywhere — but what counts as an implausible silence depends
 /// on how much of the region anybody ever surveyed, so they are authored per region in the plan
@@ -103,10 +103,10 @@ pub const SURVEYED_CEILINGS: ExistenceCeilings = ExistenceCeilings {
 // flags, so they never mix within one edge.
 const GRPH_STRUCTURE: u8 = 1 << 0; // on a bridge or tunnel deck
 const GRPH_STEPS: u8 = 1 << 1; // a step street (rw_type 7)
-// A walking line the graph takes as drawn rather than offsetting from a centreline: a boardwalk,
+// A walking line the graph takes as drawn rather than offsetting from a centerline: a boardwalk,
 // path, steps or non-vehicular deck, a street the gate demoted to its middle, and every OSM way.
 // NOT the same as a zero half-offset any more — a matched OSM sidewalk keeps this flag and borrows
-// its street's half-offset, which is what the shed's deck depth infers the kerb from.
+// its street's half-offset, which is what the shed's deck depth infers the curb from.
 const GRPH_PATHLIKE: u8 = 1 << 2;
 // Written into the final edge record's flags byte (byte 23, bit 3): an OSM-sourced walking edge —
 // a path, or a sidewalk or crossing OSM drew — as against a CSCL-derived one. The crossing
@@ -156,7 +156,7 @@ const FLAG_GEOMETRY_RIGHT: u8 = 1 << 2; // this sidewalk lies right of its store
 // which nothing outside this file read — is gone.
 const GRAPH_FORMAT: u16 = 12;
 // The field the relief is sampled off is built at this zoom's pixel size — about 5 m at San
-// Francisco's latitude. Finer than the block a grade is measured over, coarser than the metre the
+// Francisco's latitude. Finer than the block a grade is measured over, coarser than the meter the
 // DEM is published at, and a whole city of it is tens of megabytes rather than gigabytes.
 const RELIEF_FIELD_ZOOM: u32 = 15;
 // 64 fixed header bytes, then a 48-entry (offset, length, column tag) section directory of which v12
@@ -184,7 +184,7 @@ const UNNAMED: u16 = 0xFFFF;
 pub const DECIMETERS_PER_METER: f64 = 10.0; // the half-offset byte's unit, as the chunk uses
 const STEP_STREET: u8 = 7;
 const TUNNEL_STREET: u8 = 4; // CSCL rw_type 4, as against 3 for a bridge
-// A sidewalk's baked geometry runs corner-to-corner (the centreline offset to its side, with the
+// A sidewalk's baked geometry runs corner-to-corner (the centerline offset to its side, with the
 // two end vertices replaced by the corner nodes), so its length is the geodesic sum of that
 // polyline; it is clamped up to the straight corner-to-corner distance only if quantization ever
 // leaves it a hair short, keeping the A* heuristic admissible. The chord that decides the N/S/E/W
@@ -196,7 +196,7 @@ const EARTH_RADIUS_METERS: f64 = 6_371_000.0; // matches the client's haversineM
 // The chunk offset uses the manifest's sidewalkInsetMeters; this pass is handed the street file and
 // no manifest, so it mirrors that value here. It never turns a width-based offset into 0, and the
 // path-like road types return 0 regardless, so the PATHLIKE classification does not depend on it —
-// only the exact decimetre byte does, and this keeps it identical to the chunk the street layer
+// only the exact decimeter byte does, and this keeps it identical to the chunk the street layer
 // draws.
 const SIDEWALK_INSET_METERS: f64 = 2.0;
 
@@ -213,7 +213,7 @@ const FERRY_SNAP_RADIUS_METERS: f64 = 250.0;
 const TRANSIT_SNAP_RADIUS_METERS: f64 = 250.0;
 // How near a walking edge stands to a station's own point to be one of its ways in. A station gets a
 // door on every such edge, not only the nearest: which edge is nearest is an accident of a few
-// metres, and a lone door on the far side of an avenue sends every walk out of the station up to the
+// meters, and a lone door on the far side of an avenue sends every walk out of the station up to the
 // crossing and back.
 const TRANSIT_ENTRANCE_RADIUS_METERS: f64 = 40.0;
 // Enough doors for both sides of an avenue and the street a station stands on, few enough that a
@@ -224,7 +224,7 @@ const TRANSIT_ENTRANCES_MAX: usize = 6;
 const ACCESS_WALK_METERS_PER_SECOND: f64 = 1.3;
 // What the walk in and out of a station costs, baked rather than measured: down a stair, along a
 // mezzanine and through a gate for a station the feed models as an enclosed place, and a step off
-// the kerb for one it models as a stop on the pavement. The way out is the shorter one either way —
+// the curb for one it models as a stop on the pavement. The way out is the shorter one either way —
 // nobody queues to leave — so every alight edge takes the surface figure.
 const UNDERGROUND_ACCESS_SECONDS: u16 = 90;
 const SURFACE_ACCESS_SECONDS: u16 = 30;
@@ -250,15 +250,15 @@ const ACCESS_ELEVATOR: u8 = 1 << 7;
 const RIDE_STAY_ABOARD: u8 = 1 << 6;
 // The seam radius: how far from where a corner would be placed OSM's own corner may stand and still
 // be that corner. A fan corner sits one averaged half-offset out along the gap bisector, and OSM's
-// kerb ramp sits at the true corner of the roadway, so the two differ by the difference between the
+// curb ramp sits at the true corner of the roadway, so the two differ by the difference between the
 // two flanking half-offsets — under 10 m even where a narrow street meets an avenue.
 const SEAM_RADIUS_METERS: f64 = 12.0;
 // And how far a corner that could not *be* an OSM node will reach to join one. A corner the fan had
 // to invent — because a derived sidewalk or a park path binds to it — still has to reach the mapped
-// pavement of the side beside it, or the two networks pass within metres of each other and never
+// pavement of the side beside it, or the two networks pass within meters of each other and never
 // meet. This is the reach of that join, which the graph draws as a link edge.
 const SEAM_LINK_METERS: f64 = 20.0;
-// The kerb cut. Neither radius is a new number: the cut exists only to hand the seam above the node
+// The curb cut. Neither radius is a new number: the cut exists only to hand the seam above the node
 // it is short of, so it is bounded by that seam's own two reaches. A corner cuts the pavement only
 // where it would then *stand* on the cut — past the seam radius the corner could not resolve onto it
 // and the cut would be a node nothing binds to. And it cuts only where the way's own nearest node is
@@ -268,17 +268,17 @@ const SEAM_LINK_METERS: f64 = 20.0;
 // within 1 m of the line and the tail decays smoothly — but the detour does: 83% of pairs have a way
 // node within 8 m along the pavement, and past 10 m the distribution flattens into the tail these
 // two radii sit well inside.
-const KERB_CUT_METERS: f64 = SEAM_RADIUS_METERS;
-const KERB_CUT_DETOUR_METERS: f64 = SEAM_LINK_METERS;
+const CURB_CUT_METERS: f64 = SEAM_RADIUS_METERS;
+const CURB_CUT_DETOUR_METERS: f64 = SEAM_LINK_METERS;
 // Two cut positions, or a cut and an existing vertex, within 2 m are one: a cut beside a vertex
 // joins it rather than shedding a sliver edge, as the CSCL splits do.
 const SPLIT_MERGE_METERS: f64 = 2.0;
 // How far round an OSM crossing path may go and still count as serving the corner pair a
 // synthesized crossing joins: a marked crossing that doglegs through a traffic island is longer than
-// the straight line between the two kerbs, and is still the crossing.
+// the straight line between the two curbs, and is still the crossing.
 const SUPPRESSION_SLACK: f64 = 1.5;
 // The seam repair's reach. Where OSM's mapping of a side stops short of the corner the derived
-// pavement reaches, the two stand a few metres apart with no edge between them; this is how far the
+// pavement reaches, the two stand a few meters apart with no edge between them; this is how far the
 // repair will look for the other half before giving up and reporting the gap.
 const SEAM_REPAIR_METERS: f64 = 60.0;
 // What the swap measured, and the headroom over it: the ceiling is derived rather than written out,
@@ -286,8 +286,8 @@ const SEAM_REPAIR_METERS: f64 = 60.0;
 // networks stop meeting, without failing over the residue OSM's own patchiness leaves.
 const MEASURED_SEAM_GAPS: usize = 80;
 const MAX_SEAM_GAPS: usize = 6 * MEASURED_SEAM_GAPS;
-// The pavement-coverage grid: half-kilometre cells, and how much walking network a cell needs before
-// it is scored at all. Half a kilometre is a couple of blocks — small enough that a neighbourhood
+// The pavement-coverage grid: half-kilometer cells, and how much walking network a cell needs before
+// it is scored at all. Half a kilometer is a couple of blocks — small enough that a neighborhood
 // losing its pavement is its own cell rather than an average, large enough that an ordinary block
 // with one demoted service road is not the worst cell in the city.
 const PAVEMENT_CELL_METERS: f64 = 500.0;
@@ -296,11 +296,11 @@ const PAVEMENT_CELL_KM: f64 = 2.0;
 // one, and a build of the same city with the fix that closed the defect taken back out on the other.
 //
 // 0.42 of 303.1 km of alley (0.14%) hangs off the main walking component. Without the mouth noding
-// that reads 264.1 of 303.2 (87.1%) and without the kerb cuts 5.98 of 302.1 (2.0%), so 1% separates
+// that reads 264.1 of 303.2 (87.1%) and without the curb cuts 5.98 of 302.1 (2.0%), so 1% separates
 // the city from both, at seven times what it measures.
 const MAX_STRANDED_ALLEY_FRACTION: f64 = 0.01;
 // An alley mouth stands on mapped pavement at the median, walks 37 m at the 90th percentile, and
-// none of the 3,813 fails to reach any. Without the kerb cuts that reads 108 m, 349 m and 94, and
+// none of the 3,813 fails to reach any. Without the curb cuts that reads 108 m, 349 m and 94, and
 // without the mouth noding 3.6 m, 205 m and 61. The median is a near-zero property and 10 m is its
 // margin — half the mouths would have to leave the pavement they stand on to reach it. 120 m is
 // between the 37 the city measures and the 205 of the milder regression, and 10 stranded is a margin
@@ -312,16 +312,16 @@ const MAX_STRANDED_ALLEY_MOUTHS: usize = 10;
 // than a rate: a loop street wraps round onto its own far wind and labels the same pavement twice.
 // This bound has no measured far side — a build that computes the gate and then hands the offsetter
 // both sides anyway does not get this far, it dies on the corner assignment above — so 200 is eight
-// times the residue and two orders under the ~14,961 a gate that stopped being honoured would make.
+// times the residue and two orders under the ~14,961 a gate that stopped being honored would make.
 const MAX_PHANTOM_SIDEWALKS: usize = 200;
 // The link edges reach 32 m at the 99th percentile, and the longest is the seam repair's own longest
-// to the centimetre: every link the graph draws is a repair or an entrance snap, so the whole
+// to the centimeter: every link the graph draws is a repair or an entrance snap, so the whole
 // distribution is bounded above by SEAM_REPAIR_METERS by construction, and a link past it is
 // something other than a repair claiming to be one. 50 m is the 99th percentile's own room — over
-// the 40 m a build without the kerb cuts reaches, under the reach that makes them.
+// the 40 m a build without the curb cuts reaches, under the reach that makes them.
 const MAX_LINK_P99_METERS: f64 = 50.0;
-// A tenth of New York's half-kilometre cells are over 9.4% streets the gate found no pavement on.
-// The failure this bounds is a whole neighbourhood's survey going missing while the citywide average
+// A tenth of New York's half-kilometer cells are over 9.4% streets the gate found no pavement on.
+// The failure this bounds is a whole neighborhood's survey going missing while the citywide average
 // hides it: a borough is about a fifth of the 2,877 scored cells, so a borough at ~100% unpaved puts
 // the 90th percentile itself at 1.0. Its ceiling is per region — `existence_ceilings`.
 // Every bound above is held over a population the build classifies for itself, so each one passes
@@ -396,7 +396,7 @@ pub struct Args {
     /// terrain. The city's own box: the terrain overlay widens it to keep its shoreline, the relief
     /// byte has no shore to keep.
     pub elevation_bounds: Option<crate::manifest::Bounds>,
-    /// Whether this city's centreline classifies alleys — see the alley bounds in `run`.
+    /// Whether this city's centerline classifies alleys — see the alley bounds in `run`.
     pub alleys: bool,
     /// The existence gate's two ceilings for this region, out of the plan.
     pub existence_ceilings: ExistenceCeilings,
@@ -444,13 +444,13 @@ struct Edge {
     paved: u8,
     // This end entrance-snapped onto a street's derived sidewalk, so it binds to the corner node the
     // split made rather than to a path node standing in the roadway. See conflate.rs step 4.
-    kerb_a: bool,
-    kerb_b: bool,
+    curb_a: bool,
+    curb_b: bool,
 }
 
-/// Whether the given end of an edge is a kerb-bound entrance snap.
-fn kerb_end(edge: &Edge, node: u32) -> bool {
-    (edge.a == node && edge.kerb_a) || (edge.b == node && edge.kerb_b)
+/// Whether the given end of an edge is a curb-bound entrance snap.
+fn curb_end(edge: &Edge, node: u32) -> bool {
+    (edge.a == node && edge.curb_a) || (edge.b == node && edge.curb_b)
 }
 
 /// What an OSM sidewalk way becomes. A traffic island is part of the crossing it chains through and
@@ -486,7 +486,7 @@ fn gated_sidewalks(record_flags: u8) -> u8 {
 /// Cut a street into the stretches that share one derived-sidewalk mask, so an offset is placed only
 /// where OSM has not already drawn the pavement. Each piece keeps everything durable the street
 /// knows — its physicalid, its name, its half-offset and its pavement mask — and shares its cut
-/// vertices exactly with its neighbours, so the noding puts the chain back together and contraction
+/// vertices exactly with its neighbors, so the noding puts the chain back together and contraction
 /// re-merges any pair the mask does not actually separate. The cover bytes are copied rather than
 /// re-integrated, which is what the contraction's length-weighted merge would hand back anyway.
 fn trim_derived(
@@ -698,7 +698,7 @@ struct CutAt {
 /// merge `conflate::apply_splits` makes on the CSCL side, so neither routine sheds a sliver.
 ///
 /// Both of the graph's cuts take their pieces from this. What they do with the pieces differs — one
-/// builds contracted edges with kerb flags, the other divides a finished V2 edge and hands each
+/// builds contracted edges with curb flags, the other divides a finished V2 edge and hands each
 /// door the node it joins — but where a piece begins and ends does not.
 struct WovenCuts {
     x: Vec<i32>,
@@ -828,8 +828,8 @@ fn cut_edge_at(
             poly_x,
             poly_y,
             length,
-            kerb_a: edge.kerb_a && start == 0,
-            kerb_b: edge.kerb_b && boundary == last,
+            curb_a: edge.curb_a && start == 0,
+            curb_b: edge.curb_b && boundary == last,
             ..clone_edge(edge)
         });
         start = boundary;
@@ -838,7 +838,7 @@ fn cut_edge_at(
     pieces
 }
 
-/// Everything a cut piece inherits from its parent — the geometry, the length and the two kerb
+/// Everything a cut piece inherits from its parent — the geometry, the length and the two curb
 /// flags are set per piece, and `Edge` is deliberately not `Clone` so the rest cannot drift.
 fn clone_edge(edge: &Edge) -> Edge {
     Edge {
@@ -858,13 +858,13 @@ fn clone_edge(edge: &Edge) -> Edge {
         side: edge.side,
         sidewalks: edge.sidewalks,
         paved: edge.paved,
-        kerb_a: edge.kerb_a,
-        kerb_b: edge.kerb_b,
+        curb_a: edge.curb_a,
+        curb_b: edge.curb_b,
     }
 }
 
-/// The cumulative along-distance of every vertex of a polyline, in metres.
-/// The kerb cut: a corner cuts the OSM sidewalk way it stands beside, giving the seam the node it
+/// The cumulative along-distance of every vertex of a polyline, in meters.
+/// The curb cut: a corner cuts the OSM sidewalk way it stands beside, giving the seam the node it
 /// was missing. DESIGN.md, "The seam", is the join this is the fourth case of.
 ///
 /// The cut is guarded three ways, because a line passing close is not by itself pavement this
@@ -875,12 +875,12 @@ fn clone_edge(edge: &Edge) -> Edge {
 ///   street-ends bounding the gap, not inside it, so it is never cut; nor is the sidewalk of a
 ///   street that merely passes nearby.
 /// - **The detour.** The nearest node the way already offers must be more than
-///   `KERB_CUT_DETOUR_METERS` further along it. That distance is a lower bound on the walk the cut
+///   `CURB_CUT_DETOUR_METERS` further along it. That distance is a lower bound on the walk the cut
 ///   removes — every route to this pavement has to enter the way through one of its ends — so a
 ///   corner the seam can already reach round the block takes no cut, and only a genuine stranding
 ///   does.
 /// - **Grade.** Neither the way nor anything at the node may be a bridge or tunnel deck: a footway
-///   over a cutting passes within metres of the road below it and shares no ground with it.
+///   over a cutting passes within meters of the road below it and shares no ground with it.
 ///
 /// Measured citywide, 21,593 corners cut and 21,150 of them — 97.9% — landed on pavement carrying
 /// the name of one of the two streets bounding their own wedge, which is the check that the geometry
@@ -902,7 +902,7 @@ fn cut_sidewalks_at_corners(
     }
 
     // The pavement a cut may fall on: OSM's own sidewalk edges, at grade. A crossing is not among
-    // them — it is metres long and both its ends are already nodes — and no derived sidewalk exists
+    // them — it is meters long and both its ends are already nodes — and no derived sidewalk exists
     // yet, its geometry being made from the corners this pass runs before.
     let pavement: Vec<u32> = (0..final_edges.len() as u32)
         .filter(|&edge_id| {
@@ -993,7 +993,7 @@ fn cut_sidewalks_at_corners(
                 final_edges,
                 &pavement,
                 corner,
-                KERB_CUT_METERS,
+                CURB_CUT_METERS,
                 meters_per_unit,
             ) {
                 // The wedge: the projection, seen from the node, must lie in that gap. Pavement
@@ -1010,7 +1010,7 @@ fn cut_sidewalks_at_corners(
                 let (from, to) = (along[candidate.vertex], along[candidate.vertex + 1]);
                 let cut = from + candidate.param * (to - from);
                 let whole = along.last().copied().unwrap_or(0.0);
-                if cut.min(whole - cut) <= KERB_CUT_DETOUR_METERS {
+                if cut.min(whole - cut) <= CURB_CUT_DETOUR_METERS {
                     continue;
                 }
                 cuts_by_edge
@@ -1046,7 +1046,7 @@ struct Projection {
     vertex: usize, // its sub-segment, by that sub-segment's first vertex
     param: f64,    // how far along the sub-segment the projection falls
     point: (i32, i32),
-    metres: f64,
+    meters: f64,
 }
 
 /// Every sub-segment of `pavement` within `radius` of a point, nearest first — nearest because the
@@ -1068,20 +1068,20 @@ fn pavement_within(
             edge.poly_x[vertex as usize + 1],
             edge.poly_y[vertex as usize + 1],
         );
-        let (metres, param, projected) = conflate::project(point, from, to, meters_per_unit);
-        if metres <= radius {
+        let (meters, param, projected) = conflate::project(point, from, to, meters_per_unit);
+        if meters <= radius {
             found.push(Projection {
                 entry: entry as usize,
                 vertex: vertex as usize,
                 param,
                 point: projected,
-                metres,
+                meters,
             });
         }
     }
     found.sort_by(|left, right| {
-        left.metres
-            .total_cmp(&right.metres)
+        left.meters
+            .total_cmp(&right.meters)
             .then(left.entry.cmp(&right.entry))
             .then(left.vertex.cmp(&right.vertex))
     });
@@ -1109,7 +1109,7 @@ struct V2Edge {
 }
 
 /// The departure bearing of one edge end: `atan2(north, east)` to the first geometry vertex
-/// distinct from the node, in the local metre frame. Ties on a collapsed segment fall back to 0.
+/// distinct from the node, in the local meter frame. Ties on a collapsed segment fall back to 0.
 fn departure_bearing(
     poly_x: &[i32],
     poly_y: &[i32],
@@ -1155,7 +1155,7 @@ fn side_label(normal_x: f64, normal_y: f64) -> u8 {
 }
 
 /// The side labels of a street's two sidewalks, geometry-left then geometry-right. The direction is
-/// the whole-edge chord (first to last centreline vertex); a chord that degenerates on a tight loop
+/// the whole-edge chord (first to last centerline vertex); a chord that degenerates on a tight loop
 /// falls back to the first geometry segment's bearing. The right label is always the opposite wind.
 fn side_labels(
     poly_x: &[i32],
@@ -1183,9 +1183,9 @@ fn side_labels(
     (left, right)
 }
 
-/// Great-circle metres between two quantized nodes, matching the client's `haversineMeters` (same
+/// Great-circle meters between two quantized nodes, matching the client's `haversineMeters` (same
 /// mean earth radius) so a crossing or link length is exactly the A* heuristic between its ends and
-/// the length-vs-node-distance invariant is admissible by construction — the equirectangular metre
+/// the length-vs-node-distance invariant is admissible by construction — the equirectangular meter
 /// frame the corners and labels live in overestimates east-west far from the reference latitude.
 fn great_circle(
     from_x: i32,
@@ -1251,7 +1251,7 @@ fn polyline_length(
     total
 }
 
-/// The baked geometry of one sidewalk: every interior centreline vertex shifted perpendicular to
+/// The baked geometry of one sidewalk: every interior centerline vertex shifted perpendicular to
 /// the local direction by `half_offset_m` to the given side (`sign` +1 geometry-left, -1
 /// geometry-right), with the first and last vertices replaced by the sidewalk's two corner nodes so
 /// it runs corner-to-corner with no overshoot into the intersection. A straight two-vertex street
@@ -1274,7 +1274,7 @@ fn offset_polyline(
     let same =
         |left: usize, right: usize| poly_x[left] == poly_x[right] && poly_y[left] == poly_y[right];
     for vertex in 1..count - 1 {
-        // The tangent runs between the neighbouring distinct vertices, so a coincident vertex does
+        // The tangent runs between the neighboring distinct vertices, so a coincident vertex does
         // not collapse the normal.
         let mut back = vertex;
         while back > 0 && same(back, vertex) {
@@ -1304,13 +1304,13 @@ fn offset_polyline(
 }
 
 impl conflate::Adjacency for HashMap<u32, Vec<(u32, f64)>> {
-    fn neighbours(&self, node: u32) -> &[(u32, f64)] {
+    fn neighbors(&self, node: u32) -> &[(u32, f64)] {
         self.get(&node).map_or(&[], Vec::as_slice)
     }
 }
 
-/// Whether an OSM crossing path joins two termini within `cap` metres — a walk over the mapped
-/// crossings alone, capped so it covers an intersection, not a neighbourhood.
+/// Whether an OSM crossing path joins two termini within `cap` meters — a walk over the mapped
+/// crossings alone, capped so it covers an intersection, not a neighborhood.
 fn crossing_joins(adjacency: &HashMap<u32, Vec<(u32, f64)>>, from: u32, to: u32, cap: f64) -> bool {
     let mut joined = false;
     conflate::walk_within(adjacency, from, cap, |node| {
@@ -1395,7 +1395,7 @@ fn contractible(edges: &[Edge], incidence: &[Vec<u32>], node: u32) -> bool {
         && edges[incident[0] as usize].flags == edges[incident[1] as usize].flags
         && edges[incident[0] as usize].name_id == edges[incident[1] as usize].name_id
         && edges[incident[0] as usize].osm == edges[incident[1] as usize].osm
-        // A mapped sidewalk arrives already labelled, so two pieces merge only when they are the
+        // A mapped sidewalk arrives already labeled, so two pieces merge only when they are the
         // same kind of thing on the same side of the same street — never a sidewalk into a crossing,
         // and never the north pavement into the south.
         && edges[incident[0] as usize].kind == edges[incident[1] as usize].kind
@@ -1412,11 +1412,11 @@ fn contractible(edges: &[Edge], incidence: &[Vec<u32>], node: u32) -> bool {
         // segment's pavement to the far end and place, or miss, a crossing at a real intersection.
         && paved_leaving(&edges[incident[0] as usize], node)
             == swap_sidewalks(paved_leaving(&edges[incident[1] as usize], node))
-        // A kerb end binds to a corner of the street split under it, which only exists while the
+        // A curb end binds to a corner of the street split under it, which only exists while the
         // node does. Contracting it away would strand the entrance back in the roadway; the street's
         // two halves make this node degree 3 anyway, so this only ever guards the degenerate case.
-        && !kerb_end(&edges[incident[0] as usize], node)
-        && !kerb_end(&edges[incident[1] as usize], node)
+        && !curb_end(&edges[incident[0] as usize], node)
+        && !curb_end(&edges[incident[1] as usize], node)
 }
 
 /// Walk the chain of degree-2 nodes out of `start` along `first_edge`, merging edges as long as
@@ -1443,9 +1443,9 @@ fn trace_chain(
     // first part's, read in the direction the trace walks it.
     let sidewalks = sidewalks_leaving(&edges[first_edge as usize], start);
     let paved = paved_leaving(&edges[first_edge as usize], start);
-    let kerb_a = kerb_end(&edges[first_edge as usize], start);
+    let curb_a = curb_end(&edges[first_edge as usize], start);
     // Assigned on every pass before any break, so the chain's far end is the last one walked to.
-    let mut kerb_b;
+    let mut curb_b;
     let mut poly_x: Vec<i32> = Vec::new();
     let mut poly_y: Vec<i32> = Vec::new();
     let mut length = 0.0f32;
@@ -1491,7 +1491,7 @@ fn trace_chain(
         left_weighted += f64::from(edge.length) * f64::from(left);
         right_weighted += f64::from(edge.length) * f64::from(right);
         current = far;
-        kerb_b = kerb_end(edge, current);
+        curb_b = curb_end(edge, current);
 
         if !contractible(edges, incidence, current) {
             break;
@@ -1508,7 +1508,7 @@ fn trace_chain(
             break;
         }
         // Unreachable for the current data (the longest merged polyline is ~84 vertices), but the
-        // format caps a vertex count at u16, so the guard is honoured rather than assumed away.
+        // format caps a vertex count at u16, so the guard is honored rather than assumed away.
         if poly_x.len() + edges[next as usize].poly_x.len() - 1 > MAX_EDGE_VERTICES {
             break;
         }
@@ -1539,8 +1539,8 @@ fn trace_chain(
         side,
         sidewalks,
         paved,
-        kerb_a,
-        kerb_b,
+        curb_a,
+        curb_b,
     }
 }
 
@@ -1778,7 +1778,7 @@ fn transit_edge(
 }
 
 /// One station node's worth of the topology: where it stands, what it is called, whether a rider
-/// reaches it off the kerb rather than down a stair, and where its members stand. The members'
+/// reaches it off the curb rather than down a stair, and where its members stand. The members'
 /// points are the platforms and doors the feed gives, so they are where the pavement is looked for;
 /// the node itself is their centroid, which for a complex is inside the block.
 struct StationGroup {
@@ -1798,7 +1798,7 @@ struct StationGroup {
 /// The station groups the graph gets, and for each station of the topology the one it joins: one
 /// group per transfer complex, one per station the feed puts in no complex, and one node per group
 /// unless the agency publishes no free crossover through it. A group stands at its
-/// members' centroid, takes the name most of them carry, and is only a kerbside stop where every
+/// members' centroid, takes the name most of them carry, and is only a curbside stop where every
 /// member is one. Giving a whole complex a single node is what makes a change of train there an
 /// alight and a board rather than a walk out to the pavement and back in through another door.
 fn station_groups(
@@ -1876,7 +1876,7 @@ struct PavementFoot {
 /// The pavement a station point reaches: every sidewalk or path whose perpendicular foot lies within
 /// TRANSIT_ENTRANCE_RADIUS_METERS of it — one foot per edge, the nearest — and failing all of them
 /// the single nearest edge within TRANSIT_SNAP_RADIUS_METERS. Ranked on the perpendicular in the
-/// quantized metre frame and confirmed on the great circle, nearest first, each with its metres.
+/// quantized meter frame and confirmed on the great circle, nearest first, each with its meters.
 /// Empty when the point stands out of reach of any walking edge at all. `nearest_only` asks for that
 /// single nearest edge whatever the distance: a published entrance is a street door already, so the
 /// pavement it opens onto is the one under it and not the one across the road.
@@ -1899,7 +1899,7 @@ fn pavement_feet(
     // One projection: how far off it is, the edge, and where on that edge it landed.
     #[derive(Clone, Copy)]
     struct Nearest {
-        metres: f64,
+        meters: f64,
         edge: u32,
         vertex: usize,
         param: f64,
@@ -1908,7 +1908,7 @@ fn pavement_feet(
     let nearer = |left: &Nearest, right: &Nearest| -> bool {
         // The edge id breaks a tie: the grid hands back the cells in the order they were filled, and
         // the two pieces meeting at a corner do stand the same distance from a point beside it.
-        left.metres < right.metres || (left.metres == right.metres && left.edge < right.edge)
+        left.meters < right.meters || (left.meters == right.meters && left.edge < right.edge)
     };
     let mut doors: HashMap<u32, Nearest> = HashMap::new();
     let mut nearest: Option<Nearest> = None;
@@ -1916,17 +1916,17 @@ fn pavement_feet(
         let edge = candidates[candidate as usize];
         let (poly_x, poly_y) = polyline_of(edge);
         let vertex = vertex as usize;
-        let (metres, param, projected) = conflate::project(
+        let (meters, param, projected) = conflate::project(
             point,
             (poly_x[vertex], poly_y[vertex]),
             (poly_x[vertex + 1], poly_y[vertex + 1]),
             meters_per_unit,
         );
-        if metres > TRANSIT_SNAP_RADIUS_METERS {
+        if meters > TRANSIT_SNAP_RADIUS_METERS {
             continue;
         }
         let standing = Nearest {
-            metres,
+            meters,
             edge,
             vertex,
             param,
@@ -1966,15 +1966,15 @@ fn pavement_feet(
         doors.into_values().collect()
     };
     kept.sort_by(|left, right| {
-        left.metres
-            .total_cmp(&right.metres)
+        left.meters
+            .total_cmp(&right.meters)
             .then(left.edge.cmp(&right.edge))
     });
     kept.into_iter()
         .map(|door| {
             let (poly_x, poly_y) = polyline_of(door.edge);
             (
-                door.metres,
+                door.meters,
                 PavementFoot {
                     edge: door.edge,
                     along: conflate::along_at(
@@ -2028,7 +2028,7 @@ fn door_street(v2_edges: &[V2Edge], foot: &PavementFoot) -> (u16, u8) {
     (edge.name_id, edge.side)
 }
 
-/// What the descent costs before the walk out to the door. A stop the feed models as a kerbside
+/// What the descent costs before the walk out to the door. A stop the feed models as a curbside
 /// shelter is a step off the pavement whatever it is built of.
 fn entrance_base(surface: bool, kind: binfmt::EntranceKind) -> u16 {
     if surface {
@@ -2480,7 +2480,7 @@ fn append_transit(
                     // taken from the station node so that it is the edge's own length — for a lone
                     // station that IS the perpendicular, and for a complex, whose node stands at its
                     // members' centroid, it is the longer and honest figure.
-                    let metres = node_distance(
+                    let meters = node_distance(
                         node_lng,
                         node_lat,
                         place.entry,
@@ -2489,7 +2489,7 @@ fn append_transit(
                         origin_lat,
                         scale,
                     );
-                    let walk = (metres / ACCESS_WALK_METERS_PER_SECOND).round();
+                    let walk = (meters / ACCESS_WALK_METERS_PER_SECOND).round();
                     let seconds = (f64::from(door.base) + walk).min(f64::from(u16::MAX)) as u16;
                     // A two-way door is two edges, because the way in and the way out land on nodes
                     // of their own. Each keeps the flag that says which it is.
@@ -2581,7 +2581,7 @@ fn append_transit(
         for &(place, (platform_x, platform_y), offset, stop_index) in &kept {
             // The platform stands at the stop the feed gives this pattern, not on the station node:
             // a complex's node is its members' centroid, and a ride drawn from there would start a
-            // couple of hundred metres off the track. The board and the alight carry that passage.
+            // couple of hundred meters off the track. The board and the alight carry that passage.
             //
             // It stands on TWO nodes at that point, the way a station side does: the BOARDING node,
             // which the board lands on and the ride out leaves, and the ARRIVAL node, which the ride
@@ -2749,7 +2749,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 ///
 /// Deliberately integer-only. The blob hash beside it covers the f32 edge lengths, which the
 /// geodesic and offset maths land a ulp apart on macOS/aarch64 and Linux/x86_64: a graph built on one
-/// can never match an artifact placed on the other, though not one shed moves a millimetre between
+/// can never match an artifact placed on the other, though not one shed moves a millimeter between
 /// them. Nothing here is float-derived, so this figure is bit-identical wherever it is computed.
 fn key_space_hash(edges: &[V2Edge], ordinals: &[u8]) -> u64 {
     let mut keys: Vec<u64> = edges
@@ -2858,7 +2858,7 @@ pub fn read_stranded(path: &std::path::Path) -> Fallible<Vec<u32>> {
         .collect())
 }
 
-/// One route of the city's transit topology as the graph carries it: the feed's own colours, and
+/// One route of the city's transit topology as the graph carries it: the feed's own colors, and
 /// the three names as ids into the graph's name table.
 #[derive(Clone, Copy)]
 #[cfg_attr(test, derive(PartialEq, Debug))]
@@ -3152,7 +3152,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     let origin_lng = streets.origin_lng;
     let origin_lat = streets.origin_lat;
     let scale = streets.scale;
-    // Equirectangular metres per quantized unit at the origin latitude — one reference latitude
+    // Equirectangular meters per quantized unit at the origin latitude — one reference latitude
     // for the whole city, as the estimator uses.
     let meters_per_unit_lat = METERS_PER_DEGREE_LAT * scale;
     let meters_per_unit_lng = METERS_PER_DEGREE_LAT * origin_lat.to_radians().cos() * scale;
@@ -3221,8 +3221,8 @@ fn topology(args: &Args) -> Fallible<Base> {
             side: SIDE_NONE,
             sidewalks: 0,
             paved: 0,
-            kerb_a: false,
-            kerb_b: false,
+            curb_a: false,
+            curb_b: false,
         });
         street_segment.push(segment);
     }
@@ -3291,8 +3291,8 @@ fn topology(args: &Args) -> Fallible<Base> {
                 side: SIDE_NONE,
                 sidewalks: 0,
                 paved: 0,
-                kerb_a: false,
-                kerb_b: false,
+                curb_a: false,
+                curb_b: false,
             });
         }
         all_names.extend(paths.names);
@@ -3348,8 +3348,8 @@ fn topology(args: &Args) -> Fallible<Base> {
                 side: SIDE_NONE,
                 sidewalks: 0,
                 paved: 0,
-                kerb_a: false,
-                kerb_b: false,
+                curb_a: false,
+                curb_b: false,
             });
         }
         all_names.extend(ways.names.clone());
@@ -3372,7 +3372,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         .collect();
 
     // The existence gate, now that both sources have spoken. A side exists when OSM maps any of it
-    // or the city's survey draws it; a street with neither side is demoted to its centreline. Which
+    // or the city's survey draws it; a street with neither side is demoted to its centerline. Which
     // of the side is *derived* is settled per stretch further down — a run OSM maps is evidence that
     // the pavement is there, whether or not it is enough of the side for the survey's bit to be set,
     // so it counts here and is subtracted there.
@@ -3646,8 +3646,8 @@ fn topology(args: &Args) -> Fallible<Base> {
             side: proto.side,
             sidewalks: proto.sidewalks,
             paved: proto.paved,
-            kerb_a: proto.kerb_a,
-            kerb_b: proto.kerb_b,
+            curb_a: proto.curb_a,
+            curb_b: proto.curb_b,
         });
     }
 
@@ -3759,11 +3759,11 @@ fn topology(args: &Args) -> Fallible<Base> {
     }
     let mut final_edges = kept_edges;
 
-    // The kerb cut — the seam's fourth join case (DESIGN.md, "The seam"). Every step below binds a
+    // The curb cut — the seam's fourth join case (DESIGN.md, "The seam"). Every step below binds a
     // corner to OSM's pavement through a *node* of it, and where OSM draws a block as one unbroken
     // way there is no node to bind to: the corner cuts the way at its own projection instead, and
-    // the seam then resolves onto the cut exactly as it would onto a kerb ramp OSM had drawn.
-    let kerb_cuts = cut_sidewalks_at_corners(
+    // the seam then resolves onto the cut exactly as it would onto a curb ramp OSM had drawn.
+    let curb_cuts = cut_sidewalks_at_corners(
         &mut final_edges,
         &mut merged_x,
         &mut merged_y,
@@ -3817,10 +3817,10 @@ fn topology(args: &Args) -> Fallible<Base> {
     let mut left_at_b = vec![u32::MAX; final_edges.len()];
     let mut right_at_b = vec![u32::MAX; final_edges.len()];
     let mut path_node = vec![u32::MAX; merged_count];
-    // Per base path edge end, the corner an entrance snap bound it to — the kerb it arrives at,
+    // Per base path edge end, the corner an entrance snap bound it to — the curb it arrives at,
     // standing in for the path node the join used to detour through.
-    let mut kerb_node_at_a = vec![u32::MAX; final_edges.len()];
-    let mut kerb_node_at_b = vec![u32::MAX; final_edges.len()];
+    let mut curb_node_at_a = vec![u32::MAX; final_edges.len()];
+    let mut curb_node_at_b = vec![u32::MAX; final_edges.len()];
     let mut link_pairs: HashMap<(u32, u32), u8> = HashMap::new();
     // (corner a, corner b, crossed edge): a deg-2 street joint's latent crossing, added only if the
     // mop-up finds its two sides in different components.
@@ -3904,9 +3904,9 @@ fn topology(args: &Args) -> Fallible<Base> {
                         f64::from(merged_x[base as usize] - corner_x[slot]) * meters_per_unit_lng;
                     let delta_y =
                         f64::from(merged_y[base as usize] - corner_y[slot]) * meters_per_unit_lat;
-                    let metres = delta_x.hypot(delta_y);
-                    if metres <= SEAM_LINK_METERS {
-                        seam_candidates.push((metres, slot as u32, base));
+                    let meters = delta_x.hypot(delta_y);
+                    if meters <= SEAM_LINK_METERS {
+                        seam_candidates.push((meters, slot as u32, base));
                     }
                 }
             }
@@ -3920,8 +3920,8 @@ fn topology(args: &Args) -> Fallible<Base> {
     });
     let mut corner_osm = vec![u32::MAX; corner_x.len()];
     let mut claimed_osm: HashSet<u32> = HashSet::new();
-    for &(metres, slot, base) in &seam_candidates {
-        if metres <= SEAM_RADIUS_METERS
+    for &(meters, slot, base) in &seam_candidates {
+        if meters <= SEAM_RADIUS_METERS
             && corner_osm[slot as usize] == u32::MAX
             && claimed_osm.insert(base)
         {
@@ -4095,32 +4095,32 @@ fn topology(args: &Args) -> Fallible<Base> {
         }
 
         // A path end that entrance-snapped onto a sidewalk binds straight to the corner in the gap
-        // it departs into — the kerb it reaches — so the walk never enters the roadway. Every other
+        // it departs into — the curb it reaches — so the walk never enters the roadway. Every other
         // path end meets at the old intersection position, which a link ties to its corner; that
         // node is only created if one of them needs it.
         //
-        // A walking surface that merely *ends* at a street arrives at the kerb too, whether or not
+        // A walking surface that merely *ends* at a street arrives at the curb too, whether or not
         // conflation snapped it there: CSCL digitizes a boardwalk or a walkway as meeting the road at
-        // its centreline, and binding that end to the intersection would leave the walk stopping in
+        // its centerline, and binding that end to the intersection would leave the walk stopping in
         // the middle of the roadbed. It is the sole path end that makes it an ending — where two or
         // more meet, the path net genuinely passes through the intersection and keeps its node.
         let terminates = ends.len() == street_count + 1 && street_count > 0;
-        let kerbs: Vec<bool> = ends[street_count..]
+        let curbs: Vec<bool> = ends[street_count..]
             .iter()
             .enumerate()
             .map(|(path_slot, end)| {
                 let edge = &final_edges[end.edge as usize];
-                let kerb = (if end.at_a { edge.kerb_a } else { edge.kerb_b }) || terminates;
+                let curb = (if end.at_a { edge.curb_a } else { edge.curb_b }) || terminates;
                 let corner = if street_count > 0 {
                     corner_ids[fan.path_corner[path_slot] as usize]
                 } else {
                     u32::MAX
                 };
-                if kerb && corner != u32::MAX {
+                if curb && corner != u32::MAX {
                     if end.at_a {
-                        kerb_node_at_a[end.edge as usize] = corner;
+                        curb_node_at_a[end.edge as usize] = corner;
                     } else {
-                        kerb_node_at_b[end.edge as usize] = corner;
+                        curb_node_at_b[end.edge as usize] = corner;
                     }
                     true
                 } else {
@@ -4128,7 +4128,7 @@ fn topology(args: &Args) -> Fallible<Base> {
                 }
             })
             .collect();
-        if kerbs.iter().any(|kerb| !kerb) {
+        if curbs.iter().any(|curb| !curb) {
             let node = match path_node[base] {
                 u32::MAX => {
                     let node = v2_x.len() as u32;
@@ -4142,7 +4142,7 @@ fn topology(args: &Args) -> Fallible<Base> {
                 existing => existing,
             };
             for (path_slot, end) in ends[street_count..].iter().enumerate() {
-                if street_count == 0 || kerbs[path_slot] {
+                if street_count == 0 || curbs[path_slot] {
                     continue;
                 }
                 let corner = corner_ids[fan.path_corner[path_slot] as usize];
@@ -4182,15 +4182,15 @@ fn topology(args: &Args) -> Fallible<Base> {
     for (edge_id, edge) in final_edges.iter().enumerate() {
         let base_flags = edge.flags & (GRPH_STRUCTURE | GRPH_STEPS | GRPH_TUNNEL);
         if edge.flags & GRPH_PATHLIKE != 0 {
-            // An end the entrance snap bound to a kerb takes that corner; the rest take the base
-            // node's path node. The stored polyline ends on the centreline either way — that is what
+            // An end the entrance snap bound to a curb takes that corner; the rest take the base
+            // node's path node. The stored polyline ends on the centerline either way — that is what
             // located the street split — so both endpoints are re-pinned onto whatever they resolved
             // to, which is what actually moves the join out of the roadway and onto the pavement.
-            let node_a = match kerb_node_at_a[edge_id] {
+            let node_a = match curb_node_at_a[edge_id] {
                 u32::MAX => path_node[edge.a as usize],
                 corner => corner,
             };
-            let node_b = match kerb_node_at_b[edge_id] {
+            let node_b = match curb_node_at_b[edge_id] {
                 u32::MAX => path_node[edge.b as usize],
                 corner => corner,
             };
@@ -4207,7 +4207,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             let geom = geometry_polys.len() as u32;
             geometry_polys.push((poly_x, poly_y));
             // The stored length is the ingest's geodesic sum, but the 1 m node merge nudged the
-            // pinned endpoints, so a near-straight path can end a metre or two under the node
+            // pinned endpoints, so a near-straight path can end a meter or two under the node
             // distance; clamp it up like a sidewalk to keep the heuristic admissible.
             let length = clamp_length(node_a, node_b, edge.length, &mut length_clamped);
             let mut path_flags = if edge.osm {
@@ -4220,7 +4220,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             }
             // A mapped sidewalk is a walking line like a path is, so it is built as one — but the
             // record it writes is a sidewalk on a named side of a named street, and it keeps that
-            // street's half-offset byte, which is what the scaffolding's depth infers the kerb from.
+            // street's half-offset byte, which is what the scaffolding's depth infers the curb from.
             v2_edges.push(V2Edge {
                 a: node_a,
                 b: node_b,
@@ -4272,7 +4272,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             );
             let half_offset_m = f64::from(edge.offset) / DECIMETERS_PER_METER;
             let meters_per_unit = (meters_per_unit_lng, meters_per_unit_lat);
-            // The left sidewalk runs cornerLeft(a) -> cornerRight(b), the centreline offset to its
+            // The left sidewalk runs cornerLeft(a) -> cornerRight(b), the centerline offset to its
             // geometry-left; the right runs cornerRight(a) -> cornerLeft(b), offset geometry-right.
             // Each bakes its own corners into its geometry so it reaches them without overshoot, and
             // its length is that offset polyline's geodesic sum. Both keep base node a first.
@@ -4416,7 +4416,7 @@ fn topology(args: &Args) -> Fallible<Base> {
 
     // The backstop, over whatever the passes above left: one crossing per pair of nodes, whoever
     // drew them. Collapsing here catches the duplicates no rule upstream can see — a synthesized
-    // crossing and a mapped one over the same two kerbs, or two mapped ways over one roadway —
+    // crossing and a mapped one over the same two curbs, or two mapped ways over one roadway —
     // because it asks only what the finished graph says, which is where the defect is visible.
     let collapsed_crossings = collapse_parallel_crossings(&mut v2_edges);
     crossing_count -= collapsed_crossings;
@@ -4456,7 +4456,7 @@ fn topology(args: &Args) -> Fallible<Base> {
 
     // The seam repair. Where OSM maps a side, its way is that side's edge and no offset is placed —
     // so if the mapped way stops short of the corner the rest of the block reaches, the two halves of
-    // one street stand metres apart with nothing between them. Every such gap is *inside* one v1
+    // one street stand meters apart with nothing between them. Every such gap is *inside* one v1
     // component, which is what makes it repairable without inventing connectivity: the base graph
     // already said these two nodes are the same street, and the repair only supplies the join the
     // seam did not find. It is measured (`seamRepairLinks`, `seamRepairMeters`) because a large or a
@@ -4525,7 +4525,7 @@ fn topology(args: &Args) -> Fallible<Base> {
                         {
                             continue;
                         }
-                        let metres = node_distance(
+                        let meters = node_distance(
                             &v2_x,
                             &v2_y,
                             node as u32,
@@ -4534,18 +4534,18 @@ fn topology(args: &Args) -> Fallible<Base> {
                             origin_lat,
                             scale,
                         );
-                        if metres <= SEAM_REPAIR_METERS
+                        if meters <= SEAM_REPAIR_METERS
                             && best.is_none_or(|(held, at)| {
-                                metres < held || (metres == held && other < at)
+                                meters < held || (meters == held && other < at)
                             })
                         {
-                            best = Some((metres, other));
+                            best = Some((meters, other));
                         }
                     }
                 }
             }
-            if let Some((metres, other)) = best {
-                joins.push((metres, node as u32, other));
+            if let Some((meters, other)) = best {
+                joins.push((meters, node as u32, other));
             }
         }
         joins.sort_by(|left, right| {
@@ -4554,14 +4554,14 @@ fn topology(args: &Args) -> Fallible<Base> {
                 .then(left.1.cmp(&right.1))
                 .then(left.2.cmp(&right.2))
         });
-        for &(metres, node, other) in &joins {
+        for &(meters, node, other) in &joins {
             if find(&mut v2_parent, node) == find(&mut v2_parent, other) {
                 continue;
             }
             v2_edges.push(V2Edge {
                 a: node,
                 b: other,
-                length: metres as f32,
+                length: meters as f32,
                 geom: NO_GEOMETRY,
                 cover: 0,
                 half_offset: 0,
@@ -4573,8 +4573,8 @@ fn topology(args: &Args) -> Fallible<Base> {
             });
             union(&mut v2_parent, node, other);
             seam_repair_links += 1;
-            seam_repair_meters += metres;
-            seam_repair_longest = seam_repair_longest.max(metres);
+            seam_repair_meters += meters;
+            seam_repair_longest = seam_repair_longest.max(meters);
         }
         for pieces in split_v1.values() {
             let mut whole: HashSet<u32> = HashSet::new();
@@ -4640,7 +4640,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         }
     }
 
-    // Components of the finished v2 graph, relabelled by size descending (0 = largest). What holds
+    // Components of the finished v2 graph, relabeled by size descending (0 = largest). What holds
     // the partition to account is the seam-gap ceiling below, not an equality with v1's.
     let mut component_size: HashMap<u32, usize> = HashMap::new();
     let mut node_root = vec![0u32; v2_node_count];
@@ -4731,7 +4731,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             let stop_y = quantize_y(stop.lat);
             let mut nearest: Option<(u32, f64)> = None;
             for node in 0..node_count {
-                let metres = great_circle(
+                let meters = great_circle(
                     stop_x,
                     stop_y,
                     node_lng[node],
@@ -4740,12 +4740,12 @@ fn topology(args: &Args) -> Fallible<Base> {
                     origin_lat,
                     scale,
                 );
-                if nearest.is_none_or(|(_, best)| metres < best) {
-                    nearest = Some((node as u32, metres));
+                if nearest.is_none_or(|(_, best)| meters < best) {
+                    nearest = Some((node as u32, meters));
                 }
             }
             match nearest {
-                Some((node, metres)) if metres <= FERRY_SNAP_RADIUS_METERS => {
+                Some((node, meters)) if meters <= FERRY_SNAP_RADIUS_METERS => {
                     stop_node.push(Some(node));
                 }
                 _ => {
@@ -5106,7 +5106,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         / 1000.0;
     let mut broken: Vec<String> = Vec::new();
     // The alley bounds assert New York's meaning of an alley — a service way with no pavement, which
-    // the gate demotes to its centreline. A city whose centreline has no such class is not asked:
+    // the gate demotes to its centerline. A city whose centerline has no such class is not asked:
     // San Francisco's "alleys" are narrow streets with sidewalks, and 6.6% of their km demote where
     // New York's 97% do. `args.alleys` is the city's own statement, not a count, so a classifier
     // that stopped matching still fails the floors below rather than skipping them.
@@ -5139,7 +5139,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         (
             pavement_cells.cells as f64,
             MIN_PAVEMENT_CELLS as f64,
-            "scored half-kilometre cells",
+            "scored half-kilometer cells",
         ),
         (
             link_lengths.links as f64,
@@ -5176,7 +5176,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             "an alley mouth walks {:.0} m to mapped pavement at the median and {:.0} m at the 90th \
              percentile, with {} of {} reaching none at all, over {MAX_ALLEY_MOUTH_MEDIAN_METERS:.0} \
              / {MAX_ALLEY_MOUTH_P90_METERS:.0} m and {MAX_STRANDED_ALLEY_MOUTHS}: the mouth is \
-             metres from the pavement it faces and is going round the block to reach it",
+             meters from the pavement it faces and is going round the block to reach it",
             mouth_walk.median_meters, mouth_walk.p90_meters, mouth_walk.stranded, mouth_walk.mouths
         ));
     }
@@ -5202,8 +5202,8 @@ fn topology(args: &Args) -> Fallible<Base> {
     let ceilings = args.existence_ceilings;
     if pavement_cells.p90_demoted_share > ceilings.cell_demoted_share {
         broken.push(format!(
-            "a tenth of the city's {} half-kilometre cells are over {:.0}% streets with no \
-             pavement, over the {:.0}% ceiling: a neighbourhood has lost its sidewalks while the \
+            "a tenth of the city's {} half-kilometer cells are over {:.0}% streets with no \
+             pavement, over the {:.0}% ceiling: a neighborhood has lost its sidewalks while the \
              citywide average hid it",
             pavement_cells.cells,
             100.0 * pavement_cells.p90_demoted_share,
@@ -5237,7 +5237,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         }
         if args.alleys && demoted_alley_fraction < MIN_DEMOTED_ALLEY_FRACTION {
             broken.push(format!(
-                "only {:.1}% of alley km demoted to its centreline, under the {:.0}% floor: alleys \
+                "only {:.1}% of alley km demoted to its centerline, under the {:.0}% floor: alleys \
                  have no sidewalks, so a build that keeps them has the gate the wrong way round",
                 100.0 * demoted_alley_fraction,
                 100.0 * MIN_DEMOTED_ALLEY_FRACTION
@@ -5316,10 +5316,10 @@ fn topology(args: &Args) -> Fallible<Base> {
         "dedupedOrphanKm": conflate_stats.deduped_orphan_km,
         "osmTSplits": conflate_stats.osm_t_splits,
         "csclTSplits": conflate_stats.cscl_t_splits,
-        "kerbCuts": kerb_cuts,
+        "curbCuts": curb_cuts,
         "weldedVertices": conflate_stats.welded_vertices,
         "entranceSnaps": conflate_stats.entrance_snaps,
-        "entranceSnapsKerb": conflate_stats.entrance_snaps_kerb,
+        "entranceSnapsCurb": conflate_stats.entrance_snaps_curb,
         "shortEntranceSnaps": conflate_stats.short_entrance_snaps,
         "danglingEnds": conflate_stats.dangling_ends,
         "mergedDanglingEnds": conflate_stats.merged_dangling_ends,
@@ -5794,7 +5794,7 @@ fn bake(
 /// of nothing else in the schedule, so a grid that gained a bin bakes exactly the one — which is the
 /// same property the shade pyramid's per-bucket keys have, one artifact over.
 ///
-/// The bins that are missing are baked in ONE call, because the bake parallelises across bins and
+/// The bins that are missing are baked in ONE call, because the bake parallelizes across bins and
 /// not within one: a cold build that took them one at a time would run on a single thread.
 fn shade_columns(
     args: &Args,
@@ -7062,7 +7062,7 @@ mod tests {
         assert_eq!(
             rows_of(sides[0].0, sides[0].0),
             vec![0],
-            "side 0 opens onto the near kerb"
+            "side 0 opens onto the near curb"
         );
         assert_eq!(
             rows_of(sides[1].0, sides[1].0),
@@ -7543,7 +7543,7 @@ mod tests {
 
     #[test]
     fn a_mapped_crossing_takes_the_pair_from_a_synthesized_one_however_far_it_doglegs() {
-        // What the suppression's length slack cannot reach: the mapped crossing rounds a kerb and
+        // What the suppression's length slack cannot reach: the mapped crossing rounds a curb and
         // runs to twice the straight line the synthesis drew between the same two corners.
         let mut edges = vec![crossing(4, 9, 10.9, false), crossing(9, 4, 21.8, true)];
         assert_eq!(collapse_parallel_crossings(&mut edges), 1);
@@ -7635,7 +7635,7 @@ mod tests {
             gated_sidewalks(record(false, false, true, true)),
             SIDEWALK_LEFT | SIDEWALK_RIGHT
         );
-        // And the reverse: the survey missed it — a driveway kerb cut, a plaza drawn separately —
+        // And the reverse: the survey missed it — a driveway curb cut, a plaza drawn separately —
         // but a mapper walked it, so it survives too.
         assert_eq!(
             gated_sidewalks(record(true, false, false, false)),
@@ -7651,7 +7651,7 @@ mod tests {
     #[test]
     fn the_gate_leaves_an_alley_no_sidewalks_at_all() {
         // 99.4% of the city's alley km is like this: no OSM sidewalk, no surveyed polygon, either
-        // side. The gate returns nothing, which is what demotes the alley to a centreline path edge
+        // side. The gate returns nothing, which is what demotes the alley to a centerline path edge
         // — the alley stays routable, it just stops pretending to have pavement.
         assert_eq!(gated_sidewalks(record(false, false, false, false)), 0);
         // The other flag bits share the byte and must not be read as sides.
@@ -7703,8 +7703,8 @@ mod tests {
             side: SIDE_NONE,
             sidewalks,
             paved,
-            kerb_a: false,
-            kerb_b: false,
+            curb_a: false,
+            curb_b: false,
         };
         let north_only = |a: u32, b: u32, sidewalks: u8| block(a, b, sidewalks, sidewalks);
         let incidence = vec![vec![0u32], vec![0u32, 1u32], vec![1u32]];
@@ -7728,7 +7728,7 @@ mod tests {
         assert!(contractible(&mirrored, &incidence, 1));
         // The derived masks agree and the paved ones do not: the first block's north side is OSM's,
         // so nothing is derived there but the pavement is real, while the second's is bare on both.
-        // The corner fan reads `paved`, so merging these would carry the first block's kerb to the
+        // The corner fan reads `paved`, so merging these would carry the first block's curb to the
         // far end and place a crossing where there is no pavement to cross to.
         let paved_only = vec![block(0, 1, 0, SIDEWALK_LEFT), block(1, 2, 0, 0)];
         assert!(!contractible(&paved_only, &incidence, 1));
@@ -7760,8 +7760,8 @@ mod tests {
             side: SIDE_NONE,
             sidewalks: SIDEWALK_LEFT | SIDEWALK_RIGHT,
             paved: SIDEWALK_LEFT | SIDEWALK_RIGHT,
-            kerb_a: false,
-            kerb_b: false,
+            curb_a: false,
+            curb_b: false,
         };
         let covered = [vec![(0.0, 40.0)], Vec::new()];
         let pieces = trim_derived(street, &covered, (1.0, 1.0));
@@ -7803,8 +7803,8 @@ mod tests {
             side: SIDE_NONE,
             sidewalks: SIDEWALK_LEFT | SIDEWALK_RIGHT,
             paved: SIDEWALK_LEFT | SIDEWALK_RIGHT,
-            kerb_a: false,
-            kerb_b: false,
+            curb_a: false,
+            curb_b: false,
         };
         let covered = [vec![(0.0, 100.0)], vec![(0.0, 100.0)]];
         let pieces = trim_derived(street, &covered, (1.0, 1.0));
@@ -7881,8 +7881,8 @@ mod tests {
         fs::remove_dir_all(&dir).expect("cleanup");
     }
 
-    // The kerb-cut fixture: a bend node where an east street and a south street meet, and one OSM
-    // sidewalk way running east-west a little to the north of it. Metres are units here, so the
+    // The curb-cut fixture: a bend node where an east street and a south street meet, and one OSM
+    // sidewalk way running east-west a little to the north of it. Meters are units here, so the
     // coordinates read directly. The fan puts one corner in the 90-degree south-east wedge at
     // (4, -4) and one in the 270-degree wedge behind it at (-4, 4); the way passes through the
     // second wedge and only clips the corner of the first, which is what the guards have to tell
@@ -7906,8 +7906,8 @@ mod tests {
             side: SIDE_NONE,
             sidewalks: 0,
             paved: 0,
-            kerb_a: false,
-            kerb_b: false,
+            curb_a: false,
+            curb_b: false,
         }
     }
 
@@ -7965,8 +7965,8 @@ mod tests {
             side: SIDE_NONE,
             sidewalks: SIDEWALK_LEFT | SIDEWALK_RIGHT,
             paved: SIDEWALK_LEFT | SIDEWALK_RIGHT,
-            kerb_a: false,
-            kerb_b: false,
+            curb_a: false,
+            curb_b: false,
         }
     }
 
@@ -8033,7 +8033,7 @@ mod tests {
 
     #[test]
     fn grade_separation_is_never_cut() {
-        // A footway on a bridge deck passes within metres of the road under it and shares no ground
+        // A footway on a bridge deck passes within meters of the road under it and shares no ground
         // with it — from either side of the pairing.
         assert_eq!(
             cut_fixture(&[(-200, 4), (200, 4)], true, false),

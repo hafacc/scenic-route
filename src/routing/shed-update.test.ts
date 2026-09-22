@@ -44,7 +44,7 @@ import {
   type ShedWalk,
   type SnapshotRow,
   startFold,
-  TRUNCATION_NEIGHBOURS,
+  TRUNCATION_NEIGHBORS,
 } from "../../scripts/shed-permits";
 import {
   loadDeployedGraph,
@@ -347,13 +347,13 @@ test("an update lands on a full rebuild wherever the replay started", () => {
 test("the truncation window travels in the artifact", () => {
   // A run picks the feed up a fortnight behind the day it reached, so the first day it judges is the
   // one the artifact's window was cut off before. Point that at the feed's truncated write: judged
-  // against its thirty neighbours it is dropped, and judged against nothing at all — which is what a
+  // against its thirty neighbors it is dropped, and judged against nothing at all — which is what a
   // walk that had to rediscover its own window would start with — it is believed.
   const artifact = decodeShedArtifact(
     build(TRUNCATED_DAY + MERGE_TOLERANCE_DAYS - 1).open,
     build(TRUNCATED_DAY + MERGE_TOLERANCE_DAYS - 1).closed,
   );
-  expect(artifact.counts).toHaveLength(TRUNCATION_NEIGHBOURS);
+  expect(artifact.counts).toHaveLength(TRUNCATION_NEIGHBORS);
   expect(resumeFrom(isoDay(TRUNCATED_DAY + MERGE_TOLERANCE_DAYS - 1))).toBe(
     isoDay(TRUNCATED_DAY),
   );

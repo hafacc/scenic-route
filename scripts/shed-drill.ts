@@ -14,7 +14,7 @@
 // BBL shifts every batch boundary after it, which reorders the parts of unrelated lots and — before
 // scripts/shed-parcels.ts sorted them — moved where their sheds started. Placement itself has been
 // the other half: it once anchored to a graph EDGE rather than to the pavement, so a rebuild that cut
-// a kerb into different edges moved the anchor. That is why the drill re-runs the whole pipeline
+// a curb into different edges moved the anchor. That is why the drill re-runs the whole pipeline
 // below the permit walk, parcel fetch included, rather than re-placing the requests it already has.
 //
 // It reads public/routing/nyc.bin and the DOB snapshots package.json pipes in, so it is a by-hand
@@ -278,7 +278,7 @@ function shapeOf(graph: RoutingGraph, placement: ShedPlacement): Shape | null {
 }
 
 // One permit per shape, each in a different borough — a job number's leading digit — so the four
-// drops exercise four different placements rather than four neighbours in the same block of the
+// drops exercise four different placements rather than four neighbors in the same block of the
 // feed. Within a shape the choice is the middle candidate by job number, which is arbitrary but
 // fixed, so a re-run drills the same permits.
 export function pickDrops(

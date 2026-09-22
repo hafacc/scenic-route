@@ -6,8 +6,8 @@
 // pattern's first stop, shifted by the stop's own offset so the answer is the next train from the
 // platform the walker is standing on.
 //
-// It is bands rather than departures, so a `board` answer is the modelled train and not a promise
-// about a particular one: over the 2026 feeds the modelled departure is a mean of 20 seconds from the
+// It is bands rather than departures, so a `board` answer is the modeled train and not a promise
+// about a particular one: over the 2026 feeds the modeled departure is a mean of 20 seconds from the
 // real one. That is the trade the artifact exists to make — a departure list would be ten times the
 // records for a wait nobody can tell apart.
 //

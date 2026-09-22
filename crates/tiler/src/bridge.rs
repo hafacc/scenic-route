@@ -108,7 +108,7 @@ mod tests {
     }
 
     /// A point `east_meters` east and `north_meters` north of a reference in the middle of New York,
-    /// so the tests read in metres and still exercise the cos(lat) scaling of the real bake.
+    /// so the tests read in meters and still exercise the cos(lat) scaling of the real bake.
     fn at(east_meters: f64, north_meters: f64) -> Coord {
         Coord {
             lng: -74.0 + east_meters / meters_per_degree_lng(),
@@ -116,7 +116,7 @@ mod tests {
         }
     }
 
-    /// An axis-aligned ring in metres, corners `(west, south)` to `(east, north)`.
+    /// An axis-aligned ring in meters, corners `(west, south)` to `(east, north)`.
     fn rectangle(west: f64, south: f64, east: f64, north: f64) -> Vec<Coord> {
         vec![
             at(west, south),
@@ -146,7 +146,7 @@ mod tests {
         let share = water_share(true, &[vec![rectangle(-50.0, -50.0, 50.0, 50.0)]]);
 
         assert!((share - 0.5).abs() < 0.01, "half a deck reads {share}");
-        // The fixture's deck is a hair over 100 m once its degrees are metres, so it takes 101
+        // The fixture's deck is a hair over 100 m once its degrees are meters, so it takes 101
         // samples rather than 100 and the share lands a step either side of half.
         assert!(
             matches!(byte_of(share), 127..=129),
@@ -211,7 +211,7 @@ mod tests {
     }
 
     /// The column the record carries: the byte follows the measured share, only a deck counts, and
-    /// the metres reported are the share of each deck's own length.
+    /// the meters reported are the share of each deck's own length.
     #[test]
     fn the_column_counts_only_the_decks_it_measured() {
         let baked = column(&[0.5, 0.0, 1.0], &[100.0, 100.0, 40.0], 7);

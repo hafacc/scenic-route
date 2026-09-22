@@ -60,7 +60,7 @@ interface MapViewProps {
   routeDest: { lat: number; lng: number } | null;
   routeStart: { lat: number; lng: number } | null;
   searchPin: SearchPin | null;
-  // The colour the dropped pins wear, from the deck that has an accent; null keeps the app's green.
+  // The color the dropped pins wear, from the deck that has an accent; null keeps the app's green.
   markerColor: string | null;
   // A field has armed the next tap to set its point. Nothing else makes a tap place anything.
   picking: boolean;
@@ -68,7 +68,7 @@ interface MapViewProps {
   initialCamera: Camera | null; // a shared link's camera, applied once; null leaves the map alone
   preframedDest: { lat: number; lng: number } | null; // a dest whose framing the link already chose
   // The settled camera, plus what it can see: the visible bounds pick the active city when only one
-  // city is on screen, which the centre alone cannot tell.
+  // city is on screen, which the center alone cannot tell.
   onCamera: (camera: Camera, view: CityBounds) => void;
   // The basemap could not be fetched, so the map has no streets under the overlays. It has no row in
   // the layers menu to badge, so the app says it in the banner instead.
@@ -239,7 +239,7 @@ function DoubleTapZoom({
             // tap keeps its synthesised click, which the pick flow runs on.
             event.preventDefault();
           }
-          // while following, anchor on the centre so the zoom can't drift off the user
+          // while following, anchor on the center so the zoom can't drift off the user
           const at = following
             ? map.getSize().divideBy(2)
             : containerPoint(touch);
@@ -361,7 +361,7 @@ function DoubleTapZoom({
 
 // Reports the camera after every settled move so the share link can capture it, and applies a shared
 // link's camera once. The hash is read in an effect, so the camera arrives as a prop rather than as the
-// container's initial centre — hence setView here rather than a MapContainer prop.
+// container's initial center — hence setView here rather than a MapContainer prop.
 function CameraWatcher({
   initial,
   onCamera,

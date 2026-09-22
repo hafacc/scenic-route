@@ -24,7 +24,7 @@ import { EAST_BAY_WINDOW } from "./lidar";
 import type { Polygon } from "./overpass";
 
 // The release a local run reads, pinned rather than "latest" so a rebuild answers with the rows the
-// counts in scripts/README.md were measured against. Spelt the way scripts/places.ts spells it,
+// counts in scripts/README.md were measured against. Spelled the way scripts/places.ts spells it,
 // including the environment override the monthly refresh job passes.
 const PINNED_RELEASE = "2026-08-19.0";
 const OVERTURE_RELEASE = process.env.OVERTURE_RELEASE || PINNED_RELEASE;
@@ -70,7 +70,7 @@ export interface Footprint {
 }
 
 // What `tiler ndsm` measured under one footprint. A missing reading is a footprint the surface model
-// held no cell for — a shed of a few square metres, or a building the flight did not reach.
+// held no cell for — a shed of a few square meters, or a building the flight did not reach.
 export interface Reading {
   feature: number;
   roofMeters?: number;
@@ -225,7 +225,7 @@ export interface Merged {
 
 // The merge rule: the measurement wins, an OSM-sourced height patches it where the measurement is
 // under 70% of the tag, and a machine-learned height never overrides. A footprint with neither is
-// dropped — it is a shed of a few square metres, which is what the sampler misses.
+// dropped — it is a shed of a few square meters, which is what the sampler misses.
 export function merge(
   footprints: readonly Footprint[],
   readings: readonly Reading[],

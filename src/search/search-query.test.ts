@@ -22,7 +22,7 @@ import {
 } from "./search-query";
 
 // Somewhere for documents whose test is not about where they are. Everything sits on top of the
-// centre unless it says otherwise, so distance drops out of the ordering.
+// center unless it says otherwise, so distance drops out of the ordering.
 const HERE = { lat: 40.73, lng: -73.99 };
 
 const DEFAULT_PROMINENCE = 120;
@@ -51,9 +51,9 @@ function names(
   index: SearchIndex,
   text: string,
   limit = 20,
-  centre = HERE,
+  center = HERE,
 ): string[] {
-  return searchNames(index, { text, centre, limit }).map((hit) => hit.name);
+  return searchNames(index, { text, center, limit }).map((hit) => hit.name);
 }
 
 // Deterministic, so a failing corpus is the same corpus next run.
@@ -170,7 +170,7 @@ test("a word the name does not contain still answers, below anything that matche
   const index = build([place("Joes Pizza"), place("Pizza Corner Cafe")]);
   const hits = searchNames(index, {
     text: "pizza corner",
-    centre: HERE,
+    center: HERE,
     limit: 20,
   });
   expect(hits[0].name).toBe("Pizza Corner Cafe");
@@ -196,10 +196,10 @@ test("a word may take a name word from an earlier one that has another", () => {
   // "sh shake": the first word could take "Shake", which would leave the second with nothing. The
   // pairing has to be the best one available, not the first one found.
   const index = build([place("Shake Shack")]);
-  const hits = searchNames(index, { text: "sh shake", centre: HERE, limit: 5 });
+  const hits = searchNames(index, { text: "sh shake", center: HERE, limit: 5 });
   const whole = searchNames(index, {
     text: "shake shack",
-    centre: HERE,
+    center: HERE,
     limit: 5,
   });
   expect(hits[0].score).toBeGreaterThan(0.5 * whole[0].score);
@@ -226,7 +226,7 @@ test("distance outranks prominence, and prominence breaks an equal match", () =>
   ]);
   const hits = searchNames(index, {
     text: "starbucks",
-    centre: HERE,
+    center: HERE,
     limit: 5,
   });
   expect(hits[0].lat).toBe(HERE.lat);
@@ -237,7 +237,7 @@ test("distance outranks prominence, and prominence breaks an equal match", () =>
   ]);
   const ordered = searchNames(tie, {
     text: "chambers street",
-    centre: HERE,
+    center: HERE,
     limit: 5,
   });
   expect(ordered[0].score).toBeGreaterThan(ordered[1].score);
@@ -254,7 +254,7 @@ test("the two ranking factors are monotone over their whole range", () => {
   expect(distanceFactor(1e6)).toBeCloseTo(0.25, 6);
 });
 
-test("a name is found the way it would be typed rather than the way it is spelt", () => {
+test("a name is found the way it would be typed rather than the way it is spelled", () => {
   const index = build([place("Café Grumpy"), place("Joe's Coffee")]);
   expect(names(index, "cafe")).toContain("Café Grumpy");
   expect(names(index, "joes")).toContain("Joe's Coffee");
@@ -283,7 +283,7 @@ test("the address a place sits at survives the round trip", () => {
   ]);
   const [pizza] = searchNames(index, {
     text: "joes pizza",
-    centre: HERE,
+    center: HERE,
     limit: 1,
   });
   expect(pizza.streetIndex).toBe(4211);
@@ -292,7 +292,7 @@ test("the address a place sits at survives the round trip", () => {
 
   const [bridge] = searchNames(index, {
     text: "bridge cafe",
-    centre: HERE,
+    center: HERE,
     limit: 1,
   });
   expect(bridge.number).toEqual({ major: 126, minor: 10, suffix: 2 });
@@ -300,7 +300,7 @@ test("the address a place sits at survives the round trip", () => {
 
   const [park] = searchNames(index, {
     text: "prospect",
-    centre: HERE,
+    center: HERE,
     limit: 1,
   });
   expect(park.kind).toBe("street");
@@ -317,12 +317,12 @@ test("a category comes back as the slug it was baked from", () => {
   ]);
   const hits = searchNames(index, {
     text: "bow",
-    centre: HERE,
+    center: HERE,
     limit: 5,
   });
   expect(hits[0].category).toBeNull();
   expect(
-    searchNames(index, { text: "joes", centre: HERE, limit: 5 })[0].category,
+    searchNames(index, { text: "joes", center: HERE, limit: 5 })[0].category,
   ).toBe("pizza_restaurant");
 });
 
@@ -337,7 +337,7 @@ test("coordinates come back where the documents were, whatever order they were w
   for (const doc of docs) {
     const [hit] = searchNames(index, {
       text: doc.name,
-      centre: HERE,
+      center: HERE,
       limit: 1,
     });
     expect(hit.lat).toBeCloseTo(doc.lat, 4);
@@ -424,7 +424,7 @@ test("the avenue the query spells in full beats the one it only opens", () => {
       tokens: streetTokens("57 AVE", "57th Avenue"),
     }),
   ]);
-  // Both names start with what was typed. Only one of them is spelt by it — "5" is a word of 5 AVE
+  // Both names start with what was typed. Only one of them is spelled by it — "5" is a word of 5 AVE
   // and merely the first character of 57 AVE — and the whole-name lift is for the one that is.
   expect(names(index, "5 av")).toEqual(["5th Avenue", "57th Avenue"]);
 });
@@ -459,7 +459,7 @@ test("the place a query ends in is cut at an offset into the query itself", () =
 });
 
 test("a door on a street the query only opened is not the top of the scale", () => {
-  // The doorway is underfoot and the avenue is three kilometres north, which is the arrangement that
+  // The doorway is underfoot and the avenue is three kilometers north, which is the arrangement that
   // used to decide it: a real house number on a street the query merely opened was scored above
   // everything a name can reach, so "5 Av" answered with a door on Avenue A.
   const AVENUE_A = HERE;
@@ -501,7 +501,7 @@ test("a door on a street the query only opened is not the top of the scale", () 
     }),
   ]);
   const answers = (text: string): string[] =>
-    searchCity(index, addresses, { text, centre: HERE, limit: 5 }).map(
+    searchCity(index, addresses, { text, center: HERE, limit: 5 }).map(
       (hit) => hit.name,
     );
   expect(answers("5 Av")[0]).toBe("5th Avenue");
@@ -509,13 +509,13 @@ test("a door on a street the query only opened is not the top of the scale", () 
   expect(answers("5 Avenue A")[0]).toBe("5 Avenue A");
 });
 
-test("a neighbourhood the query names is not the school named after it", () => {
+test("a neighborhood the query names is not the school named after it", () => {
   const away = { lat: HERE.lat + 0.027, lng: HERE.lng };
   const index = build([
     place("Williamsburg Montessori School", { prominence: 150 }),
     place("Williamsburg", { kind: "neighborhood", prominence: 150, ...away }),
   ]);
-  // The district is three kilometres off and the school is underfoot, because a district is filed at
+  // The district is three kilometers off and the school is underfoot, because a district is filed at
   // its middle and half of it is nowhere near that. Naming the whole of it is what says so.
   expect(names(index, "williamsburg")[0]).toBe("Williamsburg");
 });
@@ -538,7 +538,7 @@ test("the kinds a caller asks for are the only ones answered, and every kind sti
   expect(names(index, "carmine")).toEqual(["Carmine St"]);
   const places = searchNames(index, {
     text: "carmine",
-    centre: HERE,
+    center: HERE,
     limit: 5,
     kinds: ["place"],
   });
@@ -546,7 +546,7 @@ test("the kinds a caller asks for are the only ones answered, and every kind sti
   // Still matched, though: it is what answers the place on it.
   const linked = searchNames(index, {
     text: "joes pizza carmine",
-    centre: HERE,
+    center: HERE,
     limit: 5,
     kinds: ["place"],
   });
@@ -584,7 +584,7 @@ test("a borough named at the end of a query is where the answer is measured from
   const named = (text: string): { lat: number; lng: number } => {
     const [hit] = searchCity(index, BOROUGHS, {
       text,
-      centre: MANHATTAN,
+      center: MANHATTAN,
       limit: 5,
     });
     return { lat: hit.lat, lng: hit.lng };
@@ -603,7 +603,7 @@ test("a query that only names a borough keeps its words", () => {
   // after it, so the whole text is searched as well and the name that carries the word wins.
   const [hit] = searchCity(index, BOROUGHS, {
     text: "brooklyn bagel",
-    centre: MANHATTAN,
+    center: MANHATTAN,
     limit: 5,
   });
   expect(hit.name).toBe("Brooklyn Bagel");
@@ -619,7 +619,7 @@ test("a station is answered with the routes it serves, out of the category slot"
   ]);
   const [hit] = searchCity(index, BOROUGHS, {
     text: "union sq",
-    centre: HERE,
+    center: HERE,
     limit: 5,
   });
   expect(hit.kind).toBe("station");
@@ -627,7 +627,7 @@ test("a station is answered with the routes it serves, out of the category slot"
   expect(hit.exact).toBeNull();
 });
 
-test("a word spelt wrong finds the name, under the one spelt right", () => {
+test("a word spelled wrong finds the name, under the one spelled right", () => {
   const index = build([
     place("Katzs Delicatessen"),
     place("Kanz Express Delicatessen"),
@@ -637,8 +637,8 @@ test("a word spelt wrong finds the name, under the one spelt right", () => {
     "Katzs Delicatessen",
     "Kanz Express Delicatessen",
   ]);
-  // And spelt right, the correction is still there but cannot overtake: a match one edit away is
-  // worth a little over half of the same match spelt properly.
+  // And spelled right, the correction is still there but cannot overtake: a match one edit away is
+  // worth a little over half of the same match spelled properly.
   expect(names(index, "katzs delicatessen")[0]).toBe("Katzs Delicatessen");
 });
 
@@ -663,8 +663,8 @@ test("a query that is already answered plentifully is not corrected", () => {
   expect(names(index, "pizza place 07")).toContain("Pizzo Place");
 });
 
-test("a street spelt out in words is the one whose every word was spelt", () => {
-  // The one the query names in full is three kilometres away and the one it half-names is underfoot,
+test("a street spelled out in words is the one whose every word was spelled", () => {
+  // The one the query names in full is three kilometers away and the one it half-names is underfoot,
   // so nothing but the words can put it first — which is the whole point: a street named entirely is
   // measured on the flat curve a door is, and distance stops deciding it.
   const away = { lat: HERE.lat + 0.027, lng: HERE.lng };

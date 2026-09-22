@@ -97,7 +97,7 @@ export default function FeedbackDialog({ onClose }: FeedbackDialogProps) {
     <Sheet
       onClose={onClose}
       closeLabel="Close feedback"
-      labelledBy="feedback-title"
+      labeledBy="feedback-title"
       width="md:max-w-md"
     >
       <div className="flex shrink-0 items-start gap-3">

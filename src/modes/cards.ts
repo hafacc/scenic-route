@@ -1,4 +1,4 @@
-// The line of text and the colour a card wears, worked out apart from the card that says it. A card
+// The line of text and the color a card wears, worked out apart from the card that says it. A card
 // says what a route IS — never how the planner found it, and never what it avoided.
 
 import { SCENIC_KEYS, type ScenicKey } from "../routing/cost";
@@ -7,7 +7,7 @@ import { FACTORS, type FactorKey } from "../routing/factors";
 import type { FerryLeg, TransitLeg } from "../routing/search";
 import type { FactorAvailability, Mode } from "./modes";
 
-// The colour a single route has always been drawn in, worn here by the least scenic card.
+// The color a single route has always been drawn in, worn here by the least scenic card.
 export const DIRECT_COLOR = "#334155";
 
 // A line the reader rides, as the card says it: what the sign calls it, the livery the agency
@@ -34,7 +34,7 @@ export function rideSummaries(rides: readonly TransitLeg[]): RideSummary[] {
 
 // A boat ridden, as the card says it: the minutes it costs, the wait on the pier included for the
 // reason a train's is. A boat has no line bullet to wear, so the pill is drawn from the glyph and
-// colour the ferry layer already uses and the name is not said.
+// color the ferry layer already uses and the name is not said.
 export interface FerrySummary {
   seconds: number;
   // Trains ridden before this boat, which is all it takes to put the two kinds of leg in trip order.
@@ -163,7 +163,7 @@ export function cardLine(
 // What a chip's number says. Shelter is the one factor a card reads backwards: in the rain the
 // question is how long you are out in it, so the chip counts EXPOSURE — 100 less the shelter the
 // route was scored on — and the lowest of them is the bold one, which is the same card the shelter
-// mean already bolds. The score, the colours and the order of the cards are the mean throughout;
+// mean already bolds. The score, the colors and the order of the cards are the mean throughout;
 // only this number is turned over.
 export interface ChipReading {
   percent: number;
@@ -195,10 +195,10 @@ function factorColor(key: FactorKey): string | null {
   return FACTORS.find((factor) => factor.key === key)?.color ?? null;
 }
 
-// One colour per card, every one of them a colour the mode's own layers already draw with, so the
+// One color per card, every one of them a color the mode's own layers already draw with, so the
 // lines and the map read as the same palette. The ends are fixed: the most scenic card wears the
-// mode's colour and the least scenic the slate a lone route has always been. Between them, a card
-// that stands out on one factor wears that factor's colour, and the rest take the mode's palette in
+// mode's color and the least scenic the slate a lone route has always been. Between them, a card
+// that stands out on one factor wears that factor's color, and the rest take the mode's palette in
 // order, skipping anything already spoken for.
 export function cardColors(mode: Mode, cards: readonly CardRank[]): string[] {
   const byScore = [...cards.keys()].sort(

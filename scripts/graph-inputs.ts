@@ -20,7 +20,7 @@
 //
 // THE CODE HALF is `tiler key-probe`: the graph pipeline itself, run over a committed fixture cut
 // out of the real city, reporting the key hash it lands on. It is a stamp of the key assignment's
-// BEHAVIOUR rather than of its source text, which is the only thing that can tell a change that
+// BEHAVIOR rather than of its source text, which is the only thing that can tell a change that
 // moves keys from a change to the same file that cannot. scripts/README.md has the measured
 // sensitivity and the one hole it leaves.
 
@@ -74,7 +74,7 @@ export async function graphInputStamp(): Promise<{
 // Queens and cut out of data/{streets,paths,sidewalks}/nyc.bin — real geometry rather than a drawn
 // network, because what the probe has to be sensitive to is the pipeline's near-threshold decisions
 // and only real data holds them in quantity: 4,226 durable keys over 1,283 streets, 3,358 OSM
-// sidewalk ways and 518 paths, with alleys, step streets, bridge decks, kerb cuts, island drops,
+// sidewalk ways and 518 paths, with alleys, step streets, bridge decks, curb cuts, island drops,
 // T-splits and one-sided pavement all populated. Its own bytes are deliberately out of the data half
 // — an edit to it that moves no key is an edit no shed can feel, and one that moves a key moves this
 // figure. Committed as plain bytes, so the push/PR job reads it under `lfs: false` like everything

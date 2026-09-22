@@ -43,7 +43,7 @@ export default function AboutDialog({ onClose }: AboutDialogProps) {
     <Sheet
       onClose={onClose}
       closeLabel="Close about"
-      labelledBy="about-title"
+      labeledBy="about-title"
       width="md:max-w-md"
     >
       {/* Pinned: the title and the way out stay put while the sources scroll under them, which is

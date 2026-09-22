@@ -127,7 +127,7 @@ export function ManeuverList({
         const state = maneuverState(progress, index);
         const isNext = state === "next";
         const isPassed = state === "passed";
-        // Passed landmarks and artwork wear their overlay colour, so the turn-by-turn reads
+        // Passed landmarks and artwork wear their overlay color, so the turn-by-turn reads
         // as the same palette as the map.
         const bubbleClass =
           maneuver.kind === "landmark"

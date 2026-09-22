@@ -455,7 +455,7 @@ export function subscribeSettings(listener: () => void): () => void {
 }
 
 // A stored order reconciled with the built-in one, which is what changes under it. Ids the build has
-// dropped go; ids it has gained are inserted where IT puts them relative to the neighbours that
+// dropped go; ids it has gained are inserted where IT puts them relative to the neighbors that
 // survived, so a new overlay or a new factor lands somewhere sensible rather than at the end of a
 // list the reader arranged.
 export function mergeOrder<Key extends string>(
@@ -495,7 +495,7 @@ export function layerMenuOrder(stored: readonly OverlayId[]): OverlayId[] {
 }
 
 // The scenic factors in the reader's order. Hiding is NOT applied here: the route panel drops the
-// hidden ones and the settings page shows them greyed, so the two want the same list.
+// hidden ones and the settings page shows them grayed, so the two want the same list.
 export function factorRunOrder(stored: readonly FactorKey[]): FactorKey[] {
   return mergeOrder(
     stored,

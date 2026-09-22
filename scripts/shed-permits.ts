@@ -59,12 +59,12 @@ export const MERGE_TOLERANCE_DAYS = 14;
 // needed a settled-day clock. The same depth doubles as the reorder buffer: snapshots are filed under
 // the day they claim and judged thirty behind the read head, which is what collapses the several
 // commits a day the repo often has into one snapshot.
-export const TRUNCATION_NEIGHBOURS = 30;
+export const TRUNCATION_NEIGHBORS = 30;
 const TRUNCATION_RATIO = 0.75;
 // How many judged days a walk keeps the row count of, so it can hand the next one its window. A run
 // re-reads the last MERGE_TOLERANCE_DAYS of the feed, so the thirty counts that window has to be
 // seeded with are thirty days further back than the last day this walk saw.
-const JUDGED_TAIL = TRUNCATION_NEIGHBOURS + MERGE_TOLERANCE_DAYS;
+const JUDGED_TAIL = TRUNCATION_NEIGHBORS + MERGE_TOLERANCE_DAYS;
 const PROGRESS_INTERVAL = 500;
 const DAY_MS = 86_400_000;
 const NEWLINE = 0x0a;
@@ -754,7 +754,7 @@ export function mergeIntervals(
   return merged;
 }
 
-// The snapshots waiting to be judged. The judgement itself reads only the 30 days BEFORE the one at
+// The snapshots waiting to be judged. The judgment itself reads only the 30 days BEFORE the one at
 // the head, whose row counts are all that is kept of them; the queue exists to file a snapshot under
 // the day it claims and to let a later commit for a day replace an earlier one.
 interface SnapshotWindow {
@@ -782,10 +782,10 @@ function judgeSnapshot(
   emit: (snapshot: DatedSnapshot) => void,
 ): void {
   const snapshot = window.pending[0];
-  const neighbours = window.before.slice();
-  neighbours.sort((left, right) => left - right);
+  const neighbors = window.before.slice();
+  neighbors.sort((left, right) => left - right);
   const median =
-    neighbours.length === 0 ? 0 : neighbours[Math.floor(neighbours.length / 2)];
+    neighbors.length === 0 ? 0 : neighbors[Math.floor(neighbors.length / 2)];
   if (median !== 0 && snapshot.rows.size < TRUNCATION_RATIO * median) {
     window.dropped += 1;
   } else {
@@ -796,13 +796,13 @@ function judgeSnapshot(
     window.kept += 1;
     emit(snapshot);
   }
-  // Dropped or kept, the day counts as a neighbour: the rule asks what a snapshot looked like beside
+  // Dropped or kept, the day counts as a neighbor: the rule asks what a snapshot looked like beside
   // the ones around it, and a walk that left the truncated ones out would judge the next one against
   // a window that depends on its own earlier verdicts.
   window.judged = snapshot.date;
   window.pending.shift();
   window.before.push(snapshot.rows.size);
-  if (window.before.length > TRUNCATION_NEIGHBOURS) {
+  if (window.before.length > TRUNCATION_NEIGHBORS) {
     window.before.shift();
   }
   window.tail.push({ date: snapshot.date, rows: snapshot.rows.size });
@@ -832,7 +832,7 @@ function acceptSnapshot(
   } else {
     window.pending.splice(index + 1, 0, snapshot);
   }
-  while (window.pending.length > TRUNCATION_NEIGHBOURS) {
+  while (window.pending.length > TRUNCATION_NEIGHBORS) {
     judgeSnapshot(window, emit);
   }
 }
@@ -854,7 +854,7 @@ export interface ShedFold {
 }
 
 // `before` is the truncation window the walk starts holding, which a windowed walk takes from the
-// artifact it is updating: the first day it judges then sees the same neighbours a walk over the
+// artifact it is updating: the first day it judges then sees the same neighbors a walk over the
 // whole history would have given it, without reading a day of history to find out what they were.
 export function startFold(
   applyFrom = "",
@@ -931,7 +931,7 @@ export function finishFold(fold: ShedFold): ShedWalk {
     ...window.tail
       .filter((judged) => judged.date < resume)
       .map((judged) => judged.rows),
-  ].slice(-TRUNCATION_NEIGHBOURS);
+  ].slice(-TRUNCATION_NEIGHBORS);
   // The day is the SNAPSHOT's, never the day the job ran: a feed that has published nothing since
   // Tuesday leaves Tuesday behind, and Friday's run picks up from there rather than from Thursday.
   return { permits, lastDay: window.lastDate, counts };

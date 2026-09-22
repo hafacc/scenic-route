@@ -1,5 +1,5 @@
-// The network estimate has to be a LOWER bound on the metres a route has left, and the radius cap is
-// where that can break: a node one hop past the frontier keeps whatever label a settled neighbour
+// The network estimate has to be a LOWER bound on the meters a route has left, and the radius cap is
+// where that can break: a node one hop past the frontier keeps whatever label a settled neighbor
 // relaxed it to, and that is an upper bound on its distance — the shorter way round is exactly what
 // the cap left unexplored.
 

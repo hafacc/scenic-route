@@ -35,7 +35,7 @@ interface OpenStreetRow {
 }
 
 // Walks one polyline and drops a point every OPEN_STREET_SAMPLE_METERS, interpolating between
-// vertices by ground distance, so a dense trail of points follows the corridor's own centreline.
+// vertices by ground distance, so a dense trail of points follows the corridor's own centerline.
 function sampleLine(line: [number, number][], name: string): NamedPoint[] {
   const points: NamedPoint[] = [];
   if (line.length === 0) {
@@ -43,7 +43,7 @@ function sampleLine(line: [number, number][], name: string): NamedPoint[] {
   }
   let [previousLng, previousLat] = line[0];
   points.push({ lat: previousLat, lng: previousLng, name }); // always sample the corridor's start
-  let sinceSample = 0; // metres walked past the last emitted sample, at the previous vertex
+  let sinceSample = 0; // meters walked past the last emitted sample, at the previous vertex
   for (let index = 1; index < line.length; index++) {
     const [lng, lat] = line[index];
     const span = haversineMeters(

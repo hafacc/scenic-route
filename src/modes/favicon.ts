@@ -1,4 +1,4 @@
-// The app icon in the mode's colour, for the tab. The path is app/icon.svg's own pin, copied rather
+// The app icon in the mode's color, for the tab. The path is app/icon.svg's own pin, copied rather
 // than fetched: a data URI is what a <link rel="icon"> can be swapped to without a round trip, and
 // the shape has to be in the string to build one.
 const PIN_PATH =

@@ -46,7 +46,7 @@ export interface CasterChunk {
   points: Float64Array; // x/y interleaved, zoom-0 world pixels
   rings: Uint32Array;
   records: Uint32Array;
-  heights: Float32Array; // metres
+  heights: Float32Array; // meters
   boxes: Float64Array; // per record, the box of everything it casts from, as minX, minY, maxX, maxY
   // Per RING, its convex hull as a start vertex and a count into `hullPoints`, positively wound. Zero
   // where the ring is concave enough to need the exact sweep, and for a footprint's holes. Held apart
@@ -57,12 +57,12 @@ export interface CasterChunk {
   levels: Uint8Array; // per ring, which slice of its crown it is; 0 for every footprint ring
   buildings: number; // records below this are footprints, the rest crowns
   // The census trunks, which are points rather than records: x/y interleaved in zoom-0 world pixels,
-  // then per trunk a radius and the height it stands to, both in metres.
+  // then per trunk a radius and the height it stands to, both in meters.
   trunks: Float64Array;
   trunkRadii: Float32Array;
   trunkHeights: Float32Array;
   trunkBox: Float64Array; // minX, minY, maxX, maxY over the points alone
-  trunkMaxHeight: number; // how far past that box a trunk shadow can reach, as a height in metres
+  trunkMaxHeight: number; // how far past that box a trunk shadow can reach, as a height in meters
   bytes: number;
 }
 
@@ -150,7 +150,7 @@ export function decodeChunk(buffer: ArrayBuffer): CasterChunk {
   const scale = view.getFloat64(32, true);
   const cursor: Cursor = { offset: view.getUint16(6, true) };
 
-  // A chunk spans under a kilometre, so its own origin's scale stands for all of it — this only weighs
+  // A chunk spans under a kilometer, so its own origin's scale stands for all of it — this only weighs
   // a footprint against its hull, against a 200 m² threshold.
   const metersPerPoint =
     EQUATOR_METERS_PER_PIXEL * Math.cos((originLat * Math.PI) / 180);

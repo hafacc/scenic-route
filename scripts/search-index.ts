@@ -81,7 +81,7 @@ const CITIES = ["nyc", "sf"] as const;
 const MAX_VARINT_BYTES = 5;
 
 // The Hilbert grid the documents are ordered on: 2^16 cells across the city's own box, so a cell is
-// a few metres and the curve orders documents that share a doorway arbitrarily but adjacently.
+// a few meters and the curve orders documents that share a doorway arbitrarily but adjacently.
 const HILBERT_SIZE = 1 << 16;
 
 // A slug carrying any of these as a WHOLE WORD. Overture writes a category as underscore-joined
@@ -106,7 +106,7 @@ function slugs(...names: readonly string[]): RegExp {
 // The tiers are spread further apart than they were, and the reason is the distance term they
 // multiply against: it swings four to one across a city, so a park a byte or two above a shop is a
 // park that whatever is nearest beats. A park now stands 1.8 to 1 over a place with no category,
-// which is more than distance can make of a kilometre and a half — enough that Prospect Park
+// which is more than distance can make of a kilometer and a half — enough that Prospect Park
 // outranks the storefront named after it, and short of a shop across town outranking the same shop
 // up the road, which is what distance is in the score for.
 const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
@@ -288,7 +288,7 @@ const STREET_PROMINENCE = 170;
 // small. Dining points are restaurants and rank as the shops do.
 const STATION_PROMINENCE = 240;
 // A stop named after the corner it stands on rather than after a place: San Francisco files 182 of
-// its 217 Muni stops as "Judah St & 40th Ave", which is a kerb with a sign on it and not where a
+// its 217 Muni stops as "Judah St & 40th Ave", which is a curb with a sign on it and not where a
 // journey ends. New York names none of its stations this way. The same lesson as `gas_station` in
 // the tiers above — the name is what says which kind of thing this is.
 const STOP_PROMINENCE = 150;
@@ -334,7 +334,7 @@ export function prominenceOf(
   }
 }
 
-// One row of data/places/<city>-neighborhoods.jsonl. Spelt out here rather than imported from
+// One row of data/places/<city>-neighborhoods.jsonl. Spelled out here rather than imported from
 // scripts/places.ts for the same reason PlaceRow below is: that module opens DuckDB as it loads, and
 // this one only reads what it wrote.
 const NEIGHBORHOOD_SUFFIX = "-neighborhoods.jsonl";
@@ -657,7 +657,7 @@ export function streetTokens(source: string, pretty: string): string[] {
   for (const token of [...tokens]) {
     // The suffixed spelling too, and not only the bare digits: a street the routing graph names has
     // no other, and the query side rebuilds these words from the DISPLAY name to tell which of them
-    // a query spelt out — so a name that shows an ordinal has to be findable under one.
+    // a query spelled out — so a name that shows an ordinal has to be findable under one.
     const value = ordinalValue(token);
     if (value !== null) {
       for (const word of ordinalWords(value)) {
@@ -670,7 +670,7 @@ export function streetTokens(source: string, pretty: string): string[] {
 
 // One document per (name, place) pair, positioned at the mean of its own addresses — the only
 // coordinate the file has for a street, and near enough for a distance term whose scale is
-// kilometres. A street with no addresses at all cannot be placed and is skipped.
+// kilometers. A street with no addresses at all cannot be placed and is skipped.
 function streetDocs(addresses: AddressIndex): StreetDoc[] {
   const docs: StreetDoc[] = [];
   const streetCount = addresses.starts.length - 1;
@@ -734,7 +734,7 @@ function numberKey({ major, minor, suffix }: HouseNumber): string {
 
 // Which of the streets of one name a joined place is on. scripts/places.ts merges New York's five
 // Court Streets to look a house number up, so what it writes down is a NAME and a number, and the
-// borough the place is labelled with is only recoverable by asking which of them has that house
+// borough the place is labeled with is only recoverable by asking which of them has that house
 // nearest to the place. One name is the common case and answers without decoding anything.
 class StreetLookup {
   private readonly byName = new Map<string, number[]>();
@@ -823,7 +823,7 @@ export interface Summary {
   graphStreets: number; // names the routing graph carries and ADDR does not
   points: number; // documents from the curated sets — stations, landmarks, art, legacy, dining
   duplicates: number; // documents dropped as one place two sources both named
-  joined: number; // places that carry a street ordinal, so a result can be labelled with its address
+  joined: number; // places that carry a street ordinal, so a result can be labeled with its address
   unplaced: number; // joined places whose street could not be told from its namesakes
   bounded: number; // places whose borough came from the boundaries rather than from an address
   homeless: number; // places no address and no boundary could place, so they read with no borough
@@ -1133,7 +1133,7 @@ function tokenKey(tokens: readonly string[]): string {
 // Everything the dropped document knew that the surviving one does not.
 function inherit(kept: SearchDoc, dropped: SearchDoc): void {
   // Two sources' opinions of how prominent one place is, and each tier is what its own source can
-  // vouch for rather than the whole truth: the bank named Bay Ridge stands in the neighbourhood of
+  // vouch for rather than the whole truth: the bank named Bay Ridge stands in the neighborhood of
   // that name, and the plaza called Nolan Park is a park. The higher of the two is what the one
   // remaining document is worth.
   kept.prominence = Math.max(kept.prominence, dropped.prominence);

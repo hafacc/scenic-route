@@ -25,12 +25,12 @@ import type { PolygonSink } from "./sweep";
 // most needs mitring rather than leaving as two bands meeting. The ring states its own width per
 // segment instead, and a corner is where the two edges' offset lines cross.
 //
-// The band is not centred on the sidewalk's baked polyline either. A shed stands against the building
-// it is up for and runs out to just short of the kerb, so the two edges are pinned to those two
-// lines: the graph puts the kerb a fixed `sidewalkInsetMeters` inboard of its polyline, the deck
+// The band is not centered on the sidewalk's baked polyline either. A shed stands against the building
+// it is up for and runs out to just short of the curb, so the two edges are pinned to those two
+// lines: the graph puts the curb a fixed `sidewalkInsetMeters` inboard of its polyline, the deck
 // stops a hand's breadth short of it, and the artifact's measured depth carries the other edge to the
-// building. On a wide Midtown pavement that is two metres of band outside the polyline, which is
-// exactly the gap of sunlight a centred band used to leave between a shed and its building.
+// building. On a wide Midtown pavement that is two meters of band outside the polyline, which is
+// exactly the gap of sunlight a centered band used to leave between a shed and its building.
 //
 // The vertices land as ZOOM-0 world pixels, the same space the caster chunks decode into: Mercator is
 // the same projection at every zoom up to a factor of 2^z, so projecting once here turns a tile's
@@ -44,8 +44,8 @@ import type { PolygonSink } from "./sweep";
 const EARTH_CIRCUMFERENCE_METERS = 40_075_016.686;
 const TILE_SIZE = 256;
 
-// What the deck stops short of the kerb by, as scripts/shed-map.ts measured the depth with.
-const KERB_MARGIN_METERS = 0.3;
+// What the deck stops short of the curb by, as scripts/shed-map.ts measured the depth with.
+const CURB_MARGIN_METERS = 0.3;
 
 function sidewalkInset(): number {
   return activeCity().sidewalkInsetMeters;
@@ -54,9 +54,9 @@ function sidewalkInset(): number {
 // A day's decks, flattened so a draw walks typed arrays rather than objects. Deck `d`'s ring runs
 // `points[2 * rings[d]]` up to `2 * rings[d + 1]`, closed by the reader.
 //
-// Every ring is a STRIP of an even number of vertices, the building edge out and the kerb edge back,
+// Every ring is a STRIP of an even number of vertices, the building edge out and the curb edge back,
 // so vertex `i` and its mirror `from + to - 1 - i` are the pair straddling one point of the run. That
-// pairing is what lets `traceDeck` open a band out to a minimum width without carrying a centreline
+// pairing is what lets `traceDeck` open a band out to a minimum width without carrying a centerline
 // or a depth alongside. Every ring is wound positively, for the nonzero fill that draws it.
 export interface ShedDecks {
   points: Float64Array; // x/y interleaved, zoom-0 world pixels
@@ -81,7 +81,7 @@ export interface DeckGrid {
   decks: Uint32Array; // deck ids grouped by cell; a deck sits in every cell its box touches
 }
 
-// Web Mercator's ground resolution at the city's latitude, which is what turns the deck's metres
+// Web Mercator's ground resolution at the city's latitude, which is what turns the deck's meters
 // into the pixels it is drawn at.
 export function pixelsPerMeter(zoom: number): number {
   const cosLat = Math.cos((activeCity().center.lat * Math.PI) / 180);
@@ -264,7 +264,7 @@ export interface DeckRun {
   xs: Float64Array;
   ys: Float64Array;
   building: Float64Array; // per segment, world pixels from the polyline to the building edge
-  kerb: Float64Array; // per segment, ditto to the kerb edge
+  curb: Float64Array; // per segment, ditto to the curb edge
   closed: boolean;
 }
 
@@ -275,8 +275,8 @@ export interface DeckRun {
 interface SpanPath {
   xs: Float64Array;
   ys: Float64Array;
-  depth: number; // metres across the pavement, floored at what can be built
-  wall: number; // metres from the baked line to the building edge, as measured
+  depth: number; // meters across the pavement, floored at what can be built
+  wall: number; // meters from the baked line to the building edge, as measured
   right: boolean; // the sidewalk was baked to its street's geometry-right, so the building is too
   head: number; // the node the polyline starts at
   tail: number; // the node it ends at
@@ -288,14 +288,14 @@ interface Step {
   reversed: boolean;
 }
 
-// Where the band's BUILDING edge sits, in metres from the sidewalk's own baked line toward the
-// building. The pipeline measured from the lot's street wall to a hand's breadth short of the kerb,
-// and the graph puts that kerb one inset in from the line, so the measurement itself says where the
-// wall is. The kerb edge is the deck's depth back from there — the FLOORED depth, so a shed measured
+// Where the band's BUILDING edge sits, in meters from the sidewalk's own baked line toward the
+// building. The pipeline measured from the lot's street wall to a hand's breadth short of the curb,
+// and the graph puts that curb one inset in from the line, so the measurement itself says where the
+// wall is. The curb edge is the deck's depth back from there — the FLOORED depth, so a shed measured
 // narrower than one can be built keeps the wall it was measured from and reaches over the roadway.
 function buildingEdgeMeters(depth: number): number {
-  // less the kerb-to-baked-sidewalk offset the graph pass lays the sidewalks at
-  return measuredDepth(depth) + KERB_MARGIN_METERS - sidewalkInset();
+  // less the curb-to-baked-sidewalk offset the graph pass lays the sidewalks at
+  return measuredDepth(depth) + CURB_MARGIN_METERS - sidewalkInset();
 }
 
 function spanPaths(graph: RoutingGraph, shed: Shed): SpanPath[] {
@@ -320,8 +320,8 @@ function spanPaths(graph: RoutingGraph, shed: Shed): SpanPath[] {
       depth: deckDepth(depth),
       wall: buildingEdgeMeters(depth),
       // Away from the roadway is the side the sidewalk was baked to: a sidewalk polyline is its
-      // centreline pushed to the geometry-LEFT unless the flag says right, and it keeps the
-      // centreline's own direction, so the building is a quarter turn off the way the vertices run.
+      // centerline pushed to the geometry-LEFT unless the flag says right, and it keeps the
+      // centerline's own direction, so the building is a quarter turn off the way the vertices run.
       right: edgeGeometryRight(graph, edge),
       head: t0 === 0 ? graph.edgeNodeA[edge] : -1,
       tail: t1 === 1 ? graph.edgeNodeB[edge] : -1,
@@ -334,7 +334,7 @@ function spanPaths(graph: RoutingGraph, shed: Shed): SpanPath[] {
 // nothing else ends there, or three spans do, which is a fork with no single path through it. A
 // corner onto a pavement of a different width IS a pair: the ring carries a width per segment, so a
 // shed turning off an avenue onto a side street stays one deck that narrows at the corner.
-function neighbour(
+function neighbor(
   ends: Map<number, number[]>,
   span: number,
   node: number,
@@ -384,7 +384,7 @@ function chainSpans(paths: readonly SpanPath[]): Chain[] {
     let current = span;
     let exit = node;
     for (;;) {
-      const next = neighbour(ends, current, exit);
+      const next = neighbor(ends, current, exit);
       if (next === null) {
         return { steps, closed: false };
       } else if (taken[next] === 1) {
@@ -425,8 +425,8 @@ function chainSpans(paths: readonly SpanPath[]): Chain[] {
 
 // One shed's decks: its spans projected and chained into the runs they form, each carrying the two
 // offsets its band's edges sit at. A span is the edge's own baked polyline, which for a sidewalk runs
-// corner to corner one half-offset out from the centreline (scripts/README.md); the offsets are what
-// carry the band across the pavement to stand between the building line and the kerb.
+// corner to corner one half-offset out from the centerline (scripts/README.md); the offsets are what
+// carry the band across the pavement to stand between the building line and the curb.
 export function shedRuns(graph: RoutingGraph, shed: Shed): DeckRun[] {
   const paths = spanPaths(graph, shed);
   const scale = pixelsPerMeter(0);
@@ -438,7 +438,7 @@ export function shedRuns(graph: RoutingGraph, shed: Shed): DeckRun[] {
     const xs: number[] = [];
     const ys: number[] = [];
     const building: number[] = [];
-    const kerb: number[] = [];
+    const curb: number[] = [];
     for (const { span, reversed } of steps) {
       const path = paths[span];
       // Walking a span against its own direction turns its geometry-left round with it.
@@ -451,7 +451,7 @@ export function shedRuns(graph: RoutingGraph, shed: Shed): DeckRun[] {
         }
         if (step > 0) {
           building.push(side * path.wall * scale);
-          kerb.push(side * (path.wall - path.depth) * scale);
+          curb.push(side * (path.wall - path.depth) * scale);
         }
       }
     }
@@ -464,7 +464,7 @@ export function shedRuns(graph: RoutingGraph, shed: Shed): DeckRun[] {
       xs: Float64Array.from(xs),
       ys: Float64Array.from(ys),
       building: Float64Array.from(building),
-      kerb: Float64Array.from(kerb),
+      curb: Float64Array.from(curb),
       closed,
     });
   }
@@ -473,13 +473,13 @@ export function shedRuns(graph: RoutingGraph, shed: Shed): DeckRun[] {
 
 // How far a corner is allowed to run out from the vertex it turns on, as a multiple of the deck's
 // own depth. Two offset lines meet further and further out as the turn sharpens — a shed wrapping
-// the sharp end of a Flatiron block would reach metres past where any deck stands — and where a run
+// the sharp end of a Flatiron block would reach meters past where any deck stands — and where a run
 // carries on straight into a DIFFERENT depth they never meet at all. Past this the corner is cut
 // square across instead. 2 leaves every turn up to 120° meeting exactly, which is every ordinary
 // street corner and then some.
 const MITER_LIMIT = 2;
 
-// The unit direction of each of a run's segments. A segment pinched to nothing takes its neighbour's
+// The unit direction of each of a run's segments. A segment pinched to nothing takes its neighbor's
 // direction, so a repeated vertex in the baked geometry turns into a corner that does not turn rather
 // than a hole in the walk. Null where the whole run is one point and there is no direction to be had.
 function runDirections({
@@ -548,11 +548,11 @@ function edgeCorner(
   return Math.hypot(x, y) > reach ? null : [x, y];
 }
 
-// One run as the ring it covers: out along the building edge and back along the kerb edge, x/y
+// One run as the ring it covers: out along the building edge and back along the curb edge, x/y
 // interleaved in zoom-0 world pixels and wound positively.
 //
 // Both edges are the polyline offset sideways, so a corner is where two offset lines MEET — the
-// building's own corner and the kerb's own corner, which is what a shed wraps around — and a depth
+// building's own corner and the curb's own corner, which is what a shed wraps around — and a depth
 // that changes only moves the line the building edge is on. Where they would meet too far out, or
 // are parallel at different offsets, the corner is cut square across both edges instead: two
 // vertices a side rather than one, which is a chamfer at a hairpin and the step across a change of
@@ -561,7 +561,7 @@ function edgeCorner(
 // part of the band rather than as a hole. A closed run repeats its first vertex, which joins the
 // annulus with a slit of no width instead of leaving the corner it closed on undecked.
 export function deckRing(run: DeckRun): Float64Array {
-  const { xs, ys, building, kerb, closed } = run;
+  const { xs, ys, building, curb, closed } = run;
   const count = xs.length;
   if (count < 2 || building.length === 0) {
     return new Float64Array(0);
@@ -573,7 +573,7 @@ export function deckRing(run: DeckRun): Float64Array {
   const { dirX, dirY } = directions;
   const segments = dirX.length;
 
-  // The two edges as they are walked: the building's in order, the kerb's to be walked back.
+  // The two edges as they are walked: the building's in order, the curb's to be walked back.
   const outer: number[] = [];
   const inner: number[] = [];
   for (let vertex = 0; vertex <= (closed ? count : count - 1); vertex++) {
@@ -589,8 +589,8 @@ export function deckRing(run: DeckRun): Float64Array {
     const reach =
       MITER_LIMIT *
       Math.max(
-        Math.abs(building[into] - kerb[into]),
-        Math.abs(building[outOf] - kerb[outOf]),
+        Math.abs(building[into] - curb[into]),
+        Math.abs(building[outOf] - curb[outOf]),
       );
     const buildingCorner = edgeCorner(
       intoX,
@@ -601,20 +601,20 @@ export function deckRing(run: DeckRun): Float64Array {
       building[outOf],
       reach,
     );
-    const kerbCorner = edgeCorner(
+    const curbCorner = edgeCorner(
       intoX,
       intoY,
-      kerb[into],
+      curb[into],
       outX,
       outY,
-      kerb[outOf],
+      curb[outOf],
       reach,
     );
     // Both edges turn on one vertex or neither does, so the two stay in step and every vertex of
     // the ring keeps the one across the band from it as its mirror.
-    if (buildingCorner && kerbCorner) {
+    if (buildingCorner && curbCorner) {
       outer.push(xs[at] + buildingCorner[0], ys[at] + buildingCorner[1]);
-      inner.push(xs[at] + kerbCorner[0], ys[at] + kerbCorner[1]);
+      inner.push(xs[at] + curbCorner[0], ys[at] + curbCorner[1]);
     } else {
       outer.push(
         xs[at] + intoX * building[into],
@@ -623,10 +623,10 @@ export function deckRing(run: DeckRun): Float64Array {
         ys[at] + outY * building[outOf],
       );
       inner.push(
-        xs[at] + intoX * kerb[into],
-        ys[at] + intoY * kerb[into],
-        xs[at] + outX * kerb[outOf],
-        ys[at] + outY * kerb[outOf],
+        xs[at] + intoX * curb[into],
+        ys[at] + intoY * curb[into],
+        xs[at] + outX * curb[outOf],
+        ys[at] + outY * curb[outOf],
       );
     }
   }

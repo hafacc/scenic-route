@@ -60,7 +60,7 @@ export type CrownAllometry =
 
 // data/canopy/<id>.bin: NYC's 2017 LiDAR tree-canopy polygons, magic `CNPY`, the shared polygon
 // byte layout (a header, then per-polygon varint-delta rings) plus a trailing crown height in
-// decimetres per polygon. This is the *measured* canopy footprint — the cover field itself:
+// decimeters per polygon. This is the *measured* canopy footprint — the cover field itself:
 // the canopy pass rasterizes it for the fill pyramid and the density pass samples it at each
 // sidewalk to fill the routing density blobs. layout: scripts/README.md
 export interface CanopyLayer {
@@ -98,7 +98,7 @@ export interface FieldLayer {
   land: SourceFile; // data/land/<id>.bin, the population and the clip
   canopy: CanopyLayer; // data/canopy/<id>.bin, the measured 2017 LiDAR canopy: the cover source
   fillSigmaMeters: number; // the isotropic blur the canopy fill and the land mean read
-  tightSigmaAlongMeters: number; // the street kernel, down the road: the colour stays smooth
+  tightSigmaAlongMeters: number; // the street kernel, down the road: the color stays smooth
   tightSigmaAcrossMeters: number; // and tight across it, so the two sidewalks stay distinct
   crownAllometry: CrownAllometry; // dbh -> crown radius, the size each genus dot draws at
   maxDbhInches: number; // trunks past this are clamped: the source has nonsense outliers
@@ -128,8 +128,8 @@ export interface StreetLayer {
   bytes: number;
   sha256: string;
   densifyMeters: number; // longest gap between two sampled vertices
-  sidewalkInsetMeters: number; // curb to the centre of the sidewalk, either side
-  // Whether this city's centreline distinguishes a service way with no pavement — New York's CSCL
+  sidewalkInsetMeters: number; // curb to the center of the sidewalk, either side
+  // Whether this city's centerline distinguishes a service way with no pavement — New York's CSCL
   // does and San Francisco's does not, its "alleys" being narrow streets with sidewalks. The graph's
   // alley invariants are held over that population, so a city without one is not asked about it.
   alleys: boolean;

@@ -11,7 +11,7 @@ use crate::graph::{KIND_CROSSING, KIND_LINK, KIND_SIDEWALK, SIDE_EAST, SIDE_NORT
 
 /// One finished edge, as the checks read it. `alley` and `demoted` come from the CSCL record the
 /// edge was derived from: an alley is `rw_type` 10, and a demoted street is one the existence gate
-/// found no pavement on and dropped to its centreline.
+/// found no pavement on and dropped to its centerline.
 pub struct Edge {
     pub a: u32,
     pub b: u32,
@@ -92,7 +92,7 @@ pub struct AlleyReach {
     pub off_component_km: f64,
 }
 
-/// The component holding the most walking kilometres, and every node's component root.
+/// The component holding the most walking kilometers, and every node's component root.
 fn components(walk: &Walk) -> (u32, Vec<u32>) {
     let mut parent: Vec<u32> = (0..walk.node_count as u32).collect();
     for edge in walk.edges {
@@ -137,7 +137,7 @@ pub fn alley_reach(walk: &Walk) -> AlleyReach {
 /// How far an alley mouth has to walk to stand on mapped pavement.
 ///
 /// A mouth is a node where the alley meets something that is not an alley. Reaching pavement is not
-/// the same as being connected to it: a mouth that can only get to the sidewalk it is five metres
+/// the same as being connected to it: a mouth that can only get to the sidewalk it is five meters
 /// from by going round the block is connected, is reachable, and is wrong. The distance is measured
 /// through the graph, so that detour is what it reports.
 pub struct MouthWalk {
@@ -208,7 +208,7 @@ pub fn alley_mouth_walk(walk: &Walk) -> MouthWalk {
 
 /// Crossings that stop in the middle of the road. A marked crossing of a divided street is drawn as
 /// two ways chained through the traffic island between them, so a build that loses the islands keeps
-/// the two halves and joins neither: the walker steps off the kerb, reaches the median, and the
+/// the two halves and joins neither: the walker steps off the curb, reaches the median, and the
 /// route ends there. The finished shape is a crossing whose far end has nothing else on it.
 pub fn crossings_to_nowhere(walk: &Walk) -> usize {
     let incidence = walk.incidence();
@@ -227,7 +227,7 @@ pub fn crossings_to_nowhere(walk: &Walk) -> usize {
 ///
 /// The test is the pair of *opposite* labels rather than the label the gate chose, because a label
 /// is taken from the chord of the edge that carries it: a street's two sides always face opposite
-/// winds, but one side broken into pieces by the conflation drifts between neighbouring winds along
+/// winds, but one side broken into pieces by the conflation drifts between neighboring winds along
 /// a bend. Opposition is the part of the label that means something here.
 pub fn phantom_sidewalks(walk: &Walk, one_sided: &HashSet<u32>) -> usize {
     let mut sides: HashMap<u32, u8> = HashMap::new();
@@ -268,9 +268,9 @@ pub fn link_lengths(walk: &Walk) -> LinkLengths {
     }
 }
 
-/// The worst neighbourhood's pavement, over a grid of `cell_meters` squares. Per cell this is the
-/// share of its walking kilometres that are streets the gate found no pavement on — an ordinary
-/// neighbourhood has few, and a neighbourhood nobody has mapped and whose survey went missing has
+/// The worst neighborhood's pavement, over a grid of `cell_meters` squares. Per cell this is the
+/// share of its walking kilometers that are streets the gate found no pavement on — an ordinary
+/// neighborhood has few, and a neighborhood nobody has mapped and whose survey went missing has
 /// nothing but. Alleys are excluded: they are demoted on purpose. Cells under `floor_km` of walking
 /// network are skipped, so a park edge or a strip of waterfront cannot be the worst cell.
 pub struct PavementCells {
@@ -388,7 +388,7 @@ mod tests {
     fn an_alley_nothing_reaches_is_off_the_component_it_should_be_on() {
         let zeros = [0i32; 5];
         // The city's own shape: a street's two sidewalks (0-1-2) with an alley (3-4) behind the
-        // block. The alley's mouth stands on the street's centreline with no node cut there, so
+        // block. The alley's mouth stands on the street's centerline with no node cut there, so
         // nothing joins the two — which is exactly what the graph did before the mouths were noded,
         // over 264 of 302 km of alley.
         let mut edges = vec![edge(0, 1), edge(1, 2), edge(3, 4)];
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(round_the_block.mouths, 1);
         assert_eq!(round_the_block.median_meters, 30.0);
 
-        // The kerb cut: the way is cut where the mouth stands beside it, and the mouth binds to the
+        // The curb cut: the way is cut where the mouth stands beside it, and the mouth binds to the
         // cut. The two halves keep the way's mapped provenance, so the walk is nothing at all.
         let mut cut = vec![
             edge(0, 3),
@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn a_crossing_chained_through_its_island_is_whole_and_one_cut_in_half_is_not() {
         let zeros = [0i32; 6];
-        // Kerb 0, island 2-3, kerb 1: the crossing is three edges and both ends stand on pavement.
+        // Curb 0, island 2-3, curb 1: the crossing is three edges and both ends stand on pavement.
         let mut whole = vec![edge(4, 0), edge(0, 2), edge(2, 3), edge(3, 1), edge(1, 5)];
         for crossing in &mut whole[1..4] {
             crossing.kind = KIND_CROSSING;
@@ -503,9 +503,9 @@ mod tests {
     }
 
     #[test]
-    fn a_neighbourhood_of_streets_with_no_pavement_is_its_own_cell() {
-        // Two cells a kilometre apart in x: an ordinary one at the origin and one whose streets the
-        // gate found no pavement on at all. The cell scores the share of its walking kilometres that
+    fn a_neighborhood_of_streets_with_no_pavement_is_its_own_cell() {
+        // Two cells a kilometer apart in x: an ordinary one at the origin and one whose streets the
+        // gate found no pavement on at all. The cell scores the share of its walking kilometers that
         // are demoted street, so the bad cell reads 1 and the good one 0.
         let node_x = [0i32, 0, 2000, 2000];
         let node_y = [0i32; 4];
@@ -529,7 +529,7 @@ mod tests {
         assert_eq!(cells.worst_demoted_share, 1.0);
         assert_eq!(cells.p90_demoted_share, 1.0);
 
-        // An alley is demoted on purpose and is not a neighbourhood without pavement.
+        // An alley is demoted on purpose and is not a neighborhood without pavement.
         edges[1].alley = true;
         let alleys = pavement_cells(
             &Walk {

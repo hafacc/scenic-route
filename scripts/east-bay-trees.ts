@@ -4,7 +4,7 @@
 // What a register is for here is narrow and worth stating, because the name suggests more: these
 // points do NOT feed the cover field or the shade. Cover comes from the measured canopy polygons
 // (scripts/alcc.ts) and a crown's height from the raster under it. A register carries a species,
-// which becomes a genus byte and a colour, and a trunk diameter, which the published allometry in
+// which becomes a genus byte and a color, and a trunk diameter, which the published allometry in
 // scripts/allometry.ts turns into the radius of the dot drawn for it. A city with no register loses
 // one overlay and nothing else.
 //

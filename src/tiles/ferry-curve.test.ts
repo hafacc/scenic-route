@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { MAX_ROUNDING_PX, type PathSink, roundedPath } from "./ferry-curve";
 
 // Rounding's contract is what a fit could not give: the drawn line is the published line except
-// within a corner's own neighbourhood, it never reaches past a vertex, and it only ever cuts a
+// within a corner's own neighborhood, it never reaches past a vertex, and it only ever cuts a
 // corner short — so it cannot bow a leg out over the water it shares or onto the bank beside it.
 
 interface Point {

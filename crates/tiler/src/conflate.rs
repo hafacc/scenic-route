@@ -7,7 +7,7 @@
 //! the Central Park measurement that chose it. See scripts/README.md.
 //!
 //! All coordinates are quantized i32 in the streets file's frame (graph.rs re-quantizes the paths
-//! against the streets origin first), so `meters_per_unit` converts a unit delta to metres on each
+//! against the streets origin first), so `meters_per_unit` converts a unit delta to meters on each
 //! axis at the city's reference latitude — the same equirectangular frame the corners live in.
 
 use std::cmp::Reverse;
@@ -19,7 +19,7 @@ use crate::graph::{DECIMETERS_PER_METER, KIND_CROSSING, KIND_SIDEWALK};
 
 // 408 of Central Park's 1,449 OSM ways (35.6 of 88.6 km) lie within 8 m of a walkable CSCL segment
 // — the car-free drives (duplicated as highway=pedestrian) and the paths CSCL already carries. At
-// 6 m with a bearing guard the on-street protected bike lanes (~5 m off the centreline, aligned)
+// 6 m with a bearing guard the on-street protected bike lanes (~5 m off the centerline, aligned)
 // drop while off-street greenways (>10 m) survive.
 const DEDUP_METERS: f64 = 6.0;
 // A footpath running beside a drive shares its bearing; a path merely crossing it does not. 25°
@@ -29,7 +29,7 @@ const DEDUP_BEARING_DEGREES: f64 = 25.0;
 // that runs 5 m beside a drive then peels away) are a real distinct walk and are kept whole.
 const DEDUP_FRACTION: f64 = 0.8;
 // The orphan band (step 2b). 10 m is where the first band's evidence runs out: an off-street
-// greenway sits more than 10 m from the centreline it follows, a re-mapped street sits inside the
+// greenway sits more than 10 m from the centerline it follows, a re-mapped street sits inside the
 // right-of-way. Only a named, standalone way tested against a CSCL segment of the same name reaches
 // this band, so it never touches a path that is part of a network or that OSM names for itself.
 const ORPHAN_DEDUP_METERS: f64 = 10.0;
@@ -39,21 +39,21 @@ const DEDUP_SAMPLE_METERS: f64 = 10.0;
 // The dedup/weld/entrance grid cell. 16 m > the 6 m dedup band and the 4 m weld radius, so a 3×3
 // scan covers those; the 20 m entrance radius scans the 2-cell ring it needs.
 const GRID_CELL_METERS: f64 = 16.0;
-// A crossing node in OSM sits on the road centreline, so 4 m is generous for welding a greenway
+// A crossing node in OSM sits on the road centerline, so 4 m is generous for welding a greenway
 // mapped as one long way to every street it crosses at grade. Structure flags on either side (a
 // bridge over a transverse, a path under a viaduct) suppress the false weld a bare distance makes.
 const WELD_METERS: f64 = 4.0;
-// Park entrances meet the street mid-block at arbitrary kerb points: of Central Park's 318 dangling
+// Park entrances meet the street mid-block at arbitrary curb points: of Central Park's 318 dangling
 // endpoints, 210 lie within 25 m of a walkable CSCL segment, the 3–15 m masses being sidewalk-line
-// and kerb endings. 20 m captures them; endpoints beyond stay honest interior dead-ends. The radius
-// is measured to the *walking* line the snap targets, not to the centreline it used to.
+// and curb endings. 20 m captures them; endpoints beyond stay honest interior dead-ends. The radius
+// is measured to the *walking* line the snap targets, not to the centerline it used to.
 const ENTRANCE_METERS: f64 = 20.0;
 // The continuation guard: an entrance connector is accepted only if it continues the way's exit
 // direction within 75°. A fence-parallel path exits along the fence, so its connector to the curb
 // runs ~90° across it and is rejected — Green-Wood's interior paths stay inside Green-Wood.
 const CONTINUATION_DEGREES: f64 = 75.0;
 // The guard only has something to guard beyond the street's own half-width. NYC's standard
-// right-of-way is 60 ft, so a CSCL centreline is ~9 m from the property line and an endpoint within
+// right-of-way is 60 ft, so a CSCL centerline is ~9 m from the property line and an endpoint within
 // 8 m of it is standing in the roadbed or on its sidewalk — there is no fence between the two, and
 // whatever direction the way exits, that curb is the one it belongs to. Below 8 m the guard is
 // skipped: at that range rejecting costs a whole-block detour (Coenties Alley's 6 m-offset second
@@ -81,9 +81,9 @@ pub const SPLIT_MERGE_METERS: f64 = 2.0;
 const ISLAND_TOUCH_METERS: f64 = 1.0;
 // Step 0's tolerance: how far a CSCL endpoint may stand from the CSCL line it opens off and still be
 // the same place. This is a coincidence test, not a weld — the city draws an alley's mouth *on* the
-// street's centreline and simply does not node it there, so the distance is zero and the tolerance
+// street's centerline and simply does not node it there, so the distance is zero and the tolerance
 // only has to survive quantization. Measured over the 4,468 alley ends that are not already a street
-// node: 3,795 lie within 0.25 m of a street centreline and the next one is 5 m away, so any
+// node: 3,795 lie within 0.25 m of a street centerline and the next one is 5 m away, so any
 // tolerance in that gap picks out the same set; this one matches graph.rs's own node merge radius.
 const CSCL_TOUCH_METERS: f64 = 1.0;
 
@@ -104,7 +104,7 @@ const STRUCTURE_FLAG: u8 = 1 << 0;
 /// One edge before `graph.rs` nodes it: the same shape as its `Edge`, plus an `osm` provenance bit
 /// the contraction and island-drop key on. The polyline is quantized in the streets frame with its
 /// endpoints already at their final positions; `cover_left`/`cover_right` are in the stored
-/// direction (equal for an offset-0 path); `length` is the ingest's geodesic metres. `source_id` is
+/// direction (equal for an offset-0 path); `length` is the ingest's geodesic meters. `source_id` is
 /// the source record's own id (a CSCL physicalid or an OSM way id) and every cut, weld or weave
 /// below hands it to each piece unchanged — it is what the graph's durable edge key is built from.
 #[derive(Clone)]
@@ -120,8 +120,8 @@ pub struct ProtoEdge {
     pub osm: bool,
     pub source_id: u32,
     // The GRPH record kind this becomes, and the N/E/S/W label that goes with it. A CSCL street
-    // carries KIND_SIDEWALK and SIDE_NONE — it expands into one edge per side, each labelled from
-    // its own geometry — while an OSM sidewalk way is one side already and arrives labelled.
+    // carries KIND_SIDEWALK and SIDE_NONE — it expands into one edge per side, each labeled from
+    // its own geometry — while an OSM sidewalk way is one side already and arrives labeled.
     pub kind: u8,
     pub side: u8,
     // Which of the two sides a *derived* sidewalk is offset onto, in the stored direction. Zero on a
@@ -134,17 +134,17 @@ pub struct ProtoEdge {
     // sidewalk on that side, or the city's planimetric survey drew one — and nothing about surface.
     pub paved: u8,
     // This end entrance-snapped onto a street's derived sidewalk (step 4), so its coordinate is the
-    // centreline point the street was split at but the walk arrives at the kerb: `graph.rs` binds it
+    // centerline point the street was split at but the walk arrives at the curb: `graph.rs` binds it
     // to the corner node the split makes rather than to a path node in the middle of the roadway.
-    pub kerb_a: bool,
-    pub kerb_b: bool,
+    pub curb_a: bool,
+    pub curb_b: bool,
 }
 
 impl ProtoEdge {
     /// An OSM sidewalk or crossing way — the primary walking network, and the one the passes below
     /// tuned for park paths must leave alone: the 6 m dedup band would eat it (DESIGN.md, "OSM is
-    /// the pavement, CSCL is the label"), and welding a crossing onto the centreline it crosses
-    /// would put the join back in the middle of the roadway (DESIGN.md, "The centreline dogleg").
+    /// the pavement, CSCL is the label"), and welding a crossing onto the centerline it crosses
+    /// would put the join back in the middle of the roadway (DESIGN.md, "The centerline dogleg").
     fn sidewalk_network(&self) -> bool {
         self.osm && (self.kind == KIND_SIDEWALK || self.kind == KIND_CROSSING)
     }
@@ -160,7 +160,7 @@ pub struct ConflateStats {
     pub cscl_t_splits: usize, // CSCL segments cut where another CSCL end stands on their interior
     pub welded_vertices: usize, // OSM vertices moved onto a CSCL segment at an at-grade crossing
     pub entrance_snaps: usize, // dangling OSM endpoints snapped to a walking line, guard accepted
-    pub entrance_snaps_kerb: usize, // of those, onto a street's derived sidewalk rather than a line
+    pub entrance_snaps_curb: usize, // of those, onto a street's derived sidewalk rather than a line
     pub short_entrance_snaps: usize, // of those, accepted only because the connector was under 8 m
     pub dangling_ends: usize, // degree-1 OSM endpoints left unconnected after every step
     pub merged_dangling_ends: usize, // dangling ends pulled onto a node a block away by network
@@ -178,7 +178,7 @@ pub fn meters_between(from: Point, to: Point, meters_per_unit: (f64, f64)) -> f6
     delta_x.hypot(delta_y)
 }
 
-/// The geodesic length of a quantized polyline in the equirectangular metre frame — the metric the
+/// The geodesic length of a quantized polyline in the equirectangular meter frame — the metric the
 /// stored f32 length is divided against when a polyline is cut, so the halves keep its proportions.
 pub fn polyline_meters(poly_x: &[i32], poly_y: &[i32], meters_per_unit: (f64, f64)) -> f64 {
     let mut total = 0.0;
@@ -192,7 +192,7 @@ pub fn polyline_meters(poly_x: &[i32], poly_y: &[i32], meters_per_unit: (f64, f6
     total
 }
 
-/// The bearing of a unit-space delta, in degrees (`atan2` of the metre-frame delta).
+/// The bearing of a unit-space delta, in degrees (`atan2` of the meter-frame delta).
 pub fn bearing_degrees(from: Point, to: Point, meters_per_unit: (f64, f64)) -> f64 {
     let east = f64::from(to.0 - from.0) * meters_per_unit.0;
     let north = f64::from(to.1 - from.1) * meters_per_unit.1;
@@ -213,7 +213,7 @@ fn directed_angle(first_degrees: f64, second_degrees: f64) -> f64 {
     wrapped.min(360.0 - wrapped)
 }
 
-/// Project a point onto a segment in the metre frame: the perpendicular distance in metres, the
+/// Project a point onto a segment in the meter frame: the perpendicular distance in meters, the
 /// clamped parameter along the segment, and the quantized projection point.
 pub fn project(
     point: Point,
@@ -248,7 +248,7 @@ pub fn project(
 
 /// A grid over a list of polylines: each `(line, vertex)` sub-segment registered in every 16 m cell
 /// its bounding box touches, so a point query scans only the handful of cells its own radius can
-/// reach. `vertex` is the sub-segment's first vertex. Two are built — one over the CSCL centrelines
+/// reach. `vertex` is the sub-segment's first vertex. Two are built — one over the CSCL centerlines
 /// the dedup and the weld compare against, one over the walking lines the entrance snap reaches for.
 pub struct SegmentGrid {
     cell_units_x: i32,
@@ -291,7 +291,7 @@ impl SegmentGrid {
         }
     }
 
-    /// Every sub-segment registered in a cell within `radius` metres of the point (Chebyshev ring
+    /// Every sub-segment registered in a cell within `radius` meters of the point (Chebyshev ring
     /// `ceil(radius / cell)`), possibly with duplicates the caller resolves by taking the minimum.
     pub fn nearby(
         &self,
@@ -301,11 +301,11 @@ impl SegmentGrid {
     ) -> Vec<(u32, u32)> {
         let ring_x = (radius / (f64::from(self.cell_units_x) * meters_per_unit.0)).ceil() as i32;
         let ring_y = (radius / (f64::from(self.cell_units_y) * meters_per_unit.1)).ceil() as i32;
-        let centre_x = point.0.div_euclid(self.cell_units_x);
-        let centre_y = point.1.div_euclid(self.cell_units_y);
+        let center_x = point.0.div_euclid(self.cell_units_x);
+        let center_y = point.1.div_euclid(self.cell_units_y);
         let mut found = Vec::new();
-        for cell_x in centre_x - ring_x..=centre_x + ring_x {
-            for cell_y in centre_y - ring_y..=centre_y + ring_y {
+        for cell_x in center_x - ring_x..=center_x + ring_x {
+            for cell_y in center_y - ring_y..=center_y + ring_y {
                 if let Some(bucket) = self.cells.get(&(cell_x, cell_y)) {
                     found.extend_from_slice(bucket);
                 }
@@ -318,7 +318,7 @@ impl SegmentGrid {
 /// The nearest street sub-segment to a point within `radius`, honouring the structure filter
 /// (neither caller may target a bridge or tunnel deck): the proto, its sub-segment, the parameter,
 /// the quantized projection point, and the distance. Its callers are step 0's alley-mouth split and
-/// the weld — the entrance snap wants pavement rather than a centreline and goes through
+/// the weld — the entrance snap wants pavement rather than a centerline and goes through
 /// `nearest_walk_line`. `exclude` drops one proto from the search, which is what step 0 needs: a
 /// street's own endpoint lies on its own line, at distance zero.
 fn nearest_street(
@@ -360,24 +360,24 @@ fn nearest_street(
 
 /// One line a dangling OSM endpoint may reach in step 4, and the street it is a line of. Only
 /// streets offer lines, and a sidewalked street offers its two derived sidewalks rather than its
-/// centreline. DESIGN.md, "The centreline dogleg", is why — and why another OSM way, which is a
+/// centerline. DESIGN.md, "The centerline dogleg", is why — and why another OSM way, which is a
 /// walking polyline too, is left to step 6 instead of being a candidate here.
 struct WalkLine {
     poly_x: Vec<i32>,
     poly_y: Vec<i32>,
     street: usize,
-    /// The line is the street's derived sidewalk, offset vertex for vertex from its centreline, so
-    /// the projection's sub-segment and parameter carry straight back to that centreline: the split
+    /// The line is the street's derived sidewalk, offset vertex for vertex from its centerline, so
+    /// the projection's sub-segment and parameter carry straight back to that centerline: the split
     /// is recorded there, and `graph.rs` binds the OSM end to the corner node it makes. Clear when
     /// the street *is* the walking surface — a boardwalk, a path, a step street, a street the
-    /// existence gate demoted — and its centreline is the line people walk.
-    kerb: bool,
+    /// existence gate demoted — and its centerline is the line people walk.
+    curb: bool,
 }
 
-/// A street's derived sidewalk line: every centreline vertex shifted `half_offset_m` metres along
+/// A street's derived sidewalk line: every centerline vertex shifted `half_offset_m` meters along
 /// the local normal (`sign` +1 geometry-left, -1 geometry-right), the tangent taken between the
-/// nearest distinct neighbours so a coincident vertex cannot collapse it. Vertex for vertex with
-/// the centreline, which is what lets a projection on it name a position on that centreline.
+/// nearest distinct neighbors so a coincident vertex cannot collapse it. Vertex for vertex with
+/// the centerline, which is what lets a projection on it name a position on that centerline.
 /// `graph.rs` bakes the two end vertices into corner nodes instead; within a half-offset of an
 /// intersection this line therefore runs a little past where the sidewalk really stops.
 fn offset_line(
@@ -420,7 +420,7 @@ fn offset_line(
 }
 
 /// Every line an entrance snap may target: per non-structure street, the sidewalk position of each
-/// side that has pavement at all, and its own centreline where the street is the walking surface.
+/// side that has pavement at all, and its own centerline where the street is the walking surface.
 fn walk_lines(streets: &[ProtoEdge], meters_per_unit: (f64, f64)) -> Vec<WalkLine> {
     let mut lines = Vec::with_capacity(2 * streets.len());
     for (street, proto) in streets.iter().enumerate() {
@@ -432,7 +432,7 @@ fn walk_lines(streets: &[ProtoEdge], meters_per_unit: (f64, f64)) -> Vec<WalkLin
                 poly_x: proto.poly_x.clone(),
                 poly_y: proto.poly_y.clone(),
                 street,
-                kerb: false,
+                curb: false,
             });
         } else {
             let half_offset_m = f64::from(proto.offset) / DECIMETERS_PER_METER;
@@ -458,7 +458,7 @@ fn walk_lines(streets: &[ProtoEdge], meters_per_unit: (f64, f64)) -> Vec<WalkLin
                     poly_x,
                     poly_y,
                     street,
-                    kerb: true,
+                    curb: true,
                 });
             }
         }
@@ -544,7 +544,7 @@ fn dedup_samples(poly_x: &[i32], poly_y: &[i32], meters_per_unit: (f64, f64)) ->
     samples
 }
 
-/// The share of a way's samples that lie within `band` metres of a CSCL sub-segment running the
+/// The share of a way's samples that lie within `band` meters of a CSCL sub-segment running the
 /// same way (within `DEDUP_BEARING_DEGREES`) — the duplicate test, with the band as a parameter so
 /// the orphan pass can ask the same question of a wider one, and with an optional name the matched
 /// segment must also carry.
@@ -637,7 +637,7 @@ fn street_key(name_id: u16, names: &[String]) -> Option<String> {
 /// Cut a proto at a sorted, distinct set of interior vertex indices, dividing the stored length by
 /// each piece's share of the parent's geodesic length. Every field but the geometry and length is
 /// inherited (per-side cover is the parent's block-half approximation), and only the outermost
-/// pieces keep the parent's kerb ends — a cut is an interior node, never an entrance snap.
+/// pieces keep the parent's curb ends — a cut is an interior node, never an entrance snap.
 fn split_at_vertices(
     parent: &ProtoEdge,
     cuts: &[usize],
@@ -673,8 +673,8 @@ fn split_at_vertices(
             side: parent.side,
             sidewalks: parent.sidewalks,
             paved: parent.paved,
-            kerb_a: parent.kerb_a && piece_index == 0,
-            kerb_b: parent.kerb_b && piece_index == last_piece,
+            curb_a: parent.curb_a && piece_index == 0,
+            curb_b: parent.curb_b && piece_index == last_piece,
         });
         start = end;
     }
@@ -707,7 +707,7 @@ fn apply_splits(
     let mut existing_cuts: HashSet<usize> = HashSet::new();
     let mut inserted: Vec<(f64, Point)> = Vec::new();
     for split in splits.iter() {
-        // Nearest existing vertex by along-distance (a proxy for metres on the polyline).
+        // Nearest existing vertex by along-distance (a proxy for meters on the polyline).
         let mut nearest_vertex = 0usize;
         let mut nearest_gap = f64::INFINITY;
         for (vertex, &along) in vertex_along.iter().enumerate() {
@@ -985,15 +985,15 @@ pub fn conflate(
 
     // Step 3: weld at-grade crossings — move each vertex of a non-structure OSM way onto the nearest
     // non-structure CSCL segment within 4 m and record the CSCL split there. This one *does* target
-    // the centreline: OSM says the path physically crosses the roadway there, and it does. The
+    // the centerline: OSM says the path physically crosses the roadway there, and it does. The
     // sidewalk network is exempt (`sidewalk_network`): its crossings say the same thing, but they
     // already reach the pavement either side through their own nodes, so welding them would only
     // shatter every crossed street and hang the walk off a node in the roadbed.
     //
     // A way's own terminal endpoint is the exception, when it is the only way end at that
-    // coordinate. Nothing crosses there — the way stops — so welding it to the centreline is the
+    // coordinate. Nothing crosses there — the way stops — so welding it to the centerline is the
     // same mid-roadway join step 4 exists to avoid, and the endpoint is left for step 4 to take to
-    // the kerb instead. An endpoint two ways share stays welded: it is a junction of the path net
+    // the curb instead. An endpoint two ways share stays welded: it is a junction of the path net
     // standing on the roadway, and sending the two ways to their own corners would part them.
     let mut way_end_count: HashMap<Point, usize> = HashMap::new();
     for way in &ways {
@@ -1065,7 +1065,7 @@ pub fn conflate(
     // Step 4: entrance snap — a dangling OSM endpoint (degree 1, unwelded) reaches to the nearest
     // *walking* line within 20 m, accepted only if the connector continues the way's exit direction
     // (the continuation guard). The candidates are a street's two derived sidewalks, or its
-    // centreline where the street is itself the walking surface — see DESIGN.md, "The centreline
+    // centerline where the street is itself the walking surface — see DESIGN.md, "The centerline
     // dogleg". Every projection is taken against the geometry as it stands here, before this step's
     // own edits, so the result does not depend on the order the ways are visited.
     let lines = walk_lines(&streets, meters_per_unit);
@@ -1088,7 +1088,7 @@ pub fn conflate(
             .or_default() += 1;
     }
     let mut entrance_snaps = 0usize;
-    let mut entrance_snaps_kerb = 0usize;
+    let mut entrance_snaps_curb = 0usize;
     let mut short_entrance_snaps = 0usize;
     let mut dangling_ends = 0usize;
     for way in &mut ways {
@@ -1130,12 +1130,12 @@ pub fn conflate(
                 endpoint,
                 meters_per_unit,
             );
-            // The join is recorded on the centreline the line was offset from, since that is what
+            // The join is recorded on the centerline the line was offset from, since that is what
             // splits — but for a sidewalk the corner node that split makes is where the walk really
             // arrives, and `graph.rs` binds the OSM end to it instead. Both the guard and its
-            // right-of-way waiver stay measured to that centreline, exactly as before the retarget:
+            // right-of-way waiver stay measured to that centerline, exactly as before the retarget:
             // either question asks whether the way is heading for this street, and the street is
-            // where its centreline is, so moving the far end of the connector onto the pavement must
+            // where its centerline is, so moving the far end of the connector onto the pavement must
             // not also change which entrances are accepted.
             let line = &lines[line_index];
             let join = point_on_segment(
@@ -1165,20 +1165,20 @@ pub fn conflate(
                 .entry(line.street)
                 .or_default()
                 .push(Split { along, point: join });
-            if line.kerb {
-                entrance_snaps_kerb += 1;
+            if line.curb {
+                entrance_snaps_curb += 1;
             }
             // The connector's cost is the walk to the pavement, not to the middle of the road: the
-            // vertex carries the centreline coordinate only so `graph.rs` can find the split there.
+            // vertex carries the centerline coordinate only so `graph.rs` can find the split there.
             let connector_meters = meters_between(endpoint, projected, meters_per_unit) as f32;
             if at_start {
                 way.poly_x.insert(0, join.0);
                 way.poly_y.insert(0, join.1);
-                way.kerb_a = line.kerb;
+                way.curb_a = line.curb;
             } else {
                 way.poly_x.push(join.0);
                 way.poly_y.push(join.1);
-                way.kerb_b = line.kerb;
+                way.curb_b = line.curb;
             }
             way.length += connector_meters;
             entrance_snaps += 1;
@@ -1242,7 +1242,7 @@ pub fn conflate(
         cscl_t_splits,
         welded_vertices,
         entrance_snaps,
-        entrance_snaps_kerb,
+        entrance_snaps_curb,
         short_entrance_snaps,
         dangling_ends,
         merged_dangling_ends,
@@ -1388,8 +1388,8 @@ fn merge_dangling_ends(protos: &mut [ProtoEdge], meters_per_unit: (f64, f64)) ->
 /// moves onto the cut. DESIGN.md, "The order conflation runs in", is why this runs last and why the
 /// island takes at most one join. Returns the number of components noded.
 ///
-/// Neither side may be a bridge or tunnel deck: a trail passing under a viaduct is a metre from it
-/// in plan view and a storey below it on the ground, and the plan view cannot tell the two apart.
+/// Neither side may be a bridge or tunnel deck: a trail passing under a viaduct is a meter from it
+/// in plan view and a story below it on the ground, and the plan view cannot tell the two apart.
 /// A projection landing on the anchored line's own end is left alone — those two are already one
 /// node, or `graph.rs`'s near-node merge is about to make them one.
 fn cut_island_touches(
@@ -1592,20 +1592,20 @@ fn walking_components(protos: &[ProtoEdge]) -> (Vec<u32>, HashSet<u32>) {
     (component, anchored)
 }
 
-/// What a bounded walk needs of a network: a node's neighbours, each with its length in metres. It
+/// What a bounded walk needs of a network: a node's neighbors, each with its length in meters. It
 /// is a trait because callers hold their adjacency differently — indexed by node here, keyed by it
 /// in `graph.rs` — and nothing else about the walk changes with that.
 pub trait Adjacency {
-    fn neighbours(&self, node: u32) -> &[(u32, f64)];
+    fn neighbors(&self, node: u32) -> &[(u32, f64)];
 }
 
 impl Adjacency for [Vec<(u32, f64)>] {
-    fn neighbours(&self, node: u32) -> &[(u32, f64)] {
+    fn neighbors(&self, node: u32) -> &[(u32, f64)] {
         &self[node as usize]
     }
 }
 
-/// Everything within `cap` metres of `source` through the network, in ascending distance — a Dijkstra
+/// Everything within `cap` meters of `source` through the network, in ascending distance — a Dijkstra
 /// that stops at the cap, so it walks a block, not a borough. `settle` sees each node once, at its
 /// own distance, and breaks the walk off as soon as it has seen enough.
 pub fn walk_within<A: Adjacency + ?Sized>(
@@ -1615,10 +1615,10 @@ pub fn walk_within<A: Adjacency + ?Sized>(
     mut settle: impl FnMut(u32) -> ControlFlow<()>,
 ) {
     let mut best: HashMap<u32, f64> = HashMap::from([(source, 0.0)]);
-    // Centimetres, so the queue orders on an integer key; the cap keeps the frontier tiny.
+    // Centimeters, so the queue orders on an integer key; the cap keeps the frontier tiny.
     let mut queue: BinaryHeap<Reverse<(u64, u32)>> = BinaryHeap::from([Reverse((0, source))]);
-    while let Some(Reverse((centimetres, node))) = queue.pop() {
-        let distance = centimetres as f64 / 100.0;
+    while let Some(Reverse((centimeters, node))) = queue.pop() {
+        let distance = centimeters as f64 / 100.0;
         if best
             .get(&node)
             .is_some_and(|&incumbent| distance > incumbent + 0.01)
@@ -1628,7 +1628,7 @@ pub fn walk_within<A: Adjacency + ?Sized>(
         if settle(node).is_break() {
             return;
         }
-        for &(next, length) in adjacency.neighbours(node) {
+        for &(next, length) in adjacency.neighbors(node) {
             let step = distance + length;
             if step > cap {
                 continue;
@@ -1641,7 +1641,7 @@ pub fn walk_within<A: Adjacency + ?Sized>(
     }
 }
 
-/// Which of `targets` lie within `cap` metres of `source` through the network.
+/// Which of `targets` lie within `cap` meters of `source` through the network.
 fn reachable_within(
     adjacency: &[Vec<(u32, f64)>],
     source: u32,
@@ -1677,7 +1677,7 @@ fn find(parent: &mut [u32], node: u32) -> u32 {
     root
 }
 
-/// The along-distance in metres to a projection at parameter `param` on sub-segment `seg` of a
+/// The along-distance in meters to a projection at parameter `param` on sub-segment `seg` of a
 /// polyline — the prefix length to `seg` plus the fraction of that sub-segment.
 pub fn along_at(
     poly_x: &[i32],
@@ -1703,7 +1703,7 @@ pub fn along_at(
 }
 
 /// The quantized point at parameter `param` along sub-segment `seg` of a polyline. A sidewalk is
-/// offset vertex for vertex, so this turns a projection on one into the point on the centreline the
+/// offset vertex for vertex, so this turns a projection on one into the point on the centerline the
 /// split is recorded at.
 fn point_on_segment(poly_x: &[i32], poly_y: &[i32], seg: usize, param: f64) -> Point {
     let x = f64::from(poly_x[seg]) + param * f64::from(poly_x[seg + 1] - poly_x[seg]);
@@ -1745,8 +1745,8 @@ mod tests {
     use super::*;
     use crate::graph::{KIND_PATH, SIDE_NONE};
 
-    // A metre-per-unit frame of exactly 1, so quantized units are metres and fixtures read in
-    // metres directly.
+    // A meter-per-unit frame of exactly 1, so quantized units are meters and fixtures read in
+    // meters directly.
     const MPU: (f64, f64) = (1.0, 1.0);
 
     fn street(poly: &[(i32, i32)]) -> ProtoEdge {
@@ -1784,13 +1784,13 @@ mod tests {
             } else {
                 SIDEWALK_LEFT | SIDEWALK_RIGHT
             },
-            kerb_a: false,
-            kerb_b: false,
+            curb_a: false,
+            curb_b: false,
         }
     }
 
     // A street the existence gate demoted, or one that was always the walking surface: offset 0, so
-    // its own centreline is the line people walk.
+    // its own centerline is the line people walk.
     fn walkway(poly: &[(i32, i32)]) -> ProtoEdge {
         let mut edge = line(poly, false, 4); // GRPH_PATHLIKE
         edge.offset = 0;
@@ -1858,7 +1858,7 @@ mod tests {
 
     #[test]
     fn a_deck_over_the_network_is_not_noded_to_what_runs_beneath_it() {
-        // A footbridge crosses the pavement a storey up. In plan view it stands on it exactly as the
+        // A footbridge crosses the pavement a story up. In plan view it stands on it exactly as the
         // trail above does, and only the structure flag can tell the two apart.
         let pavement = mapped_sidewalk(&[(0, 0), (100, 0)]);
         let mut deck = path(&[(50, 0), (50, 40), (90, 40)]);
@@ -1992,23 +1992,23 @@ mod tests {
     }
 
     #[test]
-    fn an_entrance_snaps_to_the_kerb_of_a_sidewalked_street() {
-        // The fixture's offset byte is 40 decimetres, so the street's sidewalks sit 4 m either side.
-        // The path stops 2 m short of the northern one and 6 m short of the centreline.
+    fn an_entrance_snaps_to_the_curb_of_a_sidewalked_street() {
+        // The fixture's offset byte is 40 decimeters, so the street's sidewalks sit 4 m either side.
+        // The path stops 2 m short of the northern one and 6 m short of the centerline.
         let streets = vec![street(&[(-50, 0), (50, 0)])];
         let entering = path(&[(0, 20), (0, 6)]);
         let (combined, stats) = conflate(streets, vec![entering], &[], MPU);
         assert_eq!(stats.entrance_snaps, 1);
-        assert_eq!(stats.entrance_snaps_kerb, 1);
+        assert_eq!(stats.entrance_snaps_curb, 1);
         let snapped = combined.iter().find(|edge| edge.osm).expect("the entrance");
-        // The vertex carries the centreline point, which is where the street is cut; the kerb bit is
+        // The vertex carries the centerline point, which is where the street is cut; the curb bit is
         // what tells graph.rs the walk arrives at the corner that cut makes, not in the roadway.
         let end = (
             *snapped.poly_x.last().expect("a vertex"),
             *snapped.poly_y.last().expect("a vertex"),
         );
         assert_eq!(end, (0, 0));
-        assert!(snapped.kerb_b && !snapped.kerb_a);
+        assert!(snapped.curb_b && !snapped.curb_a);
         // And the connector costs the 2 m walk to the pavement, not the 6 m to the middle of the road.
         assert!((snapped.length - 16.0).abs() < 0.5, "{}", snapped.length);
         assert_eq!(stats.cscl_splits, 1, "the street was cut at the join");
@@ -2016,7 +2016,7 @@ mod tests {
 
     #[test]
     fn a_bare_side_is_not_a_snap_target_but_one_osm_maps_still_is() {
-        // A 48 m-wide corridor, so its two sidewalk lines sit 24 m either side of the centreline and
+        // A 48 m-wide corridor, so its two sidewalk lines sit 24 m either side of the centerline and
         // only the near one is in reach. The path stops 2 m short of it.
         let mut wide = street(&[(-50, 0), (50, 0)]);
         wide.offset = 240;
@@ -2036,16 +2036,16 @@ mod tests {
         // But a side this build derives no edge for because OSM maps the pavement there itself is
         // still pavement, and still what the entrance is reaching for: the corner it joins is
         // materialized off `paved` too. Gating the targets on the derived mask instead would leave
-        // this path hanging over a fully mapped block, or send it to the far kerb across the road.
+        // this path hanging over a fully mapped block, or send it to the far curb across the road.
         wide.sidewalks = SIDEWALK_RIGHT;
         let (_, stats) = conflate(vec![wide], vec![entering], &[], MPU);
         assert_eq!(stats.entrance_snaps, 1);
     }
 
     #[test]
-    fn a_street_that_is_the_walking_surface_keeps_its_centreline_join() {
+    fn a_street_that_is_the_walking_surface_keeps_its_centerline_join() {
         // Offset 0 — a boardwalk, a path, a step street, or a street the existence gate demoted to
-        // its centreline: that line IS where people walk, so the join is not a kerb.
+        // its centerline: that line IS where people walk, so the join is not a curb.
         let entering = path(&[(0, 20), (0, 6)]);
         let (combined, stats) = conflate(
             vec![walkway(&[(-50, 0), (50, 0)])],
@@ -2054,21 +2054,21 @@ mod tests {
             MPU,
         );
         assert_eq!(stats.entrance_snaps, 1);
-        assert_eq!(stats.entrance_snaps_kerb, 0);
+        assert_eq!(stats.entrance_snaps_curb, 0);
         let snapped = combined.iter().find(|edge| edge.osm).expect("the entrance");
-        assert!(!snapped.kerb_a && !snapped.kerb_b);
+        assert!(!snapped.curb_a && !snapped.curb_b);
     }
 
     #[test]
     fn the_snap_radius_is_measured_to_the_pavement() {
-        // 23 m from the centreline is out of range, but the sidewalk it would join is 19 m away and
+        // 23 m from the centerline is out of range, but the sidewalk it would join is 19 m away and
         // is not: the entrance reaches the street it plainly belongs to.
         let mut wide = street(&[(-50, 0), (50, 0)]);
         wide.offset = 40;
         let entering = path(&[(0, 60), (0, 23)]);
         let (_, stats) = conflate(vec![wide], vec![entering], &[], MPU);
         assert_eq!(stats.entrance_snaps, 1);
-        assert_eq!(stats.entrance_snaps_kerb, 1);
+        assert_eq!(stats.entrance_snaps_curb, 1);
     }
 
     #[test]
@@ -2100,7 +2100,7 @@ mod tests {
 
     #[test]
     fn an_alley_mouth_cuts_the_street_it_stands_on() {
-        // The city's alley: a walkway whose end sits on the street's centreline mid-block, with no
+        // The city's alley: a walkway whose end sits on the street's centerline mid-block, with no
         // node of its own there. Step 0 cuts the street at the mouth, so the noding sees one point.
         let streets = vec![
             street(&[(0, 0), (100, 0)]),

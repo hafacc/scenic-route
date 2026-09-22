@@ -43,7 +43,7 @@ pub struct FieldLayer {
 #[serde(rename_all = "camelCase")]
 pub struct StreetLayer {
     pub file: String,
-    pub sidewalk_inset_meters: f64, // curb to the centre of the sidewalk, either side
+    pub sidewalk_inset_meters: f64, // curb to the center of the sidewalk, either side
 }
 
 #[derive(Deserialize)]

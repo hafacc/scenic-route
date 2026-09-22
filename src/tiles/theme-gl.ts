@@ -3,7 +3,7 @@
 import { type Channel, type Ramp, STOPS_LIMIT } from "../theme/palette";
 import { type Patch, draw as resample } from "./magnify";
 
-// The one place a value tile becomes a coloured one.
+// The one place a value tile becomes a colored one.
 //
 // The raster overlays ship data — canopy cover, height and relief, the fraction of light lost to a
 // shadow — and the palette (src/theme/palette.ts) says what that data looks like. Every one of them
@@ -40,7 +40,7 @@ uniform float alphaFull;
 uniform float alphaCurve;
 uniform float maxAlpha;
 uniform float reliefScale;
-out vec4 colour;
+out vec4 color;
 
 float channel(vec4 pixel, int which) {
   return which == 0 ? pixel.r : which == 1 ? pixel.g : which == 2 ? pixel.b : pixel.a;
@@ -52,7 +52,7 @@ void main() {
   float alpha = maxAlpha
     * pow(clamp(channel(pixel, alphaChannel) / alphaFull, 0.0, 1.0), alphaCurve);
   if (alpha <= 0.0) {
-    colour = vec4(0.0);
+    color = vec4(0.0);
     return;
   }
   vec3 tint = stops[0];
@@ -65,7 +65,7 @@ void main() {
   if (reliefChannel >= 0) {
     tint *= channel(pixel, reliefChannel) * reliefScale;
   }
-  colour = vec4(clamp(tint, 0.0, 1.0) * alpha, alpha); // premultiplied, matching the canvas
+  color = vec4(clamp(tint, 0.0, 1.0) * alpha, alpha); // premultiplied, matching the canvas
 }`;
 
 function compile(gl: WebGL2RenderingContext): WebGLProgram {
@@ -101,7 +101,7 @@ function stopsOf(ramp: Ramp): Float32Array {
 }
 
 class Painter {
-  // The value pixels, resampled to the tile's own device pixels before they are coloured. The
+  // The value pixels, resampled to the tile's own device pixels before they are colored. The
   // resample runs on the VALUES rather than on a picture of them, which is the point of shipping
   // values: the ramp is applied to what the interpolation actually produced.
   readonly stage: OffscreenCanvas;
@@ -154,7 +154,7 @@ class Painter {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     // The staging canvas's backing store is premultiplied, as every 2D canvas's is, so this flag is
     // what makes the browser UNDO that on the way to the card and hand the shader the values back.
-    // Colour conversion is off for the same reason: these are data, not a picture.
+    // Color conversion is off for the same reason: these are data, not a picture.
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     gl.pixelStorei(
       gl.UNPACK_COLORSPACE_CONVERSION_WEBGL,
@@ -195,7 +195,7 @@ class Painter {
     this.gl.getExtension("WEBGL_lose_context")?.loseContext();
   }
 
-  // Colour whatever is on the staging canvas, leaving it on this painter's own canvas.
+  // Color whatever is on the staging canvas, leaving it on this painter's own canvas.
   paint(ramp: Ramp): void {
     const { gl, size, uniforms } = this;
     gl.useProgram(this.program);
@@ -234,7 +234,7 @@ let painter: Painter | null = null;
 
 // The shared painter at this tile size, rebuilt when the device ratio changes under it or its
 // context was lost. Unlike the swept shade there is no second path to fall back to — an overlay whose
-// values were never coloured has nothing to show — so a card that cannot do this throws, and the
+// values were never colored has nothing to show — so a card that cannot do this throws, and the
 // tile reaches Leaflet as an error the layers menu can report.
 function painterFor(size: number): Painter {
   if (painter?.lost) {
@@ -247,7 +247,7 @@ function painterFor(size: number): Painter {
   return painter;
 }
 
-// One tile's values cut out of a baked pyramid, resampled, coloured through the ramp, and composed
+// One tile's values cut out of a baked pyramid, resampled, colored through the ramp, and composed
 // onto the tile. A null patch is a pyramid with nothing over this ground, which draws as nothing.
 export function drawRamped(
   context: OffscreenCanvasRenderingContext2D,

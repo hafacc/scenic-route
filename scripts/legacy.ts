@@ -11,7 +11,7 @@
 //
 //   - NYC's DCWP licenses cover regulated trades (home-improvement contractors, tobacco dealers,
 //     sightseeing guides), not diners or hardware stores, and nothing predates 1994 except 102
-//     sentinel rows dated 1900 — the file begins where the agency's digitisation does.
+//     sentinel rows dated 1900 — the file begins where the agency's digitization does.
 //   - The State Liquor Authority's `originalissuedate` has a statewide MINIMUM of 2017 and is 96%
 //     dated 2023 or later: licensing moved systems and "original issue" reset with it. The older
 //     list that carried deep dates is retired and answers 403. A NY liquor license does not survive
@@ -47,7 +47,7 @@ const MAX_ATTEMPTS = 3;
 const RETRY_BASE_MS = 2_000;
 
 // San Francisco's Legacy Business Registry, as the Office of Small Business publishes it behind its
-// own dashboard. Not on DataSF's Socrata catalogue — searching for it there finds nothing — so this
+// own dashboard. Not on DataSF's Socrata catalog — searching for it there finds nothing — so this
 // reads the ArcGIS layer directly, the same way scripts/historic.ts reads the LPC's.
 const SF_SERVICE =
   "https://services.arcgis.com/Zs2aNLFN00jrS4gG/arcgis/rest/services/legacy_biz/FeatureServer/0/query";
@@ -138,7 +138,7 @@ function yearIn(value: unknown, thisYear: number): number | null {
 
 // The label the overlay draws: the name and nothing else. The year decides whether a business is on
 // the map at all — fifty years is the whole entry condition — but it does not go in the label. A
-// screenful of dates reads as a database; the names read as a neighbourhood.
+// screenful of dates reads as a database; the names read as a neighborhood.
 
 async function sfLegacy(
   land: LandContext,

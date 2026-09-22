@@ -179,7 +179,7 @@ test("an edge that crests is slower than a steady climb of the same total grade"
   expect(rawSeconds(crest, 0, 0)).toBeCloseTo(rawSeconds(crest, 0, 1), 6);
 });
 
-test("the A* per-metre floor never exceeds what a metre actually costs", () => {
+test("the A* per-meter floor never exceeds what a meter actually costs", () => {
   // Every mix of climb and drop the bytes can carry, including the gentle descents that walk faster
   // than flat — the case that makes the flat speed an invalid divisor.
   const slopes: [number, number][] = [];

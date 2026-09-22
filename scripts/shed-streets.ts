@@ -1,6 +1,6 @@
 // Deciding whether a DOB permit's street is the street a graph edge carries. DOB writes the name out
 // in full and pads its numbers ("WEST   057 STREET"); CSCL, which the routing graph ships, writes it
-// abbreviated ("W 57 ST"). Both sides are normalised to the same token string and then compared on
+// abbreviated ("W 57 ST"). Both sides are normalized to the same token string and then compared on
 // their distinctive tokens, with the street type required to agree — "182 ST" must not claim the
 // "182 PL" stub one block over, and it would, since every other token matches.
 
@@ -99,7 +99,7 @@ const JOINING_PARTICLES: ReadonlySet<string> = new Set(["MC", "MAC", "DE"]);
 // Streets the city renamed but the permits still call by their number, and vice versa. A name scores
 // against every one of its aliases, rather than being rewritten into one: `6 AVENUE` is Avenue of the
 // Americas in Manhattan and a plain 6th Avenue in Brooklyn, and only the candidate edges near the lot
-// decide which. Keyed and valued in normalised form.
+// decide which. Keyed and valued in normalized form.
 const ALIASES: Readonly<Record<string, readonly string[]>> = {
   "6 AVE": ["AVE OF THE AMERICAS"],
   "AVE OF THE AMERICAS": ["6 AVE"],
@@ -117,15 +117,15 @@ const ORDINAL = /^(\d+)(ST|ND|RD|TH)$/;
 const PUNCTUATION = /[.,'`]/g;
 
 // The graph carries 8,495 distinct names and the feed a comparable number of streets, so both
-// normalisation and the pair score are worth memoizing: the placement asks for a score once per
+// normalization and the pair score are worth memoizing: the placement asks for a score once per
 // candidate sidewalk per shed, which is millions of calls over 61,302 permits.
-const normalised = new Map<string, string>();
+const normalized = new Map<string, string>();
 const cores = new Map<string, ReadonlySet<string>>();
 const scores = new Map<string, number>();
 
 // Canonical token string, e.g. "WEST   057 STREET" -> "W 57 ST".
 export function normalizeStreet(name: string): string {
-  const hit = normalised.get(name);
+  const hit = normalized.get(name);
   if (hit !== undefined) {
     return hit;
   }
@@ -159,7 +159,7 @@ export function normalizeStreet(name: string): string {
     }
   }
   const value = tokens.join(" ");
-  normalised.set(name, value);
+  normalized.set(name, value);
   return value;
 }
 

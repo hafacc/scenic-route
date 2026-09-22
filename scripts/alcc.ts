@@ -1,4 +1,4 @@
-// The East Bay's canopy, from the Alameda / Contra Costa 1-metre lidar canopy height model.
+// The East Bay's canopy, from the Alameda / Contra Costa 1-meter lidar canopy height model.
 //
 // New York and San Francisco are each handed canopy POLYGONS by their city. No Bay Area county
 // publishes any: what Alameda and Contra Costa publish — jointly, from one unified point cloud — is
@@ -50,7 +50,7 @@ export const ALCC_HEIGHT_ATTRIBUTION =
   "Canopy heights © EBRPD / CAL FIRE / Tukman Geospatial (ALCC 1 m LiDAR CHM)";
 
 // The service's own cache, checked against the service on every run rather than trusted: the level
-// whose cells are the raster's own metre, the 256-cell blocks it is cut into, and the ground corner
+// whose cells are the raster's own meter, the 256-cell blocks it is cut into, and the ground corner
 // its tile (0, 0) starts at. A cache rebuilt on a different origin would otherwise shift every
 // crown by a fraction of a tile, silently.
 const LEVEL = 9;
@@ -72,7 +72,7 @@ const CANOPY_FLOOR_FEET = 15;
 const METERS_PER_FOOT = 0.3048;
 
 // How far a simplified ring may leave the cells it was traced from. A 1 m raster boundary is a
-// staircase carrying a vertex per metre; at this tolerance a crown keeps its shape and its area to a
+// staircase carrying a vertex per meter; at this tolerance a crown keeps its shape and its area to a
 // percent while its vertex count falls by about three quarters. Measured over the whole East Bay:
 // 38,245,168 vertices traced, 9,733,115 kept, 0.37% more area.
 const SIMPLIFY_METERS = 0.75;
@@ -101,7 +101,7 @@ interface ServiceInfo {
 }
 
 // The five things a wrong assumption here would corrupt rather than break: the grid the tiles are
-// cut on, the level whose cells are metres, and that the cells are float heights on UTM zone 10.
+// cut on, the level whose cells are meters, and that the cells are float heights on UTM zone 10.
 async function checkService(): Promise<void> {
   const info = await fetchJson<ServiceInfo>(`${SERVICE}?f=json`, {
     attempts: MAX_ATTEMPTS,
@@ -179,7 +179,7 @@ export interface AlccCanopy {
   covered: number; // of those, the ones holding any canopy at all
   offLand: number; // blocks dropped as wholly outside the land mask
   cutOnLand: number; // blocks the mask ran through, cut on it
-  canopyCells: number; // cells above the floor, i.e. square metres of canopy
+  canopyCells: number; // cells above the floor, i.e. square meters of canopy
   droppedCells: number;
   vertices: number;
   heightTiles: string[]; // the height rasters, for the tiler's mosaic sampler
@@ -193,7 +193,7 @@ interface CutBlock {
 
 // Cuts a traced block on the land mask.
 //
-// Every other canopy source here is a crown — a polygon a few metres across, which the shoreline
+// Every other canopy source here is a crown — a polygon a few meters across, which the shoreline
 // either holds or does not — and `clipCanopyToLand` in scripts/tree-data-fetch.ts keeps or drops one
 // whole on a single vertex of it. A traced block is a piece of one 256 m raster tile, and along the
 // region's edge the mask runs through the MIDDLE of it: deciding those whole is what drew the canopy
@@ -255,7 +255,7 @@ function landCutter(land: Polygon[]): (polygon: Polygon) => Promise<CutBlock> {
 //
 // Tracing runs per raster tile rather than over the window as a whole, so a polygon never spans
 // more than 256 m. That is a deliberate cut, not a limitation of the tracer: the East Bay hills
-// carry canopy in single components kilometres across, and one polygon that wide would be scanned
+// carry canopy in single components kilometers across, and one polygon that wide would be scanned
 // in full by every map tile and every band of the height sampler it touches. Cutting it costs the
 // seams — two abutting polygons where there was one — and buys a bounded polygon everywhere. The
 // cover field cannot tell the difference, because the union of the pieces is the same set of cells;
@@ -355,9 +355,9 @@ export async function fetchAlccCanopy(land: Polygon[]): Promise<AlccCanopy> {
     }
     result.covered += 1;
 
-    // The height tile is the raster as published, in metres and not thresholded: the sampler reads
+    // The height tile is the raster as published, in meters and not thresholded: the sampler reads
     // it only through these polygons, so what lies under a crown's own cells is all it can see, and
-    // a ring that simplification nudged a decimetre outside its cells still lands on a reading.
+    // a ring that simplification nudged a decimeter outside its cells still lands on a reading.
     const path = join(HEIGHT_DIR, `${row}-${column}.tif`);
     await writeAtomic(
       path,

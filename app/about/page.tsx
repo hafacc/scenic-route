@@ -24,7 +24,7 @@ export const metadata: Metadata = pageMetadata({
     "What Scenic Route optimizes for, its four walking modes, where it works, and the open data behind every layer.",
 });
 
-// Name and colour per mode, kept as a plain fact rather than a written description of what each mode
+// Name and color per mode, kept as a plain fact rather than a written description of what each mode
 // is for. Repeated here rather than read off MODES, because MODES cannot be imported into a server
 // component: it pulls in src/routing/factors.tsx, which is `"use client"`, and a client module
 // imported from the server is a reference proxy rather than the values. Keying the record by

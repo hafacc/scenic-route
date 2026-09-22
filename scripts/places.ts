@@ -9,7 +9,7 @@
 // what is inside it, which is the difference between 533,628 rows in New York's box and 389,043 in
 // New York.
 //
-// A place that resolves to a doorway is stored as that doorway, spelt the way
+// A place that resolves to a doorway is stored as that doorway, spelled the way
 // public/addresses/<city>.bin.gz spells it, so a search index can hand the pair straight to the
 // address search that already exists rather than carrying a second copy of the street names. Parks,
 // beaches and landmarks have no street address and never will, so every row keeps its coordinates
@@ -36,7 +36,7 @@ import { haversineMeters } from "./geometry";
 import type { Coord } from "./socrata";
 
 const PLACES_DIR = join(import.meta.dirname, "..", "data", "places");
-// What the city's neighborhood file is called. Spelt out again in scripts/search-index.ts, which
+// What the city's neighborhood file is called. Spelled out again in scripts/search-index.ts, which
 // reads it: importing it from here would open DuckDB in a module that has no use for it.
 const NEIGHBORHOOD_SUFFIX = "-neighborhoods.jsonl";
 const ADDRESS_DIR = join(import.meta.dirname, "..", "public", "addresses");
@@ -69,7 +69,7 @@ const NOT_A_NEIGHBORHOOD = /\bcommunity (board|district)\b/i;
 // How near two rows of one name have to be to be one neighborhood written down twice. The gap in the
 // data is wide, so this sits in the middle of it: Herald Square, Union Square, Hayes Valley and
 // Fresh Meadows are each filed twice within 1.2 km, and the next pair of a shared name stands ten
-// kilometres apart — Chelsea in Manhattan and Chelsea in Staten Island, which are two real places.
+// kilometers apart — Chelsea in Manhattan and Chelsea in Staten Island, which are two real places.
 const SAME_NEIGHBORHOOD_METERS = 2000;
 
 // How sure Overture is that a place exists and is what it says. Below this the names stop being

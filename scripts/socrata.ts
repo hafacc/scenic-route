@@ -91,7 +91,7 @@ async function fetchJson<Row>(url: string): Promise<Row[]> {
       async () => {
         attemptStarted = Date.now();
         // A fetch that dies mid-body throws a TypeError, and p-retry ABANDONS the retry on any
-        // TypeError whose message its `is-network-error` list does not recognise — reasoning that a
+        // TypeError whose message its `is-network-error` list does not recognize — reasoning that a
         // TypeError is usually a bug rather than a network fault. Bun's message for it, "The socket
         // connection was closed unexpectedly", is not on that list, and the gate runs before
         // `shouldRetry` so it cannot be overridden. The effect was silent and total: eight retries

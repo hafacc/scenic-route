@@ -1,12 +1,12 @@
 //! The elevation overlay: a topographic map of the city, as three data channels.
 //!
-//! The DEM arrives as several hundred one-metre tiles on the city's own projected grid, which is far
+//! The DEM arrives as several hundred one-meter tiles on the city's own projected grid, which is far
 //! finer than any zoom the map shows and in the wrong coordinate system. So it is resampled once,
 //! into a single longitude/latitude field at the finest zoom's own resolution, and the pyramid is
 //! rendered from that. One pass over the tiles rather than one per zoom level, and the field for a
 //! whole city is a few tens of megabytes where the tiles are gigabytes.
 //!
-//! Nothing here is coloured. R carries the height across the city's own range, G the relief shade,
+//! Nothing here is colored. R carries the height across the city's own range, G the relief shade,
 //! and alpha how much of the pixel is ground; the client multiplies the three together and applies
 //! the hypsometric tint — greens at the bottom through tans to browns at the top, the convention a
 //! paper topographic map uses — in a shader. The range travels with the tiles in range.json, since
@@ -30,7 +30,7 @@ use crate::raster::{
 
 /// The finest level the pyramid is baked to, at which a pixel is about 2.4 m of ground.
 ///
-/// The tint itself has no detail to show at that scale — ground does not change over a few metres
+/// The tint itself has no detail to show at that scale — ground does not change over a few meters
 /// the way a canopy edge does — but the COASTLINE does, and the coastline is what a reader notices.
 /// The land mask is applied at the field's own resolution, so the shore is a staircase of whole
 /// cells: at z14 that is 9.5 m steps, plainly visible the moment the tile is magnified, and no
@@ -120,7 +120,7 @@ const HILLSHADE_MAX: f32 = 1.15;
 // port's piers and the built edges of Treasure Island fell outside them and came out as holes in the
 // middle of the city. 300 m clears the longest finger pier; the deck height is what stops the reach
 // from tinting the bay with it, since the water's own returns sit near the tidal plane — MHHW is
-// about 1.8 m on this datum — and a pier deck stands several metres over that.
+// about 1.8 m on this datum — and a pier deck stands several meters over that.
 const SHORE_REACH_METERS: f64 = 300.0;
 const DECK_METERS: f32 = 2.5;
 
@@ -156,7 +156,7 @@ fn render(field: &Field, directory: &std::path::Path, tile: &Tile) -> Fallible<u
                 continue;
             }
             // Opacity follows how much ground is under the PIXEL, sampled on a grid across it
-            // rather than once at its centre. Once at the centre is what the field's own coverage
+            // rather than once at its center. Once at the center is what the field's own coverage
             // gives, and that varies only within a single field cell — narrower than a pixel — so
             // the shore still landed on whole-pixel boundaries and came out a staircase. Averaging
             // across the pixel puts a real fractional edge in the tile, which is what survives being
@@ -167,7 +167,7 @@ fn render(field: &Field, directory: &std::path::Path, tile: &Tile) -> Fallible<u
             }
             let shade = hillshade(field, lng, lat, METERS_PER_DEGREE_LAT);
             let pixel = (row * TILE_SIZE + column) * 4;
-            // Three fields, no colour: height across the city's range, the relief shade, and how
+            // Three fields, no color: height across the city's range, the relief shade, and how
             // much of the pixel is ground. Blue is unused.
             pixels[pixel] = byte(((value - field.low()) / range).clamp(0.0, 1.0));
             pixels[pixel + 1] = byte((shade / HILLSHADE_MAX).clamp(0.0, 1.0));
@@ -180,7 +180,7 @@ fn render(field: &Field, directory: &std::path::Path, tile: &Tile) -> Fallible<u
     if !painted {
         return Ok(0);
     }
-    // Lossless rather than lossy: alpha survives a lossy WebP exactly, but a COLOUR channel does
+    // Lossless rather than lossy: alpha survives a lossy WebP exactly, but a COLOR channel does
     // not — lossy keeps the two chroma planes at quarter resolution, and the measured error is
     // 18-22 — and this tile now carries data in R and G.
     let bytes = encode_webp_lossless(&pixels);
@@ -211,7 +211,7 @@ pub fn run(args: &Args, dem: &mut Dem) -> Fallible<()> {
     // and were cut by a ruler-straight line down the middle of the shipyard.
     manifest.cities[0].bounds = widen(&manifest.cities[0].bounds, SHORE_REACH_METERS);
     let mut field = resample(&manifest.cities[0].bounds, ELEVATION_MAX_ZOOM, dem)?;
-    // The decoded tile is a city of float32 at one metre; nothing below reads the mosaic again.
+    // The decoded tile is a city of float32 at one meter; nothing below reads the mosaic again.
     dem.release();
 
     // Water out. The DEM answers over the bay and the ocean the same way it answers over a hill, so

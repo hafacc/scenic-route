@@ -42,7 +42,7 @@ export async function fetchNycBoroughs(): Promise<NamedArea[]> {
 }
 
 // The city as one shape. Clipping to it drops the New Jersey and Westchester spill a city bounding
-// box reaches, and keeps the harbour out of any field the sources feed.
+// box reaches, and keeps the harbor out of any field the sources feed.
 export async function fetchNycLand(): Promise<Polygon[]> {
   const boroughs = await fetchNycBoroughs();
   return boroughs.flatMap((borough) => borough.polygons);
@@ -66,8 +66,8 @@ export async function landContextOf(
   return { onLand: buildLandTest(land), box: boxOf(land) };
 }
 
-// The Bay Area as one shape: San Francisco's analysis neighbourhoods and the seven East Bay cities,
-// unioned. The two are separated by twelve kilometres of water and joined only by the ferry edges
+// The Bay Area as one shape: San Francisco's analysis neighborhoods and the seven East Bay cities,
+// unioned. The two are separated by twelve kilometers of water and joined only by the ferry edges
 // scripts/ferries.ts builds — the same arrangement Staten Island has in New York, and the reason the
 // union is a plain concatenation: the parts do not touch, so there is nothing to merge.
 //

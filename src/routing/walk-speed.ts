@@ -1,4 +1,4 @@
-// How long a metre of pavement takes to walk, which is where every length in the cost model turns
+// How long a meter of pavement takes to walk, which is where every length in the cost model turns
 // into seconds. Its own module because the graph bakes these seconds per edge as it decodes and the
 // cost model reads them back: one of the two has to be free of the other, and it is this one.
 
@@ -47,14 +47,14 @@ export function gradeSpeedFactor(grade: number): number {
   );
 }
 
-// The speed multiplier for an edge that climbs `ascent` and drops `descent` per metre of it. With
+// The speed multiplier for an edge that climbs `ascent` and drops `descent` per meter of it. With
 // g = ascent + descent, the climbing run is a fraction ascent/g of the length and rises `ascent`
 // times the length, so its grade is exactly g, and the dropping run's is -g. That collapses the whole
 // edge to one effective speed: seconds = L/(V*g) * (ascent/f(g) + descent/f(-g)).
 //
 // Exact when the edge really is one constant-grade climb followed by one constant-grade drop, an
 // approximation otherwise: the bytes do not say how the height was distributed along the polyline,
-// and this reads them as the arrangement where every metre of it tips at the same |grade|.
+// and this reads them as the arrangement where every meter of it tips at the same |grade|.
 //
 // The result is a weighted harmonic mean of f(g) and f(-g), so it can exceed 1 only where f(-g)
 // does, i.e. on descents under 10%; `maxSpeedFactor` below is what keeps the A* bound honest.
@@ -87,7 +87,7 @@ export function walkSpeedOn(
 }
 
 // The fastest any edge in the graph can be walked, as a multiple of the flat speed — the divisor the
-// A* heuristic's per-metre floor needs now that a descent can beat flat. Deliberately computed here
+// A* heuristic's per-meter floor needs now that a descent can beat flat. Deliberately computed here
 // rather than baked into the graph header: a figure in the file would go silently stale the moment
 // the Tobler constants moved without a format bump.
 //
@@ -175,8 +175,8 @@ export function bakeWalkSeconds(graph: {
   return { forward, backward };
 }
 
-// The seconds for ONE metre of an edge, walked in the given direction. What the two end edges of a
-// route are charged per metre of the partial they walk: the interior is charged the whole, so
+// The seconds for ONE meter of an edge, walked in the given direction. What the two end edges of a
+// route are charged per meter of the partial they walk: the interior is charged the whole, so
 // pricing the ends off the same figure is what keeps a route's arithmetic self-consistent — a
 // partial priced off `walkSpeedOn` instead differs in the last bits, and a tie between two ways into
 // the destination edge then turns on float noise.

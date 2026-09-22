@@ -16,13 +16,13 @@ pub(crate) const MAX_ZOOM: u32 = 15; // past this the field has no detail left t
 pub(crate) const MIN_ALPHA: u8 = 2; // below this the fill is invisible, and the pixel costs more than it says
 pub(crate) const EQUATOR_METERS_PER_PIXEL: f64 = 156_543.033_92; // web mercator, at the equator, at z0
 pub(crate) const MIN_FEATHER_PIXELS: f64 = 0.5; // below this the blur has nothing to say and is skipped
-const WEBP_QUALITY: f32 = 80.0; // lossy tile colour; alpha and the density blobs are untouched
+const WEBP_QUALITY: f32 = 80.0; // lossy tile color; alpha and the density blobs are untouched
 // The shoreline clip, rasterized once. Only canopy within a cell of the water can care, and the
 // field this replaced clipped land on a 20 m grid too — rasterizing the boroughs into every tile
 // instead costs a quarter of the whole build and buys nothing.
 const LAND_METERS: f64 = 20.0;
 
-/// The land, on a regular LAND_METERS grid in the local metre space.
+/// The land, on a regular LAND_METERS grid in the local meter space.
 pub(crate) struct LandMask {
     cells: Vec<u8>,
     cols: usize,
@@ -32,13 +32,13 @@ pub(crate) struct LandMask {
 }
 
 impl LandMask {
-    /// The land column a projected metre x falls in, or None outside the grid.
+    /// The land column a projected meter x falls in, or None outside the grid.
     pub(crate) fn column(&self, x_meters: f64) -> Option<usize> {
         let col = ((x_meters - self.min_x) / LAND_METERS).floor();
         (col >= 0.0 && col < self.cols as f64).then_some(col as usize)
     }
 
-    /// The row's base offset into `cells` for a projected metre y, or None outside the grid.
+    /// The row's base offset into `cells` for a projected meter y, or None outside the grid.
     pub(crate) fn row_base(&self, y_meters: f64) -> Option<usize> {
         let row = ((y_meters - self.min_y) / LAND_METERS).floor();
         (row >= 0.0 && row < self.rows as f64).then_some(row as usize * self.cols)
@@ -118,20 +118,20 @@ pub(crate) fn rasterize_land(
     }
 }
 
-// Lossy WebP at WEBP_QUALITY: the smooth colour gradient the blur produces — which PNG stores
+// Lossy WebP at WEBP_QUALITY: the smooth color gradient the blur produces — which PNG stores
 // poorly, in a way that tripled the pyramid — compresses to a fraction of the size. These tiles
 // are a cosmetic overlay; the densities the routing and street lines read live in the .bin
-// blobs, not in these pixels, so lossy colour costs nothing real.
+// blobs, not in these pixels, so lossy color costs nothing real.
 pub(crate) fn encode_webp(pixels: &[u8]) -> Fallible<Vec<u8>> {
     let encoder = webp::Encoder::from_rgba(pixels, TILE_SIZE as u32, TILE_SIZE as u32);
     Ok(encoder.encode(WEBP_QUALITY).to_vec())
 }
 
-/// Lossless WebP: for tiles whose channels carry DATA, not colour — the genus-field pyramid packs a
+/// Lossless WebP: for tiles whose channels carry DATA, not color — the genus-field pyramid packs a
 /// per-genus density byte into each channel, which the client reads back exactly, so any lossy
 /// quantization would corrupt the numbers; the shade pyramid is a constant slate whose alpha is a
-/// quantised opacity lattice that lossy encoding smears. Lossless still compresses both well, since
-/// a constant colour plane costs almost nothing and the varying channels are locally flat.
+/// quantized opacity lattice that lossy encoding smears. Lossless still compresses both well, since
+/// a constant color plane costs almost nothing and the varying channels are locally flat.
 pub(crate) fn encode_webp_lossless(pixels: &[u8]) -> Vec<u8> {
     let encoder = webp::Encoder::from_rgba(pixels, TILE_SIZE as u32, TILE_SIZE as u32);
     encoder.encode_lossless().to_vec()

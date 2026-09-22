@@ -53,7 +53,7 @@ const weightsWith = (over: Partial<RouteWeights> = {}): RouteWeights => ({
 });
 
 interface NodeSpec {
-  east: number; // metres east of the origin
+  east: number; // meters east of the origin
   north: number;
 }
 
@@ -64,7 +64,7 @@ interface EdgeSpec {
   kind?: keyof typeof KIND_BITS; // sidewalk unless said otherwise
 }
 
-// A synthetic graph over points placed in metres. Only the fields the waypoint planner and findRoute
+// A synthetic graph over points placed in meters. Only the fields the waypoint planner and findRoute
 // read are filled; the cast covers the rest of the artifact's arrays.
 function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
   clearEdgePathCache();
@@ -165,7 +165,7 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
     ferries: null,
     edgeDurationSeconds: new Uint16Array(edgeCount),
     ferryEdges: new Uint32Array(0),
-    minFerrySecPerMetre: Number.POSITIVE_INFINITY,
+    minFerrySecPerMeter: Number.POSITIVE_INFINITY,
     edgeFlags: new Uint8Array(edgeCount),
     names: [],
     geometry: new Uint8Array(0),
@@ -234,15 +234,15 @@ function diamondChain(covers: readonly number[]): {
   for (const [index, cover] of covers.entries()) {
     nodes.push({ east: index * 300 + 150, north: 60 }); // the detour's corner
     const corner = nodes.length - 1;
-    nodes.push({ east: index * 300 + 150, north: 120 }); // a kerb across the street from it
-    const kerb = nodes.length - 1;
+    nodes.push({ east: index * 300 + 150, north: 120 }); // a curb across the street from it
+    const curb = nodes.length - 1;
     nodes.push({ east: (index + 1) * 300, north: 0 });
     const next = nodes.length - 1;
     edges.push({ a: junction, b: next });
     const direct = edges.length - 1;
     edges.push({ a: junction, b: corner, cover });
     edges.push({ a: corner, b: next, cover });
-    edges.push({ a: corner, b: kerb, kind: "crossing" });
+    edges.push({ a: corner, b: curb, kind: "crossing" });
     diamonds.push({ corner, direct, around: [direct + 1, direct + 2] });
     junction = next;
   }
@@ -323,15 +323,15 @@ test("a budget too small for every detour is spent on the leafiest", () => {
 });
 
 test("two corners of one intersection give the planner one candidate", () => {
-  // The kerb and the far side of the crossing it meets are one place to Google, which snaps both to
+  // The curb and the far side of the crossing it meets are one place to Google, which snaps both to
   // the same road node, so the crossing between them is what joins them — and the earlier of the two
   // is what a pin lands on.
   const graph = buildGraph(
     [
       { east: -100, north: 0 }, // the lead-in's far end
       { east: 0, north: 0 }, // where the interior walk starts
-      { east: 150, north: 0 }, // the near kerb
-      { east: 150, north: 50 }, // the far kerb, one crossing away
+      { east: 150, north: 0 }, // the near curb
+      { east: 150, north: 50 }, // the far curb, one crossing away
       { east: 300, north: 50 },
       { east: 500, north: 50 }, // the lead-out's far end
     ],
@@ -366,15 +366,15 @@ test("two corners of one intersection give the planner one candidate", () => {
 
 test("a crossing chained through an island is still one intersection", () => {
   // A divided street is crossed in two 30 m pieces with an island between them, which puts the far
-  // kerb 60 m of walking from the near one. Nothing about the distance says these are one place; the
+  // curb 60 m of walking from the near one. Nothing about the distance says these are one place; the
   // chain of crossings through a node standing in the roadway is what says it.
   const graph = buildGraph(
     [
       { east: -100, north: 0 }, // the lead-in's far end
       { east: 0, north: 0 }, // where the interior walk starts
-      { east: 150, north: 0 }, // the near kerb
+      { east: 150, north: 0 }, // the near curb
       { east: 150, north: 30 }, // the island, its every edge a crossing
-      { east: 150, north: 60 }, // the far kerb
+      { east: 150, north: 60 }, // the far curb
       { east: 300, north: 60 },
       { east: 500, north: 60 }, // the lead-out's far end
     ],
@@ -410,16 +410,16 @@ test("a crossing chained through an island is still one intersection", () => {
 });
 
 test("a link to a nearby path junction is a second intersection", () => {
-  // A kerb and the mouth of a park path 20 m along the link that joins them: two places a walker can
+  // A curb and the mouth of a park path 20 m along the link that joins them: two places a walker can
   // be told to go, however close together they stand, since a link is not a way across a street. The
-  // bare street the proxy prefers leaves both leafy edges behind, and the shortcut off the kerb
+  // bare street the proxy prefers leaves both leafy edges behind, and the shortcut off the curb
   // leaves the second, so it takes a pin at each to hold it to the route.
   const graph = buildGraph(
     [
       { east: -100, north: 0 }, // the lead-in's far end
       { east: 0, north: 0 }, // where the interior walk starts
-      { east: 150, north: 60 }, // the kerb
-      { east: 150, north: 100 }, // a kerb across the street, making it a corner
+      { east: 150, north: 60 }, // the curb
+      { east: 150, north: 100 }, // a curb across the street, making it a corner
       { east: 170, north: 60 }, // the path junction, one 20 m link away
       { east: 170, north: 100 }, // the far side of the path's own crossing
       { east: 400, north: 0 },
@@ -434,7 +434,7 @@ test("a link to a nearby path junction is a second intersection", () => {
       { a: 4, b: 6, cover: 0.6 },
       { a: 6, b: 7 },
       { a: 1, b: 6 }, // the bare street the proxy would take instead
-      { a: 2, b: 6 }, // and its shortcut back to the far end from the kerb
+      { a: 2, b: 6 }, // and its shortcut back to the far end from the curb
     ],
   );
   const ontoThePath = {
@@ -465,7 +465,7 @@ test("an equal-cost alternative does not cost the route its own value", () => {
       { east: 150, north: -80 }, // its bare mirror image
       { east: 300, north: 0 }, // where they meet again
       { east: 500, north: 0 }, // the lead-out's far end
-      { east: 150, north: 140 }, // a kerb across the street, making the corner one
+      { east: 150, north: 140 }, // a curb across the street, making the corner one
     ],
     [
       { a: 0, b: 1 },
@@ -502,10 +502,10 @@ test("a route that doubles back through a node it already used still terminates"
       { east: -100, north: 0 }, // the lead in's far end
       { east: 0, north: 0 }, // the junction, visited twice
       { east: 0, north: 120 }, // the spur's far end
-      { east: 0, north: 180 }, // a kerb across the street from the spur, making it a corner
+      { east: 0, north: 180 }, // a curb across the street from the spur, making it a corner
       { east: 200, north: 0 },
       { east: 400, north: 0 }, // the lead out's far end
-      { east: 0, north: -60 }, // a kerb across the street from the junction
+      { east: 0, north: -60 }, // a curb across the street from the junction
     ],
     [
       { a: 0, b: 1 },

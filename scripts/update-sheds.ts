@@ -6,7 +6,7 @@
 // between the two is the update. Identity comes out of the artifact too: `open.bin` carries every
 // standing permit's job number, so which record is which permit is stated rather than re-derived.
 // The feed's own answer — the permits still provisional on that day, in job order — is then a CHECK
-// on it, and a disagreement stops the run rather than shifting every shed onto its neighbour's
+// on it, and a disagreement stops the run rather than shifting every shed onto its neighbor's
 // street.
 //
 // The one thing it must not assume is that it ran yesterday. Cron on a public repo is best-effort and

@@ -1,6 +1,6 @@
 // A hand-written rail feed for the transit artifacts to be built from. Small enough to reason about
 // by hand and shaped like the things that go wrong: a route with a branch and a one-off pattern, two
-// kerbs of one station under one name, an underground stop, a second route timetabled by frequency
+// curbs of one station under one name, an underground stop, a second route timetabled by frequency
 // rather than by trip, a Saturday service, and a holiday that swaps the two.
 //
 // Both the topology (scripts/transit.ts) and the timetable (scripts/transit-schedule.ts) are built
@@ -20,7 +20,7 @@ export const FIXTURE_SOURCE: TransitFeedSource = {
   underground: new Set(["Deep"]),
 };
 
-// The stops, all without a parent_station, so the ingest merges the two kerbs of "Bay" the way it
+// The stops, all without a parent_station, so the ingest merges the two curbs of "Bay" the way it
 // merges Muni's.
 const STOPS: readonly { id: string; name: string; lat: number; lng: number }[] =
   [
@@ -34,7 +34,7 @@ const STOPS: readonly { id: string; name: string; lat: number; lng: number }[] =
     { id: "G", name: "Gulf", lat: 40.61, lng: -74.05 },
   ];
 
-// The three patterns of route L1: the trunk, the branch that turns at Echo off the other kerb of
+// The three patterns of route L1: the trunk, the branch that turns at Echo off the other curb of
 // Bay, and a single working that goes no further than Bay.
 const TRUNK: readonly [string, number][] = [
   ["A", 0],

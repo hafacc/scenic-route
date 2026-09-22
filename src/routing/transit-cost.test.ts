@@ -1,6 +1,6 @@
 // What the router does with a published timetable: when it rides, what the ride costs, what it
 // reports afterwards, and whether the A* credit that lets it consider rides at all is still a lower
-// bound. The fixture is a straight kilometre of pavement with a two-station line beside it
+// bound. The fixture is a straight kilometer of pavement with a two-station line beside it
 // (./transit-graph.fixture.ts), which is the smallest network where riding and walking are both
 // real answers.
 
@@ -132,10 +132,10 @@ function dijkstraCost(
       const edge = graph.adjacency[slot];
       const relaxed =
         distance[node] + effSeconds(graph, edge, weights, elapsed[node], node);
-      const neighbour = otherEnd(graph, edge, node);
-      if (relaxed < distance[neighbour]) {
-        distance[neighbour] = relaxed;
-        elapsed[neighbour] =
+      const neighbor = otherEnd(graph, edge, node);
+      if (relaxed < distance[neighbor]) {
+        distance[neighbor] = relaxed;
+        elapsed[neighbor] =
           elapsed[node] + rawSeconds(graph, edge, node, elapsed[node]);
       }
     }
@@ -311,7 +311,7 @@ test("shelter discounts the wait and the ride, and shade never touches either", 
     effSeconds(graph, WEST_BOARD, dry, ACCESS_SECONDS, station),
   ).toBeLessThan(effSeconds(graph, WEST_BOARD, plain, ACCESS_SECONDS, station));
 
-  // A fully-shaded field at full shade preference makes a walked metre a tenth of its price; the
+  // A fully-shaded field at full shade preference makes a walked meter a tenth of its price; the
   // ride is priced by neither.
   const before = effSeconds(
     graph,
@@ -338,7 +338,7 @@ test("shelter discounts the wait and the ride, and shade never touches either", 
 });
 
 test("the ride is in the trip's length and out of its miles and its shares", () => {
-  // Two hundred metres back along the pavement, so the route walks some of it before it rides and
+  // Two hundred meters back along the pavement, so the route walks some of it before it rides and
   // the means have something to average. The timetable is resolved against that longer approach, so
   // the train is still caught without a wait.
   const walkBack = 200;
@@ -357,7 +357,7 @@ test("the ride is in the trip's length and out of its miles and its shares", () 
   expect(route?.walkMeters).toBeCloseTo(walkBack, 3);
   // The ride's own span is in the distance the map draws, and out of the miles the summary reports.
   expect(route?.lengthMeters).toBeGreaterThan(graph.edgeLength[RIDE_EDGE]);
-  // A chip is a share of the whole trip's time, and a kilometre of tunnel is time under no canopy:
+  // A chip is a share of the whole trip's time, and a kilometer of tunnel is time under no canopy:
   // half-shaded pavement walked for part of the trip reads that part of a half.
   const walkSeconds = walkBack / WALK_METERS_PER_SECOND;
   expect(route?.factors.tree).toBeCloseTo(
@@ -429,7 +429,7 @@ test("the maneuvers name the line, where it is bound and both stations", () => {
     `Enter ${WEST_STATION} by the stair on Main Street`,
     `Take the ${ROUTE_SHORT_NAME} at 8:00 AM toward ${EAST_STATION} (1 stop)`,
     `Get off at ${EAST_STATION}`,
-    // A kerbside stop is left rather than exited: the east end of this line is one.
+    // A curbside stop is left rather than exited: the east end of this line is one.
     `Leave the ${EAST_STATION} stop`,
   ]);
   const ride = transit[1];
@@ -465,7 +465,7 @@ test("shelter is a mean over the trip's seconds, and a ride is all of them cover
   const { start, dest } = ends(graph);
   const route = findRoute(graph, start, dest, transitWeights({ transit: 0 }));
   // The station walks are out in the weather; the platform and the train are not. The fixture has no
-  // shed feed, so a walked metre shelters nobody, and the two access walks are the whole of the rest.
+  // shed feed, so a walked meter shelters nobody, and the two access walks are the whole of the rest.
   const covered = BOARDING_SECONDS + RIDE_SECONDS;
   expect(route?.factors.shelter).toBeCloseTo(
     covered / (route?.travelSeconds ?? 1),
@@ -488,7 +488,7 @@ test("the floor stays under a board edge that spans a transfer complex", () => {
   expect(length).toBeCloseTo(PLATFORM_SETBACK_METERS, 0);
   for (const shelter of [0, 0.5, 0.6, 0.9]) {
     const weights = transitWeights({ shelter });
-    // The least a board edge can cost per metre: the boarding constant, since the wait on top of it
+    // The least a board edge can cost per meter: the boarding constant, since the wait on top of it
     // is at least zero, priced the way a ride is.
     const cheapest = (BOARDING_SECONDS * transitMultiplier(weights)) / length;
     expect(
@@ -496,7 +496,7 @@ test("the floor stays under a board edge that spans a transfer complex", () => {
       `shelter=${shelter}`,
     ).toBeLessThanOrEqual(cheapest);
   }
-  // Past half a shelter weight the passage is the cheapest metre in the graph, so the floor is it:
+  // Past half a shelter weight the passage is the cheapest meter in the graph, so the floor is it:
   // the bound would be broken rather than merely loose if board edges were left out.
   const strong = transitWeights({ shelter: 0.9 });
   expect(heuristicFloor(graph, strong)).toBeCloseTo(

@@ -117,7 +117,7 @@ improvement. Both noise.
 (Urban Ecology 9:337–359, measured at 40°48′N on London plane, Norway and sugar maple), whose
 leafless/in-leaf ratios of 0.53/0.44/0.46/0.51 give ~0.49. Genus spans only 0.076 across our genera
 while trunk size spans 0.154 — size matters twice as much as species, which is why neither is
-modelled per tree.
+modeled per tree.
 
 **Crown geometry.** A crown is a **spheroid spanning 0.4h to h**: a point where it meets the trunk,
 widest at the middle of that span, a point at the top. Nothing is cast from the polygon's own height —
@@ -131,7 +131,7 @@ midpoint, 0.7h, is the assumption standing in for it. Cast crowns with **one** s
 buildings get six: a 10 m crown's penumbra is ~5 cm against 3.6 m pixels.
 
 The crown is a sheet at no single height: its shadow is the union over the whole 0.4h–h span, which at
-a 5° sun is a smear tens of metres long. So `crates/tiler/src/crown.rs` cuts each crown into
+a 5° sun is a smear tens of meters long. So `crates/tiler/src/crown.rs` cuts each crown into
 `CROWN_SEGMENTS` = 4 nested **slices**, slice `j` being the outline inset to the radius the crown keeps
 `j/3·0.99` of the way up its own half-height, and each is *swept* between the ground displacements of
 the two heights where the crown draws in to that radius.
@@ -150,7 +150,7 @@ Four choices carry that:
   cross and losing `(1 − π/4)·d²` of it at a right angle. A blob that pinches in two on the way in
   comes back as two rings, which is ordinary output for a merged canopy rather than a failure. The
   outline is simplified *before* it is offset, not after: a raw trace is a 1-foot raster staircase, and
-  an offset opens every one of its concave steps into an arc, so the staircase bites a metre or two out
+  an offset opens every one of its concave steps into an arc, so the staircase bites a meter or two out
   of a ring it should not touch — clearing the steps first is the difference between losing 1.7% and
   3.3% of area at the deepest inset, and it makes the inner rings genuine offsets of the ring shipped
   as slice 0 rather than of a curve nobody ships. What kept the simplification last before was the
@@ -196,7 +196,7 @@ see `t > 1`. τ is still applied once to the finished crown layer, so the pyrami
   weakest number in the file: the light tau rests on 149 taxa, this one on about four studied trees.
   It sits at the low end of its 0.20-0.55 bracket on purpose, because it carries most of the shelter
   slider's signal on the least evidence. The scaffolding half of that factor is not a heuristic — a
-  plywood deck stops essentially all vertical rain — which is why the slider is labelled a preference
+  plywood deck stops essentially all vertical rain — which is why the slider is labeled a preference
   and shows no percentage.
 - The CSTR tests do not cross-check the two implementations: the TS reader is tested against a
   hand-rolled TS writer and the Rust writer against a hand-rolled Rust reader, so a mistake mirrored
@@ -213,7 +213,7 @@ see `t > 1`. τ is still applied once to the finished crown layer, so the pyrami
   - What *is* measured: `crown.rs`'s disc-calibration test exists and passes — discs of R = 3, 5, 8 m
     rasterized at 1 m read back 3.00, 5.00 and 7.91 m — and two merged 5 m discs read 5 m, which is the
     self-calibration the whole estimator rests on. It fixed two constants the hard way. The turning has
-    to be read across a **chord** spanning twice the smoothing window, not between neighbouring
+    to be read across a **chord** spanning twice the smoothing window, not between neighboring
     samples: a traced outline concentrates its turning at a handful of samples and leaves the rest dead
     straight, and per-sample turning reads a 5 m disc at 3.4 m. And the radius has to be the exact
     circle through the three points, `chord / 2sin(θ/2)`, not `arc/θ`, which is 20% low on a small
@@ -231,18 +231,18 @@ see `t > 1`. τ is still applied once to the finished crown layer, so the pyrami
     buildings — gives 24.5 M polygons and 153.8 M vertices for one low bin, 6.7 GB and 78 s, because
     `PolygonSet` costs ~200 bytes of `Vec` overhead per polygon. Emitting one strip per front-facing
     **run** instead fixed the memory but cost *more* time (119 s), because a run along a park boundary
-    is a strip hundreds of metres long and every tile its bounding box touches walks all of it. Both
+    is a strip hundreds of meters long and every tile its bounding box touches walks all of it. Both
     together — runs, capped at `MAX_SWEEP_RUN` = 16 vertices — are what land at 31 s.
   - The 0.6 m Douglas-Peucker simplification moved out of `caster_chunks.rs` and into `crown.rs`, so it
     now applies to the pyramid's rings too. That is not a cost dodge: the design requires both halves
     to build slices from the same rings, and before this the chunks were simplified and the pyramid was
-    not, leaving the two halves half a metre apart at the zoom they hand over.
+    not, leaving the two halves half a meter apart at the zoom they hand over.
   - `MAX_SWEEP_RUN` (16) is chosen, not measured.
   - The rings were cut by raster erosion before — a 0.5 m grid, an exact distance transform,
     thresholded and contoured — and are now `cavalier_contours`' polyline offset. Over all 1,076,146
     NYC outlines the offset has no failures and no degenerate output, runs the whole pass in 7.2 s
     against the erosion's 16.9 s, and comes back 1.7–6.5% smaller by level. The erosion was the larger
-    of the two: it traces cell *corners* around the cells whose *centres* pass the threshold, which
+    of the two: it traces cell *corners* around the cells whose *centers* pass the threshold, which
     dilates every ring by a half-cell, and against an analytic disc the offset is the closer of the two.
     Where the two disagree about whether a ring exists at all it is mostly the erosion's 0.5 m grid
     failing to resolve one the offset finds — 61,695 crowns to 19,215 at the deepest inset.
@@ -263,25 +263,25 @@ see `t > 1`. τ is still applied once to the finished crown layer, so the pyrami
 
 ## The walking network
 
-Where OSM maps a sidewalk, that way *is* the sidewalk edge. CSCL's centrelines supply a per-side
+Where OSM maps a sidewalk, that way *is* the sidewalk edge. CSCL's centerlines supply a per-side
 offset only on the sides OSM leaves, and only where a source — OSM's own sidewalk ways, the city's
 survey, or OSM's `sidewalk=*` tag on the road itself — says there
 is pavement there at all — a street both of whose sides come back silent is demoted to its own
-centreline rather than deleted, because you walk an alley. `scripts/README.md` says how it is built.
+centerline rather than deleted, because you walk an alley. `scripts/README.md` says how it is built.
 This is why the seam between the two datasets is cut where it is.
 
 ### Whether there is pavement at all
 
 Two sources answer it and neither alone can, and a third stands behind the second where a city
 publishes none. **OSM's silence is ambiguous** — a mapping gap or a
-genuinely bare kerb — and it is worst exactly where it would do most damage: OSM is silent on both
+genuinely bare curb — and it is worst exactly where it would do most damage: OSM is silent on both
 sides of 40.5% of Bronx street km, and only 24.0% of that is really bare, against 82.1% of the 7.6%
-it is silent on in Brooklyn. The gaps fall in contiguous neighbourhoods
+it is silent on in Brooklyn. The gaps fall in contiguous neighborhoods
 (Williamsbridge, Wakefield, Soundview, Mott Haven) that plainly have sidewalks. The city's
 planimetric ROW-sidewalk polygons are an aerial trace of what is on the ground, so *their* silence
 means something. A side has pavement when OSM maps a sidewalk there **or** the survey draws one; only
 a side both come back silent on is bare. Where both call a street one-sided they name the same side
-**96.8%** of the time — 11,177 of the 11,546 streets they both call one-sided, or 97.9% by kilometre.
+**96.8%** of the time — 11,177 of the 11,546 streets they both call one-sided, or 97.9% by kilometer.
 
 **The survey layer is `52n9-sdep`, `sub_code` 380000, and its sibling is a trap.** "Sidewalk
 Centerline" (`a9xv-vek9`) looks like the obvious dataset and is not: it captures interior-campus
@@ -292,28 +292,28 @@ at all. The polygon layer can, and it is NYC Open Data rather than ODbL.
 sidewalk is either drawn as its own way or stated on the road with a `sidewalk`, `sidewalk:left`,
 `sidewalk:right` or `sidewalk:both` tag, and which form a city uses is a mapping culture rather than
 a fact about its streets: San Francisco and New York draw the ways, the East Bay largely tags the
-roads. So the tags are read too, matched to the centreline they describe and turned round where OSM
+roads. So the tags are read too, matched to the centerline they describe and turned round where OSM
 digitized the street the other way — but only on a side the city's own survey leaves unstated, since
 a survey is one trace of the whole city where a tag is one mapper's note on one way. A city with a
 survey is therefore untouched by them: New York's probe answers every side, and its per-side bits
 came back byte-for-byte identical when the tags were added. A region without one — the East Bay —
 gets its whole answer from them. `scripts/README.md` has the values, the match and the measurements.
 
-**Three states, not two.** `sidewalk=no` is a mapper saying the kerb is bare, and an untagged road
+**Three states, not two.** `sidewalk=no` is a mapper saying the curb is bare, and an untagged road
 says nothing at all; a survey row reading NONE is a statement where a missing row is not. Only a
 stated pavement sets a bit, so bare and unstated leave the same four bits — but they are held apart
 because a stated bare stops a weaker source being asked, and because a region that is largely
 unstated is missing *data* where one that is largely bare is missing *pavement*.
 
 Every source is read the same way — a side counts when half its samples hit, not when one lucky
-point does — so a driveway or a corner cannot decide a whole segment. The stations are the **centres
+point does — so a driveway or a corner cannot decide a whole segment. The stations are the **centers
 of equal pieces** of the segment rather than every step from its start: a CSCL segment ends at a
 junction, so a station standing on an end vertex takes its perpendicular offset into the *cross*
 street's roadway, and on the corner slivers the city is full of that one station is the whole answer.
 The point probe's own false negatives are then beaten down by a cross-street fan at each station
 rather than by loosening the half rule. Where CSCL carries no `streetwidth` at all the fan is
 **wider**, because there the offset it is fanning around is the citywide median standing in for a
-width nobody recorded rather than a measured one off by half a metre.
+width nobody recorded rather than a measured one off by half a meter.
 
 **Those false negatives are not evenly spread, and the gate's budget must not be read as if they
 were.** Against "OSM maps both sides" as the independent check, the survey confirms 94.7% of the
@@ -321,7 +321,7 @@ streets it gets eight or more stations on and 26.8% of the ones it gets one; bot
 silent on 55.4% of sub-15 m segments against 9.6% of blocks over 120 m, and on 57.5% of the 1,602
 offsetted segments with no recorded width against 16.0% of those that have one. Part of that is real
 — a sliver inside a junction has no pavement beside it to draw — and the rest is the probe's, so a
-short or width-less street is markedly likelier than a long one to be demoted to its centreline. The
+short or width-less street is markedly likelier than a long one to be demoted to its centerline. The
 figures above are after both fixes; from the start of the segment and with one fan for every street
 they read 20.6%, 61.2% and 66.9%.
 
@@ -329,7 +329,7 @@ they read 20.6%, 61.2% and 66.9%.
 
 A side keeps its derived sidewalk edge only where a source above says there is pavement on it:
 OSM maps a sidewalk way there, or a survey does. A street both of whose sides come back silent
-keeps no sidewalk at all and is **demoted to its centreline as a path edge, never deleted** — an
+keeps no sidewalk at all and is **demoted to its centerline as a path edge, never deleted** — an
 alley has no sidewalk, but you walk the alley, and so do the people on any street the city never
 paved a side of. Alleys fall out of the rule with no special case of their own, which is the check
 the build asserts on: a run where the gate does not take them has the rule the wrong way round.
@@ -345,26 +345,26 @@ bits, and both its guards sit at 0.30 — two to three times what the city measu
 publishes one too and would hold that ceiling on its own streets, but it no longer has a build of
 its own: the widened region kept its `sf` id, so the city is guarded with the East Bay. The Bay Area
 publishes none, and even after the pipeline learned to read OSM's
-`sidewalk=*` tags off the road centrelines, 45% of East Bay streets still have nobody stating
+`sidewalk=*` tags off the road centerlines, 45% of East Bay streets still have nobody stating
 whether a pavement exists. That is a hole in OpenStreetMap, so over that region a 0.30 ceiling was
 measuring the map rather than the build. The ceilings are therefore authored per region — as the
 ferry wait cap already is — and the Bay's sit just over what it measures, not at a round number, so
 a real regression still trips them.
 
-### The centreline dogleg
+### The centerline dogleg
 
 Observed live at Pearl and Water Street: a route walks the sidewalk, turns 90° **into the middle of
 the roadway**, and turns back out to reach a plaza path. It is a seam defect, not a coverage or a
-sidedness one — a dangling OSM endpoint snapped to its projection on the CSCL *centreline*, that
-projection became a graph node, and the sidewalks were offset off the centreline only afterwards, so
+sidedness one — a dangling OSM endpoint snapped to its projection on the CSCL *centerline*, that
+projection became a graph node, and the sidewalks were offset off the centerline only afterwards, so
 the join landed where nobody walks. Citywide there were **13,636 such entrance snaps**, each costing
 twice the street's half-offset: a median 13.1 m of detour, 19.2 m at p90.
 
 So an entrance snaps to the nearest *walking* line — the sidewalk position of a side that has
-pavement, or a centreline only where the street is itself the walking surface — and splits that. A
-sidewalked street's centreline is never a snap target again. Both the continuation guard and its
-right-of-way waiver stay measured to the centreline, because either question asks whether the way is
-heading for this street and the street is where its centreline is: moving the far end of the
+pavement, or a centerline only where the street is itself the walking surface — and splits that. A
+sidewalked street's centerline is never a snap target again. Both the continuation guard and its
+right-of-way waiver stay measured to the centerline, because either question asks whether the way is
+heading for this street and the street is where its centerline is: moving the far end of the
 connector onto the pavement must not also change which entrances are accepted.
 
 **A side offers its line when pavement *exists* there, not when this build derives an edge for it.**
@@ -383,7 +383,7 @@ apart they are through the network. A 20 m way-to-way snap here would quietly ov
 The dogleg is what makes OSM primary rather than supplementary. It is a seam defect, so it is not
 answered by better coverage or better sidedness, and it is fixed *by construction* wherever OSM has
 mapped the block: the sidewalk way is in the graph, the entrance footway meets it at a node the
-mappers already shared, and the centreline never enters into it. **86% of the dangling entrance
+mappers already shared, and the centerline never enters into it. **86% of the dangling entrance
 endpoints have an OSM sidewalk mapped within 30 m**, so most of that join was there all along and the
 old build discarded it by excluding sidewalks from the ingest and then re-invented it badly.
 
@@ -401,7 +401,7 @@ carry a name — so a matched way takes its street's name, its N/E/S/W side labe
 and its cover byte from the CSCL side it flanks. That side label is the nearest cardinal to the
 side's outward normal, with an exact diagonal resolved to N/S. The half-offset has to keep meaning
 "half the roadway plus the inset of the street I flank", because the shed depth measurement infers
-the kerb from it. The cover byte transfers because the OSM line sits a median 0.78 m from where that
+the curb from it. The cover byte transfers because the OSM line sits a median 0.78 m from where that
 byte was sampled, which is noise against the density kernel's 4 m across-street σ.
 
 `footway=traffic_island` comes in with the crossings and is costed as part of one: a crossing chains
@@ -425,13 +425,13 @@ bridge decks — where scaffolding is rare and 1.5–2% a year is an acceptable 
 measured and rejected. An along-street *index* shifts every later sibling down one when a piece is
 removed, so a span keyed to ordinal 2 silently resolves to what was ordinal 3 — the adjacent piece of
 the same street and side. Plausible, undetectable, wrong. A **position-derived** ordinal, the piece's
-start offset along the centreline quantised into the u8's 255 buckets, cannot pick a quantum: the
+start offset along the centerline quantized into the u8's 255 buckets, cannot pick a quantum: the
 buckets must span a `physicalid` row that runs to 2,505 m, while the pieces the ordinal has to
 separate are corner and crossing slivers — cutting the 137k sidewalk ways at their junction nodes
 gives 293,797 pieces of **median length 4.2 m**, 52.3% of them under 8 m. At any workable quantum
-about half collide with a neighbour at build time, and the geometry drifts underneath: 3.1% of way
+about half collide with a neighbor at build time, and the geometry drifts underneath: 3.1% of way
 start nodes moved more than 8 m in two years, so a vacated bucket gets reoccupied by a drifted one.
-Both schemes turn a removal into a neighbour match, which is the one failure this artifact may not
+Both schemes turn a removal into a neighbor match, which is the one failure this artifact may not
 have. What makes them unnecessary is the key-space gate — the artifact resolves nothing at all
 against a graph carrying a different set of keys — so an ordinal never has to survive a rebuild.
 
@@ -448,13 +448,13 @@ from the CSCL street-ends. Every street-side slot resolves to exactly one **term
 corner node where the side is derived, the nearest incident OSM sidewalk node within the corner
 radius where it is mapped. Crossings and fan joins then connect termini pairwise, whichever kind each
 is. Exactly one, in both directions — a slot with no terminus leaves the two networks passing within
-metres of each other and never meeting, and a slot with two leaves a corner standing beside a corner.
+meters of each other and never meeting, and a slot with two leaves a corner standing beside a corner.
 
 *Where the mapping ends mid-block* — uncommon, since sidewalks are mapped block-wise — the OSM end
 and the derived edge on the same side splice end to end.
 
 *Where OSM draws a whole block as one unbroken way* there is no node for the seam to bind to at all,
-so a corner standing metres from that pavement reaches nothing and the walk goes round the block. The
+so a corner standing meters from that pavement reaches nothing and the walk goes round the block. The
 corner cuts the way at its own projection, which gives the seam the node it was missing; nothing
 downstream changes, because a cut is only a node. It is guarded, because a line passing close is not
 by itself pavement this corner opens onto — `cut_sidewalks_at_corners` states the three guards and
@@ -470,7 +470,7 @@ unmapped ones. Differences remain where OSM maps a crossing on one arm of an int
 another.
 
 This is also what carries a walk from one block face to the next. A block face's mapped pavement
-stops at every kerb — see *Where a shed actually stands* for the 152,629 sidewalk ends this produced
+stops at every curb — see *Where a shed actually stands* for the 152,629 sidewalk ends this produced
 against 54 in the derived network — so a walk that steps only from sidewalk to sidewalk stops dead at
 the first corner.
 
@@ -494,7 +494,7 @@ carrying the Central Park measurement that chose it, so none of them should be m
 **The first pass exists because the city does not node an alley's mouth.** `graph.rs` nodes protos by
 their endpoints alone, which is all it takes wherever the city splits both lines at their junction —
 and an alley is a T onto the *interior* of the street it opens off. **3,795 alley ends citywide stand
-on a street centreline** at p50 0.00 m with no node of their own, against 63 street ends and 108 path
+on a street centerline** at p50 0.00 m with no node of their own, against 63 street ends and 108 path
 ends that do the same. With no cut there the alley lattice behind a block is a walkable island
 nothing on the street can reach: 269 of 312 km of alley, measured before the pass existed. So a
 street endpoint standing on another street's interior cuts it there and moves onto the cut, and the
@@ -503,17 +503,17 @@ noding then sees one point.
 **The two dedup bands are one rule split by how much evidence it has.** Between 6 and 10 m geometry
 alone cannot tell a re-mapped street from a path that merely runs beside one — at 10 m a single band
 would take the Jamaica Bay and Marine Park greenways with it — so the wider band asks for two more
-witnesses: the way must carry the same street name as the CSCL segment it parallels, OSM labelling
+witnesses: the way must carry the same street name as the CSCL segment it parallels, OSM labeling
 it as the street it duplicates, and it must share no node with any other OSM way. A path network's
 members meet each other, and Central Park's interior paths, the tuning set for the 6 m band, are a
 connected net. What passes both tests is a second drawing of one named street lying inside its own
 right-of-way.
 
 **A gap and a network distance are different questions, and the last pass needs both.** A degree-1
-endpoint a couple of metres from another node, and a whole block from it *through the network*, is a
+endpoint a couple of meters from another node, and a whole block from it *through the network*, is a
 seam between two mappings of the same place — the second OSM drawing of an alley ending 1.7 m from
 the corner the first one already reaches. The gap alone cannot say that: a pier tip, a cul-de-sac
-path and a fenced-off stub all sit metres from something. That is why this is a pass of its own and
+path and a fenced-off stub all sit meters from something. That is why this is a pass of its own and
 not a loosening of `graph.rs`'s 1 m near-miss union, which is a CSCL digitization sliver with no
 topology in it and stays as tight as it is. The end that moves is always OSM's: CSCL geometry feeds
 the corner and crossing construction downstream and is left exactly where the city drew it.
@@ -532,7 +532,7 @@ what is genuinely out of reach. It runs last because it can only ask its questio
 other pass has finished with, and it runs to a fixed point because joining one component can bring a
 second within reach of the first. **The island takes one join, not one per touch**: reachability
 needs a single node, and a second would invent a second junction OSM never drew. Neither side may be
-a bridge or tunnel deck — a trail under a viaduct is a metre from it in plan and a storey below it on
+a bridge or tunnel deck — a trail under a viaduct is a meter from it in plan and a story below it on
 the ground — which is the same grade-separation guard the weld and the dangling-end merge carry, and
 it is what keeps a trail net from being welded to the highway or rail cut it passes beneath.
 
@@ -571,7 +571,7 @@ kind: how far a route goes against the straight line, whether it doubles back ov
 just crossed, whether it threads roadway to roadway, and whether it arrives at all. None of them
 shows up until thousands of walks have been asked for, so `tests/route-sampling.test.ts` routes 400
 trips in each borough between real PLUTO tax lots — addressed parcels, where random lat/lngs would
-land in the harbour and manufacture a routing failure — and holds the distributions rather than any
+land in the harbor and manufacture a routing failure — and holds the distributions rather than any
 one route. It cannot run beside the unit tests: it reads the built graph, which is gitignored, and
 two LFS files standard CI checks out as pointers, so it runs on the manual deploy path beside the
 shed pairing check.
@@ -606,7 +606,7 @@ the overlay drew those again with no change to any of the code below, which is w
 one-directional reconciliation is for.
 
 **The overlay is the side that gives way.** A green line is an offer, and the graph is the only thing
-that can honour one, so the graph now writes the ways it stranded (`public/routing/stranded.bin`) and
+that can honor one, so the graph now writes the ways it stranded (`public/routing/stranded.bin`) and
 the second chunk pass marks them undrawn. That is not a claim the trails are unwalkable — most plainly
 are. It is that a layer must not advertise what the router will refuse.
 
@@ -623,7 +623,7 @@ question, below.
   network it would join is a continuum from 4 m out with no trough in it at any conditioning tried —
   parkland, the entrance snap's continuation guard, or a connector that crosses no other line. Floyd
   Bennett Field's North Forty, the worst single case, is **36.3 m** from anything anchored; the
-  premise that OSM merely leaves out the last few metres does not hold there, and a bound wide enough
+  premise that OSM merely leaves out the last few meters does not hold there, and a bound wide enough
   to reach it welds 882 further components (127.6 km) that no evidence vouches for.
   Closing this needs evidence the graph's own inputs do not carry — a parkland boundary, an OSM
   `barrier`/`entrance` tag, or a survey of where park entrances actually are — not a wider tolerance.
@@ -633,11 +633,11 @@ question, below.
 - **The per-borough drop criterion was waived in the Bronx, and nobody has checked it by eye.** The
   criterion was that no borough lose much more derived sidewalk than the city as a whole, and the
   Bronx came in 2.8 pp above it (25.7% against 22.9%), which is a fail. It was waived on the
-  judgement that the number is measuring OSM's thinner coverage there rather than pavement the graph
+  judgment that the number is measuring OSM's thinner coverage there rather than pavement the graph
   is missing, and the evidence for that is a browser pass over the finished network: **zero routing
   failures in 700 sampled trips**, a median detour ratio of 1.38 against Manhattan's 1.32, and worst
   cases that are all genuine terrain — the Van Cortlandt trails, the Bronx Community College bluff,
-  the Botanical Garden. That is a judgement rather than a measurement of pavement, so it is left open
+  the Botanical Garden. That is a judgment rather than a measurement of pavement, so it is left open
   until someone drives Bronx routing in the app and confirms it.
 
 ## Sidewalk sheds
@@ -690,7 +690,7 @@ sheds with no geometry at all 624 → **19**, total coverage 294 mi → **321 mi
 DOB's own linear-feet column sums to, and — the actual point — length laid along measured frontage
 rather than invented 125 mi → **261 mi**, which is the same length reclassified rather than more of
 it. Side of street did not move: 56/56 on the blind audit either way. A shed runs along the property
-line, and on a superblock — NYCHA, Stuy Town, a school campus — the building can sit a hundred metres
+line, and on a superblock — NYCHA, Stuy Town, a school campus — the building can sit a hundred meters
 inside its lot, so footprint-derived frontage invents a wrap onto streets it never touched. What lots
 cost is placement ambiguity, which grew with them (slide room p90 5.8 m → 46.5 m): a lot puts the
 right length on the correct block face and lets it slide along it, which is what the per-placement
@@ -708,8 +708,8 @@ to stand in front of a building whose permit it is not.
 *A frontage is the boundary a lot sweeps along one pavement, not the span between its two ends.* It
 was read as the interval from the first facing boundary sample to the last, which is a different
 thing wherever a lot reaches the same pavement twice: a through-block lot with an arcade arm either
-side of a neighbour's building, a U around a rear yard, a corner arm projecting onto the far end of
-the same edge. The span between them covers the neighbour, and it is not a rounding — **414 of
+side of a neighbor's building, a U around a rear yard, a corner arm projecting onto the far end of
+the same edge. The span between them covers the neighbor, and it is not a rounding — **414 of
 108,803 spans, 8,214 m in all, stood off their own lot**, up to 193 m of one edge at a time. The
 frontage is now walked out from the lot's closest approach to that pavement, sample by sample, and
 stopped where the boundary leaves — including where it leaves by running past the end of the edge,
@@ -739,23 +739,23 @@ lot's closest approach to its own street: over the feed, pavement the lot fronts
 at p95, and pavement across a street is never nearer than 7.2 m.
 
 **Pavement is continuous; the edges it is cut into are not.** The walk has to be written against the
-first and never against the second, because a graph rebuild re-cuts one kerb into different edges
+first and never against the second, because a graph rebuild re-cuts one curb into different edges
 wherever anything nearby changes, and two places took an edge for the pavement.
 
 *Where along the frontage the shed sits.* A permit shorter than its lot's frontage is one run anchored
 on the building, and the anchor used to be a position along whichever candidate edge came nearest the
 lot — so a rebuild that split that edge in two handed the anchor to the other half and clamped it to
-the new edge's end, sliding the shed tens of metres down its own block face with its street, its side
+the new edge's end, sliding the shed tens of meters down its own block face with its street, its side
 and its length all unchanged. It is now the point of the measured frontage nearest the building's
-centre, and the edge holding that point follows from it. The distances the old choice ranked are as
+center, and the edge holding that point follows from it. The distances the old choice ranked are as
 close as they sound: the gap between the nearest candidate edge and the runner-up is under a
-centimetre for 1,438 of 59,773 placements and under a metre for 9,824, while the same gap measured to
+centimeter for 1,438 of 59,773 placements and under a meter for 9,824, while the same gap measured to
 the next distinct *pavement* — the (source id, side) group — is an order of magnitude wider at the
 same quantiles. What is left is an exact tie, the anchor landing on the node two pieces of one
 pavement share, and that is settled on the arcs' own coordinates rather than on edge ids.
 
 *Getting past a corner, and the step across that was rejected.* A block face's pavement now stops at
-every kerb: **152,629 sidewalk ends have no other sidewalk on them, against 54** in the derived
+every curb: **152,629 sidewalk ends have no other sidewalk on them, against 54** in the derived
 network this replaced, and what carries the pavement to the next block face is a crossing edge over
 the roadway. A walk that steps only from sidewalk to sidewalk therefore stops dead at the first
 corner — 57.2% of runs ended with nothing to continue on to, against none at all before.
@@ -770,7 +770,7 @@ this is not. No amount of recovered length buys that. The graph no longer indexe
 so the walk cannot take one.
 
 What the step was reaching for is met inside the lot instead. The lot's own frontage is a **single
-walkable piece for 98.40%** of lots, so those kerbs almost never cut one lot's frontage in two — and
+walkable piece for 98.40%** of lots, so those curbs almost never cut one lot's frontage in two — and
 where they do (0.95% rejoined only across a crossing, 0.65% not rejoined at all), and at the corners
 the network fails to node, the recovery pass spends the stranded run on the lot's own unreached
 frontage without walking to it. That is why the corner wrap does not depend on the step across:
@@ -780,9 +780,9 @@ discounted in the confidence, because which piece of its own lot the structure o
 from the length rather than traced on foot.
 
 **How deep the deck is, measured rather than assumed.** A shed spans the pavement from the building
-face out to roughly the kerb, and no dataset New York publishes carries a sidewalk width. Two lines
-pin it. The kerb falls out of the graph: a sidewalk's baked polyline is the centreline offset by half
-the CSCL kerb-to-kerb roadway plus a fixed `sidewalkInsetMeters`, so the kerb is always exactly that
+face out to roughly the curb, and no dataset New York publishes carries a sidewalk width. Two lines
+pin it. The curb falls out of the graph: a sidewalk's baked polyline is the centerline offset by half
+the CSCL curb-to-curb roadway plus a fixed `sidewalkInsetMeters`, so the curb is always exactly that
 inset inboard of the line — the offset byte measures the ROADWAY and stops there, and knows nothing
 about the pavement beyond it, so the baked line is where the inset says the middle of the pavement is
 rather than where it is. The building line is the tax lot the frontage is already measured against,
@@ -797,20 +797,20 @@ stores it clamped into **[0.1 m, 8 m]**. The ceiling is 26 ft, wider than a Midt
 and is where the distribution stops falling and goes flat out to 32 m — 3.7% of spans, and
 superblocks, forecourts and plazas rather than pavement, where the lot line is not the building line
 at all. Those are clamped rather than discarded because clamping is the honest drawing: the deck runs
-out from the kerb over as much pavement as there can be, and the ground between it and a tower set
-20 m back is not decked by anyone. The floor is the encoding's alone: a depth rounds to decimetres and
-zero decimetres is the byte that means "not measured".
+out from the curb over as much pavement as there can be, and the ground between it and a tower set
+20 m back is not decked by anyone. The floor is the encoding's alone: a depth rounds to decimeters and
+zero decimeters is the byte that means "not measured".
 
 **What cannot be built is corrected by the reader, at 2.4 m.** The code wants 5 ft of clear path
-under a shed (BC 3307.6.2; BC 3307.6.3 has the deck cover the whole pavement bar 18 in at the kerb),
+under a shed (BC 3307.6.2; BC 3307.6.3 has the deck cover the whole pavement bar 18 in at the curb),
 the frame's posts and bracing stand outside that path either side, and 8 ft is where the standard
-shed frame starts — so a measurement under 2.4 m is a lot line or a kerb estimate that is off rather
+shed frame starts — so a measurement under 2.4 m is a lot line or a curb estimate that is off rather
 than a sliver of a shed. **23% of spans** are under it. The correction belongs to the measurement,
 not to the drawing: `deckDepth` in `src/routing/sheds.ts` raises the number the band, the shadow it
-throws and `shedShade`'s falloff all read. It goes on the KERB side — the lot line is evidence and
-the kerb is a fixed inset off a CSCL centreline — so a floored deck keeps the building line it was
+throws and `shedShade`'s falloff all read. It goes on the CURB side — the lot line is evidence and
+the curb is a fixed inset off a CSCL centerline — so a floored deck keeps the building line it was
 measured from and reaches further over what the graph took for roadway. 18% of spans overhang the
-kerb that way, by a median 0.8 m and at most 2 m; the 3.7% measured under 0.5 m had their building
+curb that way, by a median 0.8 m and at most 2 m; the 3.7% measured under 0.5 m had their building
 line inside the roadway to begin with, and those bands sit over it entirely.
 
 ### Named by its source, not its position
@@ -926,13 +926,13 @@ filled from, so a shadow cannot leave a corner the display drew differently, or 
 deck is a slab, not a tunnel: trace a ray back toward the sun from a point beneath one and the point is
 lit as soon as that ray has moved further *across* the sidewalk than the deck is deep. Only the
 across-street component of the translate counts, so a sun running along the street slides the shadow
-down tens of metres of the shed's own length while a sun across it clears the pavement's width within
+down tens of meters of the shed's own length while a sun across it clears the pavement's width within
 a few degrees of elevation. No single elevation threshold can say that; the angle between the sun and
 the street is what decides it — and how far the shadow has to slide is the edge's own measured DEPTH,
 the mean of its spans' weighted by the length each covers, so the falloff a 6 m avenue deck gets is
 not the one a 2.5 m side-street deck gets and the router agrees with the band on screen. Depth reaches
 neither of the other two terms: shelter is a roof either over you or not, and the avoid penalty is
-charged per decked metre of length.
+charged per decked meter of length.
 
 Shelter reads the same coverage number, but `shed` and `directCanopy` are **fractions of an edge's
 length, not transmittances at a point**, so they combine as a union of coverage rather than a stack of
@@ -961,9 +961,9 @@ above.
   to avoid the block rather than a reason to charge less for walking under it.
 - **Deck height is 4 m and is an assumption**, not data — the permit carries none, and it sets the
   cast shadow's length directly. Depth is measured per span now, but through the tax lot and the
-  graph's own kerb estimate rather than through anything that surveyed a pavement, and 23% of spans
+  graph's own curb estimate rather than through anything that surveyed a pavement, and 23% of spans
   are held up off the floor by what a shed can be built at rather than by what was measured — which
-  hangs 18% of them out over the kerb, by 2 m at the tail.
+  hangs 18% of them out over the curb, by 2 m at the tail.
 - Shed shadows appear on the z14 → z15 step, the only layer with such a discontinuity. Measured over
   a downtown screenful they darken 0.28% of it, against a step that redraws the whole layer from a
   magnified raster to swept vectors, so nothing about the crossing reads as scaffolding arriving.

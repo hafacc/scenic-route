@@ -54,7 +54,7 @@
 //     postingsOffset            that entry's posting list, from the start of the postings region
 //   per token, sorted bytewise, front-coded in blocks of 16:
 //     lcp                       bytes shared with the predecessor; 0 at a block start, so a block
-//                               decodes without its neighbours
+//                               decodes without its neighbors
 //     tailLen
 //     <tail>                    UTF-8 bytes after the shared prefix
 //     postingCount              documents carrying the token
@@ -64,7 +64,7 @@
 //     <postings>                ascending doc ids, delta varints, the first absolute
 //
 // The document order is a Hilbert curve over the quantized coordinates, purely so the coordinate
-// deltas are small: spatially adjacent documents are metres apart, so a delta pair costs about four
+// deltas are small: spatially adjacent documents are meters apart, so a delta pair costs about four
 // bytes instead of eight, and the posting lists pick up spatial coherence that gzip likes. Nothing
 // at query time depends on the order.
 //
@@ -257,7 +257,7 @@ const TEN_ORDINALS = [
 // The highest numbered street either city has, plus room: New York files a West 271st.
 export const MAX_ORDINAL = 999;
 
-// "fifth avenue" spelt out, as the tokens it would be typed as. Streets index these alongside their
+// "fifth avenue" spelled out, as the tokens it would be typed as. Streets index these alongside their
 // digits, because the two cities write a numbered street four ways — "5 AV", "5th Avenue", "Fifth
 // Avenue" — and only the first two fall out of the name itself. A compound spells as its words, so
 // "twenty first street" matches the same way "21st" does. Empty outside the range.
@@ -296,26 +296,26 @@ export function ordinalValue(word: string): number | null {
   return digits === null ? null : Number(digits[1]);
 }
 
-// A name with each of its numbers spelt out — ["5th", "avenue"] to ["fifth", "avenue"], ["21st",
+// A name with each of its numbers spelled out — ["5th", "avenue"] to ["fifth", "avenue"], ["21st",
 // "street"] to ["twenty", "first", "street"] — or null where it has no number to spell.
 //
 // A street is indexed under these words as well as its own, and the query side rebuilds them to tell
-// WHICH words of the name a query that spelt one out named: "fifth avenue" is both words of 5th
+// WHICH words of the name a query that spelled one out named: "fifth avenue" is both words of 5th
 // Avenue and two of the three of 55th Avenue, which carries the word `fifth` just as genuinely.
 export function spelledOrdinals(words: readonly string[]): string[] | null {
-  const spelt: string[] = [];
+  const spelled: string[] = [];
   let numbered = false;
   for (const word of words) {
     const value = ordinalValue(word);
     const asWords = value === null ? [] : ordinalWords(value);
     if (asWords.length === 0) {
-      spelt.push(word);
+      spelled.push(word);
     } else {
-      spelt.push(...asWords);
+      spelled.push(...asWords);
       numbered = true;
     }
   }
-  return numbered ? spelt : null;
+  return numbered ? spelled : null;
 }
 
 // Bytewise, which is the order the dictionary is written in and so the order a client binary

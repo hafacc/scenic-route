@@ -64,7 +64,7 @@ describe("sliceTrack", () => {
     expect(sliced).not.toBeNull();
     const cut = sliced as Polyline;
     // Down the trunk to the junction and then north: the east variant would have been a straight
-    // line more than a kilometre off the second station.
+    // line more than a kilometer off the second station.
     expect([...cut.lngs]).toEqual([-73.99, -73.98, -73.98, -73.98]);
     expect([...cut.lats].map((lat) => Number(lat.toFixed(6)))).toEqual([
       40.75, 40.75, 40.76, 40.765,
@@ -119,7 +119,7 @@ describe("trackShapes", () => {
   });
 
   test("a name the two files agree on carries a livery they do not", () => {
-    // The graph and the display artifact are built from different feeds; where the colours have
+    // The graph and the display artifact are built from different feeds; where the colors have
     // drifted the name is still the join, rather than the line going undrawn.
     expect(
       trackShapes(subway, { shortName: "N", color: "#ffffff" }),

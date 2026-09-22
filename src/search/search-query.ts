@@ -66,7 +66,7 @@ export const DEFAULT_LIMIT = 20;
 // named them all — cannot be read off the accumulators, so it is applied after the names are
 // decoded, to a pool wide enough that it can still change the order of what is shown.
 const POOL_FACTOR = 4;
-// And how much wider again once a misspelt word has been corrected. A correction can add hundreds of
+// And how much wider again once a misspelled word has been corrected. A correction can add hundreds of
 // documents that each answer one more word of the query than they would have, and the cheap ordering
 // cannot yet see that two of those words landed on the SAME word of the name — so without the room,
 // a name that answered the query properly from across town is cut before anything reads it.
@@ -115,21 +115,21 @@ const DISTANCE_SCALE_METERS = 1500;
 
 // How much of the distance term something the reader has named EXACTLY pays: a house number, and a
 // street or district whose whole name was typed. New York has five Court Streets and each is
-// kilometres long, so which of them is nearest ORDERS the several answers, but it must not decide
+// kilometers long, so which of them is nearest ORDERS the several answers, but it must not decide
 // whether the far one is shown at all, the way it decides between two Starbucks. So these are
 // measured on a flatter curve than a name — 1.6:1 across the city rather than 4:1.
 const NAMED_DISTANCE_FLOOR = 0.6;
 const NAMED_DISTANCE_SPAN = 0.4;
 
 // The kinds whose one coordinate stands in for ground they cover rather than marking a spot: a
-// street is a line kilometres long, filed at the mean of its own addresses, and a neighborhood is a
-// district filed at its middle. How far that point is from the map centre is not how far the thing
+// street is a line kilometers long, filed at the mean of its own addresses, and a neighborhood is a
+// district filed at its middle. How far that point is from the map center is not how far the thing
 // is, which is what the flatter curve above is for.
 const AREA_KINDS: ReadonlySet<DocKind> = new Set(["street", "neighborhood"]);
 
 // What one of those is worth when what was typed IS its name, whole and with nothing else in it. A
 // person who types a bare street name wants the street, not the courthouse, the post office and the
-// four subway stations named after it, and one who types Williamsburg wants the neighbourhood rather
+// four subway stations named after it, and one who types Williamsburg wants the neighborhood rather
 // than the Montessori school in it — so it is scored the way an exact door is, at the top of the
 // scale that a station otherwise leads.
 const WHOLE_AREA_PROMINENCE = 255;
@@ -155,9 +155,9 @@ export function namedDistanceFactor(meters: number): number {
   );
 }
 
-// Where the results are measured from: what the map is centred on, which exists signed out and
+// Where the results are measured from: what the map is centered on, which exists signed out and
 // without a permission prompt, and is what the reader is looking at.
-export interface SearchCentre {
+export interface SearchCenter {
   lat: number;
   lng: number;
 }
@@ -209,8 +209,8 @@ export interface SearchIndex {
   lngUnits: Int32Array;
   payload: Uint32Array; // where streetIndex and the house number sit, or 0 for neither
   // Where each ADDR place is, as the mean of the documents in it, or null for a place with none.
-  // What a query naming a borough at its end is measured from, in place of the map centre.
-  placeCentres: (SearchCentre | null)[];
+  // What a query naming a borough at its end is measured from, in place of the map center.
+  placeCenters: (SearchCenter | null)[];
   tokenCount: number;
   restartCount: number;
   restartStart: number;
@@ -247,7 +247,7 @@ export function decodeSearchIndex(bytes: Uint8Array): SearchIndex {
   const lngUnits = new Int32Array(docCount);
   const payload = new Uint32Array(docCount);
 
-  // Summed per ADDR place as the documents go by, so the centre of a borough costs one addition a
+  // Summed per ADDR place as the documents go by, so the center of a borough costs one addition a
   // document rather than a second pass over the file.
   const placeLat = new Array<number>(MAX_PLACES).fill(0);
   const placeLng = new Array<number>(MAX_PLACES).fill(0);
@@ -319,7 +319,7 @@ export function decodeSearchIndex(bytes: Uint8Array): SearchIndex {
     restartStart,
     dictStart,
     postingsStart: dictStart + dictBytes,
-    placeCentres: placeCount.map((count, place) =>
+    placeCenters: placeCount.map((count, place) =>
       count === 0
         ? null
         : {
@@ -410,7 +410,7 @@ interface Match {
 }
 
 // One word of the query: what was typed, the bytes the dictionary is searched with, whether it is
-// the word still being typed, how wrong it was allowed to be spelt — zero until the fuzzy pass runs,
+// the word still being typed, how wrong it was allowed to be spelled — zero until the fuzzy pass runs,
 // and zero for every word too short for it — and the dictionary tokens it reached.
 interface QueryWord {
   text: string;
@@ -472,7 +472,7 @@ function expand(
 
 export interface SearchRequest {
   text: string;
-  centre: SearchCentre;
+  center: SearchCenter;
   limit?: number;
   // Which kinds of document may be ANSWERED with. Every kind is still matched whatever this says —
   // a street a query names is what the street link below reads, whether or not the street itself is
@@ -499,23 +499,23 @@ interface Candidate extends Ranked {
   meters: number;
 }
 
-function metersBetween(at: SearchCentre, centre: SearchCentre): number {
-  const north = at.lat - centre.lat;
-  const east = (at.lng - centre.lng) * Math.cos((centre.lat * Math.PI) / 180);
+function metersBetween(at: SearchCenter, center: SearchCenter): number {
+  const north = at.lat - center.lat;
+  const east = (at.lng - center.lng) * Math.cos((center.lat * Math.PI) / 180);
   return Math.sqrt(north * north + east * east) * METERS_PER_DEGREE;
 }
 
 function metersFrom(
   index: SearchIndex,
   doc: number,
-  centre: SearchCentre,
+  center: SearchCenter,
 ): number {
   return metersBetween(
     {
       lat: index.latUnits[doc] / COORD_SCALE,
       lng: index.lngUnits[doc] / COORD_SCALE,
     },
-    centre,
+    center,
   );
 }
 
@@ -657,7 +657,7 @@ function placeFactor(
 }
 
 // The word sequences a document may be read as. Everything is its own name; a STREET is also its
-// name with the numbers spelt out, since that is what the index files it under — and reading "fifth
+// name with the numbers spelled out, since that is what the index files it under — and reading "fifth
 // avenue" against ["fifth", "avenue"] rather than against ["5th", "avenue"] is the whole difference
 // between 5th Avenue, which the query names entirely, and 55th Avenue, which carries the word
 // `fifth` just as genuinely and is ["fifty", "fifth", "avenue"].
@@ -666,8 +666,8 @@ function placeFactor(
 // mix of two: one that answers it under neither gains nothing from being read twice.
 function spellingsOf(kind: DocKind, name: string): string[][] {
   const words = tokenize(name);
-  const spelt = kind === "street" ? spelledOrdinals(words) : null;
-  return spelt === null ? [words] : [words, spelt];
+  const spelled = kind === "street" ? spelledOrdinals(words) : null;
+  return spelled === null ? [words] : [words, spelled];
 }
 
 // How many words of the query reached only a word of the name that another word of the query has a
@@ -686,7 +686,7 @@ function doubledWords(
 ): number {
   const encoded = new Array<Uint8Array | null>(nameWords.length).fill(null);
   // Whether the word the reader typed is a word of this name, by the same rule the dictionary was
-  // searched under: it starts one, or — where it was looked for misspelt — it is within the same
+  // searched under: it starts one, or — where it was looked for misspelled — it is within the same
   // number of edits of the start of one. Without the second half a word that only matched through a
   // correction claims nothing, and the name word it corrected to is left free for the next query
   // word to claim as well, which is the doubling this whole function exists to stop.
@@ -735,7 +735,7 @@ function doubledWords(
   return reached - paired;
 }
 
-// A word one edit from what the dictionary holds is scored well below the same word spelt right, and
+// A word one edit from what the dictionary holds is scored well below the same word spelled right, and
 // a word two edits away well below that: what these multiply is the prefix quality the same match
 // would have earned had it been typed correctly, so a misspelling can only ever ADD an answer under
 // the ones that match properly, never displace them.
@@ -785,7 +785,7 @@ function postingMass(word: QueryWord): number {
 //
 // It is called twice for a query that had to be corrected, the second time with the corrections
 // ALONE: what a word already reached it keeps, at the quality it first arrived with, and since every
-// correction scores below every properly spelt match, first is also best. So the second pass reads
+// correction scores below every properly spelled match, first is also best. So the second pass reads
 // only the posting lists the first one did not, which is what keeps a corrected query from costing
 // twice a plain one — and matters most where one word of the query is a single letter carrying tens
 // of thousands of documents.
@@ -823,7 +823,7 @@ function accumulate(
 
 export function searchNames(
   index: SearchIndex,
-  { text, centre, limit = DEFAULT_LIMIT, kinds }: SearchRequest,
+  { text, center, limit = DEFAULT_LIMIT, kinds }: SearchRequest,
 ): SearchHit[] {
   const tokens = queryTokens(text);
   if (tokens.join("").length < MIN_QUERY_CHARS) {
@@ -848,9 +848,9 @@ export function searchNames(
   const candidates: number[] = [];
   accumulate(index, byMass(queryWords), tokens.length, candidates);
   // What was typed reaches almost nothing, so it is worth asking whether it was typed wrong. A query
-  // spelt right never pays for this, and one that is not pays for one walk over the dictionary per
+  // spelled right never pays for this, and one that is not pays for one walk over the dictionary per
   // word — after which the walk above runs again over the corrections, because a word one edit away
-  // can complete a document that only one of the properly spelt words reached.
+  // can complete a document that only one of the properly spelled words reached.
   let corrected = false;
   if (candidates.length < limit) {
     for (const word of queryWords) {
@@ -898,7 +898,7 @@ export function searchNames(
     const linked = viaStreet.get(doc) ?? 0;
     const points = quality[doc] / QUALITY_SCALE;
     const { tokenCount } = unpackTokenInfo(index.tokenInfo[doc]);
-    const meters = metersFrom(index, doc, centre);
+    const meters = metersFrom(index, doc, center);
     // Scored here as though every word the document matched was a word of its own, which is the most
     // it can be worth; the pool is cut on that and the rescore below can only lower it, so nothing
     // that deserves a place in the answer is dropped here for a reason the name has not been read
@@ -913,9 +913,9 @@ export function searchNames(
         points,
         true,
         tokens.length,
-        // The document table holds the DISPLAY name's word count, and a street spelt out is longer
+        // The document table holds the DISPLAY name's word count, and a street spelled out is longer
         // than that — so a query that named every word of "twenty first street" reached more words
-        // than the count admits to. Erring towards the longer reading keeps the pool the upper bound
+        // than the count admits to. Erring toward the longer reading keeps the pool the upper bound
         // it has to be.
         Math.max(tokenCount, named),
       ),
@@ -1022,7 +1022,7 @@ export function searchNames(
 
 // How prominent a door is. A house number the city's own file has, on a street whose WHOLE name was
 // typed, is the most precise answer anything here can give — a network geocoder answers the same
-// query with a point at an arbitrary end of a street kilometres long more often than not — so it is
+// query with a point at an arbitrary end of a street kilometers long more often than not — so it is
 // baked at the top of the scale, where nothing that is merely a name can reach it.
 //
 // Both halves have to be the reader's. A near miss on the number is not what was asked for, and
@@ -1054,7 +1054,7 @@ export interface CityHit {
 
 export interface CityRequest {
   text: string;
-  centre: SearchCentre;
+  center: SearchCenter;
   limit?: number;
 }
 
@@ -1116,7 +1116,7 @@ export function splitTrailingPlace(
     }
     const rest = text.slice(0, at).replace(/[\s,]+$/, "");
     // "Brooklyn" on its own is a place, not something in one: what is left still has to name
-    // something, or the whole query would be answered from a borough centre with no words in it.
+    // something, or the whole query would be answered from a borough center with no words in it.
     if (
       rest.length >= MIN_QUERY_CHARS &&
       (best === null || name.length > best.length)
@@ -1138,14 +1138,14 @@ function namesWholeStreet(asked: readonly string[], street: string): boolean {
 
 // The doors a house number opens: the streets whose names answer what was typed after the number,
 // each asked for that number out of its own ADDR run. The number the FILE has is what comes back,
-// never the one that was typed — a pin labelled 121 when the file knows only 119 and 123 is a wrong
+// never the one that was typed — a pin labeled 121 when the file knows only 119 and 123 is a wrong
 // answer wearing a right one's clothes — and a number past either end of a street is not answered at
 // all, since 9999 Broadway is not at the top of Broadway.
 function addressAnswers(
   index: SearchIndex,
   addresses: AddressIndex,
   { number, street }: AddressQuery,
-  centre: SearchCentre,
+  center: SearchCenter,
   limit: number,
 ): CityHit[] {
   const named = splitTrailingPlace(addresses.places, street);
@@ -1154,10 +1154,10 @@ function addressAnswers(
     return [];
   }
   const from =
-    named === null ? centre : (index.placeCentres[named.placeIndex] ?? centre);
+    named === null ? center : (index.placeCenters[named.placeIndex] ?? center);
   const streets = searchNames(index, {
     text,
-    centre: from,
+    center: from,
     limit: MAX_SCANNED_STREETS,
     kinds: ["street"],
   });
@@ -1212,24 +1212,24 @@ function addressAnswers(
 }
 
 // The general path, run twice where the query ends in a borough: once as typed, once without it and
-// measured from that borough instead of from the map centre. Both are kept, because "5 Av Brooklyn"
+// measured from that borough instead of from the map center. Both are kept, because "5 Av Brooklyn"
 // is a street in Brooklyn and "Brooklyn Bridge" is a name that ends in one, and only the scores can
 // tell which was meant.
 function nameAnswers(
   index: SearchIndex,
   addresses: AddressIndex,
   text: string,
-  centre: SearchCentre,
+  center: SearchCenter,
   limit: number,
 ): SearchHit[] {
-  const direct = searchNames(index, { text, centre, limit });
+  const direct = searchNames(index, { text, center, limit });
   const named = splitTrailingPlace(addresses.places, text);
   if (named === null) {
     return direct;
   } else {
     const nearby = searchNames(index, {
       text: named.text,
-      centre: index.placeCentres[named.placeIndex] ?? centre,
+      center: index.placeCenters[named.placeIndex] ?? center,
       limit,
     });
     const best = new Map<number, SearchHit>();
@@ -1251,16 +1251,16 @@ function nameAnswers(
 export function searchCity(
   index: SearchIndex,
   addresses: AddressIndex,
-  { text, centre, limit = DEFAULT_LIMIT }: CityRequest,
+  { text, center, limit = DEFAULT_LIMIT }: CityRequest,
 ): CityHit[] {
   const parsed = parseAddressQuery(text);
   const doors =
     parsed === null
       ? []
-      : addressAnswers(index, addresses, parsed, centre, limit);
+      : addressAnswers(index, addresses, parsed, center, limit);
   // The general path runs on the whole text even when a number opened it: "5 Guys" is a name, not an
   // address, and the two paths' answers are told apart by their scores rather than by the parse.
-  const named = nameAnswers(index, addresses, text, centre, limit).map(
+  const named = nameAnswers(index, addresses, text, center, limit).map(
     (hit) => ({
       kind: hit.kind,
       name: hit.name,

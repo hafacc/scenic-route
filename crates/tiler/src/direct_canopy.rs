@@ -2,15 +2,15 @@
 //! literally over it.
 //!
 //! This is **not** the cover byte (record byte 20). Cover is the deliberately smoothed field the
-//! overlay is coloured from — an oriented anisotropic Gaussian, sigma 15 m along the road and 4 m
-//! across, reaching +/-37.5 m — so the colour does not lurch block to block. That answers "is this a
+//! overlay is colored from — an oriented anisotropic Gaussian, sigma 15 m along the road and 4 m
+//! across, reaching +/-37.5 m — so the color does not lurch block to block. That answers "is this a
 //! leafy stretch"; a walker sheltering from rain is asking "is there anything over my head *here*",
 //! which a kernel reaching most of a block cannot say. So this integrates the raw 0/1 canopy
 //! indicator along the edge's own baked polyline with no kernel at all — the fraction of the edge's
 //! length that falls under a canopy polygon — and quantizes it to the same 0..254 ceiling the cover
 //! and scenic bytes use.
 //!
-//! It samples the sidewalk geometry the graph baked, not the street centreline, so the two sides of
+//! It samples the sidewalk geometry the graph baked, not the street centerline, so the two sides of
 //! a one-sided street differ, which is the whole point of asking.
 
 use std::path::Path;

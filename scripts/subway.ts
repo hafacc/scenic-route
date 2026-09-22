@@ -1,6 +1,6 @@
 // `bun run build-subway`: downloads the MTA's subway GTFS feed and writes the system's route
 // geometry and its stations as data/subway/nyc.bin (magic SBWY) — every route's polylines together
-// with the colour and the names the MTA publishes for it, and every station with the set of routes
+// with the color and the names the MTA publishes for it, and every station with the set of routes
 // that genuinely serve it, so a renderer can draw one route at a time, and one marker per station,
 // and know what to paint them without a second file. Display only: nothing here enters the routing
 // graph or any of its inputs — the rail a route rides is scripts/transit.ts's TRNS blob, baked from
@@ -42,7 +42,7 @@ const FORWARD_DIRECTION = "0";
 // itself adds nothing — but a pattern that runs southbound ONLY (the R and W down the West End
 // line) is track the map would otherwise be missing entirely. So a reverse shape is kept when it
 // covers at least this many grid cells no kept shape of the route covers, about 600 m of track:
-// above the few metres the two directions wobble apart at terminals and relay tracks, and far below
+// above the few meters the two directions wobble apart at terminals and relay tracks, and far below
 // a branch. Anything from 5 to 30 cells picks the same two shapes out of the 2026-05-26 feed, so
 // this sits in the middle of a wide plateau rather than on an edge that decides anything.
 const NEW_TRACK_CELLS = 20;
@@ -73,14 +73,14 @@ const STATION_LINE_METERS = 25;
 // shapes all end 103 m short of the 96 St terminal platform, straight up Second Avenue on a heading
 // 4.6° off the bearing to it, so running the line on to the platform's foot lays no track that is
 // not there. A platform further out, or off to one side, is a different problem — the ingest reports
-// it and leaves it rather than bending track towards it.
+// it and leaves it rather than bending track toward it.
 const MAX_TERMINAL_EXTENSION_METERS = 250;
 const MAX_TERMINAL_OFFSET_METERS = 25;
-// The flat metre frame the two constants above are measured in: over a few hundred metres, scaling
-// longitude by the local cosine is exact to millimetres.
+// The flat meter frame the two constants above are measured in: over a few hundred meters, scaling
+// longitude by the local cosine is exact to millimeters.
 const METERS_PER_DEGREE_LAT = 111_320;
 
-// The GTFS defaults for a route that publishes no colour. Every route in this feed publishes both;
+// The GTFS defaults for a route that publishes no color. Every route in this feed publishes both;
 // the spec's white-on-black beats inventing one.
 const DEFAULT_ROUTE_COLOR = "FFFFFF";
 const DEFAULT_TEXT_COLOR = "000000";
@@ -268,7 +268,7 @@ function buildRoutes(feed: GtfsFeed): TransitRoute[] {
 
 // The stations a marker is drawn at. GTFS models a station as a parent stop (location_type 1) with
 // one child platform per direction at the same coordinate, so the parents are what a marker wants:
-// the platforms would put two markers a few metres apart at every station. A platform with no
+// the platforms would put two markers a few meters apart at every station. A platform with no
 // parent stands in for itself — defensive, this feed gives all 992 of its platforms one.
 //
 // A station's routes come from the trips of a kept route that stop there, both directions and every
@@ -368,7 +368,7 @@ function buildStations(
   );
 }
 
-// `to` seen from `from`, in metres east and north.
+// `to` seen from `from`, in meters east and north.
 function offsetMeters(from: Coord, to: Coord): { east: number; north: number } {
   return {
     east:
@@ -417,7 +417,7 @@ function lineMeters(point: Coord, lines: readonly Coord[][]): number {
 // on the heading that vertex arrived on, the line is extended along that heading to the station's
 // own foot — which is a published shape stopping short of its terminal platform, the MTA's Q up
 // Second Avenue being the case in this feed. A station beside a line, or far past its end, is
-// reported and left alone: track that bends towards a marker is invented track.
+// reported and left alone: track that bends toward a marker is invented track.
 function reachTerminals(
   routes: readonly TransitRoute[],
   stations: readonly TransitStation[],

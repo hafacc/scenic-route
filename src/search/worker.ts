@@ -120,11 +120,11 @@ scope.onmessage = ({ data }: MessageEvent<ToSearchWorker>) => {
       hit: name(loaded, data.at),
     });
   } else {
-    const { id, text, centre, limit } = data;
+    const { id, text, center, limit } = data;
     scope.postMessage({
       type: "results",
       id,
-      hits: look(loaded, { text, centre, limit }),
+      hits: look(loaded, { text, center, limit }),
     });
   }
 };

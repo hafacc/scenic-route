@@ -28,7 +28,7 @@ import ResultList, {
 // The open panel is a component of its own, which is what makes closing it mean anything: the words
 // typed into it and the answer they got are held there and go with it.
 
-// The route panel's own wrapper and card, verbatim: centred on a phone, pinned bottom-right on sm+,
+// The route panel's own wrapper and card, verbatim: centered on a phone, pinned bottom-right on sm+,
 // and capped in `dvh` rather than `vh` because on a phone `100vh` is the viewport with the browser
 // chrome retracted. See components/route-panel.tsx for the whole of that reasoning.
 const PANEL =
@@ -52,14 +52,14 @@ const CHROME_OPEN =
 interface Answer {
   query: string;
   results: GeocodeResult[] | null;
-  outside: boolean; // the map centre is off the city the index covers
+  outside: boolean; // the map center is off the city the index covers
 }
 
 interface SearchControlProps {
   city: City;
   open: boolean; // held by the app, which is what keeps this and the route panel out of one slot
   pinned: boolean; // a result is on the map, so the icon stays lit even with the panel closed
-  centre: () => LatLng | null; // read per query: the index ranks from it, and one off the city warns
+  center: () => LatLng | null; // read per query: the index ranks from it, and one off the city warns
   onOpenChange: (open: boolean) => void;
   onSelect: (result: GeocodeResult) => void;
   onDirections: () => void; // routes to the pinned place, the same as the directions control does
@@ -70,7 +70,7 @@ export default function SearchControl({
   city,
   open,
   pinned,
-  centre,
+  center,
   onOpenChange,
   onSelect,
   onDirections,
@@ -110,7 +110,7 @@ export default function SearchControl({
             <SearchPanel
               city={city}
               pinned={pinned}
-              centre={centre}
+              center={center}
               label={label}
               onLabelChange={setLabel}
               onOpenChange={onOpenChange}
@@ -128,7 +128,7 @@ export default function SearchControl({
 interface SearchPanelProps {
   city: City;
   pinned: boolean;
-  centre: () => LatLng | null;
+  center: () => LatLng | null;
   label: string | null; // the last pick's name, kept above so it survives a close
   onLabelChange: (label: string | null) => void;
   onOpenChange: (open: boolean) => void;
@@ -143,7 +143,7 @@ interface SearchPanelProps {
 function SearchPanel({
   city,
   pinned,
-  centre,
+  center,
   label,
   onLabelChange,
   onOpenChange,
@@ -194,7 +194,7 @@ function SearchPanel({
       </div>
       <PlaceSearch
         city={city}
-        centre={centre}
+        center={center}
         label={label}
         placeholder="Search for a place"
         autoFocus
@@ -214,7 +214,7 @@ function SearchPanel({
 
 interface PlaceSearchProps {
   city: City;
-  centre: () => LatLng | null;
+  center: () => LatLng | null;
   label: string | null; // the committed pick, which the caller owns and the box shows
   placeholder: string;
   autoFocus: boolean; // a box that opens on demand takes the caret; one that is always there does not
@@ -230,7 +230,7 @@ interface PlaceSearchProps {
 // a query nobody is typing any more.
 export function PlaceSearch({
   city,
-  centre,
+  center,
   label,
   placeholder,
   autoFocus,
@@ -273,7 +273,7 @@ export function PlaceSearch({
       }
     };
     const timer = window.setTimeout(() => {
-      const at = centre();
+      const at = center();
       const outside = at !== null && !containsPoint(city, at);
       searchPlaces(query)
         .then(async (results) => {
@@ -291,7 +291,7 @@ export function PlaceSearch({
       stale = true;
       window.clearTimeout(timer);
     };
-  }, [draft, city, centre]);
+  }, [draft, city, center]);
 
   const value = draft ?? label ?? "";
   const results = answer?.results ?? null;

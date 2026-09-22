@@ -9,7 +9,7 @@
 //! walker minds is how much of the walk has industry beside it, so that is what the byte is — the
 //! length-fraction of the edge fronting an industrial lot, each side counted for half.
 //!
-//! Shape follows direct_canopy.rs: one sample per metre along the edge's own baked polyline, each
+//! Shape follows direct_canopy.rs: one sample per meter along the edge's own baked polyline, each
 //! tested against a bbox-gridded polygon set. Here each sample probes perpendicular to the walk
 //! instead of underfoot, so the two sides of a street are asked separately and a street with yards
 //! on both sides costs exactly twice one with yards on one.
@@ -25,7 +25,7 @@ use crate::manifest::Bounds;
 
 const BYTE_CEILING: f64 = 254.0; // as the cover, scenic and direct-canopy bytes
 const SAMPLE_STEP_METERS: f64 = 1.0; // as direct_canopy: fine enough for the shortest crossing
-// Where each side is asked: out past the kerb, roughly the middle of the lots fronting the walk.
+// Where each side is asked: out past the curb, roughly the middle of the lots fronting the walk.
 const PROBE_METERS: f64 = 15.0;
 // How far past the probe a lot still counts, so the far side of a wide street reaches ~27 m — about
 // one New York roadway from the pavement, and nothing beyond the lots facing it.
@@ -90,7 +90,7 @@ fn frontage_fraction(
     let step = total / samples as f64;
     let mut score = 0.0;
     let mut segment = 0usize;
-    let mut behind = 0.0; // metres of the segments before `segment`
+    let mut behind = 0.0; // meters of the segments before `segment`
     for sample in 0..samples {
         let target = (sample as f64 + 0.5) * step;
         while segment + 1 < spans.len() && behind + spans[segment] < target {
@@ -196,7 +196,7 @@ mod tests {
     const LAT: f64 = 40.7;
 
     /// A point `east_meters` east and `north_meters` north of a reference in the middle of New
-    /// York, so the tests read in metres and still exercise the cos(lat) scaling of the real bake.
+    /// York, so the tests read in meters and still exercise the cos(lat) scaling of the real bake.
     fn at(east_meters: f64, north_meters: f64) -> Coord {
         Coord {
             lng: -74.0 + east_meters / meters_per_degree_lng(),
@@ -208,7 +208,7 @@ mod tests {
         METERS_PER_DEGREE_LAT * LAT.to_radians().cos()
     }
 
-    /// An axis-aligned ring in metres, corners `(west, south)` to `(east, north)`.
+    /// An axis-aligned ring in meters, corners `(west, south)` to `(east, north)`.
     fn rectangle(west: f64, south: f64, east: f64, north: f64) -> Vec<Coord> {
         vec![
             at(west, south),

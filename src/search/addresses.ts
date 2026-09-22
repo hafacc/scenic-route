@@ -189,7 +189,7 @@ export function parseAddressQuery(query: string): AddressQuery | null {
 }
 
 // How far apart two house numbers are, for choosing between the pair a missing number sits between.
-// Queens' block number dominates: 12-34 and 12-36 are neighbours, 12-34 and 13-02 are not.
+// Queens' block number dominates: 12-34 and 12-36 are neighbors, 12-34 and 13-02 are not.
 const BLOCK_SPAN = 10000;
 
 function numberKey({ major, minor }: HouseNumber): number {

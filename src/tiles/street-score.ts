@@ -58,7 +58,7 @@ const chunks = new Map<string, Promise<Segment[]>>();
 // counter-clockwise of the direction of travel — CSCL's own l_/r_ convention, and the side the
 // first of a vertex's two density bytes carries — and canvas y runs south, so on screen that is
 // (ty, -tx): the left of an eastbound street points up. The tangent is the central difference of
-// the nearest *distinct* neighbours, one-sided at the ends, since two vertices of the source
+// the nearest *distinct* neighbors, one-sided at the ends, since two vertices of the source
 // geometry can sit closer together than the 0.1 m the coordinates are quantized to.
 function leftNormals(
   xs: Float64Array,
@@ -80,8 +80,8 @@ function leftNormals(
     }
     const tangentX = xs[ahead] - xs[back];
     const tangentY = ys[ahead] - ys[back];
-    // A vertex every neighbour has collapsed onto has no side to take: its two lines meet on the
-    // centreline, rather than carrying a NaN into the path.
+    // A vertex every neighbor has collapsed onto has no side to take: its two lines meet on the
+    // centerline, rather than carrying a NaN into the path.
     const length = Math.hypot(tangentX, tangentY) || 1;
     normalXs[vertex] = tangentY / length;
     normalYs[vertex] = -tangentX / length;

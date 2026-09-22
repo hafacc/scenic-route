@@ -118,7 +118,7 @@ test("the chunk decoder reads a hand-written STCK file", () => {
   );
 
   expect(decoded).toHaveLength(3);
-  // Decimetres on the wire, metres out, so the street's 34 is a 3.4 m half-offset.
+  // Decimeters on the wire, meters out, so the street's 34 is a 3.4 m half-offset.
   decoded.forEach((segment, index) => {
     expect(segment.offsetMeters).toBeCloseTo(
       SEGMENTS[index].offsetDecimeters / 10,
@@ -140,7 +140,7 @@ test("the chunk decoder reads a hand-written STCK file", () => {
 
 // The bitmap is found through the header's own offset and indexed by segment, so a decoder that
 // walked it as bytes rather than bits, or read it from the wrong end of the body, shows up here.
-test("a segment's stranded bit follows the segment, not its neighbours", () => {
+test("a segment's stranded bit follows the segment, not its neighbors", () => {
   const decoded = decodeStreetChunk(
     writeChunk(ORIGIN_LNG, ORIGIN_LAT, SEGMENTS).buffer as ArrayBuffer,
   );

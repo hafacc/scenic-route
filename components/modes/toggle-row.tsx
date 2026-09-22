@@ -13,13 +13,13 @@ import {
 import type { FactorAvailability } from "../../src/modes/modes";
 import { HILLS_VALUES, SUN_VALUES, type Toggles } from "../../src/modes/modes";
 
-// Icons with no words: the glyph says which state a switch is in, colour says it is doing
+// Icons with no words: the glyph says which state a switch is in, color says it is doing
 // something, and the label is left to the screen reader. One tap moves to the next state.
 //
 // One component in two placements, as the mode row is: on a phone it is pinned at the end of that
 // row, which the chips scroll under, and on a wide screen it is its own pill beside it.
 
-const GREY = "text-slate-400 dark:text-slate-500";
+const GRAY = "text-slate-400 dark:text-slate-500";
 
 interface ToggleFace {
   Icon: IconType;
@@ -38,7 +38,7 @@ const SUN_FACES: Readonly<Record<Toggles["sun"], ToggleFace>> = {
     tint: "text-sky-600 dark:text-sky-400",
     label: "Walk in the shade",
   },
-  neutral: { Icon: MdWbTwilight, tint: GREY, label: "Sun and shade ignored" },
+  neutral: { Icon: MdWbTwilight, tint: GRAY, label: "Sun and shade ignored" },
 };
 
 const HILL_FACES: Readonly<Record<Toggles["hills"], ToggleFace>> = {
@@ -52,7 +52,7 @@ const HILL_FACES: Readonly<Record<Toggles["hills"], ToggleFace>> = {
     tint: "text-amber-700 dark:text-amber-500",
     label: "Fewer hills",
   },
-  none: { Icon: MdHorizontalRule, tint: GREY, label: "Avoid hills" },
+  none: { Icon: MdHorizontalRule, tint: GRAY, label: "Avoid hills" },
 };
 
 const FERRY_FACES: Readonly<Record<"on" | "off", ToggleFace>> = {
@@ -61,7 +61,7 @@ const FERRY_FACES: Readonly<Record<"on" | "off", ToggleFace>> = {
     tint: "text-blue-600 dark:text-blue-400",
     label: "Ferries allowed",
   },
-  off: { Icon: MdDirectionsBoat, tint: GREY, label: "Ferries barred" },
+  off: { Icon: MdDirectionsBoat, tint: GRAY, label: "Ferries barred" },
 };
 
 function next<Value extends string>(
@@ -102,7 +102,7 @@ export default function ToggleRow({
   onChange,
 }: {
   toggles: Toggles;
-  // A switch with no data behind it is hidden, not greyed: greyed reads as a state the reader chose.
+  // A switch with no data behind it is hidden, not grayed: grayed reads as a state the reader chose.
   available: FactorAvailability;
   onChange: (toggles: Toggles) => void;
 }) {

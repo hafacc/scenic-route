@@ -93,7 +93,7 @@ const MAX_CITY_REVERSAL_SHARE = 0.15;
 
 // The most crossing edges one route may traverse back to back. One is a plain street; two is a
 // divided street, whose crossing is drawn as two ways chained through the traffic island — which is
-// precisely why "a crossing goes kerb to kerb" cannot be checked edge by edge, since half of a
+// precisely why "a crossing goes curb to curb" cannot be checked edge by edge, since half of a
 // median crossing looks exactly like a whole small one until a walk goes through it. A junction of
 // several streets chains more: the worst measured over 2,000 city routes is 6, and the junctions
 // drilled at that length — Broadway/W 70 St/Amsterdam Ave, Kings Hwy/Ave P/E 22 St — really do take
@@ -101,7 +101,7 @@ const MAX_CITY_REVERSAL_SHARE = 0.15;
 const MAX_CROSSING_RUN = 8;
 
 // The smallest borough (Manhattan) holds ~37,000 of the 788,591 tax lots; anything near this floor
-// means a borough was labelled onto the wrong polygon or a PLUTO refresh dropped one, which would
+// means a borough was labeled onto the wrong polygon or a PLUTO refresh dropped one, which would
 // otherwise show up as a suspiciously clean pass rather than as a failure.
 const MIN_LOTS_PER_BOROUGH = 20_000;
 
@@ -421,7 +421,7 @@ const measured = [...lotsByBorough].map(([borough, lots], index) =>
 const percent = (share: number): string => `${(100 * share).toFixed(1)}%`;
 
 test("every borough offers enough real addresses to sample from", () => {
-  // A borough labelled onto the wrong polygon, or a PLUTO refresh that dropped a borough, would
+  // A borough labeled onto the wrong polygon, or a PLUTO refresh that dropped a borough, would
   // otherwise show up as a suspiciously clean pass rather than as a failure.
   const thin = [...lotsByBorough]
     .filter(([, lots]) => lots.length < MIN_LOTS_PER_BOROUGH)
@@ -530,7 +530,7 @@ test("a route rarely crosses a street and crosses straight back at all", () => {
 test("a crossing is traversed in one move", () => {
   // A divided street's crossing is two chained edges and a big junction is more, so this bounds the
   // run rather than forbidding it: what it rules out is a route threading roadway to roadway,
-  // which is the shape a walk takes when it has stepped off the kerb and cannot get back on.
+  // which is the shape a walk takes when it has stepped off the curb and cannot get back on.
   const over = measured
     .filter((result) => result.longestRun > MAX_CROSSING_RUN)
     .map(

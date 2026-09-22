@@ -30,9 +30,9 @@ import { palette } from "./theme";
 export const TILE_SIZE = 256;
 const DEGREES = Math.PI / 180;
 
-// The shadow's own colour, which is the palette's single stop for the shade layer and not a fact
+// The shadow's own color, which is the palette's single stop for the shade layer and not a fact
 // about the pyramid: the swept tiles and the baked ones are two ways of computing the same fraction
-// of lost light, so both take their colour from the same place, and both follow the theme.
+// of lost light, so both take their color from the same place, and both follow the theme.
 export function shadeRgb(): readonly [number, number, number] {
   const [{ red, green, blue }] = palette().shade.stops;
   return [red, green, blue];
@@ -75,7 +75,7 @@ export interface SweptGround {
 }
 
 // The transform from the chunks' zoom-0 world pixels into one tile's own, and the scale a shadow
-// length in metres becomes a displacement in them (Mercator is conformal, so one factor does both
+// length in meters becomes a displacement in them (Mercator is conformal, so one factor does both
 // axes).
 export interface Frame {
   scale: number;
@@ -99,14 +99,14 @@ export function frameFor({
 }: TileCoords): Frame & { latitude: number } {
   const originX = x * TILE_SIZE;
   const originY = y * TILE_SIZE;
-  const centre = unproject(originX + TILE_SIZE / 2, originY + TILE_SIZE / 2, z);
+  const center = unproject(originX + TILE_SIZE / 2, originY + TILE_SIZE / 2, z);
   return {
     scale: 2 ** z,
     originX,
     originY,
     pixelsPerMeter:
-      2 ** z / (EQUATOR_METERS_PER_PIXEL * Math.cos(centre.lat * DEGREES)),
-    latitude: centre.lat,
+      2 ** z / (EQUATOR_METERS_PER_PIXEL * Math.cos(center.lat * DEGREES)),
+    latitude: center.lat,
   };
 }
 
@@ -514,7 +514,7 @@ function traceRunSweep(
 }
 
 // One swept slice of a crown: which of its rings to sweep, and how far down the shadow to sweep them
-// between, in metres. Mirrors `crown_segments` in crates/tiler/src/crown.rs, which carries why the
+// between, in meters. Mirrors `crown_segments` in crates/tiler/src/crown.rs, which carries why the
 // bands sit where they do — the two halves have to cut the same slices at the zoom they hand over or
 // the seam would show.
 export function crownSegments(
@@ -540,7 +540,7 @@ export function crownSegments(
   const segments: { level: number; fromM: number; toM: number }[] = [];
   for (let slice = 0; slice < count; slice++) {
     const level = slice * stride;
-    // Half the band the crown stays at least this ring's radius over, centred on its widest section.
+    // Half the band the crown stays at least this ring's radius over, centered on its widest section.
     // The rings are spaced by equal HEIGHT, so the offsets are evenly spaced and this is just one.
     const half = (level / (CROWN_SEGMENTS - 1)) * CROWN_TIP_FRACTION;
     const fromM = displacement(middle - halfHeight * half);

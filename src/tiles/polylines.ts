@@ -124,7 +124,7 @@ export interface LaneOptions {
 
 export const METERS_PER_DEGREE_LAT = 111_320;
 
-// A degree of longitude in metres at `lat` — the other half of measuring a ground distance off
+// A degree of longitude in meters at `lat` — the other half of measuring a ground distance off
 // coordinates, and the only part of it that is not a constant.
 export function metersPerLng(lat: number): number {
   return METERS_PER_DEGREE_LAT * Math.cos((lat * Math.PI) / 180);
@@ -141,7 +141,7 @@ interface Walked {
 
 // One polyline resampled at half a cell. Resampled rather than read at its vertices because the
 // shapes are coarse where the corridor is open — a ferry crossing is 4 to 12 vertices for a
-// kilometre of water — so a span that only claimed the cells its endpoints fall in would leave the
+// kilometer of water — so a span that only claimed the cells its endpoints fall in would leave the
 // corridor between them unclaimed.
 function walk(
   { lngs, lats }: Polyline,
@@ -195,7 +195,7 @@ function walk(
 
 // The eight cells a cell touches, the four sharing a side first, for the walk that spreads a route's
 // presence out to the cells around the ones it actually runs through.
-const NEIGHBOURS: readonly (readonly [number, number])[] = [
+const NEIGHBORS: readonly (readonly [number, number])[] = [
   [1, 0],
   [-1, 0],
   [0, 1],
@@ -214,7 +214,7 @@ const NO_CELL = -1;
 interface Occupancy {
   idOf: Map<string, number>;
   routes: Set<number>[];
-  adjoining: Int32Array; // NEIGHBOURS.length per cell, NO_CELL where no line runs
+  adjoining: Int32Array; // NEIGHBORS.length per cell, NO_CELL where no line runs
   sampled: Int32Array[]; // per line, the cell each of its samples fell in
 }
 
@@ -246,10 +246,10 @@ function occupancyOf(
     }),
   );
 
-  const adjoining = new Int32Array(cellX.length * NEIGHBOURS.length);
+  const adjoining = new Int32Array(cellX.length * NEIGHBORS.length);
   for (let cell = 0; cell < cellX.length; cell++) {
-    NEIGHBOURS.forEach(([alongX, alongY], side) => {
-      adjoining[cell * NEIGHBOURS.length + side] =
+    NEIGHBORS.forEach(([alongX, alongY], side) => {
+      adjoining[cell * NEIGHBORS.length + side] =
         idOf.get(`${cellX[cell] + alongX},${cellY[cell] + alongY}`) ?? NO_CELL;
     });
   }
@@ -274,21 +274,21 @@ function presenceOf(
       pending.push(cell);
     }
   }
-  const steps = NEIGHBOURS.map(
+  const steps = NEIGHBORS.map(
     ([alongX, alongY]) => cellMeters * (alongX && alongY ? Math.SQRT2 : 1),
   );
   for (let head = 0; head < pending.length; head++) {
     const cell = pending[head];
     for (let side = 0; side < steps.length; side++) {
-      const neighbour = adjoining[cell * steps.length + side];
+      const neighbor = adjoining[cell * steps.length + side];
       const reach = spread[cell] + steps[side];
       if (
-        neighbour !== NO_CELL &&
-        reach < spread[neighbour] &&
+        neighbor !== NO_CELL &&
+        reach < spread[neighbor] &&
         reach < blendMeters
       ) {
-        spread[neighbour] = reach;
-        pending.push(neighbour);
+        spread[neighbor] = reach;
+        pending.push(neighbor);
       }
     }
   }
@@ -297,7 +297,7 @@ function presenceOf(
   );
 }
 
-// Metres of ground per unit of the projected space the normals and sample directions live in.
+// Meters of ground per unit of the projected space the normals and sample directions live in.
 // Mercator is conformal, so one factor covers both axes; over the half a degree a city spans it
 // moves under a percent, which is the same approximation `cellLng` already makes.
 function metersPerPixel(latitude: number): number {
@@ -306,14 +306,14 @@ function metersPerPixel(latitude: number): number {
 
 // How far off the corridor a parting is worth counting, in cells. A parting says which SIDE the
 // leaver left on, not how fast it got there, and once it is a cell off the two are no longer
-// sharing anything — further metres only mean it left at a steeper angle, which is the case where
+// sharing anything — further meters only mean it left at a steeper angle, which is the case where
 // the order matters least, since a route cutting across a bundle crosses it whatever lane it holds.
 // Uncapped, those steep departures outvote the gentle ones: 1,031 introduced crossings across the
 // New York subway against 935 capped at a cell, and 360 against 318 in San Francisco.
 const VOTE_CAP_CELLS = 1;
 
 // Which way round a pair of routes wants to be stacked, and by how much: per pair of routes, in
-// metres, positive where the higher-numbered of the two wants the higher lane.
+// meters, positive where the higher-numbered of the two wants the higher lane.
 //
 // A parting is a place one of them carries on and the other does not — the end of a stretch they
 // share, or the start of one. There the route that is leaving swings off to one side of the
@@ -358,12 +358,12 @@ function partingVotes(
   const reach = (index: number, sample: number, step: number): number => {
     const { sampleLngs, sampleLats } = walked[index];
     let at = sample;
-    for (let travelled = 0; travelled < blendMeters; ) {
+    for (let traveled = 0; traveled < blendMeters; ) {
       const next = at + step;
       if (next < 0 || next >= sampleLngs.length) {
         break;
       }
-      travelled +=
+      traveled +=
         Math.hypot(
           (sampleLngs[next] - sampleLngs[at]) / cellLng,
           (sampleLats[next] - sampleLats[at]) / cellLat,
@@ -446,10 +446,10 @@ function partingVotes(
 //
 // Measured on the committed artifacts, counting a crossing as one drawn ribbon properly crossing
 // another of a different route at z15, and counting as INTRODUCED one with no crossing of the same
-// two routes' published centrelines within 130 m of it: New York's ferries fall from 26 introduced
+// two routes' published centerlines within 130 m of it: New York's ferries fall from 26 introduced
 // (63 crossings in all) to 14 (47), and its subway from 1,530 (6,143) to 935 (5,515). San
 // Francisco's subway goes the other way, 306 (506) to 318 (581), which is the honest cost of one
-// order for the whole file: its Muni and BART tracks are digitised as near-coincident lines that
+// order for the whole file: its Muni and BART tracks are digitized as near-coincident lines that
 // cross each other constantly wherever two of them run down the same street, and the order its
 // partings ask for is not the order that noise happens to like. What is actually being minimised
 // falls in all three — the vote weight left unsatisfied goes from 1.7 km over 8 pairs to nothing
@@ -672,7 +672,7 @@ const MIN_PARALLEL_COSINE = Math.cos((30 * Math.PI) / 180);
 // same way round and negative where they are stored opposite. The votes are then settled
 // strongest-first over a spanning forest, so a bundle's orientation is set by the longest and
 // straightest agreement in it and the rest follows; a pair still disagreeing once both are in the
-// tree is outvoted rather than honoured. Which way the whole bundle faces is free — it mirrors which
+// tree is outvoted rather than honored. Which way the whole bundle faces is free — it mirrors which
 // side of the corridor the stack builds out on, the same for every line in it — and is taken
 // eastward off the bundle's combined chord, so a line sharing water with nobody keeps the chord rule
 // it had.
@@ -780,16 +780,16 @@ function orientations(
   // its own flip, in weight order and repeatedly, and takes it whenever that leaves less vote weight
   // unsatisfied than before — which over New York's ferry file settles 14.3% of the weight
   // unsatisfied down to 3.8%, and the subway file's 0.26% to 0.20%.
-  const neighbours = lines.map((): { line: number; weight: number }[] => []);
+  const neighbors = lines.map((): { line: number; weight: number }[] => []);
   for (const { first, second, weight } of edges) {
-    neighbours[first].push({ line: second, weight });
-    neighbours[second].push({ line: first, weight });
+    neighbors[first].push({ line: second, weight });
+    neighbors[second].push({ line: first, weight });
   }
   for (let pass = 0; pass < lines.length; pass++) {
     let improved = false;
     for (let line = 0; line < lines.length; line++) {
       let satisfied = 0;
-      for (const { line: other, weight } of neighbours[line]) {
+      for (const { line: other, weight } of neighbors[line]) {
         satisfied += senses[line] * senses[other] * weight;
       }
       if (satisfied < 0) {

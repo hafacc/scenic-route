@@ -28,7 +28,7 @@ test("a lift wears the lift icon and every other door the stair", () => {
     MdElevator,
   );
   expect(maneuverIcon(stationManeuver({ door: "stair" })).type).toBe(MdStairs);
-  // A kerbside stop carries no door at all, and still reads as a way in.
+  // A curbside stop carries no door at all, and still reads as a way in.
   expect(maneuverIcon(stationManeuver({})).type).toBe(MdStairs);
   expect(
     maneuverIcon(stationManeuver({ station: "alight", door: undefined })).type,

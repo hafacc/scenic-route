@@ -19,8 +19,8 @@ import TreeDotsLayer from "./tree-dots-layer";
 // genera's local crown density in its R/G/B (12 genera / 3 = 4 tiles). One shared WebGL2 context reads
 // the enabled channels per pixel and shades them: the dominant genus, dithered against its runner-up
 // in proportion, faded by the total density so it reads like thinning-and-thickening tree cover rather
-// than a filled map. Toggling a genus is a uniform write and a redraw, so the dominance renormalises
-// live (a region hands off to its runner-up) with no refetch — which a stack of pre-coloured tiles,
+// than a filled map. Toggling a genus is a uniform write and a redraw, so the dominance renormalizes
+// live (a region hands off to its runner-up) with no refetch — which a stack of pre-colored tiles,
 // which can only add ink, structurally could not do. From z15 up TreeDotsLayer draws crisp live dots.
 const TILE_URL = "tiles/genus-field/{layer}/{z}/{x}/{y}.webp";
 const LAYERS = 4; // 12 genera packed three-per-tile (R,G,B); see crates/tiler/src/genus_field.rs
@@ -42,10 +42,10 @@ void main() {
 }`;
 
 // The look lives here, so tuning is a shader edit (instant HMR), not a rebake. Reads the enabled
-// genera's densities per pixel, colours the dominant, dithers it against the runner-up in proportion
+// genera's densities per pixel, colors the dominant, dithers it against the runner-up in proportion
 // to their split, and fades the whole by total density: sparse cover stays faint, a dense stand goes
 // near-opaque. Toggling a genus off drops its channel from the max scan, so the region falls to
-// whatever it's next-densest in — the live renormalisation.
+// whatever it's next-densest in — the live renormalization.
 const FRAGMENT_SRC = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -151,7 +151,7 @@ function linkProgram(gl: WebGL2RenderingContext): WebGLProgram {
   return program;
 }
 
-// The genus palette as a flat RGB-in-0..1 array, uploaded once as the shader's colour lookup.
+// The genus palette as a flat RGB-in-0..1 array, uploaded once as the shader's color lookup.
 const PALETTE = new Float32Array(
   GENUS_COLORS.flatMap(({ red, green, blue }) => [
     red / 255,
@@ -295,7 +295,7 @@ export default function GenusGlLayer() {
     };
 
     // Fetch the four data tiles for a position, decode them WITHOUT the browser premultiplying or
-    // colour-converting (they're data, not colour), upload each as a texture, then draw and report.
+    // color-converting (they're data, not color), upload each as a texture, then draw and report.
     const load = (entry: TileEntry, done: (error?: Error) => void): void => {
       const { z, x, y } = entry.coords;
       const urls = Array.from({ length: LAYERS }, (_unused, layer) =>

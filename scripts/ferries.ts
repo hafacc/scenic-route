@@ -134,11 +134,11 @@ export function excludedStopNames(cityId: string): ReadonlySet<string> {
 }
 
 // A stop further than this from the city's land is warned about. Ferry terminals stand at the end of
-// piers and breakwaters, hundreds of metres out over water the land polygons do not include, so the
+// piers and breakwaters, hundreds of meters out over water the land polygons do not include, so the
 // tolerance cannot be zero; 500 m clears every terminal in either city while still being far short
 // of the next town's waterfront.
 const LAND_TOLERANCE_METERS = 500;
-// `onLand` answers about a point, not a distance, so the neighbourhood is sampled: rings of bearings
+// `onLand` answers about a point, not a distance, so the neighborhood is sampled: rings of bearings
 // at a third, two thirds and the whole of the tolerance. At the widest ring the samples are 195 m
 // apart, finer than any shoreline that could hide a whole waterfront between two of them.
 const LAND_PROBE_RINGS = 3;
@@ -291,10 +291,10 @@ function dropRepeats(points: Coord[]): Coord[] {
   return unique;
 }
 
-// The one berthing manoeuvre trimmed by hand. A published shape carries the boat's move into its
+// The one berthing maneuver trimmed by hand. A published shape carries the boat's move into its
 // berth as well as the crossing, and at Wall St/Pier 11 four of the seven shapes that call there
 // run 186 m north-west past the slip, reverse (178.9-179.9 degrees), and come back the last 70 m
-// into the pier. Drawn, that is a spike over South Street, and it is the only berthing manoeuvre in
+// into the pier. Drawn, that is a spike over South Street, and it is the only berthing maneuver in
 // the two feeds anyone has minded.
 //
 // Named rather than generalized on purpose: the sharpest genuine course change near a terminal
@@ -304,7 +304,7 @@ function dropRepeats(points: Coord[]): Coord[] {
 // gets its own line here, deliberately.
 const SLIP_STOP_NAME = "Wall St/Pier 11";
 const SLIP_REVERSAL_DEGREES = 170; // the four shapes reverse by 178.9-179.9 here
-const SLIP_REACH_METERS = 100; // the whole manoeuvre lies within 71 m of the stop
+const SLIP_REACH_METERS = 100; // the whole maneuver lies within 71 m of the stop
 
 // How far the course turns at `at`: 0 straight on, 180 straight back.
 function turnDegrees(before: Coord, at: Coord, after: Coord): number {
@@ -318,7 +318,7 @@ function turnDegrees(before: Coord, at: Coord, after: Coord): number {
   return Math.abs((Math.atan2(cross, dot) * 180) / Math.PI);
 }
 
-// Drops the manoeuvre's vertices off the `stopName` end, so the line runs from its last approach
+// Drops the maneuver's vertices off the `stopName` end, so the line runs from its last approach
 // vertex straight into the pier; a no-op at every other stop. The polyline still begins and ends at
 // its two stop coordinates, which the graph pass relies on — it substitutes the snapped walking
 // node for each end vertex, so an end that was not the stop would cost a real point.

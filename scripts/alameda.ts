@@ -7,12 +7,12 @@
 // rather than replace them. What is genuinely different from that side:
 //
 //   - **There is no shoreline-clipped boundary to read.** San Francisco publishes analysis
-//     neighbourhoods already cut at the water. Alameda County publishes city limits that are LEGAL
+//     neighborhoods already cut at the water. Alameda County publishes city limits that are LEGAL
 //     limits: Oakland's, Berkeley's and Alameda's run out into the bay over their tidelands, and the
 //     union of the seven reaches -122.347, most of the way to Yerba Buena Island. So the shoreline
 //     is subtracted rather than read — see `fetchEastBayLand`.
 //
-//   - **The centreline carries no width.** New York publishes a kerb-to-kerb `streetwidth` and San
+//   - **The centerline carries no width.** New York publishes a curb-to-curb `streetwidth` and San
 //     Francisco publishes the sidewalk width its roadway is derived from. Alameda County publishes
 //     neither, and OSM fills the gap for four ways in the whole of Oakland, so every segment here
 //     takes one stated figure — see `EAST_BAY_ROADWAY_FEET`.
@@ -53,7 +53,7 @@ export const EAST_BAY_STREET_SOURCE_URL =
 // The seven municipalities this city takes in, as the county's `DIST_NAME` spells them. They are the
 // contiguous incorporated run along the Alameda County bayshore, from the Contra Costa line at
 // Albany to San Leandro's southern boundary, and they are chosen as a set for three reasons: one
-// county centreline and one county address file cover exactly them, so this is one ingest the way
+// county centerline and one county address file cover exactly them, so this is one ingest the way
 // New York's five boroughs are; they form a single urban fabric with no municipality left out of the
 // middle of it (Piedmont is an enclave entirely surrounded by Oakland, and omitting it would put a
 // hole in the land mask); and stopping at San Leandro keeps the bounding box on the built-up
@@ -66,7 +66,7 @@ export const EAST_BAY_STREET_SOURCE_URL =
 //
 // The mask is NOT these seven, though: the line is drawn round the area rather than round the
 // cities, and `EAST_BAY_PARKLANDS` adds the ridge parkland above Oakland that no municipality
-// contains. Nothing else in this file changes — the centreline, the addresses and the landmarks are
+// contains. Nothing else in this file changes — the centerline, the addresses and the landmarks are
 // all read over `boxOf(land)` and kept by `onLand`, so they follow the mask out there by themselves.
 const EAST_BAY_CITY_LIMITS: readonly string[] = [
   "CITY OF ALBANY",
@@ -82,11 +82,11 @@ const EAST_BAY_CITY_LIMITS: readonly string[] = [
 // search box has to show. Its own `CITY` column is not that name: two Oakland-coded rows carry "San
 // Leandro", so the code is the jurisdiction and the column is a guess at the postal town.
 //
-// The seven above, under the spellings src/search/address-format.ts's borough names are spelt in —
+// The seven above, under the spellings src/search/address-format.ts's borough names are spelled in —
 // what a person would type and what a result has to read as. Read by scripts/addresses.ts, which
 // walks the county's address points, and inverted below to place the state inventory's landmarks
 // against the same layer. One map because two disagreed: Albany is `AB`, and a private second copy
-// here spelt it `AL`, which matches no row and silently placed nothing.
+// here spelled it `AL`, which matches no row and silently placed nothing.
 export const ALAMEDA_PLACES: Readonly<Record<string, string>> = {
   AA: "Alameda",
   AB: "Albany",
@@ -115,7 +115,7 @@ const PARKLAND_SERVICE =
 //
 // A park is admitted on the same condition the rest of the region is: every layer this region offers
 // has to reach it. Canopy does — the ALCC height model is Alameda AND Contra Costa, and it reads 95
-// to 100% covered cells across these two, with crowns up to 226 ft. The county centreline runs well
+// to 100% covered cells across these two, with crowns up to 226 ft. The county centerline runs well
 // past its own county line (287 segments over Redwood alone, most of them unincorporated), OSM has
 // the trail network (407 foot ways), and the county's address points here already all carry one of
 // the seven municipal codes, so the address filter drops nothing and search gains no hole.
@@ -145,7 +145,7 @@ const EAST_BAY_PARKLANDS: readonly string[] = [
 // CPAD records a park as the dozens of parcels it was assembled from — 61 for these two — and
 // records their edges to a looser precision than the edges actually meet at. Unioned raw, the two
 // parks arrive as one body pitted with fourteen holes and trailed by two detached specks: six of the
-// holes are under 20 m² and are simply where two neighbouring parcels fail to touch, three are real
+// holes are under 20 m² and are simply where two neighboring parcels fail to touch, three are real
 // private in-holdings inside Redwood, and the specks are 1,600 and 1,376 m².
 //
 // None of that is a statement about ground. A hole here would clip the trails that cross it and read
@@ -169,7 +169,7 @@ const METERS_PER_DEGREE_LAT = 111_320;
 const MAX_SEAM_HOLE_SQUARE_METERS = 100_000;
 
 // Shoelace on the ring, with longitude scaled at the ring's own latitude. Only ever compared against
-// the floor above, so the flat-earth approximation over a few hundred metres costs nothing.
+// the floor above, so the flat-earth approximation over a few hundred meters costs nothing.
 function ringAreaSquareMeters(ring: Ring): number {
   let doubled = 0;
   for (
@@ -407,7 +407,7 @@ const WALKABLE_CLASSES = new Set([
 
 // `SFEATYP` is the county's street-type abbreviation, and three of its values name a walking surface
 // rather than a roadway: a walk, a path and a plaza. They are 100 rows out of 85,134 — this
-// centreline is a road file and the pedestrian network comes from OSM — but a plaza offset two
+// centerline is a road file and the pedestrian network comes from OSM — but a plaza offset two
 // sidewalks off its middle would be two walking lines through a square that is itself the surface.
 //
 // There is no step-street type at all: San Francisco's `STPS`/`STWY` have no counterpart here, so
@@ -430,14 +430,14 @@ function roadTypeOf(row: StreetRow): RoadType | null {
 }
 
 // The roadway width every East Bay street is offset by, in the feet a STRT record stores. The county
-// centreline has no width column, its rows carry no right-of-way geometry to derive one from the way
+// centerline has no width column, its rows carry no right-of-way geometry to derive one from the way
 // San Francisco's do, and OSM tags a `width` on four ways in the whole of Oakland — so there is no
 // measurement to be had, and this is a stated assumption rather than a fallback.
 //
 // It is San Francisco's own median derived roadway, taken because it is the figure this city already
 // uses for every segment whose inputs are missing and because the alternative is New York's 30 ft,
 // measured on a different continent's street grid. What it buys is a uniform sidewalk offset of
-// about 6 m from the centreline; what it costs is that a genuinely wide East Bay arterial —
+// about 6 m from the centerline; what it costs is that a genuinely wide East Bay arterial —
 // Telegraph, San Pablo, International — has its pavement drawn nearer the traffic than it is.
 export const EAST_BAY_ROADWAY_FEET = 26;
 
@@ -446,7 +446,7 @@ const DENSIFY_METERS = 25;
 const DROP_LENGTH_METERS = 0.5;
 const UNNAMED_ID = 0xffff;
 // 85,134 segments county-wide at the last read (2026-08-27); the seven cities' own share of them by
-// `MUNL` is 22,292, and the box takes in a few thousand more of the hills and the neighbouring
+// `MUNL` is 22,292, and the box takes in a few thousand more of the hills and the neighboring
 // cities before the land test cuts them. A floor on what the paged read returns, so a service that
 // answered a truncated layer fails here rather than shipping a city with half its streets.
 const EAST_BAY_SEGMENT_FLOOR = 20_000;
@@ -466,7 +466,7 @@ function streetPageUrl(offset: number, box: Box): string {
   return url.toString();
 }
 
-// Every centreline segment whose box reaches the city, walkable or not, paged and cached. The
+// Every centerline segment whose box reaches the city, walkable or not, paged and cached. The
 // envelope is the land's own box, so the read is a fifth of the county rather than all of it, and
 // the land test below is what actually decides.
 async function fetchCountyStreets(
@@ -479,7 +479,7 @@ async function fetchCountyStreets(
   });
 }
 
-// The county centreline as STRT segments, clipped to the city's land. A segment is kept when either
+// The county centerline as STRT segments, clipped to the city's land. A segment is kept when either
 // end or its middle is on land — the same three-point rule the OSM paths are clipped by, and the
 // reason the Park Street, Fruitvale and High Street bridges survive at all: their whole span is over
 // the estuary, which the land mask has cut away, and only their ends are on the ground.
@@ -490,7 +490,7 @@ export async function fetchEastBayStreets(
   const features = await fetchCountyStreets(box);
   if (features.length < EAST_BAY_SEGMENT_FLOOR) {
     throw new Error(
-      `Alameda County's centreline answered ${features.length} segments over the city's box, too few to be the whole of it`,
+      `Alameda County's centerline answered ${features.length} segments over the city's box, too few to be the whole of it`,
     );
   }
 
@@ -591,7 +591,7 @@ const PARCEL_SERVICE =
 // The assessor's industrial band, read off its published 198-row use-code table
 // (`Assessor_Office_Use_Codes` in the same org): 4000 vacant industrial land, 4100-4103 warehouse
 // and its self-storage and cold-storage kinds, 4200-4205 light manufacturing through flex/R&D and
-// data centres, 4300 heavy industrial, 4400 miscellaneous improved industrial, 4600/4601 quarries
+// data centers, 4300 heavy industrial, 4400 miscellaneous improved industrial, 4600/4601 quarries
 // and landfill, 4700 salt ponds, 4800 trucking and distribution terminals, 4900 wrecking yards,
 // plus the condominium-industrial forms 4101/4191.
 //
@@ -796,7 +796,7 @@ async function fetchPublicIndustrial(
 // **The 341 Areas of Secondary Importance are deliberately not read.** They are the survey's second
 // rating, they are 15.1 km² — more historic ground than New York's 159 LPC districts cover, in a
 // city a fraction of the size — and their median piece is a few adjacent buildings rather than a
-// neighbourhood, which is what `data/landmarks` is for. Drawn, they would read as speckle over half
+// neighborhood, which is what `data/landmarks` is for. Drawn, they would read as speckle over half
 // of Oakland and would discount most of its streets.
 //
 // The Socrata copies on data.oaklandca.gov are the decoy this layer has: 2013 snapshots of both.
@@ -1090,7 +1090,7 @@ async function fetchBerdRows(): Promise<BerdRow[]> {
     }
     const name = prettyLandmarkName(row.Name ?? "");
     // A district row belongs to data/historic, which draws the area; here it would put one dot in
-    // the middle of a neighbourhood and label it as a building.
+    // the middle of a neighborhood and label it as a building.
     if (name === "" || /\bdistrict\b/i.test(name)) {
       continue;
     }
@@ -1145,7 +1145,7 @@ async function geocodeBatches<Key>(
   return features;
 }
 
-// The centre of a feature's first ring, or its point.
+// The center of a feature's first ring, or its point.
 function centroidOf(
   geometry: GeoJsonGeometry | null | undefined,
 ): Coord | null {
@@ -1175,10 +1175,10 @@ function centroidOf(
 //   1. the county's **address points**, on municipality + house number + street name. The best of
 //      the three: they are actual address positions, and they are the same layer the geocoder's
 //      house numbers already come from (scripts/addresses.ts).
-//   2. the **parcel APN**, which places the row at its parcel's centre.
+//   2. the **parcel APN**, which places the row at its parcel's center.
 //   3. the **parcel situs address**, which catches a parcel the address-point file has no point on.
 //
-// Nothing is placed by proximity or by a neighbouring house number. A landmark dot is tapped for a
+// Nothing is placed by proximity or by a neighboring house number. A landmark dot is tapped for a
 // name, so putting one on the building next door is worse than leaving it out.
 //
 // What is left out by that is mostly one thing: the **UC Berkeley campus**, whose buildings the

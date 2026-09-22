@@ -27,7 +27,7 @@ pub const OPENSTREET_FORMAT: u16 = 1; // Open Streets corridor samples, the shar
 pub const CHUNK_FORMAT: u16 = 4; // the served z12 street chunk, magic "STCK"; v4 adds the stranded bitmap
 
 pub const SIDES: usize = 2; // the two sidewalks a density blob carries per vertex, left then right
-pub const DECIMETERS_PER_METER: f64 = 10.0; // the crown byte's unit: a decimetre of crown radius
+pub const DECIMETERS_PER_METER: f64 = 10.0; // the crown byte's unit: a decimeter of crown radius
 
 #[derive(Clone, Copy)]
 pub struct Coord {
@@ -141,7 +141,7 @@ fn header(bytes: &[u8]) -> Header {
 }
 
 /// The tree inventory: a point per tree, the radius of the crown disc it shades the ground with
-/// (decoded from the trailing crown byte, decimetres to metres), and its genus id (0..11, from the
+/// (decoded from the trailing crown byte, decimeters to meters), and its genus id (0..11, from the
 /// genus byte block after the crowns). The three arrays are parallel — index `i` is one tree.
 pub struct Trees {
     pub coords: Vec<Coord>,
@@ -240,10 +240,10 @@ pub fn read_polygons(path: &Path, magic: &str, format: u16) -> Fallible<Vec<Poly
 }
 
 /// BLDG v1: building footprints in the shared polygon layout, then two trailing parallel u16
-/// regions in polygon order — first roof heights in decimetres, then base elevations (ignored).
+/// regions in polygon order — first roof heights in decimeters, then base elevations (ignored).
 /// A MultiPolygon was split into one footprint per part upstream, each part repeating its height,
-/// so the returned footprints and metre heights are aligned one-to-one. Returns the footprints
-/// and each polygon's roof height in metres.
+/// so the returned footprints and meter heights are aligned one-to-one. Returns the footprints
+/// and each polygon's roof height in meters.
 pub fn read_buildings(path: &Path) -> Fallible<(Vec<Polygon>, Vec<f64>)> {
     let bytes = fs::read(path)?;
     check_magic(&bytes, "BLDG", BLDG_FORMAT, path)?;
@@ -285,7 +285,7 @@ pub struct Canopy {
 }
 
 impl Canopy {
-    /// Each polygon's crown height in metres, in polygon order. 0 means the height model saw no
+    /// Each polygon's crown height in meters, in polygon order. 0 means the height model saw no
     /// cell inside the polygon: it is a sentinel no real reading collides with, the model being
     /// thresholded at 2.1 m.
     pub fn heights_m(&self) -> Vec<f64> {
@@ -296,7 +296,7 @@ impl Canopy {
             .collect()
     }
 
-    /// Fills the trailing region, decimetres in polygon order.
+    /// Fills the trailing region, decimeters in polygon order.
     pub fn set_heights_dm(&mut self, heights: &[u16]) {
         for (polygon, height) in heights.iter().enumerate() {
             let at = self.heights + polygon * 2;
@@ -306,7 +306,7 @@ impl Canopy {
 }
 
 /// CNPY v2: the measured LiDAR canopy in the shared polygon layout, then ONE trailing u16 region
-/// in polygon order — the crown height in decimetres — exactly as BLDG carries its roof heights.
+/// in polygon order — the crown height in decimeters — exactly as BLDG carries its roof heights.
 /// The generic `read_polygons` still reads the geometry alone for the callers wanting no height.
 pub fn read_canopy(path: &Path) -> Fallible<Canopy> {
     let bytes = fs::read(path)?;
@@ -743,7 +743,7 @@ pub fn read_ferries(path: &Path) -> Fallible<Ferries> {
 }
 
 /// One station of the rail topology: the point the graph snaps to the pavement, and what it is
-/// called. `surface` is a stop entered off the kerb rather than down a stair, which is the whole of
+/// called. `surface` is a stop entered off the curb rather than down a stair, which is the whole of
 /// what separates a Muni shelter from a subway mezzanine and is why the two cost different access.
 /// `complex` is the agency's own transfer complex, 0 where the feed puts a station in none; the
 /// graph gives one node to each complex, so a change of train inside one never reaches the street.
@@ -785,7 +785,7 @@ pub struct TransitEntrance {
     pub exit: bool,
 }
 
-/// One route as its feed publishes it, colours included, so the client can draw a ride in the
+/// One route as its feed publishes it, colors included, so the client can draw a ride in the
 /// livery a rider expects.
 pub struct TransitRoute {
     pub color: [u8; 3],

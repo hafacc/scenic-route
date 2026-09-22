@@ -29,9 +29,9 @@ test("a restored context paints the tile again", () => {
   expect(paints).toBe(2);
 });
 
-// An uncancelled loss is permanent — the restore never comes and the tile stays blank. This is the
+// An uncanceled loss is permanent — the restore never comes and the tile stays blank. This is the
 // only reason the loss is listened for at all.
-test("the loss is cancelled, so the pixels can come back", () => {
+test("the loss is canceled, so the pixels can come back", () => {
   const canvas = new FakeCanvas();
   repaintOnRestore(canvas as never, () => undefined);
 

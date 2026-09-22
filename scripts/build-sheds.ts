@@ -372,7 +372,7 @@ export function summarize(
   );
   // The declared length the lot had no frontage left to hold. The lot boundary is a hard constraint
   // the placement never trades against, so the shortfall is reported rather than chased. Nearly every
-  // record leaves a metre or two of it — a run is clipped to the frontage it can actually stand on —
+  // record leaves a meter or two of it — a run is clipped to the frontage it can actually stand on —
   // so the total and the tail are what to read: a permit declaring far more than its lot can hold is
   // usually a bad geocode, and those are the records that place under half of what they claim.
   const declaredMeters = placements.reduce(

@@ -1,9 +1,9 @@
 // A* over the routing graph with virtual start/dest points sitting partway along their snapped
-// edges. Cost is effective seconds (raw travel time times a clipped discount): a shaded metre costs
+// edges. Cost is effective seconds (raw travel time times a clipped discount): a shaded meter costs
 // less at high tree weight, a ferry costs its discounted crossing time, and a train costs its wait
 // and ride at the transit penalty. The straight-line heuristic scales distance by the least seconds
-// a walked metre can cost, then subtracts a bounded ferry credit (the two best ferry shortcuts) and
-// the transit credit (every ride's shortcut), never falling below what the cheapest metre of the
+// a walked meter can cost, then subtracts a bounded ferry credit (the two best ferry shortcuts) and
+// the transit credit (every ride's shortcut), never falling below what the cheapest meter of the
 // network costs — a lower bound on remaining cost that keeps the search admissible. The heap allows
 // node reopening (no closed set), so admissible suffices for optimality even though those credits
 // make the heuristic inconsistent.
@@ -83,7 +83,7 @@ export function isTransitKind(kind: EdgeKind): boolean {
 
 export interface RouteStep {
   edge: number;
-  forward: boolean; // travelled a -> b?
+  forward: boolean; // traveled a -> b?
   kind: EdgeKind;
   side: SideLabel; // the stored side of the sidewalk (null for crossings/links/paths), not travel-flipped
   name: string | null; // the edge's street name, unprettified, or null
@@ -547,7 +547,7 @@ function reconstruct(
 // plan is exactly that, sixteen searches over one — and the engine is what holds them.
 export interface SearchReuse {
   labels?: SearchLabels;
-  // Per node, the metres of the shortest path along the network to the destination, or Infinity for
+  // Per node, the meters of the shortest path along the network to the destination, or Infinity for
   // a node the backward search did not reach. See `networkMetersTo`.
   networkMeters?: Float32Array;
   // Path signature -> the route already built for it. A plan asks the same question at sixteen
@@ -589,15 +589,15 @@ export class SearchLabels {
   }
 }
 
-// Every node's distance to `dest` in plain metres, along the network rather than through the air:
+// Every node's distance to `dest` in plain meters, along the network rather than through the air:
 // one backward Dijkstra from the destination over every edge at its own length, rides and crossings
 // included, ignoring direction, weights and gates.
 //
 // This is what the A* estimate measures instead of the straight line. It keeps the estimate a lower
-// bound — any path from a node to the destination is at least as long, in metres, as the shortest
+// bound — any path from a node to the destination is at least as long, in meters, as the shortest
 // one, which is what this holds — and it is a far tighter one wherever the network cannot go
 // straight: across a river, around a park, along a waterfront. The credit and floor arguments above
-// are untouched, since both only need "d is at most the metres of any remaining path".
+// are untouched, since both only need "d is at most the meters of any remaining path".
 //
 // Rides and ferries are in it at their own lengths and are not gated: a table that ignored a barred
 // ferry would report a longer distance than a search that could not use it — which is still a lower
@@ -631,17 +631,17 @@ export function networkMetersTo(
     settled[node] = 1;
     for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
       const edge = graph.adjacency[slot];
-      const neighbour = otherEnd(graph, edge, node);
+      const neighbor = otherEnd(graph, edge, node);
       const reached = key + graph.edgeLength[edge];
-      if (reached < meters[neighbour]) {
-        meters[neighbour] = reached;
+      if (reached < meters[neighbor]) {
+        meters[neighbor] = reached;
         // The stored figure, not the one just computed: the table is floats, and pushing the double
         // would leave a key above the label it stands for, which the staleness test drops.
-        heap.push(meters[neighbour], neighbour);
+        heap.push(meters[neighbor], neighbor);
       }
     }
   }
-  // A node the cap stopped short of keeps the label its settled neighbour relaxed it to, which is an
+  // A node the cap stopped short of keeps the label its settled neighbor relaxed it to, which is an
   // UPPER bound on its distance — a shorter way round is exactly what the cap left unexplored. The
   // estimate needs a lower bound, so those fall back to the straight line.
   for (let node = 0; node < meters.length; node += 1) {
@@ -670,7 +670,7 @@ export function findRoute(
   // cost, so the shade field advances the sun by how long the walk really takes to get here.
   const elapsed = labels.elapsed;
 
-  // The walking floor (seconds per straight-line metre), the bounded ferry credit and the floor that
+  // The walking floor (seconds per straight-line meter), the bounded ferry credit and the floor that
   // keeps the credits from flattening the estimate all depend on the weights, so they are computed
   // once here and reused for every node's estimate.
   const walkCoeff = walkSecondsCoeff(graph, weights);
@@ -680,7 +680,7 @@ export function findRoute(
   const heuristicOf = (node: number): number => {
     if (heuristic[node] < 0) {
       // The network distance where the backward search reached this node, the straight line where it
-      // did not. Both are lower bounds on the metres left to walk; the first is the tighter one.
+      // did not. Both are lower bounds on the meters left to walk; the first is the tighter one.
       const alongNetwork = network?.[node] ?? Number.POSITIVE_INFINITY;
       const meters = Number.isFinite(alongNetwork)
         ? alongNetwork
@@ -700,7 +700,7 @@ export function findRoute(
   };
 
   // The snap edges are always walking edges (ferries are excluded from the snap index), so their
-  // per-metre cost is the walking multiplier over speed — effective seconds, matching the interior.
+  // per-meter cost is the walking multiplier over speed — effective seconds, matching the interior.
   // The two halves of the start edge are walked in OPPOSITE directions — the walk out to node a runs
   // b -> a — so a hill on it takes them at different speeds.
   const startA = graph.edgeNodeA[start.edge];
@@ -799,21 +799,21 @@ export function findRoute(
       ) {
         continue;
       }
-      const neighbour = otherEnd(graph, edge, node);
+      const neighbor = otherEnd(graph, edge, node);
       edgeSeconds(graph, edge, weights, elapsed[node], node, priced);
       const relaxed = distance[node] + priced.effective;
       // One label per node, keyed on cost alone: a costlier path that reaches a platform EARLIER,
       // and so catches an earlier train, is discarded here. Accepted — the ferries have always been
       // costed the same way and the Dijkstra oracle shares the convention — but it is why a route
       // over a timetable is a good route rather than provably the best one.
-      if (relaxed < distance[neighbour]) {
-        if (distance[neighbour] === Number.POSITIVE_INFINITY) {
-          labels.touch(neighbour);
+      if (relaxed < distance[neighbor]) {
+        if (distance[neighbor] === Number.POSITIVE_INFINITY) {
+          labels.touch(neighbor);
         }
-        distance[neighbour] = relaxed;
-        elapsed[neighbour] = elapsed[node] + priced.raw;
-        parentEdge[neighbour] = edge;
-        heap.push(relaxed + heuristicOf(neighbour), neighbour);
+        distance[neighbor] = relaxed;
+        elapsed[neighbor] = elapsed[node] + priced.raw;
+        parentEdge[neighbor] = edge;
+        heap.push(relaxed + heuristicOf(neighbor), neighbor);
       }
     }
   }
@@ -1066,8 +1066,8 @@ export class RouteSolver {
         ) {
           continue;
         }
-        const neighbour = otherEnd(graph, edge, node);
-        if (this.closed[neighbour] === 1) {
+        const neighbor = otherEnd(graph, edge, node);
+        if (this.closed[neighbor] === 1) {
           continue;
         }
         edgeSeconds(
@@ -1079,14 +1079,14 @@ export class RouteSolver {
           priced,
         );
         const relaxed = this.distance[node] + priced.effective;
-        if (relaxed < this.distance[neighbour]) {
-          if (this.distance[neighbour] === Number.POSITIVE_INFINITY) {
-            this.reached.push(neighbour);
+        if (relaxed < this.distance[neighbor]) {
+          if (this.distance[neighbor] === Number.POSITIVE_INFINITY) {
+            this.reached.push(neighbor);
           }
-          this.distance[neighbour] = relaxed;
-          this.elapsed[neighbour] = this.elapsed[node] + priced.raw;
-          this.parentEdge[neighbour] = edge;
-          heap.push(relaxed + heuristicOf(neighbour), neighbour);
+          this.distance[neighbor] = relaxed;
+          this.elapsed[neighbor] = this.elapsed[node] + priced.raw;
+          this.parentEdge[neighbor] = edge;
+          heap.push(relaxed + heuristicOf(neighbor), neighbor);
         }
       }
 
@@ -1128,7 +1128,7 @@ function routeSeconds(
   }
   return elapsed;
 }
-// The same route travelled the other way: swap the two snaps, reverse the step list and flip each
+// The same route traveled the other way: swap the two snaps, reverse the step list and flip each
 // step's travel direction, and reverse the stitched path. Length, walk and the attribute sums carry
 // over unchanged; the ETA is NOT — walking a hill the other way climbs what it dropped — so it is
 // re-run over the flipped steps, leaving the shares taken against the ETA walked the other way.

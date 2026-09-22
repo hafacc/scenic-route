@@ -11,7 +11,7 @@ import { useCity } from "./city-context";
 
 // The active city's designated historic districts (magic HDST), filled. Like the industrial lots it
 // rides in a pane of its own, and under them: it is the broadest areal wash the map draws — whole
-// neighbourhoods — so anything finer put beneath it would be lost. The decoding and the drawing live
+// neighborhoods — so anything finer put beneath it would be lost. The decoding and the drawing live
 // in the tile worker (src/tiles/historic.ts).
 
 const PANE_NAME = "scenic-historic";

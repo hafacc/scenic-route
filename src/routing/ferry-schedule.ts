@@ -63,7 +63,7 @@ export interface Sailing {
 // timetable is directional — the 8:15 out of St. George is not the 8:15 out of Whitehall.
 export interface FerryTimetable {
   // Whether this edge is in the timetable at all. An edge whose terminal names match no lane — a
-  // stop the feed renamed, say — is not scheduled but is not cancelled either, so it keeps the
+  // stop the feed renamed, say — is not scheduled but is not canceled either, so it keeps the
   // graph's baked figure rather than reading as a missed boat.
   covers(edge: number): boolean;
   // The next sailing at or after `elapsedSeconds` into the walk, or null once the day's last boat has

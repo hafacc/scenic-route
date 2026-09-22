@@ -1,20 +1,20 @@
 // Rounding the corners of a ferry route, which is a different problem from curving a subway line and
 // so is deliberately not the same code.
 //
-// A ferry shape is a handful of vertices over kilometres: a crossing, a turn at a pier, a run down
+// A ferry shape is a handful of vertices over kilometers: a crossing, a turn at a pier, a run down
 // the river. Its corners are real corners with long straights between them, so a fillet — walk back
 // along the way in, forward along the way out, join the two — leaves every straight exactly on the
 // published line and bends only at the corner. That is what ../tiles/spline does NOT do: it fits a
 // curve through every vertex and moves the whole path, which bowed a route's out-and-back legs to a
 // pier apart into a lens and made routes sharing water appear to twist around each other.
 //
-// The subway keeps the spline, and must: its lines are 54,906 vertices metres apart, where a curve is
+// The subway keeps the spline, and must: its lines are 54,906 vertices meters apart, where a curve is
 // a bend spread over many of them rather than a corner between two straights. Clamping a fillet to
 // segments that short rounds nothing and leaves the map angular — which is exactly what happened when
 // this was tried in the shared module.
 
 // Rounded corners on a polyline, emitted as line segments and cubic beziers.
-// Ferry geometry is coarse — a GTFS crossing is 4 to 12 vertices for a kilometre of water — so
+// Ferry geometry is coarse — a GTFS crossing is 4 to 12 vertices for a kilometer of water — so
 // stroked as chords it reads as a polygon rather than a boat's path. Softening it is a corner
 // problem, not a curve-fitting one: what looks wrong is the angle at each vertex, not the straight
 // run between two of them.
@@ -25,7 +25,7 @@ const RADIUS_PX = 14;
 // on itself.
 const MAX_SEGMENT_FRACTION = 0.5;
 // Vertices this close to their predecessor are dropped. A GTFS crossing repeats its terminal as both
-// the stop and the shape's first point, metres apart or less, and a pair that close is a direction
+// the stop and the shape's first point, meters apart or less, and a pair that close is a direction
 // read off nothing but rounding error.
 const MIN_GAP_PX = 0.25;
 // Corners whose fillet would pull the line less than this off the vertex are drawn as a plain

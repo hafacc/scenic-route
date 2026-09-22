@@ -118,7 +118,7 @@ export type EdgeKind =
 export type SideLabel = "north" | "east" | "south" | "west" | null;
 
 // Where a station door stands: the street the pavement it was cut into carries, and which side of
-// that street that pavement lies on. A door on a corner is on the street its own kerb belongs to,
+// that street that pavement lies on. A door on a corner is on the street its own curb belongs to,
 // which the step a route happens to arrive along need not be.
 export interface DoorStreet {
   street: string;
@@ -168,10 +168,10 @@ export interface RoutingGraph extends GraphIdentity {
   nodeQy: Int32Array;
   nodeComponent: Uint16Array;
   csr: Uint32Array; // nodeCount + 1; node n owns half-edges [csr[n], csr[n + 1])
-  adjacency: Uint32Array; // 2 * edgeCount edge ids; the neighbour is the edge's other endpoint
+  adjacency: Uint32Array; // 2 * edgeCount edge ids; the neighbor is the edge's other endpoint
   edgeNodeA: Uint32Array;
   edgeNodeB: Uint32Array;
-  edgeLength: Float32Array; // geodesic metres
+  edgeLength: Float32Array; // geodesic meters
   edgeGeomOffset: Uint32Array; // byte offset into the geometry blob; NO_GEOMETRY = straight a -> b
   edgeGeomCount: Uint16Array; // geometry vertices, 0 when no geometry
   edgeCover: Uint8Array; // 0..254, this edge's own single value; 0 for a ferry
@@ -205,7 +205,7 @@ export interface RoutingGraph extends GraphIdentity {
   maxBridge: number; // the greatest per-edge over-water share, 0..1; sets that discount's clip floor
 
   // The share of the edge that lies DIRECTLY under a crown, unblurred — what edgeCover, the smoothed
-  // field the overlay is coloured from, cannot answer.
+  // field the overlay is colored from, cannot answer.
   edgeDirectCanopy: Uint8Array; // 0..254; 0 for a ferry
   // 0..254 each: the height this edge CLIMBS and the height it DROPS walking it a -> b, over its
   // length, as a fraction of 35%. Reversing the edge swaps them; their sum is the absolute grade the
@@ -221,18 +221,18 @@ export interface RoutingGraph extends GraphIdentity {
   // The largest total grade present, as a fraction of 35% — up to 2, since the two bytes clamp
   // separately. NOT a heuristic bound — hill is a penalty, whose minimum factor is 1, so it never
   // loosens the A* lower bound. This is read to tell a city with no elevation source (every edge 0)
-  // from one that has it, which is what greys the slider out.
+  // from one that has it, which is what grays the slider out.
   maxRelief: number;
   maxDirectCanopy: number; // the greatest per-edge direct canopy, 0..1; that factor's clip-floor input
 
   // The route-time signed shade field, filled from the SHDE artifact by computeEdgeShade: the per-edge
-  // sun/shade attribute as a function of elapsed walking time, so a metre is costed against the sun at
+  // sun/shade attribute as a function of elapsed walking time, so a meter is costed against the sun at
   // the moment it is reached. Null when no artifact is loaded or the sun is below the horizon for the
   // whole walk (no shade to bias); its maxAbs (0..1) is the shade factor's clip-floor input.
   shade: ShadeField | null;
 
   // How long this region's walker will wait on a pier, and how long on a platform, from
-  // src/cities.ts. Not baked into the artifact: both are judgements about a timetable rather than
+  // src/cities.ts. Not baked into the artifact: both are judgments about a timetable rather than
   // facts about the geometry, and changing one should not mean rebuilding a 40 MB graph.
   maxFerryWaitSeconds?: number;
   maxTransitWaitSeconds?: number;
@@ -260,11 +260,11 @@ export interface RoutingGraph extends GraphIdentity {
   // Every route the city's transit topology carries, in the order the side table lists them, which
   // is the order `routeOf` indexes.
   transitRoutes: TransitRoute[];
-  minFerrySecPerMetre: number; // min over ferry edges of duration/length, Infinity when there are none
+  minFerrySecPerMeter: number; // min over ferry edges of duration/length, Infinity when there are none
   // The same figure for the two transit kinds that carry their seconds in the graph, and the floor
   // the A* heuristic keeps under the transit credit. Infinity when the city has no rail.
-  minRideSecPerMetre: number;
-  minAccessSecPerMetre: number;
+  minRideSecPerMeter: number;
+  minAccessSecPerMeter: number;
   // bit0 structure, bit1 steps, bit2 geometry-right (sidewalks), bit3 OSM-sourced, bit4 tunnel
   edgeFlags: Uint8Array;
   // Whether any edge carries the tunnel bit, which is what lets `maxShelter` raise its bound to meet
@@ -298,7 +298,7 @@ export interface RoutingGraph extends GraphIdentity {
 
 // One transit route as the graph carries it: what a rider calls it, the corridor it runs, its feed
 // id (the same id the display artifact uses, so the two join on it) and the published livery as CSS
-// colours.
+// colors.
 export interface TransitRoute {
   shortName: string;
   longName: string;
@@ -477,20 +477,20 @@ export function decodeGraph(
   const maxRelief = view.getUint16(56, true) / 255;
   const hasTunnels = (bytes[58] & HAS_TUNNELS_FLAG) !== 0;
 
-  // The three per-metre floors stay derived rather than baked: they are f64 arithmetic over a few
+  // The three per-meter floors stay derived rather than baked: they are f64 arithmetic over a few
   // thousand edges, and a figure in the file would go stale the moment a duration moved.
-  let minFerrySecPerMetre = Number.POSITIVE_INFINITY;
+  let minFerrySecPerMeter = Number.POSITIVE_INFINITY;
   for (const edge of ferryEdges) {
     const length = edgeLength[edge];
     if (length > 0) {
-      minFerrySecPerMetre = Math.min(
-        minFerrySecPerMetre,
+      minFerrySecPerMeter = Math.min(
+        minFerrySecPerMeter,
         edgeDurationSeconds[edge] / length,
       );
     }
   }
-  let minRideSecPerMetre = Number.POSITIVE_INFINITY;
-  let minAccessSecPerMetre = Number.POSITIVE_INFINITY;
+  let minRideSecPerMeter = Number.POSITIVE_INFINITY;
+  let minAccessSecPerMeter = Number.POSITIVE_INFINITY;
   for (const edge of transitEdges) {
     const length = edgeLength[edge];
     const kind = edgeKindSide[edge] & KIND_MASK;
@@ -498,13 +498,13 @@ export function decodeGraph(
       continue;
     }
     if (kind === KIND_RIDE) {
-      minRideSecPerMetre = Math.min(
-        minRideSecPerMetre,
+      minRideSecPerMeter = Math.min(
+        minRideSecPerMeter,
         edgeDurationSeconds[edge] / length,
       );
     } else if (kind === KIND_ACCESS) {
-      minAccessSecPerMetre = Math.min(
-        minAccessSecPerMetre,
+      minAccessSecPerMeter = Math.min(
+        minAccessSecPerMeter,
         edgeDurationSeconds[edge] / length,
       );
     }
@@ -594,9 +594,9 @@ export function decodeGraph(
     transit: null, // and this once the TSCH artifact loads, keyed on the same day
     edgeDurationSeconds,
     ferryEdges,
-    minFerrySecPerMetre,
-    minRideSecPerMetre,
-    minAccessSecPerMetre,
+    minFerrySecPerMeter,
+    minRideSecPerMeter,
+    minAccessSecPerMeter,
     edgeFlags,
     hasTunnels,
     names,
@@ -820,7 +820,7 @@ export function stationName(graph: RoutingGraph, node: number): string | null {
   return null;
 }
 
-// The seconds the tiler bakes for the walk between a kerbside stop and the pavement, against the
+// The seconds the tiler bakes for the walk between a curbside stop and the pavement, against the
 // longer one it bakes for a station with a way in (crates/tiler/src/graph.rs, SURFACE_ACCESS_SECONDS
 // and UNDERGROUND_ACCESS_SECONDS). The feed's own surface flag is not in the graph, and this is the
 // only trace of it left: what a rider is told to do differs — you go to a tram stop and you enter a

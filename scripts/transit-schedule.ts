@@ -135,7 +135,7 @@ function frequencyBands(
 // A sorted departure list cut into bands of even service. A band grows while the next gap sits
 // within the tolerance of the mean headway so far, so a run of five-minute trains stays one band
 // through the rounding a published timetable does, and the evening's first twelve-minute gap starts
-// a new one. The headway written is the mean over the band, which puts its last modelled departure
+// a new one. The headway written is the mean over the band, which puts its last modeled departure
 // on its last real one rather than letting rounding drift across a long window.
 export function deriveBands(departures: readonly number[]): Band[] {
   const sorted = [...new Set(departures)].sort((left, right) => left - right);

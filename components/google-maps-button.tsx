@@ -20,7 +20,7 @@ interface GoogleMapsButtonProps {
 }
 
 // Hands the route to Google Maps for turn-by-turn navigation, approximated by the nine waypoints its
-// URL will take. Google's own multicoloured mark rather than the Maps pin: a pin among this app's own
+// URL will take. Google's own multicolored mark rather than the Maps pin: a pin among this app's own
 // pins reads as one more piece of the map, where the brand mark says plainly that the tap leaves.
 //
 // The click does nothing but build a URL, so the new tab is opened straight out of the gesture and

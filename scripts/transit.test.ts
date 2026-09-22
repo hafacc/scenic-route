@@ -104,7 +104,7 @@ function trackEastOfTheStops(): RouteTracks {
 }
 
 test("an entrance is sided by the track, not by the station point beside it", () => {
-  // A metre east of the station point, and so nine metres WEST of the rails: measured from the
+  // A meter east of the station point, and so nine meters WEST of the rails: measured from the
   // station point this is inside the ambiguous band and would reach both platforms.
   const near = DEEP.lng + TRACK_EAST_DEGREES / TRACK_EAST_METERS;
   const far = DEEP.lng + TRACK_EAST_DEGREES * 2;
@@ -194,7 +194,7 @@ test("every side override names a station that is actually split", () => {
   }
 });
 
-// Two stations a hundred metres apart on one street, the first of them split into a stop per
+// Two stations a hundred meters apart on one street, the first of them split into a stop per
 // direction the way Muni splits its underground platforms.
 const DOWNTOWN = { lat: 37.76, lng: -122.43 };
 const UPTOWN = { lat: 37.7609, lng: -122.43 };

@@ -1,18 +1,18 @@
-// The basemap's colours: one dictionary per theme.
+// The basemap's colors: one dictionary per theme.
 //
 // The light one is matched to CARTO Voyager, the raster style this app drew on until the switch to
 // Protomaps. Every value in it was sampled from Voyager's own tiles rather than picked by eye:
-// renders of the same six viewports were pixel-counted, and the dominant colours came out as the
+// renders of the same six viewports were pixel-counted, and the dominant colors came out as the
 // cream blocks (#f6efe4), the pale land behind them (#fbf8f3), arterials from #fefdd7 to #ffe9a5,
 // water #d5e8eb and the navy place labels (#405c78).
 //
-// This is only the colour half of a style. What each feature is DRAWN as — widths, which zoom it
-// appears at, how densely it is labelled — lives in ./rules.ts, because Protomaps keeps the two
-// apart. That separation is why a second colour scheme costs a file like this one and nothing else.
+// This is only the color half of a style. What each feature is DRAWN as — widths, which zoom it
+// appears at, how densely it is labeled — lives in ./rules.ts, because Protomaps keeps the two
+// apart. That separation is why a second color scheme costs a file like this one and nothing else.
 
 import type { ThemeName } from "../theme/palette";
 
-// Protomaps does not export its Flavor type, and the shape is a flat dictionary of colour strings
+// Protomaps does not export its Flavor type, and the shape is a flat dictionary of color strings
 // with two nested groups, so it is spelled out here rather than borrowed.
 export interface Flavor {
   [key: string]: string | Record<string, string>;
@@ -87,7 +87,7 @@ export const VOYAGER: Flavor = {
   railway: "#d3c9b7",
   boundaries: "#bcae99",
 
-  // Labels are the half of Voyager that reads as "Voyager": warm-grey street names, navy places.
+  // Labels are the half of Voyager that reads as "Voyager": warm-gray street names, navy places.
   roads_label_minor: "#8d97a5",
   roads_label_minor_halo: "#ffffff",
   roads_label_major: "#7a8594",
@@ -210,7 +210,7 @@ export const MIDNIGHT: Flavor = {
   boundaries: "#66717f",
 
   // Labels are read against the ground, so they take the halo the light style gives them and swap
-  // which side is dark: light type, ground-coloured halo. Places stay the coolest and brightest
+  // which side is dark: light type, ground-colored halo. Places stay the coolest and brightest
   // thing on the map, which is the one echo of Voyager's navy that survives the move to night.
   roads_label_minor: "#9aa5b3",
   roads_label_minor_halo: "#1f252d",

@@ -11,7 +11,7 @@ import { KEEP_BUFFER } from "../src/tiles/raster";
 import manifest from "../src/tree-cover/manifest.json";
 import { useCity } from "./city-context";
 
-// A point-of-interest overlay: the committed POI points (landmarks, public art) drawn as coloured
+// A point-of-interest overlay: the committed POI points (landmarks, public art) drawn as colored
 // canvas dots at every zoom. Unlike the tree dots there is no raster pyramid below — a few thousand
 // points draw live cheaply — so one canvas GridLayer covers the whole zoom range. The dots ride in a
 // dedicated pane, which is how a layer takes a place between the tile pane and the overlay pane.
@@ -33,7 +33,7 @@ export default function PoiLayer({
   overlay: OverlayId; // which menu row this instance is, since two of them share this component
   dir: string; // the served directory, e.g. "landmarks" — the blob is <dir>/<city>.bin
   magic: string; // the expected 4-byte magic, e.g. "LMRK"
-  color: Record<ThemeName, string>; // CSS fill colour for the dots, per theme
+  color: Record<ThemeName, string>; // CSS fill color for the dots, per theme
   labelAnchor: "top" | "bottom"; // which side of the dot the label sits, to deconflict two POI layers
 }) {
   const map = useMap();

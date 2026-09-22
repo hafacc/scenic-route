@@ -3,7 +3,7 @@
 //!
 //! The source (HDST) is a city's designating body's district BOUNDARIES — New York's Landmarks
 //! Preservation Commission, San Francisco's Planning Department — which are area outlines drawn
-//! around whole neighbourhoods, street beds included, so a walker on an interior sidewalk is
+//! around whole neighborhoods, street beds included, so a walker on an interior sidewalk is
 //! simply inside one,
 //! and the byte is the length-fraction of the edge that is: the underfoot containment integral of
 //! `geometry::contained_fraction`, the same shape the direct-canopy byte is measured with.
@@ -103,7 +103,7 @@ mod tests {
     const LAT: f64 = 40.7;
 
     /// A point `east_meters` east and `north_meters` north of a reference in the middle of New
-    /// York, so the tests read in metres and still exercise the cos(lat) scaling of the real bake.
+    /// York, so the tests read in meters and still exercise the cos(lat) scaling of the real bake.
     fn at(east_meters: f64, north_meters: f64) -> Coord {
         Coord {
             lng: -74.0 + east_meters / meters_per_degree_lng(),
@@ -115,7 +115,7 @@ mod tests {
         METERS_PER_DEGREE_LAT * LAT.to_radians().cos()
     }
 
-    /// An axis-aligned ring in metres, corners `(west, south)` to `(east, north)`.
+    /// An axis-aligned ring in meters, corners `(west, south)` to `(east, north)`.
     fn rectangle(west: f64, south: f64, east: f64, north: f64) -> Vec<Coord> {
         vec![
             at(west, south),
@@ -171,7 +171,7 @@ mod tests {
             "40 m of a 100 m walk reads {fraction}"
         );
         // 0.4 of 255 is 102, but the fixture's walk is a hair over 100 m once its degrees are
-        // metres, so it takes 101 samples rather than 100 and the share lands one step under. The
+        // meters, so it takes 101 samples rather than 100 and the share lands one step under. The
         // byte follows the share the sampler measured, not the round number the fixture meant.
         assert!(
             matches!(byte_of(fraction), 101 | 102),
@@ -182,7 +182,7 @@ mod tests {
 
     /// Districts nest: four of New York's sit inside larger ones (Carnegie Hill in Expanded Carnegie
     /// Hill, and so on). `contains_point` ORs its candidates, so an overlap reads as the union it is
-    /// rather than cancelling to a hole — which is why no city's parts need a dissolve before the
+    /// rather than canceling to a hole — which is why no city's parts need a dissolve before the
     /// bake.
     #[test]
     fn a_district_inside_another_reads_as_the_union_of_the_two() {

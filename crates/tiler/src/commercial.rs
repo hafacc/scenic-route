@@ -7,10 +7,10 @@
 //! rebuild.
 //!
 //! Per segment we write three bytes: the commercial fraction (commercial lots / all fronting lots,
-//! 0..255), the median snapped roof height in metres (0..255, 255 when none — so a bare block reads
+//! 0..255), the median snapped roof height in meters (0..255, 255 when none — so a bare block reads
 //! as not-low-rise), and flags (bit0 an Open Street sample snapped, bit1 a dining/seating point
 //! snapped). The same gate the client applies by default also runs here, to emit the qualifying
-//! blocks' centrelines for the routing bake. Layouts: scripts/README.md.
+//! blocks' centerlines for the routing bake. Layouts: scripts/README.md.
 
 use std::collections::HashMap;
 use std::fs;
@@ -30,7 +30,7 @@ const SIGNAL_MAGIC: &[u8; 4] = b"CMRC";
 const SIGNAL_FORMAT: u16 = 1;
 const SIGNAL_HEADER_BYTES: usize = 12; // magic(4) + version(2) + headerSize(2) + count(4)
 const SIGNAL_BYTES: usize = 3; // commercial fraction, median roof height, flags
-// The qualifying-block centrelines for the ROUTING bake, one file per city (magic CMLN, the LAND
+// The qualifying-block centerlines for the ROUTING bake, one file per city (magic CMLN, the LAND
 // polygon layout — each segment is a single-ring "polygon"). The graph pass proximity-bakes these
 // into a per-edge commercial discount.
 const LINE_MAGIC: &[u8; 4] = b"CMLN";
@@ -75,7 +75,7 @@ pub struct Args {
     pub lines: PathBuf,
 }
 
-/// Where each city's qualifying-block centrelines landed, for the graph pass's commercial bake.
+/// Where each city's qualifying-block centerlines landed, for the graph pass's commercial bake.
 /// A city whose chunks hold no segment writes no file and appears here not at all.
 #[derive(Default)]
 pub struct Lines {
@@ -209,7 +209,7 @@ fn cell(degrees: f64) -> i64 {
 }
 
 /// Perpendicular distance squared from the origin to the piece (ax, ay)-(bx, by), in a local planar
-/// (metres) frame, but ONLY when the perpendicular foot falls within the piece; otherwise infinity.
+/// (meters) frame, but ONLY when the perpendicular foot falls within the piece; otherwise infinity.
 /// Squared to avoid a sqrt. This is the frontage test: a point counts for a piece only when it sits
 /// alongside it, so a corner or cross-street point — whose foot lands past an endpoint — is rejected
 /// rather than snapped to the nearest end.
@@ -450,7 +450,7 @@ fn encode_qualifying_lines(segments: &[Segment], signals: &Signals) -> (Vec<u8>,
 
     let mut bytes = vec![0u8; LINE_HEADER_BYTES];
     for line in &lines {
-        bytes.extend_from_slice(&1u16.to_le_bytes()); // one ring, the centreline itself
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // one ring, the centerline itself
         bytes.extend_from_slice(&(line.len() as u32).to_le_bytes());
         let mut previous = (0i64, 0i64);
         for vertex in line.iter() {
@@ -522,7 +522,7 @@ mod tests {
     const CELL_METERS: f64 = SEGMENT_CELL_DEG * METERS_PER_DEGREE_LAT;
 
     /// A point `north_meters` north and `east_meters` east of a reference near the middle of New
-    /// York, so the tests read in metres and still exercise the cos(lat) scaling of the real snap.
+    /// York, so the tests read in meters and still exercise the cos(lat) scaling of the real snap.
     fn at(east_meters: f64, north_meters: f64) -> Coord {
         const LAT: f64 = 40.7;
         Coord {
@@ -565,7 +565,7 @@ mod tests {
         let segments = two_blocks();
         let mut attributor = Attributor::new(&segments);
 
-        // Ten metres off the block's own line but beyond its end: the corner case the in-span test
+        // Ten meters off the block's own line but beyond its end: the corner case the in-span test
         // exists for, and the reason the reach can be as generous as it is.
         assert_eq!(attributor.frontage(at(110.0, 10.0), FRONTAGE_METERS), None);
     }

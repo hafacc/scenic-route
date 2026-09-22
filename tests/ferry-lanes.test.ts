@@ -29,7 +29,7 @@ test("no two of New York's ferry routes swap lanes over the water they share", (
   const cellLng = CELL_M / metersPerLng(midLat);
 
   // Per cell, the lanes each route holds at the vertices it has there. Routes are told apart by
-  // their colour, which in this file is one per route.
+  // their color, which in this file is one per route.
   const cells = new Map<string, Map<string, number[]>>();
   data.polylines.forEach(({ lngs, lats }, index) => {
     const ribbon = data.ribbons?.[index];

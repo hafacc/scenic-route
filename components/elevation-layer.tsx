@@ -11,7 +11,7 @@ import { useCity } from "./city-context";
 
 // The elevation overlay: the city's ground, tinted by height and relief-shaded. The elevation pass
 // bakes the three fields behind that into public/tiles/elevation/<city>/{z}/{x}/{y}.webp — height,
-// relief and land cover, no colour — and the tile worker (src/tiles/elevation.ts) colours them
+// relief and land cover, no color — and the tile worker (src/tiles/elevation.ts) colors them
 // through the palette as it draws.
 
 // Relative, so it picks up the basePath the deploy injects; the app is a single-route SPA.

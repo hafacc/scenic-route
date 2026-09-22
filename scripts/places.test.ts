@@ -140,7 +140,7 @@ test("picks the borough's own house out of the streets that share a name", () =>
   // Named for the distance, since both houses answer to the same street and number.
   expect(hit?.meters).toBeLessThan(1);
 
-  // The same query from a place seven kilometres from either is a match the builder throws away.
+  // The same query from a place seven kilometers from either is a match the builder throws away.
   const far = matchAddress(
     "312 Court St",
     { lat: 40.75, lng: -73.98 },

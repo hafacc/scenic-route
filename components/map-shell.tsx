@@ -79,7 +79,7 @@ import {
   awaitNameIndex,
   prefetchNameIndex,
   releaseNameIndex,
-  setSearchCentre,
+  setSearchCenter,
   warmNameIndex,
 } from "../src/search/name-search";
 import {
@@ -218,7 +218,7 @@ export interface Endpoint extends LatLng {
 }
 
 // The `brand` ramp Tailwind resolves every accent class through, rederived from one hex so a deck
-// hands over a colour rather than six. Mixed in oklab, which keeps each hue's own lightness curve;
+// hands over a color rather than six. Mixed in oklab, which keeps each hue's own lightness curve;
 // the percentages are where emerald's own stops sit against emerald-600.
 function accentVars(hex: string): CSSProperties {
   return {
@@ -421,7 +421,7 @@ export default function MapShell({
   const [logging, setLogging] = useState<boolean>(false);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [following, setFollowing] = useState<boolean>(true);
-  // The one city whose graph, tiles and overlays are live. It follows the map centre, so panning to
+  // The one city whose graph, tiles and overlays are live. It follows the map center, so panning to
   // another city switches to it rather than leaving the previous city's data drawn under a view it
   // does not cover.
   const [city, setCity] = useState<City>(DEFAULT_CITY);
@@ -755,7 +755,7 @@ export default function MapShell({
   }, [locationAttempt]);
 
   // The live fix, but only while the active city could do anything with it. Routing stays within one
-  // city, so a fix outside the one on screen is not a start, is not somewhere to centre, and is not a
+  // city, so a fix outside the one on screen is not a start, is not somewhere to center, and is not a
   // "My location" the panel can offer. Everything that reads the fix as an input to this city reads
   // this instead, so the panel, the camera and the search cannot disagree about whether it counts.
   const routableLocation =
@@ -842,7 +842,7 @@ export default function MapShell({
 
   // The toggle reads and writes the derived state, so pressing it always does what the button says.
   // Engaging it from a city you are not in means "take me to me", which moves the active city with
-  // the camera rather than lighting a control that centres nothing.
+  // the camera rather than lighting a control that centers nothing.
   const handleToggleFollow = useCallback(() => {
     if (followLive) {
       setFollowing(false);
@@ -1013,7 +1013,7 @@ export default function MapShell({
       previous.dest.lng !== request.dest.lng ||
       previous.start.lat !== request.start.lat ||
       previous.start.lng !== request.start.lng;
-    let cancelled = false;
+    let canceled = false;
     const frame = requestAnimationFrame(() => {
       // A drop bumps routeRefreshNonce; that recompute lands silently so the drawn route holds until
       // the exact one is ready. Any other trigger (a new destination or start) shows the spinner.
@@ -1025,12 +1025,12 @@ export default function MapShell({
       loadRouting(routeCity.id)
         .then(
           async ({ graph, index }) => {
-            if (cancelled) {
+            if (canceled) {
               return;
             }
             // Replaced whenever the identity changes, not kept forever once set. `loadRouting` hands
             // back one stable graph PER CITY, so `current ?? graph` held New York's for the whole
-            // session: switching to San Francisco left the hill slider greyed out (this graph is what
+            // session: switching to San Francisco left the hill slider grayed out (this graph is what
             // says which layers a city has) and built San Francisco's turn-by-turn directions against
             // New York's edges. The identity check keeps the re-render, which is what `??` was for.
             setRoutingGraph((current) => (current === graph ? current : graph));
@@ -1039,14 +1039,14 @@ export default function MapShell({
             // Waited on: a graph the worker could not decode has to reach the panel as an error,
             // not as a request queued behind a city that never loaded.
             await client.load(routeCity.id, graph);
-            if (cancelled) {
+            if (canceled) {
               return;
             }
             const contexts = (contextsRef.current ??= new RouteContexts());
             // The timetable alone: the page reads it to name a ferry leg, and the worker builds
             // every field a search is costed against on its own copy of the graph.
             await contexts.syncFerries(graph, routeCity, routeClock, weights);
-            if (cancelled) {
+            if (canceled) {
               return;
             }
             const pair = snapPair(graph, index, request.start, request.dest);
@@ -1099,11 +1099,11 @@ export default function MapShell({
               });
             }
             // Null means a newer frame overtook this one in the worker; it will answer instead.
-            if (cancelled || !reply) {
+            if (canceled || !reply) {
               return;
             }
             // Only when this pass actually rebuilt the field: a clock scrub starts a fetch per tick, and
-            // a slow failure landing after a later tick has already succeeded would otherwise grey out a
+            // a slow failure landing after a later tick has already succeeded would otherwise gray out a
             // slider whose data is loaded and being used.
             if (reply.shadeRebuilt) {
               setShadeDataLost(reply.shadeLost ?? false);
@@ -1123,7 +1123,7 @@ export default function MapShell({
             }
           },
           () => {
-            if (!cancelled) {
+            if (!canceled) {
               setRouteState({
                 kind: "error",
                 message:
@@ -1136,7 +1136,7 @@ export default function MapShell({
           // The worker refusing a request: not a network failure, but the panel has one way to say a
           // route could not be found, so the console carries what actually happened.
           console.error("routing failed:", error);
-          if (!cancelled) {
+          if (!canceled) {
             setRouteState({
               kind: "error",
               message: "Couldn't load the routing data. Check your connection.",
@@ -1145,7 +1145,7 @@ export default function MapShell({
         });
     });
     return () => {
-      cancelled = true;
+      canceled = true;
       cancelAnimationFrame(frame);
     };
   }, [
@@ -1374,7 +1374,7 @@ export default function MapShell({
       applyPick("dest", route.dest.lat, route.dest.lng);
       setRoutingOpen(true);
       // A link that names a route is a request to look at that route, so the first location fix does
-      // not get to centre the map on the visitor instead — even when they are in the same city as it.
+      // not get to center the map on the visitor instead — even when they are in the same city as it.
       setFollowing(false);
       void loadRouting(activeCity().id); // warm the graph, as opening the panel by hand does
     }
@@ -1461,17 +1461,17 @@ export default function MapShell({
     if (destQuery === null) {
       return;
     }
-    let cancelled = false;
+    let canceled = false;
     const cityId = city.id;
     // Waits for the index rather than searching without it. A shared link is opened cold, so the
     // files are usually still arriving, and asking early would answer "nothing found" about an
     // address the city certainly has.
     awaitNameIndex(cityId)
       .then(() =>
-        resolveSharedQuery(destQuery, cityId, searchAddress, () => cancelled),
+        resolveSharedQuery(destQuery, cityId, searchAddress, () => canceled),
       )
       .then((found) => {
-        if (cancelled || found === null) {
+        if (canceled || found === null) {
           return;
         }
         setDestQuery(null);
@@ -1484,14 +1484,14 @@ export default function MapShell({
         }
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [destQuery, city]);
 
   const handleCamera = useCallback((camera: Camera, view: CityBounds) => {
     cameraRef.current = camera;
     // Where the map is decides which city is active — but not yet. The first report comes from the
-    // container's default centre, which is the default city rather than anything anyone chose, and it
+    // container's default center, which is the default city rather than anything anyone chose, and it
     // lands before the hash effect has read the link. Answering it would set the city from the default
     // and leave the link to correct it afterwards, which is the race this ordering removes.
     if (!hashAppliedRef.current) {
@@ -1501,11 +1501,11 @@ export default function MapShell({
     // rather than one per frame. Read against the active city rather than through a functional update
     // because leaving a city has to clear its route too, which a state updater may not do.
     //
-    // One city on screen and no other is the whole test. Where the centre happens to sit does not
+    // One city on screen and no other is the whole test. Where the center happens to sit does not
     // enter into it: a view wide enough to hold two cities is not a view that has chosen between
-    // them, however the centre falls, and switching there would throw away the route of whichever
+    // them, however the center falls, and switching there would throw away the route of whichever
     // one you actually had. So a city takes over only once it is alone in frame — which for
-    // neighbours like Oakland and San Francisco means zooming in far enough to leave the other
+    // neighbors like Oakland and San Francisco means zooming in far enough to leave the other
     // behind, and that is the same gesture as saying which one you mean.
     // Proposed through the updater rather than compared against the city read from the last
     // render. A settled camera fires several times inside one tick — a synchronous setView reports
@@ -1515,17 +1515,17 @@ export default function MapShell({
     if (inView.length === 1) {
       const [next] = inView;
       // The same one-city-in-frame test the switch uses, because it is the same question: this
-      // centre only says anything about a city when it is the only one on screen. The address search
+      // center only says anything about a city when it is the only one on screen. The address search
       // ranks the several streets of one name — New York has five Court Streets — by how near they
       // are to it, when the reader has not shared a location of their own.
-      setSearchCentre(next.id, camera.center);
+      setSearchCenter(next.id, camera.center);
       setCity((current) => (next.id === current.id ? current : next));
     }
   }, []);
 
   // Where the map is looking, for the search panel's coverage check. A function rather than a value
   // because the camera is tracked in a ref: a pan must not re-render the app.
-  const mapCentre = useCallback(() => cameraRef.current?.center ?? null, []);
+  const mapCenter = useCallback(() => cameraRef.current?.center ?? null, []);
 
   const camera = useCallback((): Camera | null => cameraRef.current, []);
 
@@ -1766,20 +1766,20 @@ export default function MapShell({
     if (!routingOpen || poiSets) {
       return;
     }
-    let cancelled = false;
+    let canceled = false;
     Promise.all([
       loadPois(`landmarks/${city.id}.bin`, "LMRK"),
       loadPois(`art/${city.id}.bin`, "ARTW"),
     ]).then(
       ([landmarks, art]) => {
-        if (!cancelled) {
+        if (!canceled) {
           setPoiSets({ landmarks, art });
         }
       },
       () => {},
     );
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [routingOpen, poiSets, city.id]);
 
@@ -1839,7 +1839,7 @@ export default function MapShell({
     if (!routeResult || dragging) {
       return;
     }
-    let cancelled = false;
+    let canceled = false;
     routerClient()
       .waypoints({
         cityId: routeCity.id,
@@ -1849,7 +1849,7 @@ export default function MapShell({
       })
       .then(
         (plan) => {
-          if (!cancelled && plan) {
+          if (!canceled && plan) {
             setWaypointPlan({ route: routeResult, plan });
           }
         },
@@ -1858,7 +1858,7 @@ export default function MapShell({
         },
       );
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [routeResult, dragging, routeCity, routeClock, weights]);
 
@@ -2023,7 +2023,7 @@ export default function MapShell({
             city={city}
             open={searchOpen}
             pinned={searchPin !== null}
-            centre={mapCentre}
+            center={mapCenter}
             onOpenChange={handleSearchOpen}
             onSelect={handleSearchSelect}
             onDirections={handleToggleRouting}

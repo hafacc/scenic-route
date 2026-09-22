@@ -84,7 +84,7 @@ export const CITY_SOURCES: Record<string, readonly DataSource[]> = {
       detail:
         "SF Public Works street trees · DataSF, the Oakland Public Tree Inventory, and Berkeley's Arborwell street-tree survey",
     },
-    // The East Bay half of the region is read from the county's own centreline, and this list is
+    // The East Bay half of the region is read from the county's own centerline, and this list is
     // the app's only credits surface, so both publishers are named rather than just the one whose
     // name was here when the region was San Francisco alone.
     {
@@ -106,7 +106,7 @@ export const CITY_SOURCES: Record<string, readonly DataSource[]> = {
     {
       label: "Land & parks",
       detail:
-        "Analysis neighbourhoods · DataSF, city limits · Alameda County GIS, protected areas from the California Protected Areas Database (CPAD - www.calands.org). June 2024, and shoreline from US Census TIGER hydrography",
+        "Analysis Neighborhoods · DataSF, city limits · Alameda County GIS, protected areas from the California Protected Areas Database (CPAD - www.calands.org). June 2024, and shoreline from US Census TIGER hydrography",
     },
     // SFMTA's feed license requires this wording verbatim on anything derived from it, so the detail
     // line carries it rather than paraphrasing.

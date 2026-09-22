@@ -39,7 +39,7 @@ test("never comes out lighter than either source alone", () => {
   const tau = 0.814;
   for (const intensity of [0.05, 0.49, 0.93]) {
     // The whole 8-step lattice, including the step past MAX_SHADE_ALPHA * intensity a full shadow
-    // quantises up to.
+    // quantizes up to.
     for (let buildings = 0; buildings <= 255; buildings += 8) {
       for (let trees = 0; trees <= 255; trees += 8) {
         const alpha = compositeAlpha(buildings, trees, tau, intensity);

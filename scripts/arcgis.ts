@@ -1,5 +1,5 @@
 // Shared access to the ArcGIS feature services the Bay Area sources are read from: Alameda County's
-// centreline, parcels and address points, Oakland's and Berkeley's own layers, MTC's regional land
+// centerline, parcels and address points, Oakland's and Berkeley's own layers, MTC's regional land
 // use and the Census Bureau's hydrography. Every Esri service answers the same query API, so a
 // second layer is a second query here rather than a second reader.
 //

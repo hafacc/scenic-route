@@ -29,13 +29,13 @@ export interface City {
   // The overlays this city offers, in switcher order. A city without a pyramid simply omits it, so a
   // shared link naming an overlay the active city lacks drops that one rather than breaking.
   overlays: readonly OverlayId[];
-  // Kerb to the baked sidewalk line, the offset the graph pass lays this city's sidewalks at.
+  // Curb to the baked sidewalk line, the offset the graph pass lays this city's sidewalks at.
   sidewalkInsetMeters: number;
   // How long a walker here will stand on a pier before the ferry stops being a way to get anywhere.
   // Absent means the default in src/routing/cost.ts. Set it where the timetable is thin AND the water
   // cannot be walked round, since that combination turns "wait too long" into "no route".
   maxFerryWaitSeconds?: number;
-  // The same judgement about a platform. Absent means the default; both regions take it, their rail
+  // The same judgment about a platform. Absent means the default; both regions take it, their rail
   // running often enough by day that a longer wait is a walk in disguise.
   maxTransitWaitSeconds?: number;
 }
@@ -132,7 +132,7 @@ export const CITIES: readonly City[] = manifest.cities.map((city) => ({
 
 export const DEFAULT_CITY: City = CITIES[0];
 
-// Metres from a point to a city's bounds, 0 anywhere inside them. Longitude is scaled by the point's
+// Meters from a point to a city's bounds, 0 anywhere inside them. Longitude is scaled by the point's
 // latitude, so an east-west gap counts for what it is on the ground rather than in degrees.
 export function metersFromCity(city: City, point: LatLng): number {
   const { bounds } = city;

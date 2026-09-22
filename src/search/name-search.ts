@@ -189,33 +189,33 @@ export function releaseNameIndex(): void {
 
 // Where the map is, for the search box — which runs long before anything asks for a route and cannot
 // take the camera as a prop. Set from the map's settled camera, and kept WITH the city it belongs
-// to: a centre in Brooklyn says nothing about which of San Francisco's streets was meant, so after a
+// to: a center in Brooklyn says nothing about which of San Francisco's streets was meant, so after a
 // switch it is ignored until the map settles over the new city.
-let mapCentre: { cityId: string; at: { lat: number; lng: number } } | null =
+let mapCenter: { cityId: string; at: { lat: number; lng: number } } | null =
   null;
 
-export function setSearchCentre(
+export function setSearchCenter(
   cityId: string,
   at: { lat: number; lng: number },
 ): void {
-  mapCentre = { cityId, at };
+  mapCenter = { cityId, at };
 }
 
 // Where the map is pointing, for a search over this city — null until it has settled over one, which
-// is when the city's own centre stands in for it. Every result the index gives is ranked by how far
+// is when the city's own center stands in for it. Every result the index gives is ranked by how far
 // it is from here.
-export function searchCentre(
+export function searchCenter(
   cityId: string,
 ): { lat: number; lng: number } | null {
-  return mapCentre !== null && mapCentre.cityId === cityId
-    ? mapCentre.at
+  return mapCenter !== null && mapCenter.cityId === cityId
+    ? mapCenter.at
     : null;
 }
 
 export interface NameSearch {
   cityId: string;
   text: string;
-  centre: { lat: number; lng: number };
+  center: { lat: number; lng: number };
   limit: number;
 }
 
@@ -224,7 +224,7 @@ export interface NameSearch {
 export function searchNameIndex({
   cityId,
   text,
-  centre,
+  center,
   limit,
 }: NameSearch): Promise<IndexHit[] | null> {
   warmNameIndex(cityId);
@@ -238,7 +238,7 @@ export function searchNameIndex({
     type: "query",
     id,
     text,
-    centre,
+    center,
     limit,
   };
   searchWorker().postMessage(message);
@@ -262,10 +262,10 @@ export async function awaitNameIndex(cityId: string): Promise<boolean> {
 
 // What a point on the map is called, out of the same two files the box searches: the nearest house
 // number, or the name of whatever the point is standing on. Null where the city has nothing near
-// enough — a pin in the middle of the harbour keeps whatever the caller already put on it.
+// enough — a pin in the middle of the harbor keeps whatever the caller already put on it.
 //
 // This one waits for the index rather than answering without it, because a pin has something to show
-// in the meantime and nothing to lose by being labelled a second late.
+// in the meantime and nothing to lose by being labeled a second late.
 export async function reverseNameIndex(
   cityId: string,
   at: { lat: number; lng: number },

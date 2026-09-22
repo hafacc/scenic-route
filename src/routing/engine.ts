@@ -124,7 +124,7 @@ export class RoutingEngine {
     }
     // Measured only as far out as a route could plausibly wander, because the backward search is a
     // flat cost and a short trip cannot earn it back: settling the whole of New York took longer
-    // than the searches it saved on a two-kilometre walk. Three times the straight line is well
+    // than the searches it saved on a two-kilometer walk. Three times the straight line is well
     // past the most roundabout route anything here produces, and past it the estimate falls back to
     // the straight line, which is a lower bound in its own right.
     const radius =

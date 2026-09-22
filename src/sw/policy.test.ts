@@ -128,7 +128,7 @@ test("a fragment does not become part of the path either", () => {
 // The graph is fetched once and then read from memory all session, so its last-read time never
 // moves. Under a least-recently-read eviction that makes the one artifact a walk cannot do without
 // the FIRST thing out of the store; nothing evicts it.
-test("a city graph is recognisable, so eviction can leave it alone", () => {
+test("a city graph is recognizable, so eviction can leave it alone", () => {
   expect(isGraph("routing/nyc.bin")).toBe(true);
   expect(isGraph("routing/sf.bin")).toBe(true);
   // Not the things that sit beside it and are meant to rotate.

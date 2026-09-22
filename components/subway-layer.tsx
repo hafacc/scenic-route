@@ -8,7 +8,7 @@ import { KEEP_BUFFER } from "../src/tiles/raster";
 import manifest from "../src/tree-cover/manifest.json";
 import { useCity } from "./city-context";
 
-// The subway overlay: the agency's route geometry in its published colours, with a marker at every
+// The subway overlay: the agency's route geometry in its published colors, with a marker at every
 // station. Like the ferry lines and the POI dots it rides in a pane of its own, above every areal
 // wash. The decoding and the drawing live in the tile worker (src/tiles/subway.ts).
 //

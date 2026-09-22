@@ -14,15 +14,15 @@ use crate::conflate::{
 };
 use crate::graph::{DECIMETERS_PER_METER, KIND_SIDEWALK};
 
-// A way running ON the centreline is a mis-mapped alley, not a sidewalk, and would claim both
-// sides; one beyond the derived position plus the slack a real kerb line wanders by belongs to some
+// A way running ON the centerline is a mis-mapped alley, not a sidewalk, and would claim both
+// sides; one beyond the derived position plus the slack a real curb line wanders by belongs to some
 // other street.
 const MIN_MATCH_METERS: f64 = 2.0;
 const EXTRA_MATCH_METERS: f64 = 12.0;
 const MATCH_BEARING_DEGREES: f64 = 30.0; // mod 180: a sidewalk may be digitized either way round
 // The widest half-offset the STRT byte can hold, so no street's band reaches past this.
 const SEARCH_METERS: f64 = 25.5 + EXTRA_MATCH_METERS;
-// A way crosses from one street to the next at a corner, and the match flickers over a metre or two
+// A way crosses from one street to the next at a corner, and the match flickers over a meter or two
 // where it wraps; a stretch shorter than this is absorbed rather than cut out as its own edge. The
 // same figure closes the gaps between what OSM owns of one street side: two mapped stretches this
 // close together leave no room for a derived edge anyone would walk between them, and a stretch of
@@ -33,14 +33,14 @@ const MIN_RUN_METERS: f64 = 8.0;
 const CROSSED_METERS: f64 = 30.0;
 // How short a stub of derived pavement at the end of a mapped side is not worth placing: the reach
 // of the seam link a corner uses to meet the mapped pavement beside it (graph.rs SEAM_LINK_METERS).
-// OSM's ways stop at the kerb ramp rather than at the CSCL intersection, so nearly every mapped side
-// falls a few metres short at each end; placing an edge in that gap would leave a stub the corner
+// OSM's ways stop at the curb ramp rather than at the CSCL intersection, so nearly every mapped side
+// falls a few meters short at each end; placing an edge in that gap would leave a stub the corner
 // already reaches over, on top of splitting the street twice to do it.
 const MIN_DERIVED_METERS: f64 = 20.0;
 // And how much wider than its own vertices a run's stretch is taken to be. The extent is measured by
 // projecting the run's vertices, but the edge OSM's way becomes carries on to the node it shares
 // with the next way, and the trim boundary is quantized and re-noded on its way through the
-// conflation. Without this margin every boundary leaves a couple of metres of offset lying under the
+// conflation. Without this margin every boundary leaves a couple of meters of offset lying under the
 // mapped pavement — most of what is left of the duplication once the per-stretch rule is in.
 const SPAN_MARGIN_METERS: f64 = 4.0;
 
@@ -64,7 +64,7 @@ pub struct Run {
     pub matched: Option<Match>,
 }
 
-/// The stretches of one street side OSM maps for itself, in metres along the street's stored
+/// The stretches of one street side OSM maps for itself, in meters along the street's stored
 /// direction, sorted and disjoint. A derived offset is placed over the complement of this and only
 /// the complement: exclusivity is per stretch, so a side OSM maps a third of gets its OSM geometry
 /// over that third and a derived edge over the other two, never both over the same ground.
@@ -78,7 +78,7 @@ pub struct Association {
     pub covered: Vec<[Spans; 2]>,
     /// Per way, the nearest street proto to its middle *vertex* whatever its bearing — what a
     /// crossing takes its cover byte from. A two-vertex crossing has no interior vertex, so that is
-    /// its far kerb rather than the middle of the roadway, which `CROSSED_METERS` is wide enough to
+    /// its far curb rather than the middle of the roadway, which `CROSSED_METERS` is wide enough to
     /// absorb.
     pub crossed: Vec<Option<u32>>,
 }
@@ -131,7 +131,7 @@ fn match_at(
                 SIDEWALK_RIGHT
             },
             // The street is to the way's left when the turn from the way's own direction to the
-            // vector pointing at the centreline is counter-clockwise. `out_*` runs from the street to
+            // vector pointing at the centerline is counter-clockwise. `out_*` runs from the street to
             // the way, so the vector at the street is its negation.
             street_left: way_east * -out_north - way_north * -out_east > 0.0,
         };
@@ -177,7 +177,7 @@ fn nearest_street(
     best.map(|(_, street)| street)
 }
 
-/// The distance in metres from a polyline's start to each of its vertices.
+/// The distance in meters from a polyline's start to each of its vertices.
 pub fn cumulative_meters(poly_x: &[i32], poly_y: &[i32], meters_per_unit: (f64, f64)) -> Vec<f64> {
     let mut running = 0.0;
     let mut cumulative = Vec::with_capacity(poly_x.len());
@@ -193,7 +193,7 @@ pub fn cumulative_meters(poly_x: &[i32], poly_y: &[i32], meters_per_unit: (f64, 
     cumulative
 }
 
-/// How far along a polyline the point on it nearest `point` lies, in metres.
+/// How far along a polyline the point on it nearest `point` lies, in meters.
 fn along_meters(
     poly_x: &[i32],
     poly_y: &[i32],
@@ -217,7 +217,7 @@ fn along_meters(
 /// Sort the stretches OSM owns of one street side and fuse the ones that touch: overlapping, or
 /// parted by less than a stretch anybody would walk. A stretch that reaches within a seam link of
 /// the street's own end, and is longer than the stub it would leave there, is taken to reach it —
-/// which is what keeps a mapped side from being cut twice to place two kerb-length stubs.
+/// which is what keeps a mapped side from being cut twice to place two curb-length stubs.
 fn merge_spans(mut spans: Spans, length: f64) -> Spans {
     spans.sort_by(|left, right| left.0.total_cmp(&right.0));
     let mut merged: Spans = Vec::with_capacity(spans.len());
@@ -244,10 +244,10 @@ fn merge_spans(mut spans: Spans, length: f64) -> Spans {
     merged
 }
 
-/// The stretches of a street that share one derived-sidewalk mask, as (end metre, mask) pairs
+/// The stretches of a street that share one derived-sidewalk mask, as (end meter, mask) pairs
 /// spanning `0..length` in order: the sides pavement exists on, minus whatever OSM owns there. A
 /// stretch too short to be worth its own pair of corner nodes is absorbed into its longer
-/// neighbour, so the street is cut only where the answer really changes.
+/// neighbor, so the street is cut only where the answer really changes.
 pub fn derived_stretches(covered: &[Spans; 2], exists: u8, length: f64) -> Vec<(f64, u8)> {
     let mut edges: Vec<f64> = vec![0.0, length];
     for spans in covered {
@@ -275,7 +275,7 @@ pub fn derived_stretches(covered: &[Spans; 2], exists: u8, length: f64) -> Vec<(
             _ => stretches.push((pair[1], mask)),
         }
     }
-    // Same absorption `runs_of` does, for the same reason: two sides' stretch ends land a metre
+    // Same absorption `runs_of` does, for the same reason: two sides' stretch ends land a meter
     // apart and would otherwise cut a sliver of street out between them.
     while stretches.len() > 1 {
         let (shortest, span) = (0..stretches.len())
@@ -313,7 +313,7 @@ fn stretch_start(stretches: &[(f64, u8)], index: usize) -> f64 {
         .map_or(0.0, |before| stretches[before].0)
 }
 
-/// The length in metres of vertices `from..=to` of a polyline.
+/// The length in meters of vertices `from..=to` of a polyline.
 fn stretch_meters(
     poly_x: &[i32],
     poly_y: &[i32],
@@ -325,7 +325,7 @@ fn stretch_meters(
 }
 
 /// Cut a way into stretches of one association each, then absorb every stretch too short to stand
-/// on its own into its longer neighbour, taking that neighbour's association with it.
+/// on its own into its longer neighbor, taking that neighbor's association with it.
 fn runs_of(
     matches: &[Option<Match>],
     poly_x: &[i32],
@@ -492,7 +492,7 @@ mod tests {
     use super::*;
     use crate::graph::{KIND_CROSSING, SIDE_NONE};
 
-    const MPU: (f64, f64) = (1.0, 1.0); // quantized units are metres, so fixtures read in metres
+    const MPU: (f64, f64) = (1.0, 1.0); // quantized units are meters, so fixtures read in meters
 
     fn proto(poly: &[(i32, i32)], offset: u8, kind: u8) -> ProtoEdge {
         let poly_x: Vec<i32> = poly.iter().map(|point| point.0).collect();
@@ -513,8 +513,8 @@ mod tests {
             side: SIDE_NONE,
             sidewalks: 0,
             paved: 0,
-            kerb_a: false,
-            kerb_b: false,
+            curb_a: false,
+            curb_b: false,
         }
     }
 
@@ -555,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn a_way_on_the_centreline_claims_no_side() {
+    fn a_way_on_the_centerline_claims_no_side() {
         // Under 2 m off: a mis-mapped way lying on the road itself, which would otherwise claim
         // whichever side rounding put it on.
         let streets = vec![proto(&[(0, 0), (100, 0)], 40, KIND_SIDEWALK)];
@@ -591,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn stretches_a_metre_apart_are_one_stretch() {
+    fn stretches_a_meter_apart_are_one_stretch() {
         // Two ways along the same side with a 2 m gap between them: fused, because a 2 m derived
         // sidewalk between two mapped ones is an edge nobody walks, and its ends reach the street's.
         let streets = vec![proto(&[(0, 0), (100, 0)], 40, KIND_SIDEWALK)];

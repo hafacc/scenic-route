@@ -4,7 +4,7 @@ import { type PointerEvent as ReactPointerEvent, useRef, useState } from "react"
 
 // Dragging a row of a short list into a new place, on a touch screen as well as with a mouse.
 //
-// The arithmetic is in ROWS: how far the finger has travelled, divided by the height of one row, is
+// The arithmetic is in ROWS: how far the finger has traveled, divided by the height of one row, is
 // how many places the row has moved. The height is measured from the row being dragged rather than
 // declared, because the two lists this serves have different row heights — a layer is one line, a
 // route preference is a line and a slider — and a number written down here would be wrong for one of
@@ -13,7 +13,7 @@ import { type PointerEvent as ReactPointerEvent, useRef, useState } from "react"
 interface Drag {
   from: number; // where the row started
   to: number; // where it would land if the finger lifted now
-  offset: number; // pixels the finger has travelled
+  offset: number; // pixels the finger has traveled
   height: number; // one row, as measured when the drag began
 }
 

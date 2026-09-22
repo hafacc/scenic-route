@@ -1,13 +1,13 @@
 //! The genus-field pass: the low-zoom genus overlay as CLIENT-SHADED data tiles, which replaced
-//! the split per-genus colour pyramids. Where those pre-coloured each tree's disc and leaned on
-//! the client to alpha-stack the enabled layers — which can only add ink, never renormalise — this
-//! bakes the raw material and defers the colouring: each tile channel carries ONE genus's local crown
+//! the split per-genus color pyramids. Where those pre-colored each tree's disc and leaned on
+//! the client to alpha-stack the enabled layers — which can only add ink, never renormalize — this
+//! bakes the raw material and defers the coloring: each tile channel carries ONE genus's local crown
 //! density (12 genera packed 4 to an RGBA tile, so 3 tiles cover them all), and the client's shader
 //! reads the enabled channels to pick the dominant genus, dither it against the runner-up, and fade
 //! by the total density. That moves the dominance decision from bake time to render time, so toggling
-//! a genus recolours live and a region hands off to its runner-up instead of going blank.
+//! a genus recolors live and a region hands off to its runner-up instead of going blank.
 //!
-//! The tiles are DATA, not colour, so they are encoded lossless — a lossy byte would misread as a
+//! The tiles are DATA, not color, so they are encoded lossless — a lossy byte would misread as a
 //! different density. See components/genus-gl-layer.tsx for the reader and scripts/README.md.
 
 use std::fs;
@@ -26,10 +26,10 @@ use crate::raster::{
     lng_to_pixel_x, pixel_x_to_lng, pixel_y_to_lat, plan_tiles,
 };
 
-// As in the colour pyramids: the raster half stops at z14 and the client's live dots take over at z15.
+// As in the color pyramids: the raster half stops at z14 and the client's live dots take over at z15.
 const GENUS_MAX_ZOOM: u32 = 14;
 
-// A crown's disc, in pixels, is clamped to this band just as the colour pyramids clamped it: a floor so
+// A crown's disc, in pixels, is clamped to this band just as the color pyramids clamped it: a floor so
 // a sub-pixel crown at low zoom still deposits density, a ceiling so a lone giant crown does not smear.
 const MIN_DOT_PX: f64 = 1.5;
 const MAX_DOT_PX: f64 = 16.0;
@@ -42,11 +42,11 @@ const GENUS_BINS: usize = 12;
 const GENERA_PER_TILE: usize = 3;
 const LAYERS: usize = GENUS_BINS.div_ceil(GENERA_PER_TILE);
 
-// The metre-space bucket edge the tree index sorts into, so a box query scans one run per row.
+// The meter-space bucket edge the tree index sorts into, so a box query scans one run per row.
 const BUCKET_METERS: f64 = 60.0;
 
 // The accumulated crown coverage that quantizes to a full density byte (255). One opaque crown
-// deposits coverage 1 at its centre, so 2.5 means "about two or three crowns deep reads as full" —
+// deposits coverage 1 at its center, so 2.5 means "about two or three crowns deep reads as full" —
 // the point where a channel saturates. Ratios below it are preserved, so the client's dither and
 // dominance stay faithful; only the very densest stands clip, which still read as fully dominant.
 const DENSITY_FULL: f32 = 2.5;
@@ -57,7 +57,7 @@ pub struct Args {
     pub tiles: PathBuf,
 }
 
-/// One city's trees in metre space, plus the projection that placed them.
+/// One city's trees in meter space, plus the projection that placed them.
 struct Field {
     trees: TreeIndex,
     projection: Projection,
@@ -99,14 +99,14 @@ fn read_field(city: &City, data: &Path) -> Fallible<Option<Field>> {
 /// Accumulate one city's crown coverage into a tile's per-genus density buffer (`GENUS_BINS` floats
 /// per pixel). Every tree adds its disc's anti-aliased coverage into its own genus channel — additive,
 /// so overlapping crowns of a genus build density and crowns of different genera are kept apart per
-/// channel rather than compositing into one colour. Mirrors the colour pyramids' disc geometry.
+/// channel rather than compositing into one color. Mirrors the color pyramids' disc geometry.
 fn accumulate(density: &mut [f32], field: &Field, tile: &Tile) {
     let zoom = tile.zoom;
     let origin_x = f64::from(tile.x) * TILE_SIZE as f64;
     let origin_y = f64::from(tile.y) * TILE_SIZE as f64;
-    let centre_lat = pixel_y_to_lat(origin_y + TILE_SIZE as f64 / 2.0, zoom);
+    let center_lat = pixel_y_to_lat(origin_y + TILE_SIZE as f64 / 2.0, zoom);
     let meters_per_pixel =
-        EQUATOR_METERS_PER_PIXEL * centre_lat.to_radians().cos() / f64::from(1u32 << zoom);
+        EQUATOR_METERS_PER_PIXEL * center_lat.to_radians().cos() / f64::from(1u32 << zoom);
 
     let min_x = field.projection.x(pixel_x_to_lng(origin_x, zoom));
     let max_x = field
@@ -130,22 +130,22 @@ fn accumulate(density: &mut [f32], field: &Field, tile: &Tile) {
             if genus >= GENUS_BINS {
                 return;
             }
-            let centre_px = lng_to_pixel_x(field.projection.lng(mx), zoom) - origin_x;
-            let centre_py = lat_to_pixel_y(field.projection.lat(my), zoom) - origin_y;
+            let center_px = lng_to_pixel_x(field.projection.lng(mx), zoom) - origin_x;
+            let center_py = lat_to_pixel_y(field.projection.lat(my), zoom) - origin_y;
             let radius = (crown_m / meters_per_pixel).clamp(MIN_DOT_PX, MAX_DOT_PX);
 
-            let x0 = (centre_px - radius - 1.0).floor().max(0.0) as usize;
-            let x1 = (centre_px + radius + 1.0)
+            let x0 = (center_px - radius - 1.0).floor().max(0.0) as usize;
+            let x1 = (center_px + radius + 1.0)
                 .ceil()
                 .clamp(0.0, TILE_SIZE as f64) as usize;
-            let y0 = (centre_py - radius - 1.0).floor().max(0.0) as usize;
-            let y1 = (centre_py + radius + 1.0)
+            let y0 = (center_py - radius - 1.0).floor().max(0.0) as usize;
+            let y1 = (center_py + radius + 1.0)
                 .ceil()
                 .clamp(0.0, TILE_SIZE as f64) as usize;
             for iy in y0..y1 {
-                let dy = iy as f64 + 0.5 - centre_py;
+                let dy = iy as f64 + 0.5 - center_py;
                 for ix in x0..x1 {
-                    let dx = ix as f64 + 0.5 - centre_px;
+                    let dx = ix as f64 + 0.5 - center_px;
                     let coverage = (radius + 0.5 - dx.hypot(dy)).clamp(0.0, 1.0);
                     if coverage > 0.0 {
                         density[(iy * TILE_SIZE + ix) * GENUS_BINS + genus] += coverage as f32;
@@ -280,7 +280,7 @@ pub fn run(args: &Args) -> Fallible<()> {
     Ok(())
 }
 
-/// The trees in a uniform metre-space index, CSR-style: bucket `row * cols + col` owns
+/// The trees in a uniform meter-space index, CSR-style: bucket `row * cols + col` owns
 /// `[starts[bucket], starts[bucket + 1])`. Buckets along a row are contiguous, so the scan a
 /// query makes is one run per row rather than one per bucket. Each tree carries its crown radius
 /// (the size the overlay draws its dot at) and its genus id, in bucket order.
@@ -363,8 +363,8 @@ impl TreeIndex {
         self.max_crown_m
     }
 
-    /// Every tree whose metre-space position lies within `reach` of the box, handed to `visit` as
-    /// (x, y, crown_radius_m, genus_id). `reach` is the largest dot radius in metres, so a tree just
+    /// Every tree whose meter-space position lies within `reach` of the box, handed to `visit` as
+    /// (x, y, crown_radius_m, genus_id). `reach` is the largest dot radius in meters, so a tree just
     /// outside the tile whose dot still spills into it is included. The bucket scan overshoots the
     /// box by up to a bucket, so each tree is tested against the grown box before it is visited.
     fn for_each_in_box(

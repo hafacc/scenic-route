@@ -5,7 +5,7 @@ import { MODE_ICONS } from "../../src/modes/icons";
 import type { Mode, ModeId } from "../../src/modes/modes";
 
 // One component in two placements: it heads the card on a phone and floats above the map on a wide
-// screen. The active chip is filled in the mode's own colour, which its routes are drawn in.
+// screen. The active chip is filled in the mode's own color, which its routes are drawn in.
 //
 // On a phone only that chip carries its name — four modes and the switches beside them do not fit a
 // 375 px row otherwise, and the icon is what the reader is picking by anyway.

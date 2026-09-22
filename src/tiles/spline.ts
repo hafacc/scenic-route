@@ -1,12 +1,12 @@
 // A Catmull-Rom spline through a polyline's own vertices, emitted as cubic beziers.
 //
-// Ferry geometry is coarse — a GTFS crossing is 4 to 12 vertices for a kilometre of water — so
+// Ferry geometry is coarse — a GTFS crossing is 4 to 12 vertices for a kilometer of water — so
 // stroked as chords it reads as a polygon rather than a boat's path. A spline that interpolates
 // the vertices (rather than approximating them, as a B-spline would) keeps the drawn line on the
 // piers and the shape points the feed actually published.
 //
 // The parameterization is centripetal (alpha = 1/2, Yuksel et al. 2011): ferry vertices are spaced
-// wildly unevenly — a stop, then a shape point a kilometre on — and the uniform variant loops and
+// wildly unevenly — a stop, then a shape point a kilometer on — and the uniform variant loops and
 // cusps exactly there, while centripetal is proven not to self-intersect within a span.
 //
 // Centripetal keeps the curve from looping but not from *bulging*: it interpolates the vertices and
@@ -21,7 +21,7 @@ const ALPHA = 0.5;
 // the layer draws, so it never moves a curve that is not already degenerate.
 const MIN_KNOT = 1e-6;
 // Vertices this close to their predecessor are dropped before fitting. A GTFS crossing repeats its
-// terminal as both the stop and the shape's first point, metres apart or less, and a pair that
+// terminal as both the stop and the shape's first point, meters apart or less, and a pair that
 // close carries no shape but does swing the tangent that runs through it.
 const MIN_GAP_PX = 0.25;
 // Past this much course change a vertex is drawn as a corner, not smoothed through. Ferry shapes

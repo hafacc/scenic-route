@@ -1,4 +1,4 @@
-// What the graph's tunnel bit costs. A tunnel is two claims about a walked metre at once — there is a
+// What the graph's tunnel bit costs. A tunnel is two claims about a walked meter at once — there is a
 // roof over it, and no sun reaches it — so the questions here are whether both hold wherever the cost
 // model reads them (the multiplier, the A* bound, the chips a routed trip reports), and whether the
 // shelter ceiling a tunnel alone can reach still leaves the heuristic a lower bound.
@@ -94,7 +94,7 @@ test("a tunnel is sheltered whole, in a city with no scaffolding feed at all", (
   const graph = tunnelGraph();
   expect(graph.sheds ?? null).toBeNull();
   expect(shelterAttrOf(graph, TUNNEL_EDGE, 0)).toBe(TUNNEL_SHELTER);
-  // Under the ceiling, so a metre of tunnel is cheap rather than free at the top of the slider.
+  // Under the ceiling, so a meter of tunnel is cheap rather than free at the top of the slider.
   expect(TUNNEL_SHELTER).toBeLessThan(1);
   expect(shelterAttrOf(graph, 0, 0)).toBe(0);
   // A tunnel is not a bridge deck, and nothing about the bit may read as one.
@@ -150,7 +150,7 @@ test("a trip through a tunnel reports it on the shelter and sun chips", () => {
   expect(route).not.toBeNull();
   expect(route?.steps.map((step) => step.edge)).toEqual([0, 1, 2]);
   // One of the three equal edges is roofed and dark: a third of the seconds under cover, two thirds
-  // of the metres in the sun.
+  // of the meters in the sun.
   expect(route?.factors.shelter).toBeCloseTo(TUNNEL_SHELTER / 3, 6);
   expect(route?.factors.shade).toBeCloseTo(2 / 3, 6);
   expect(route?.factors.bridge).toBe(0);

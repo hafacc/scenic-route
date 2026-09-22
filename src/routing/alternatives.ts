@@ -33,7 +33,7 @@ const FIXED_FACTORS: ReadonlySet<FactorKey> = new Set<FactorKey>([
 // Eight searches between them, per the plan's budget.
 const SWEEP_STEPS = 5;
 const BREAKPOINT_SEARCHES = 4;
-// Lead on a factor, as a share of its graph max, that paints a card in that factor's colour.
+// Lead on a factor, as a share of its graph max, that paints a card in that factor's color.
 const COLOR_MARGIN = 0.15;
 
 // How finely each route is walked before the distances are taken. Well under the separation the
@@ -80,8 +80,8 @@ export function CARD_ORDER(left: PlannedRoute, right: PlannedRoute): number {
   );
 }
 
-// A route in a local equirectangular frame: metres east and north of the reference latitude. Flat
-// earth over a city is exact enough for a separation measured in tens of metres, and it is the frame
+// A route in a local equirectangular frame: meters east and north of the reference latitude. Flat
+// earth over a city is exact enough for a separation measured in tens of meters, and it is the frame
 // every distance below is taken in.
 interface Polyline {
   east: Float64Array;
@@ -237,7 +237,7 @@ function meanDistance(
   return total / count;
 }
 
-// How far apart two routes run, in metres: the mean over one route of the distance to the other,
+// How far apart two routes run, in meters: the mean over one route of the distance to the other,
 // both ways round, averaged. Symmetric by construction, 0 for a route against itself, and — being
 // an arc-length mean of a perpendicular offset — the area between the two lines divided by their
 // length, with no intersections to find and no polygon to close.

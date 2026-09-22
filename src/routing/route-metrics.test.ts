@@ -131,13 +131,13 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
     ferries: null,
     edgeDurationSeconds: new Uint16Array(edgeCount),
     ferryEdges: new Uint32Array(0),
-    minFerrySecPerMetre: Number.POSITIVE_INFINITY,
+    minFerrySecPerMeter: Number.POSITIVE_INFINITY,
     // The fixture is pavement and crossings only: no rail at all.
     transitEdges: new Uint32Array(0),
     boardEdges: new Uint32Array(0),
     transitRoutes: [],
-    minRideSecPerMetre: Number.POSITIVE_INFINITY,
-    minAccessSecPerMetre: Number.POSITIVE_INFINITY,
+    minRideSecPerMeter: Number.POSITIVE_INFINITY,
+    minAccessSecPerMeter: Number.POSITIVE_INFINITY,
     transitLaneOf: new Map(),
     transitStopOf: new Map(),
     transitRouteOf: new Map(),
@@ -152,7 +152,7 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
   };
 }
 
-// A route over the given edges, each travelled a -> b unless `false` is given, with the two snaps
+// A route over the given edges, each traveled a -> b unless `false` is given, with the two snaps
 // pinned to the first edge's start node and the last edge's end node.
 function routeOver(
   graph: RoutingGraph,
@@ -223,7 +223,7 @@ function routeOver(
 }
 
 // A corner of a narrow street: the south pavement (nodes 0-1-2) faces the north one (3-4-5) across
-// 12 m of roadway, with a crossing at each end of the block. Node 2 is also the near kerb of a
+// 12 m of roadway, with a crossing at each end of the block. Node 2 is also the near curb of a
 // north-south cross street, whose crossing runs east to node 6 — at a right angle to the other
 // three, so a corner and a reversal are told apart by direction here and not only by distance.
 const JUNCTION_NODES: NodeSpec[] = [
@@ -270,7 +270,7 @@ test("crossing out and straight back at one corner is a reversal", () => {
   expect(reversals[0].crossedMeters).toBeCloseTo(24, 0);
 });
 
-test("crossing out, walking a few metres, and crossing back is still a reversal", () => {
+test("crossing out, walking a few meters, and crossing back is still a reversal", () => {
   const graph = buildGraph(JUNCTION_NODES, JUNCTION_EDGES);
   // The corner wrap: cross at the west end, walk the north pavement, cross back at the next
   // crossing. A full block of pavement between the two is beyond the gap, so this junction has its
@@ -299,7 +299,7 @@ test("crossing out, walking a few metres, and crossing back is still a reversal"
 test("turning the corner across two different streets is not a reversal", () => {
   const graph = buildGraph(JUNCTION_NODES, JUNCTION_EDGES);
   // Cross the narrow street southbound at the east end, then cross the cross street eastbound off
-  // the same kerb: two crossings back to back with no pavement between them, at right angles to
+  // the same curb: two crossings back to back with no pavement between them, at right angles to
   // each other, which is an ordinary corner. Only the direction test rules it out.
   const route = routeOver(graph, [
     [6, false],
@@ -377,7 +377,7 @@ test("the longest crossing run counts consecutive crossings, not all of them", (
   ).toBe(2);
 });
 
-test("the detour ratio is walked metres over the straight line between the snaps", () => {
+test("the detour ratio is walked meters over the straight line between the snaps", () => {
   const graph = buildGraph(JUNCTION_NODES, JUNCTION_EDGES);
   // Straight down the south pavement: the walk and the straight line are the same, so the ratio is 1.
   const straight = routeOver(graph, [

@@ -6,7 +6,7 @@ import type { TileRenderer } from "./renderer";
 import { themeName } from "./theme";
 import { type Cursor, readVarint } from "./varint";
 
-// A point-of-interest overlay: the committed POI points (landmarks, public art) drawn as coloured
+// A point-of-interest overlay: the committed POI points (landmarks, public art) drawn as colored
 // canvas dots at every zoom. Unlike the tree dots there is no raster pyramid below — a few thousand
 // points draw live cheaply — so one canvas GridLayer covers the whole zoom range.
 
@@ -142,7 +142,7 @@ function drawTileLabels(
   );
 }
 
-// Every point the tile overlaps, projected at the tile's own zoom and filled as a coloured disc
+// Every point the tile overlaps, projected at the tile's own zoom and filled as a colored disc
 // with a faint dark outline so it reads on any background. The dot grows a little as the map zooms
 // in. The spatial buckets keep this to the points actually near the tile.
 function draw(

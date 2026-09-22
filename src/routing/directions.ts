@@ -68,7 +68,7 @@ export interface Maneuver {
   // alight the reader gets straight back onto a train from.
   station?: "enter" | "exit" | "alight" | "change";
   // The door an enter or an exit goes through, which wears its own icon. Absent on an alight, which
-  // happens on a platform, and on a kerbside stop, which has no door at all.
+  // happens on a platform, and on a curbside stop, which has no door at all.
   door?: "stair" | "elevator";
   // A rail leg's departure, seconds from midnight of the routed day. Taken from the route's own leg
   // rather than looked up here: the timetable lives in the worker, and these are built on the page.
@@ -209,7 +209,7 @@ const NO_TRANSIT = {
   doorSide: null,
 } as const;
 
-// A ferry step's destination terminal: node b when travelled a -> b, else node a.
+// A ferry step's destination terminal: node b when traveled a -> b, else node a.
 function ferryDestName(graph: RoutingGraph, step: RouteStep): string | null {
   const ends = graph.ferryEndpointNames.get(step.edge);
   if (!ends) {
@@ -787,7 +787,7 @@ export function buildDirections(
         kind: "station",
         text,
         station: changing ? "change" : (run.stationAction ?? "enter"),
-        // A kerbside stop has no door, and an alight happens on a platform: neither takes one.
+        // A curbside stop has no door, and an alight happens on a platform: neither takes one.
         door:
           changing || stop || run.stationAction === "alight"
             ? undefined

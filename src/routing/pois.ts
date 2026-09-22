@@ -110,7 +110,7 @@ const CARRIED: ReadonlySet<string> = new Set<string>([
   "access",
 ]);
 
-// Metres from a point to a segment, in a local flat approximation (the legs are short and the whole
+// Meters from a point to a segment, in a local flat approximation (the legs are short and the whole
 // thing is a proximity test, so the equirectangular error is negligible). Also returns the clamped
 // projection parameter `t` in [0, 1], so the caller can place the nearest point along the polyline.
 function pointSegmentMeters(
@@ -159,9 +159,9 @@ export function passedPois(
     west = Math.min(west, lngs[vertex]);
     east = Math.max(east, lngs[vertex]);
   }
-  const centreLat = (south + north) / 2;
+  const centerLat = (south + north) / 2;
   const metersPerLng =
-    METERS_PER_DEGREE_LAT * Math.cos((centreLat * Math.PI) / 180);
+    METERS_PER_DEGREE_LAT * Math.cos((centerLat * Math.PI) / 180);
   const maxThreshold = sets.reduce(
     (largest, entry) => Math.max(largest, entry.thresholdMeters),
     0,
@@ -170,7 +170,7 @@ export function passedPois(
   const marginLng = maxThreshold / metersPerLng;
 
   // The walked polyline of each step (the carried ones skipped) in travel order, with the cumulative
-  // metre distance to each vertex, so a POI's nearest point can be placed along the route. Computed
+  // meter distance to each vertex, so a POI's nearest point can be placed along the route. Computed
   // once. A ride is a chord from one platform to the next, so everything the train runs UNDER would
   // otherwise be reported as passed — the statues of Union Square, spliced in after the boarding.
   const stepPolys: ({

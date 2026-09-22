@@ -69,7 +69,7 @@ export function fixtureDurable(edge: number): {
   };
 }
 
-// The depth byte the fixture gives a span, in decimetres. The prototype's rows carry none — measuring
+// The depth byte the fixture gives a span, in decimeters. The prototype's rows carry none — measuring
 // the pavement postdates them — so this is synthetic, as the job numbers are: it walks the range the
 // placement can produce and returns 0, "not measured", for one span in seven, so a codec that dropped
 // the byte or slipped a span's worth of alignment fails rather than passing by luck.

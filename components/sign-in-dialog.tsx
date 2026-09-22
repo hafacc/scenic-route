@@ -78,7 +78,7 @@ export default function SignInDialog({ onClose }: SignInDialogProps) {
     <Sheet
       onClose={onClose}
       closeLabel="Close sign in"
-      labelledBy="sign-in-title"
+      labeledBy="sign-in-title"
       width="md:max-w-sm"
     >
       <div className="flex shrink-0 items-start gap-3">

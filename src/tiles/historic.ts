@@ -8,7 +8,7 @@ import { themeName } from "./theme";
 import type { Cursor } from "./varint";
 
 // A city's designated historic districts (magic HDST), drawn as filled polygons — an inspection
-// layer for seeing which neighbourhoods the city has landmarked whole, as against the individual
+// layer for seeing which neighborhoods the city has landmarked whole, as against the individual
 // buildings the landmarks overlay dots. The decoding and the drawing both live here in the tile
 // worker.
 

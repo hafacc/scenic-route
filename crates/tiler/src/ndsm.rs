@@ -6,7 +6,7 @@
 //! flight has no such derivative — no surface model, no canopy model — and its points carry no
 //! building class either: 87% of them are class 1, unclassified, which is roofs and walls and trees
 //! and rooftop plant together. So the separation here is geometric rather than by class. Binning to
-//! one-metre cells and keeping each cell's highest return dissolves the walls (a wall return shares
+//! one-meter cells and keeping each cell's highest return dissolves the walls (a wall return shares
 //! its cell with the roof edge above it) and the ground and water and noise leave by class, which
 //! makes the 75th percentile of a footprint's cells a roof-plane statistic in all but name.
 //!
@@ -74,7 +74,7 @@ const NODATA_METERS: f32 = -9999.0;
 /// How far past the window's corners the grid reaches. The window is a longitude/latitude rectangle
 /// and the grid is a UTM one, and the ground the two disagree over at the corners is the grid
 /// convergence — about half a degree of rotation this far off the central meridian, which over a
-/// kilometre of window is metres.
+/// kilometer of window is meters.
 const MARGIN_METERS: f64 = 16.0;
 
 const ROOF_PERCENTILE: f64 = 0.75;
@@ -172,7 +172,7 @@ pub struct Report {
     based: usize,
 }
 
-/// A rectangle of the output grid: the upper-left corner of cell (0, 0) at the origin, one metre
+/// A rectangle of the output grid: the upper-left corner of cell (0, 0) at the origin, one meter
 /// cells, row-major, in the DEM's own projection.
 struct Grid {
     origin_x: f64,
@@ -264,7 +264,7 @@ impl Grid {
     }
 }
 
-/// Web mercator metres back to degrees, the closed form.
+/// Web mercator meters back to degrees, the closed form.
 fn to_degrees(x: f64, y: f64) -> (f64, f64) {
     let lng = x * 180.0 / MERCATOR_HALF_WIDTH_METERS;
     let lat = (2.0 * (y / EARTH_RADIUS_METERS).exp().atan() - PI / 2.0).to_degrees();
@@ -330,7 +330,7 @@ fn reach_of(node: &Node, projection: Tmerc) -> Reach {
 struct Binned {
     /// Per cell, the highest surface return as an `ordered` key, or 0 for none.
     surface: Vec<u32>,
-    /// Per cell, the ground returns' total in decimetres and how many there were — read only for
+    /// Per cell, the ground returns' total in decimeters and how many there were — read only for
     /// the cells the staged DEM has no ground for. At this flight's spacing a cell holds one or two
     /// ground returns, so their mean is their median, and 32 bits is room to spare for the sum.
     ground_sum: Vec<i32>,
@@ -377,7 +377,7 @@ fn bin(nodes: &[&Reach], grid: &Grid, projection: Tmerc) -> Fallible<Binned> {
                     counted += 1;
                     surface[cell].fetch_max(ordered(z as f32), Ordering::Relaxed);
                 } else if class == GROUND_CLASS {
-                    ground_sum[cell].fetch_add(decimetres(z), Ordering::Relaxed);
+                    ground_sum[cell].fetch_add(decimeters(z), Ordering::Relaxed);
                     ground_count[cell].fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -409,7 +409,7 @@ fn bin(nodes: &[&Reach], grid: &Grid, projection: Tmerc) -> Fallible<Binned> {
 /// A ground return as the integer a cell's total is summed in. Signed, because the region's ground
 /// runs below sea level wherever the flight crossed reclaimed land — the airport and Bay Farm
 /// Island — which is exactly where the staged DEM has no ground and these returns are read.
-fn decimetres(height: f64) -> i32 {
+fn decimeters(height: f64) -> i32 {
     (height * 10.0)
         .round()
         .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
@@ -421,7 +421,7 @@ fn decimetres(height: f64) -> i32 {
 /// than a building's own footprint.
 fn fill_nearest(values: &mut [f32], width: usize, height: usize, rings: usize) {
     // Seeded with the known cells that touch an unknown one rather than with every known cell: a
-    // ten-kilometre square holds a hundred million of them, and the ones in the middle of a known
+    // ten-kilometer square holds a hundred million of them, and the ones in the middle of a known
     // patch have nothing to carry their height to.
     let mut frontier: VecDeque<(usize, usize)> = VecDeque::new();
     for index in 0..values.len() {
@@ -442,10 +442,10 @@ fn fill_nearest(values: &mut [f32], width: usize, height: usize, rings: usize) {
         let value = values[index];
         let row = index / width;
         let column = index % width;
-        let mut spread = |neighbour: usize, values: &mut [f32]| {
-            if !values[neighbour].is_finite() {
-                values[neighbour] = value;
-                frontier.push_back((neighbour, ring + 1));
+        let mut spread = |neighbor: usize, values: &mut [f32]| {
+            if !values[neighbor].is_finite() {
+                values[neighbor] = value;
+                frontier.push_back((neighbor, ring + 1));
             }
         };
         if column > 0 {
@@ -778,7 +778,7 @@ fn describe_tallest(footprints: &[Footprint], readings: &[Vec<u16>], count: usiz
 #[serde(rename_all = "camelCase")]
 struct Reading {
     feature: usize,
-    /// The 75th percentile of the surface cells inside the footprint, in metres, or absent where it
+    /// The 75th percentile of the surface cells inside the footprint, in meters, or absent where it
     /// caught none.
     roof_meters: Option<f64>,
     /// The median of the ground cells under it, likewise.
@@ -986,7 +986,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Binned, Grid, TileGrid, decimetres, fill_nearest, from_ordered, ground_of, ordered,
+        Binned, Grid, TileGrid, decimeters, fill_nearest, from_ordered, ground_of, ordered,
         reaching_dem, to_degrees,
     };
     use crate::heights::UTM_10N;
@@ -1058,7 +1058,7 @@ mod tests {
     /// window it walks: the two have to agree, or the points would be binned somewhere other than
     /// where the nodes holding them were asked for.
     #[test]
-    fn mercator_metres_come_back_as_the_degrees_they_were() {
+    fn mercator_meters_come_back_as_the_degrees_they_were() {
         for (x, y, lng, lat) in [
             (
                 -13_611_034.139_293_559,
@@ -1110,7 +1110,7 @@ mod tests {
         };
         let binned = Binned {
             surface: vec![0; 2],
-            ground_sum: vec![decimetres(-1.8) + decimetres(-2.2), 0],
+            ground_sum: vec![decimeters(-1.8) + decimeters(-2.2), 0],
             ground_count: vec![2, 0],
             points: 2,
             surface_points: 0,

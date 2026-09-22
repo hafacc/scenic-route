@@ -99,7 +99,7 @@ const engine = new RoutingEngine();
 engine.load(CITY, graph);
 console.log(`nyc.bin: ${graph.nodeCount} nodes, ${graph.edgeCount} edges\n`);
 
-const kilometres = (meters: number): string => (meters / 1000).toFixed(2);
+const kilometers = (meters: number): string => (meters / 1000).toFixed(2);
 const minutes = (seconds: number): string => (seconds / 60).toFixed(1);
 
 // What a card that rides says it rides: the lines it takes, and the minutes it spends waiting for
@@ -183,7 +183,7 @@ for (const mode of MODES) {
           .join(" ")
           .padEnd(16),
         plan.routes
-          .map((route) => kilometres(route.result.lengthMeters))
+          .map((route) => kilometers(route.result.lengthMeters))
           .join(" ")
           .padEnd(17),
         plan.routes
@@ -204,7 +204,7 @@ for (const mode of MODES) {
 
 // The credit's own price, off the plan: one search each at no transit penalty and at the top of the
 // slider, on the longest trip, with the nodes each of them settled. Every scenic weight is zero here
-// rather than a mode's, deliberately — a mode that discounts a metre to near nothing has already
+// rather than a mode's, deliberately — a mode that discounts a meter to near nothing has already
 // flattened the straight-line estimate, and this is about what the transit credit does to it.
 const longest = TRIPS[2]; // Union Sq - Prospect Park, the longest of them
 const snapped = snapPair(graph, index, longest.from, longest.to);

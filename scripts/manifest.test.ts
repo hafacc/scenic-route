@@ -23,7 +23,7 @@ test("nyc and sf do not share a chunk", () => {
   ).toBeNull();
 });
 
-test("a neighbour that shares the grid is caught", () => {
+test("a neighbor that shares the grid is caught", () => {
   // Oakland, immediately across the bay from San Francisco.
   expect(
     overlappingCities([

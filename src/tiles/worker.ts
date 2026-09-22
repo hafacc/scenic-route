@@ -33,7 +33,7 @@ const scope = globalThis as unknown as {
 
 // Tiles whose data is still loading, and of those the ones Leaflet has since dropped.
 const inFlight = new Set<number>();
-const cancelled = new Set<number>();
+const canceled = new Set<number>();
 // Painted tiles still on the map, by the detach that stops watching them for a lost context. The
 // canvas is the only copy of its pixels and only this side can reach it, so only this side can put
 // them back — see ./repaint.
@@ -50,7 +50,7 @@ async function run<Params, Data>(
   { tileKey, coords, ratio, canvas }: DrawMessage,
 ): Promise<void> {
   const data = await renderer.load(params, coords);
-  if (cancelled.has(tileKey)) {
+  if (canceled.has(tileKey)) {
     return;
   }
   const context = canvas.getContext("2d");
@@ -96,7 +96,7 @@ function rasterize(message: DrawMessage): Promise<void> {
 function finish(tileKey: number, error?: string): void {
   inFlight.delete(tileKey);
   // A dropped tile's canvas is detached and Leaflet has forgotten it, so there is nothing to report.
-  if (!cancelled.delete(tileKey)) {
+  if (!canceled.delete(tileKey)) {
     scope.postMessage({ type: "done", tileKey, error });
   }
 }
@@ -115,7 +115,7 @@ scope.onmessage = ({ data: message }) => {
     // Leaflet unloads tiles on every pan.
     forget(message.tileKey);
     if (inFlight.has(message.tileKey)) {
-      cancelled.add(message.tileKey);
+      canceled.add(message.tileKey);
     }
   } else {
     const { tileKey } = message;
