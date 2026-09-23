@@ -1,14 +1,8 @@
-// The calendar arithmetic both published timetables read: which GTFS services run on a day, and the
-// three service days a departure instant can catch a vehicle on.
-//
-// The ferry timetable (FSCH) and the rail one (TSCH) hold different things, but they answer the same
-// question about a day, out of the same two GTFS tables, and a walk planned at 23:50 has to look at
-// tomorrow in both.
+// Shared by FSCH and TSCH, which read the same two GTFS calendar tables.
 
 import { cityById } from "../cities";
 
-// The zone a city's published timetables are written in. Unknown ids fall back to the reader's own
-// zone, which is a fixture with no city behind it rather than anything the app routes in.
+// Unknown ids fall back to the reader's own zone, which only a fixture with no city uses.
 export function timeZoneOf(cityId: string): string {
   return (
     cityById(cityId)?.timeZone ??
@@ -19,7 +13,6 @@ export function timeZoneOf(cityId: string): string {
 export const SECONDS_PER_DAY = 86_400;
 export const EXCEPTION_ADDED = 1;
 
-// One GTFS service as an artifact stores it.
 export interface ServiceCalendar {
   mask: number; // bit 0 Monday .. bit 6 Sunday
   startDay: number; // YYYYMMDD
@@ -36,9 +29,7 @@ export function dayNumber(day: string): number {
   return Number(day.replaceAll("-", ""));
 }
 
-// The two calendar tables sit at the front of both artifacts, in the same layout: a service is
-// (u32 start day, u32 end day, u8 weekday mask) and an exception (u32 day, u16 service index, u8
-// type), each padded out to a multiple of four. Written by scripts/schedule-record.ts.
+// service (u32 start, u32 end, u8 mask), exception (u32 day, u16 service, u8 type), each padded to 4.
 export const SERVICE_BYTES = 12;
 export const EXCEPTION_BYTES = 8;
 
@@ -76,10 +67,7 @@ export function decodeExceptions(
   return exceptions;
 }
 
-// A timetable is written in the city's own local time, and the walker reading it may be anywhere:
-// the browser's clock says which instant it is, never which hour of which service day that is in
-// New York. So every calendar question here is asked of the city's zone through Intl, and the
-// browser's own offset is never consulted.
+// Asked in the city's zone through Intl; the browser's own offset is never consulted.
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
 function partsOf(date: Date, timeZone: string): Record<string, number> {
@@ -106,14 +94,12 @@ function partsOf(date: Date, timeZone: string): Record<string, number> {
   return fields;
 }
 
-// Seconds since the city's own midnight, which is what a GTFS time is counted from.
 export function secondsOfDay(date: Date, timeZone: string): number {
   const { hour, minute, second } = partsOf(date, timeZone);
   return hour * 3600 + minute * 60 + second;
 }
 
-// The city's day `offset` days from `date`, as YYYYMMDD. The arithmetic runs on the civil date in
-// UTC, so a day that is 23 or 25 hours long where the city keeps time still steps by exactly one.
+// Civil-date arithmetic in UTC, so a 23- or 25-hour day still steps by exactly one.
 export function shiftedDay(
   date: Date,
   offset: number,
@@ -142,16 +128,12 @@ function dayOfDate(date: Date): number {
   return Number(`${date.getUTCFullYear()}${month}${dayOfMonth}`);
 }
 
-// Monday-first weekday bit of a YYYYMMDD day, matching the mask the artifacts write.
 function weekdayBit(day: number): number {
   return (dateOfDay(day).getUTCDay() + 6) % 7;
 }
 
-// How many same-weekday days the vote past the end of a service's calendars looks back over.
 const FALLBACK_SAMPLES = 6;
 
-// Every calendar_dates row, by the service it names: day -> type. Built once per question because
-// the vote below asks about one service on six days and a scan per ask would be a scan per sample.
 function exceptionsByService(
   exceptions: readonly ServiceException[],
 ): Map<number, Map<number, number>> {
@@ -167,8 +149,7 @@ function exceptionsByService(
   return rows;
 }
 
-// Whether one service runs on one day: its weekday mask inside its date range, then its own
-// calendar_dates row for that day, which applies whatever the range says.
+// A calendar_dates row applies whatever the range says.
 function activeOn(
   service: ServiceCalendar,
   rows: ReadonlyMap<number, number> | undefined,
@@ -186,9 +167,7 @@ function activeOn(
   }
 }
 
-// The last day a service's own feed speaks for: its calendar range, extended by any calendar_dates
-// row naming it. A service written entirely as exceptions is covered only by those rows, and one
-// with neither is covered by nothing.
+// A service written entirely as exceptions is covered only by those rows.
 function coverageEnd(
   service: ServiceCalendar,
   rows: ReadonlyMap<number, number> | undefined,
@@ -202,10 +181,7 @@ function coverageEnd(
   return end;
 }
 
-// The days a request past the end of one service's coverage is answered from: the last same-weekday
-// days at or before `end`, most recent first, and never before the first day the FEED covers — a
-// calendar row written for two special weeks has to be outvoted by the ordinary weeks behind it,
-// which only exist inside the feed's own window.
+// Never before the feed's first day, so special-week rows are outvoted by ordinary weeks inside it.
 function fallbackDays(end: number, feedStart: number, day: number): number[] {
   if (!Number.isFinite(end)) {
     return []; // a service with neither a range nor a row of its own covers nothing to vote over
@@ -227,11 +203,9 @@ function fallbackDays(end: number, feedStart: number, day: number): number[] {
   return days;
 }
 
-// The first day any calendar in the feed covers, which bounds every vote below.
 function feedStartDay(services: readonly ServiceCalendar[]): number {
   let first = Number.POSITIVE_INFINITY;
   for (const service of services) {
-    // A service written entirely as calendar_dates rows has no range of its own and bounds nothing.
     if (service.endDay !== 0) {
       first = Math.min(first, service.startDay);
     }
@@ -239,17 +213,7 @@ function feedStartDay(services: readonly ServiceCalendar[]): number {
   return first;
 }
 
-// The services running on one day.
-//
-// A feed nobody has re-fetched would otherwise strand every rider the day after its calendars run
-// out: a service that ended on Friday runs nothing on Saturday and nothing ever again. So past the
-// end each service is asked about the same weekday of each of the last six weeks its OWN feed
-// covers, and runs if most of them ran it — a holiday, or a calendar row written for one special
-// week, is outvoted by the ordinary weeks around it.
-//
-// Per service rather than per feed, because one artifact holds several agencies: San Francisco's
-// carries BART's calendars into 2027 beside Muni's, which ended in August, and a feed-wide test
-// would leave Muni resolving normally to nothing at all for the rest of the year.
+// Past a service's own calendar, a vote over its last six covered same-weekdays; per service, not per feed.
 export function servicesOn(
   services: readonly ServiceCalendar[],
   exceptions: readonly ServiceException[],
@@ -274,7 +238,7 @@ export function servicesOn(
         ran += 1;
       }
     }
-    // Walked most recent first, so a tie is broken by whether the most recent covered day ran it.
+    // Walked most recent first, so a tie goes to the most recent covered day.
     const majority =
       2 * ran > sampled.length ||
       (2 * ran === sampled.length &&
@@ -287,10 +251,7 @@ export function servicesOn(
   return active;
 }
 
-// The three service days around a departure instant, each with the seconds to add to a time written
-// on that day to read it as seconds from midnight of the routed one. Three rather than one because a
-// walk beginning near midnight catches a vehicle on the next service day, and because GTFS writes an
-// after-midnight departure as the previous day's 25:10.
+// Three days, since walks start near midnight and GTFS writes after-midnight trips as 25:10.
 export function serviceDays(
   services: readonly ServiceCalendar[],
   exceptions: readonly ServiceException[],

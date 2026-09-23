@@ -13,8 +13,7 @@ import { clearEdgePathCache, otherEnd, type RoutingGraph } from "./graph";
 import { findRoute, networkMetersTo, type RouteResult } from "./search";
 import { haversineMeters, type Snap } from "./snap";
 
-// The reference optimum: a plain Dijkstra (heuristic identically 0, no early exit) over effective
-// seconds, using exactly findRoute's virtual-source and virtual-goal partial-edge semantics.
+// Heuristic 0 and no early exit, with findRoute's virtual-source and virtual-goal partial-edge semantics.
 function dijkstraCost(
   graph: RoutingGraph,
   start: Snap,
@@ -78,8 +77,6 @@ function dijkstraCost(
   return best;
 }
 
-// The effective-seconds cost of a returned route, reconstructed from its steps: walking steps by
-// their walked span, ferry steps by their discounted duration. Must equal the Dijkstra optimum.
 function effectiveCostOf(
   graph: RoutingGraph,
   result: RouteResult,
@@ -118,9 +115,7 @@ function hasFerryStep(result: RouteResult | null): boolean {
   return result?.steps.some((step) => step.kind === "ferry") ?? false;
 }
 
-// Fixture A — one ferry that is a large shortcut: crossing 0 -> 1 by water is far cheaper than the
-// long walk 0 -> 2 -> 1 around it. The plain walking heuristic from 0 would over-estimate the true
-// (ferry) cost, so this exercises the ferry credit.
+// A: one ferry shortcut, so the plain walking heuristic from 0 would overestimate without the credit.
 const graphA = buildGraph(
   [
     { lat: 40.7, lng: -74.02 }, // 0 start shore
@@ -136,9 +131,7 @@ const graphA = buildGraph(
 const walkEdgeA0 = 1; // walking edge 0 -> 2, for a snap at node 0
 const walkEdgeA1 = 2; // walking edge 2 -> 1, for a snap at node 1
 
-// Fixture B — a two-ferry chain: 0 =ferry= 1 -walk- 2 =ferry= 3, with a very long all-walking
-// detour 0 -walk- 4 -walk- 3. The optimum from 0 to 3 rides both ferries, so admissibility needs
-// the sum of the two largest ferry shortcuts.
+// B: a two-ferry chain, so admissibility needs both ferries' shortcuts credited.
 const graphB = buildGraph(
   [
     { lat: 40.6, lng: -74.12 }, // 0 start
@@ -158,10 +151,7 @@ const graphB = buildGraph(
 const walkEdgeB0 = 3; // walking edge 0 -> 4, for a snap at node 0
 const walkEdgeB3 = 4; // walking edge 4 -> 3, for a snap at node 3
 
-// Fixture C — the Bay Area's shape: two land masses with NO walking edge between them, joined by
-// one ferry. Every fixture above has a walk to fall back on, so none of them asks what the heuristic
-// does when the only path crosses water five times faster than anyone walks. Kept separate from the
-// scenarios above because barring its ferry leaves no path at all, and those assert one.
+// C: the Bay's shape, no walking edge across; kept apart since barring its ferry leaves no path.
 const graphC = buildGraph(
   [
     { lat: 37.7749, lng: -122.4394 }, // 0 west, a long walk in
@@ -178,10 +168,7 @@ const graphC = buildGraph(
 const walkEdgeC0 = 0; // walking edge 0 -> 1
 const walkEdgeC3 = 2; // walking edge 2 -> 3
 
-// Fixture D — a three-hop ferry line: one boat calling at four piers in a row, which the graph draws
-// as three edges rather than one. Riding all three saves more than the best two of them do, so a
-// credit bounded to the two largest shortcuts claims a cheaper remainder than any route can deliver.
-// The walk round by land is there so both snaps have pavement to sit on, and is far too long to take.
+// D: one boat drawn as three hops, whose total saving beats the best two.
 const graphD = buildGraph(
   [
     { lat: 40.6, lng: -74.1 }, // 0 the first pier, where the walk starts
@@ -201,11 +188,7 @@ const graphD = buildGraph(
 const walkEdgeD0 = 3; // walking edge 0 -> 4, for a snap at node 0
 const walkEdgeD3 = 4; // walking edge 4 -> 3, for a snap at node 3
 
-// Fixture E — the same line with a fourth hop, and the first one sailing the wrong way: the boat
-// leaves the start westward, and the three hops after it carry the walker back east past the start
-// to a dest that was a short straight line from it all along. Three hops of saving are left ahead
-// after the first, which is more than the two largest, so the two-largest credit leaves the far
-// pier's estimate above the cost of walking round — and A* stops at the walk without ever riding.
+// E: the first hop sails the wrong way, so a two-largest credit makes A* settle for the walk.
 const graphE = buildGraph(
   [
     { lat: 40.6, lng: -74.0 }, // 0 the start, and the pier it sails from
@@ -216,8 +199,7 @@ const graphE = buildGraph(
     { lat: 40.5156, lng: -73.99 }, // 5 the long way round, by land
   ],
   [
-    // The first hop is as slow as walking its span would be, so its own shortcut is nothing and the
-    // two largest in the graph are both among the three that follow.
+    // As slow as walking its span, so its own shortcut is nothing.
     { a: 0, b: 1, ferry: true, cover: 0, durationSeconds: 10391 },
     { a: 1, b: 2, ferry: true, cover: 0, durationSeconds: 900 },
     { a: 2, b: 3, ferry: true, cover: 0, durationSeconds: 900 },
@@ -273,8 +255,7 @@ const scenarios: Scenario[] = [
   },
 ];
 
-// The edge-geometry cache is keyed by edge id; these fixtures reuse ids across graphs, so reset it
-// before each test so no stale polyline leaks in (also protecting other files' synthetic graphs).
+// The edge-geometry cache is keyed by edge id, and these fixtures reuse ids across graphs.
 beforeEach(clearEdgePathCache);
 
 test("A* effective cost matches the Dijkstra oracle across the weight matrix", () => {
@@ -305,7 +286,7 @@ test("A* effective cost matches the Dijkstra oracle across the weight matrix", (
             ferryWeight,
           );
           const label = `${scenario.name} tw=${treeWeight} fw=${ferryWeight} allow=${allowFerries}`;
-          // The A* optimum must equal the true optimum; a mismatch means the heuristic over-estimated.
+          // A mismatch means the heuristic over-estimated.
           expect(Math.abs(cost - optimum), label).toBeLessThan(1e-3);
           combinations += 1;
         }
@@ -316,8 +297,7 @@ test("A* effective cost matches the Dijkstra oracle across the weight matrix", (
   expect(combinations).toBe(90);
 });
 
-// The same matrix with the estimate measured along the network instead of through the air. A
-// tighter lower bound is still a lower bound, so every answer has to be the one above.
+// A tighter lower bound is still a lower bound, so every answer must match the one above.
 test("the network estimate leaves the A* optimum where it was", () => {
   for (const scenario of scenarios) {
     const reuse = {
@@ -383,9 +363,7 @@ test("the sole crossing is optimal, and barring it leaves no route", () => {
         treeWeight,
         ferryWeight,
       );
-      // A twelve-kilometer boat against a 1.3 m/s walking bound is the widest gap the ferry credit
-      // has to close; over-estimate here and the search would settle for something worse or, with
-      // nothing worse to settle for, wander.
+      // A 12 km boat against a 1.3 m/s bound is the widest gap the ferry credit has to close.
       expect(Math.abs(cost - optimum), label).toBeLessThan(1e-3);
       expect(
         findRoute(graphC, start, dest, weights(treeWeight, ferryWeight, false)),
@@ -430,8 +408,7 @@ test("each boat boarded is a leg of its own, timed at the crossing", () => {
   const ferrySteps = (result?.steps ?? []).filter(
     (step) => step.kind === "ferry",
   );
-  // The fixture carries no timetable, so a crossing costs the graph's baked figure and nothing is
-  // waited for; two boats with a walk between them are two legs all the same.
+  // No timetable, so crossings cost the baked figure; two boats with a walk between are still two legs.
   expect(result?.ferries).toEqual(
     ferrySteps.map((step) => ({
       route: null,
@@ -442,8 +419,7 @@ test("each boat boarded is a leg of its own, timed at the crossing", () => {
   );
 });
 
-// The boat is scenery in a mode that asks for it, and what a card says it got is the crossing: the
-// wait on the pier is time on a pier.
+// The chip counts the crossing only; the wait is time on a pier.
 test("the ferry chip is the crossing's share of the trip", () => {
   const result = findRoute(
     graphB,
@@ -481,8 +457,7 @@ test("barred ferries are never boarded and the walk is ferry-weight-independent"
   }
 });
 
-// What every node's trip to `goal` really costs, by plain Dijkstra out of it: the graph is
-// undirected here, so the distances out of the goal are the costs into it.
+// The graph is undirected, so distances out of the goal are costs into it.
 function costsTo(
   graph: RoutingGraph,
   goal: number,
@@ -517,9 +492,7 @@ function costsTo(
   }
 }
 
-// The A* estimate at `node`, built the way findRoute builds it: the walking bound on the straight
-// line, less the ferry credit — the only credit a graph with no rail on it has — and never below
-// what the floor alone bounds the same line by.
+// Built as findRoute builds it: walking bound less the ferry credit, floored by the floor bound.
 function estimateTo(
   graph: RoutingGraph,
   node: number,

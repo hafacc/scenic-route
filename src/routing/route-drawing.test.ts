@@ -1,7 +1,4 @@
-// What a ridden route draws. The one thing the drawing can get wrong that nothing else notices is
-// the free step a rider takes staying aboard through a stop: it is a ride edge with no length and no
-// line of its own, so read as a change of train it would cut one ride into a drawing per hop and
-// leave a station disc — two of them, at the same coordinates — at every stop the train passes.
+// A stay-aboard step read as a change would split one ride per hop and double-dot every stop.
 
 import { beforeEach, expect, test } from "bun:test";
 import { clearEdgePathCache } from "./graph";

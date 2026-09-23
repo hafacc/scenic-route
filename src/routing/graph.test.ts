@@ -1,8 +1,4 @@
-// The GRPH decoder over a file written by hand, which is the only way to ask whether it reads the
-// layout the Rust writer lays down rather than the one it happens to write itself. v12's question is
-// the section directory: every column viewed in place at the offset the header names, the baked
-// maxima and id lists read off the header rather than off a pass over the edges, and a column the
-// file leaves out read as the zeros a graph written before that bake carried.
+// A hand-written file, so the decoder is tested against the Rust writer's layout, not its own.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -32,8 +28,7 @@ const ORIGIN_LAT = 40.7;
 const LANE_ONE = 0xdeadbeef;
 const LANE_TWO = 0x0001_2345;
 
-// Two walking nodes with a sidewalk and a ferry between them, two stations hung off them, and one
-// pattern riding station to station: every kind the format has, in one file.
+// Every kind the format has, in one file.
 const NODES: readonly [number, number][] = [
   [0, 0], // 0 walking
   [2_000, 0], // 1 walking
@@ -41,8 +36,7 @@ const NODES: readonly [number, number][] = [
   [1_990, 10], // 3 station B
   [10, 10], // 4 platform A, where its station stands
   [1_990, 10], // 5 platform B
-  // The two ends of a footway under the ground, set well away from the rest so the snap index has
-  // nothing to weigh it against.
+  // Set well away from the rest so the snap index has nothing to weigh it against.
   [0, 5_000], // 6
   [200, 5_000], // 7
 ];
@@ -60,7 +54,6 @@ interface EdgeSpec {
 }
 
 const EDGES: readonly EdgeSpec[] = [
-  // The sidewalk carries a bridge byte: it is the walk that crosses the water here.
   {
     a: 0,
     b: 1,
@@ -79,8 +72,7 @@ const EDGES: readonly EdgeSpec[] = [
   { a: 4, b: 5, kind: 7, cover: 0, seconds: 300, geometry: false }, // ride
   { a: 3, b: 5, kind: 6, cover: 0, seconds: 0, geometry: false }, // board, the other end
   { a: 5, b: 3, kind: 5, cover: 0, seconds: 30, geometry: false }, // alight
-  // A walking edge under the ground, appended last so every id above is where it was. It carries no
-  // bridge share: a tunnel is the opposite of the thing that byte measures.
+  // Appended last so every id above stays put.
   {
     a: 6,
     b: 7,
@@ -102,10 +94,7 @@ const BOARD_TABLE: readonly [number, number, number][] = [
 const RIDE_TABLE: readonly [number, number][] = [[6, 0]];
 const NAMES = ["Broadway", "A", "Eighth Avenue Express", "gtfs:A"];
 
-// The blob as `assemble` lays it out. `bakedBridge` false stands in for a graph written before that
-// column existed: the section is simply absent, which is what the decoder's gate has to read as
-// zeros. `bakedTunnel` false does the same for the flags byte's tunnel bit, which came without a
-// section of its own.
+// The false flags stand in for graphs written before the bridge column or tunnel bit existed.
 function graphBytes(
   withTransit: boolean,
   bakedBridge = true,
@@ -196,8 +185,7 @@ describe("the v12 graph decoder", () => {
     expect([...graph.edgeDurationSeconds]).toEqual([
       0, 600, 90, 30, 0, 30, 300, 0, 30, 0,
     ]);
-    // The one walking edge is the only thing that may set the cover ceiling: a duration read as a
-    // cover would put maxCover at 1 and collapse the cost model's clip floor.
+    // A duration read as a cover would put maxCover at 1 and collapse the clip floor.
     expect(graph.edgeCover[0]).toBe(100);
     expect(graph.maxCover).toBeCloseTo(100 / 255, 10);
     expect(graph.edgeCover[6]).toBe(0);
@@ -206,8 +194,6 @@ describe("the v12 graph decoder", () => {
   test("reads the bridge byte, which a graph written before the bake leaves 0", () => {
     expect(graph.edgeBridge[0]).toBe(200);
     expect(graph.maxBridge).toBeCloseTo(200 / 255, 10);
-    // The bake's own gate: a graph with the byte unwritten reads 0 everywhere, so the factor's max
-    // is 0 and its slider takes itself off the panel rather than mispricing anything.
     expect(decodeGraph(graphBytes(true, false), identity).maxBridge).toBe(0);
   });
 
@@ -219,8 +205,6 @@ describe("the v12 graph decoder", () => {
     expect(
       EDGES.every((_, edge) => edge === TUNNEL_EDGE || !isTunnel(graph, edge)),
     ).toBe(true);
-    // The byte predates the bit, so an older graph simply has it clear, and the flag that lifts the
-    // shelter bound stays down with it.
     const preTunnel = decodeGraph(graphBytes(true, true, false), identity);
     expect(isTunnel(preTunnel, TUNNEL_EDGE)).toBe(false);
     expect(preTunnel.hasTunnels).toBe(false);
@@ -256,10 +240,7 @@ describe("the v12 graph decoder", () => {
   });
 
   test("refuses a file whose columns are not where the directory says", () => {
-    // Two u8 columns of the same length, written in the other order: every byte of the file is a
-    // byte the reader would accept, and the only thing that says they have traded places is the tag
-    // each directory entry carries. Read positionally, this city's shade would be priced off its
-    // landmarks.
+    // Swapped same-size u8 columns: only the directory tags can tell them apart.
     expect(() =>
       decodeGraph(
         graphBytes(true, true, true, ["edgeCover", "edgeLandmark"]),
@@ -269,8 +250,6 @@ describe("the v12 graph decoder", () => {
   });
 
   test("reads a column the file leaves out as the zeros it never wrote", () => {
-    // The directory entry stays in place, zeroed, so every later section is still where it was: a
-    // column baked after this graph was written costs it nothing but that column.
     const older = decodeGraph(graphBytes(true, false), identity);
     expect(older.maxBridge).toBe(0);
     expect([...older.edgeBridge]).toEqual(EDGES.map(() => 0));
@@ -282,8 +261,7 @@ describe("the v12 graph decoder", () => {
   test("never snaps a walker onto a platform", () => {
     clearEdgePathCache(); // the polyline cache keys on the edge id alone, across graphs
     const index = buildSnapIndex(graph);
-    // Right on top of station A, which is a meter off the sidewalk and shares its point with a
-    // platform node: the only thing indexed is the pavement.
+    // Station A shares its point with a platform node; only pavement is indexed.
     const snaps = snapCandidates(graph, index, {
       lat: ORIGIN_LAT + 10 * SCALE,
       lng: ORIGIN_LNG + 10 * SCALE,
@@ -293,9 +271,7 @@ describe("the v12 graph decoder", () => {
   });
 
   test("a station on a traffic island does not pave it", () => {
-    // A crossing chained through an island (nodes 0-1-2), with a station node 3 hung off the island
-    // by an access edge. The island is still mid-roadway — a walker standing there is part way
-    // through one crossing — and the station, which has no walking edge at all, is not.
+    // A crossing chained through an island (nodes 0-1-2), with a station node 3 hung off the island.
     const csr = Uint32Array.from([0, 1, 4, 5, 6]);
     const adjacency = Uint32Array.from([0, 0, 1, 2, 1, 2]);
     const kinds = Uint8Array.from([1, 1, 5]); // crossing, crossing, access
@@ -305,8 +281,7 @@ describe("the v12 graph decoder", () => {
   });
 
   test("names an edge durably, which is what places the sheds", () => {
-    // The shed artifact names a deck by (source id, side, ordinal) and the page is the thread that
-    // draws it, so both threads decode these two columns — under v12 there is only one decode.
+    // The page draws sheds, so both threads decode these two columns.
     expect(edgeDurableKey(graph, 0)).toBe(4_242 * 2048 + 3);
     expect(edgeDurableKey(graph, TUNNEL_EDGE)).toBe(9_001 * 2048);
     expect(edgeDurableKey(graph, 1)).toBe(-1); // a ferry has no source segment
@@ -317,7 +292,6 @@ describe("the v12 graph decoder", () => {
     expect(walkingOnly.transitRoutes).toEqual([]);
     expect(laneOf(walkingOnly, 4)).toBe(-1);
     expect(routeOf(walkingOnly, 6)).toBeNull();
-    // The kinds are still in the records; only the side tables are gone.
     expect([...walkingOnly.transitEdges]).toEqual([2, 3, 4, 5, 6, 7, 8]);
   });
 });

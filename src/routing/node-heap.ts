@@ -1,5 +1,4 @@
-// A binary min-heap over parallel key/id arrays, grown by doubling. Stale entries are left in
-// place and skipped on pop (lazy deletion), which is cheaper than sifting on every relaxation.
+// Stale entries are skipped on pop (lazy deletion), which is cheaper than sifting on every relaxation.
 export class NodeHeap {
   private keys: Float64Array;
   private ids: Uint32Array;

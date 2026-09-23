@@ -31,19 +31,7 @@ import {
   WEST_SIDEWALK,
 } from "./transit-graph.fixture";
 
-// Four corridors between the same two ends, each five nodes wide and linked to the direct one at
-// both ends, with the breakpoints put where the planner has to find them:
-//
-//   direct      1780 m, industrial 0.4               cost 1780 * (1 + 0.4 * w_industrial)
-//   canopy      1780 m + 445 m of links, cover 0.45  cost 1780 * (1 - 0.45 * w_tree) + 445
-//   deep canopy 1780 m + 890 m of links, cover 0.9   cost 1780 * (1 - 0.9 * w_tree) + 890
-//   shops       1780 m + 1780 m of links, commercial 1
-//
-// So direct wins at zero and deep canopy at full weight; the shallow canopy is cheapest only for
-// t in (0.10, 0.51), and shops only once the tree weight is dropped on its own. Every distance is a
-// ratio of every other, so the breakpoints are where they are whatever the fixture's scale — and the
-// scale is what it is so that the corridors stand further apart than DIFFERENT_METERS, which is what
-// makes each of them a different walk.
+// Four corridors: direct wins at zero, deep canopy at full weight, shallow canopy for t in (0.10, 0.51).
 
 const SCALE = 1e-6;
 const KIND_SIDEWALK = 0;
@@ -173,9 +161,7 @@ const CORRIDORS: { name: string; lat: number; attributes: EdgeSpec }[] = [
   { name: "direct", lat: 0, attributes: { a: 0, b: 0, industrial: 0.4 } },
   { name: "canopy", lat: 0.002, attributes: { a: 0, b: 0, cover: 0.45 } },
   { name: "deep", lat: 0.004, attributes: { a: 0, b: 0, cover: 0.9 } },
-  // Shops out-scores the deep canopy as well as out-lasting it: a corridor as commercial as the
-  // canopy is leafy would tie it on score while taking longer, which is a dominated route and no
-  // card at all.
+  // Shops must out-score deep canopy, else it's dominated and no card at all.
   { name: "shops", lat: 0.008, attributes: { a: 0, b: 0, commercial: 1 } },
 ];
 
@@ -195,7 +181,6 @@ function buildFixture(): Fixture {
       edges.push({ ...attributes, a: first + column, b: first + column + 1 });
     }
     if (corridor > 0) {
-      // What makes the detour cost real.
       rowOf.set(edges.length, corridor);
       edges.push({ a: 0, b: first });
       rowOf.set(edges.length, corridor);
@@ -278,7 +263,6 @@ test("the fixture's corridors win where they were designed to", async () => {
     );
   expect(route(weightsOf())).toBe("direct");
   expect(route(MODE_WEIGHTS)).toBe("deep");
-  // The shallow-canopy corridor is the cheapest only in a band of the cost scale.
   const scaled = (scale: number): RouteWeights =>
     weightsOf({
       tree: MAX_TREE_WEIGHT * scale,
@@ -290,9 +274,7 @@ test("the fixture's corridors win where they were designed to", async () => {
   expect(route(scaled(0.8))).toBe("deep");
 });
 
-// A route along a parallel of latitude, `lat` north of the equator and running `east` degrees of
-// longitude: at the equator a degree of longitude is the same 111,320 m a degree of latitude is, so
-// these read in meters without a projection of the test's own.
+// At the equator a degree of longitude is 111,320 m, so these read in meters without projection.
 const alongLatitude = (lat: number, east = 0.01): RouteResult =>
   ({
     path: {
@@ -318,20 +300,16 @@ test("two routes are as far apart as the ground between them", async () => {
   expect(routeDistanceMeters(direct, direct)).toBeCloseTo(0, 9);
   expect(routeDistanceMeters(direct, deep)).toBeGreaterThan(DIFFERENT_METERS);
 
-  // Two parallel lines are exactly their offset apart, which is the whole claim: the measure is the
-  // area between them over their length, and for parallels that area is a rectangle.
+  // Parallel lines are exactly their offset apart.
   expect(
     routeDistanceMeters(alongLatitude(0), alongLatitude(0.0009)),
   ).toBeCloseTo(100, 0);
-  // And two lines that share no ground at all are as far apart as the ground between them, which is
-  // a number rather than the 1 a Jaccard saturates at.
+  // Unlike a Jaccard, which saturates at 1.
   expect(
     routeDistanceMeters(alongLatitude(0), alongLatitude(0.05)),
   ).toBeGreaterThan(5000);
 });
 
-// The property the old grid rasterization was built to keep, and the floor under the threshold: the
-// two pavements of one street are one route.
 test("opposite sidewalks of one street are the same walk", async () => {
   const apart = routeDistanceMeters(alongLatitude(0), alongLatitude(0.00018));
 
@@ -361,9 +339,8 @@ test("the first breakpoint above the fastest route is the shallow corridor", asy
   const corridors = plan.routes.map((route) =>
     fixture.corridorOf(route.result),
   );
-  // The breakpoint route is offered as a card of its own, not just searched.
   expect(corridors).toContain("canopy");
-  // Bracketed around where the shallow corridor overtakes the direct one (t ~ 0.104).
+  // Around where the shallow corridor overtakes the direct one (t ~ 0.104).
   const scales = seen
     .map((weights) => weights.tree / MAX_TREE_WEIGHT)
     .filter((scale) => scale > 0 && scale < 0.15)
@@ -378,7 +355,7 @@ test("dropping a factor finds the route only that factor was hiding", async () =
   const corridors = plan.routes.map((route) =>
     fixture.corridorOf(route.result),
   );
-  // Only reachable by dropping the tree weight on its own: with it the deep canopy always wins.
+  // Only reachable by dropping the tree weight alone: with it the deep canopy always wins.
   expect(corridors).toContain("shops");
   expect(corridors.sort()).toEqual(["canopy", "deep", "direct", "shops"]);
   expect(new Set(corridors).size).toBe(corridors.length);
@@ -403,9 +380,7 @@ test("cards are the max-scenic route, the direct one and what differs from both"
     (route) => fixture.corridorOf(route.result) === "deep",
   );
   expect(deep).toBeDefined();
-  // Most scenic first, most direct last: the end the owner cares about is the one read first. The
-  // shops corridor leads on score although the full weights chose the deep canopy, which is what the
-  // cards are ordered by.
+  // Shops leads on score although the full weights chose the deep canopy.
   const scores = plan.routes.map((route) => route.scenicScore);
   expect([...scores].sort((left, right) => right - left)).toEqual(scores);
   expect(fixture.corridorOf(plan.routes[0].result)).toBe("shops");
@@ -437,7 +412,6 @@ test("two cards worth the same scenery are read shortest first", async () => {
 
 test("selection stops rather than offering a route that is not different", async () => {
   const fixture = buildFixture();
-  // One factor, one corridor worth taking: nothing else clears the threshold against the two kept.
   const plan = await planOn(fixture, weightsOf({ tree: MAX_TREE_WEIGHT }));
   expect(plan.routes.length).toBeLessThan(4);
   expect(plan.routes.length).toBeGreaterThanOrEqual(2);
@@ -452,8 +426,7 @@ test("the scenic score and the color factor say what a card has", async () => {
   const scoreOf = (corridor: string): number =>
     plan.routes.find((route) => fixture.corridorOf(route.result) === corridor)!
       .scenicScore;
-  // Weight times the SECONDS spent on the attribute, over the discounts; the direct corridor has
-  // none of them.
+  // The direct corridor has none of the discounted attributes.
   expect(scoreOf("direct")).toBeCloseTo(0, 5);
   expect(scoreOf("deep")).toBeGreaterThan(scoreOf("canopy"));
   expect(scoreOf("deep")).toBeGreaterThan(0.5);
@@ -473,14 +446,10 @@ test("the scenic score and the color factor say what a card has", async () => {
   ).toBe("shops");
 });
 
-// A fixed path's cost is affine in one weight, so the cheapest cost over all paths is concave in it:
-// a route that wins both at 0 and at the mode's weight wins at every point between, and asking there
-// can only return it again. The sweep still moves every scenic weight together, which is a different
-// line through the space and does find other routes.
+// The cheapest cost is concave in one weight, so a route winning at both ends wins in between.
 test("a factor whose drop changed nothing is never asked for in between", async () => {
   const fixture = buildFixture();
   const seen: RouteWeights[] = [];
-  // With no commercial weight the shops corridor never wins, so every drop reproduces R_max.
   const plan = await planOn(
     fixture,
     weightsOf({ tree: MAX_TREE_WEIGHT, industrial: MAX_INDUSTRIAL_WEIGHT }),
@@ -506,9 +475,6 @@ test("a search that finds nothing plans nothing", async () => {
   expect(plan.searches).toBe(1);
 });
 
-// The sweep's zero end is what every scenic card is compared against, and that has to be the fastest
-// WALK. Transit is a PENALTY, so scaling it toward zero along with the discounts made the baseline
-// the most train-happy route there is, and the quickest way on foot was never asked for at all.
 test("the sweep's baseline is the fastest walk, not the ride", async () => {
   const graph = transitGraph(undefined, { detours: true });
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
@@ -533,7 +499,6 @@ test("the sweep's baseline is the fastest walk, not the ride", async () => {
     },
     minMultiplier: (candidate) => minMultiplier(graph, candidate),
   });
-  // Nothing the sweep asks for discounts the ride: the penalty is held where the mode put it.
   expect(
     asked.every(
       (candidate) =>
@@ -549,9 +514,6 @@ test("the sweep's baseline is the fastest walk, not the ride", async () => {
   ).toBeCloseTo((onFoot as RouteResult).travelSeconds, 6);
 });
 
-// The baseline is the fastest WALK, not the fastest trip: it still carries the mode's transit
-// penalty, which can have it leave the train a stop early and walk the rest. So the trip with
-// nothing priced at all is asked for outright, and it is what the least scenic card offers.
 test("the fastest trip is asked for even where the mode charges a ride", async () => {
   const graph = transitGraph(undefined, { detours: true });
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
@@ -587,16 +549,11 @@ test("the fastest trip is asked for even where the mode charges a ride", async (
     fastest.travelSeconds,
     6,
   );
-  // And the card it becomes is the quickest one offered: the absolute score puts it last, where the
-  // reader looking for the quick way round looks.
   expect(
     Math.min(...plan.routes.map((route) => route.result.travelSeconds)),
   ).toBeCloseTo(fastest.travelSeconds, 6);
 });
 
-// The planner needs no special case for the rail: transit is a weight like any other, so backing it
-// off is one of the per-factor drops the sweep already makes, and the route that comes back is the
-// "take the subway" card.
 test("dropping the transit penalty is what offers the ride", async () => {
   const graph = transitGraph();
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
@@ -617,8 +574,6 @@ test("dropping the transit penalty is what offers the ride", async () => {
   );
   expect(riding).toHaveLength(1);
   expect(riding[0].result.transitSeconds).toBeGreaterThan(0);
-  // The route this mode chose walks, so the surface-only candidate below would be that same route
-  // again and is not asked for.
   expect(
     asked.every(
       (candidate) => candidate.allowFerries || candidate.allowTransit,
@@ -626,10 +581,7 @@ test("dropping the transit penalty is what offers the ride", async () => {
   ).toBe(true);
 });
 
-// Rain prices no ride at all, so the sweep has nothing to back off: without a candidate asked for
-// outright, every route it found would be the same ride. Whether the walk it finds earns a card is
-// the dominance rule's business, not this one's — here the ride is quicker and the mode prices
-// nothing the walk has, so it does not.
+// Here the ride is quicker and the mode prices nothing the walk has, so the walk earns no card.
 test("a mode that prices no ride is still offered the walk", async () => {
   const graph = transitGraph();
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
@@ -656,7 +608,6 @@ test("a mode that prices no ride is still offered the walk", async () => {
   expect(riding).toHaveLength(1);
 });
 
-// And a mode whose route walks anyway is not charged a search to be told so.
 test("the walking candidate is not asked for when nothing rides", async () => {
   const fixture = buildFixture();
   const asked: RouteWeights[] = [];
@@ -664,9 +615,6 @@ test("the walking candidate is not asked for when nothing rides", async () => {
   expect(asked.every((candidate) => candidate.allowTransit)).toBe(true);
 });
 
-// The surface-only candidate: a route that rides is offered the walk that stays on the ground the
-// whole way, with the boats and the trains barred together. No back-off axis can reach it — barring
-// a crossing is a switch, not a weight — so it is asked for outright.
 test("a route that rides is offered the walk that stays on the surface", async () => {
   const graph = transitGraph();
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
@@ -689,8 +637,7 @@ test("a route that rides is offered the walk that stays on the surface", async (
       (candidate) => !candidate.allowFerries && !candidate.allowTransit,
     ),
   ).toBe(true);
-  // Both switches are in the memo key, so the candidate is a search of its own rather than the
-  // answer to the weights it shares with the max-scenic route.
+  // Both switches are in the memo key, so the candidate is a search of its own.
   expect(
     new Set(asked.map((candidate) => JSON.stringify(candidate))).size,
   ).toBe(asked.length);
@@ -703,11 +650,7 @@ test("a route that rides is offered the walk that stays on the surface", async (
   ).toBe(true);
 });
 
-// A route that runs due east in two even halves, each held a number of meters north of a shared
-// line: two of these run as far apart as the mean of their two gaps, which is what lets the
-// geometry of the pool below be read off as plain numbers. Every second of one is spent under trees,
-// so a longer one is always the more scenic and no pool below has a dominated route in it — what
-// these tests are about is which routes selection puts on cards, not which are worth a card.
+// Two routes run as far apart as the mean of their two gaps; all tree, so none is dominated.
 function twoHalves(
   edge: number,
   travelSeconds: number,
@@ -735,9 +678,7 @@ function twoHalves(
   } as unknown as RouteResult;
 }
 
-// The same route with a train ridden along the way per line named, so two lines are a connection.
-// Which lines they are is decoration: the planner reads how many legs a route rides, not what they
-// were, and the tests below name real ones only so they read like trips.
+// Line names are decoration: the planner counts legs, not lines.
 function riding(route: RouteResult, ...lines: string[]): RouteResult {
   return {
     ...route,
@@ -745,8 +686,6 @@ function riding(route: RouteResult, ...lines: string[]): RouteResult {
   } as unknown as RouteResult;
 }
 
-// One walk of a given length, some of it under trees: the share and the seconds disagree, which is
-// what the score is asked about below.
 function treeWalk(
   edge: number,
   travelSeconds: number,
@@ -760,9 +699,7 @@ function treeWalk(
   } as unknown as RouteResult;
 }
 
-// The planner over a pool laid out by hand: the first search answers with the max-scenic route and
-// each later one takes the next, until the queue runs down and every further search repeats the
-// last. What the weights are never matters here — the geometry of the pool is the whole subject.
+// Each search returns the next queued route, then repeats the last; the weights never matter.
 function planOverPool(
   pool: RouteResult[],
   weights: RouteWeights = weightsOf({ tree: MAX_TREE_WEIGHT }),
@@ -775,8 +712,6 @@ function planOverPool(
   });
 }
 
-// A shorter walk is time a route spends earning nothing: ten minutes wholly under a canopy is a
-// perfect SHARE and less tree than half an hour half in the open.
 test("the score is the time spent on a factor, not the share of the trip", async () => {
   const wholly = treeWalk(1, 600, 600, 0);
   const longer = treeWalk(2, 1800, 900, 1000);
@@ -786,19 +721,14 @@ test("the score is the time spent on a factor, not the share of the trip", async
     plan.routes.find((route) => route.result.steps[0].edge === edge)!
       .scenicScore;
   expect(scoreOf(2)).toBeGreaterThan(scoreOf(1));
-  // The share says the opposite, which is the whole point of the change.
   expect(wholly.factors.tree).toBeGreaterThan(longer.factors.tree);
-  // Most scenic first, so the card the reader sees first is the one with the most tree in it.
   expect(plan.routes[0].result.steps[0].edge).toBe(2);
 });
 
 const edgesOf = (plan: Awaited<ReturnType<typeof planRoutes>>): number[] =>
   plan.routes.map((route) => route.result.steps[0].edge).sort();
 
-// Furthest-from-chosen takes the far route first, and against that one nothing else clears the
-// floor: the better plan is the pair it blocks, which is why the set is enumerated rather than
-// built up. The far route runs 1000 m from the max-scenic one but only 39 m and 43 m from the two
-// routes that are 78 m apart from each other.
+// The far route is 1000 m out but only 39 m and 43 m from the pair that's 78 m apart.
 test("the set of cards is the best one, not the one furthest-first builds", async () => {
   const maxScenic = twoHalves(1, 600, 0, 0);
   const far = twoHalves(2, 500, 1000, 1000);
@@ -817,8 +747,6 @@ test("the set of cards is the best one, not the one furthest-first builds", asyn
   expect(edgesOf(plan)).toEqual([1, 3, 4]);
 });
 
-// And the floor is what the largest set is measured against: draw that same pair together and no
-// three routes are all different walks, so the plan is the two that are.
 test("no set of cards is offered whose closest pair is under the floor", async () => {
   const maxScenic = twoHalves(1, 600, 0, 0);
   const far = twoHalves(2, 500, 1000, 1000);
@@ -830,9 +758,6 @@ test("no set of cards is offered whose closest pair is under the floor", async (
   expect(edgesOf(plan)).toEqual([1, 2]);
 });
 
-// How much of a trip is ridden is read before the ground it covers: the walk and the same walk with
-// a train in the middle of it are two trips, and a reader told they are one card has been told
-// nothing about the train.
 test("a route that rides is a different card from the walk beside it", async () => {
   const walk = twoHalves(1, 900, 0, 0);
   const rail = riding(twoHalves(2, 600, 10, 10), "A");
@@ -842,8 +767,7 @@ test("a route that rides is a different card from the walk beside it", async () 
   expect(edgesOf(plan)).toEqual([1, 2]);
 });
 
-// Which line is boarded is not a trip of its own, though: two routes that each ride once fall back
-// to the ground between them, which here is the width of a street.
+// Here the ground between them is the width of a street.
 test("the 2 and the 3 over the same ground are one card", async () => {
   const express = riding(twoHalves(1, 600, 0, 0), "2");
   const local = riding(twoHalves(2, 700, 10, 10), "3");
@@ -853,8 +777,6 @@ test("the 2 and the 3 over the same ground are one card", async () => {
   expect(edgesOf(plan)).toEqual([1]);
 });
 
-// A change of train is a trip of its own: one ride and two are different cards however close the
-// two run, because changing trains is something the reader is choosing about.
 test("one ride is a different card from two", async () => {
   const through = riding(twoHalves(1, 600, 0, 0), "A");
   const connection = riding(twoHalves(2, 700, 10, 10), "A", "C");
@@ -866,10 +788,6 @@ test("one ride is a different card from two", async () => {
   expect(edgesOf(plan)).toEqual([1, 2]);
 });
 
-// The owner's case: three walks that each buy their extra minutes with extra trees, and a ride that
-// takes longer than any of them and passes less. Nothing about the ride is worth a reader's slot —
-// whatever they wanted from it, one of the walks has more of it and is home sooner — so it goes
-// before the cards are chosen, and the three walks are the plan.
 test("a trip another beats on both counts is no card at all", async () => {
   const walks = [
     treeWalk(1, 46 * 60, 25 * 60, 0),
@@ -887,8 +805,6 @@ test("a trip another beats on both counts is no card at all", async () => {
   ).toBe(false);
 });
 
-// The quickest trip is a card whatever it passes on the way, because nothing else is quicker: a
-// reader who wants to be there is offered it however dull the ride is.
 test("the quickest trip is a card with nothing to its name", async () => {
   const walks = [
     treeWalk(1, 53 * 60, 37 * 60, 0),
@@ -901,8 +817,7 @@ test("the quickest trip is a card with nothing to its name", async () => {
   expect(edgesOf(plan)).toEqual([1, 2, 3, 4]);
 });
 
-// And the slow trip is a card when it is worth the time: Rain prices shelter, which a ride has all
-// of and a walk in the open none of, so the ride leads on score and no faster walk covers it.
+// Rain prices shelter, which a ride has all of, so the ride leads on score.
 test("a slower trip is a card when it is worth more", async () => {
   const sheltered = (
     edge: number,
@@ -927,15 +842,10 @@ test("a slower trip is a card when it is worth more", async () => {
   expect(plan.routes[0].result.steps[0].edge).toBe(1);
 });
 
-// Both ends of the front are there by construction, which is why the planner keeps no case for
-// either: nothing is more scenic than the most scenic route, so it is never beaten on scenery, and
-// nothing is quicker than the quickest, so that one is never beaten on time. Two routes alike on
-// both counts are one offer made twice, and the first of them stands for it.
 test("nothing beats the most scenic trip or the quickest one", () => {
   const travelSeconds = [900, 600, 1200, 600, 900];
   const scenicScores = [30, 10, 40, 10, 5];
   const kept = undominated(travelSeconds, scenicScores);
-  // The duplicate of the quickest and the walk that is slower and duller than the first are gone.
   expect(kept).toEqual([0, 1, 2]);
   expect(Math.max(...kept.map((index) => scenicScores[index]))).toBe(
     Math.max(...scenicScores),
@@ -945,9 +855,7 @@ test("nothing beats the most scenic trip or the quickest one", () => {
   );
 });
 
-// Every set of up to three cards, scored in full and in the order the search walks them, so that a
-// tie falls the same way in both. No floor test until the whole set is scored and no bound: this is
-// the answer the search has to reproduce cheaply.
+// No floor test until the whole set is scored and no bound; ties fall as in the search.
 function enumerateCards(
   separations: readonly Float64Array[],
   travelSeconds: readonly number[],
@@ -992,8 +900,6 @@ function enumerateCards(
   return [0, ...best];
 }
 
-// Twenty routes scattered over a few hundred meters, which is the spread a real pool has: some
-// pairs are the same walk, most are not.
 function randomPool(seed: number): {
   separations: Float64Array[];
   travelSeconds: number[];
@@ -1037,6 +943,5 @@ test("the search over sets finds what enumerating every set finds", async () => 
     visited += selectionDiagnostics.visited;
     enumerated += selectionDiagnostics.enumerated;
   }
-  // And gets there over a fraction of the sets, which is the point of bounding the search.
   expect(visited).toBeLessThan(enumerated / 2);
 });

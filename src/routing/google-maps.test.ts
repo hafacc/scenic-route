@@ -34,8 +34,7 @@ test("a route with no waypoints leaves the parameter off entirely", () => {
 });
 
 test("more waypoints than Google takes are cut rather than silently ignored", () => {
-  // Over the limit Google drops waypoints itself, without saying so, degrading the link to a plain
-  // walk from one end to the other — so the cut has to happen here, where the first nine are kept.
+  // Google silently drops waypoints over the limit, so the cut happens here, keeping the first nine.
   const many = Array.from({ length: MAX_WAYPOINTS + 4 }, (_unused, index) =>
     point(40.7 + index / 1000, -74),
   );
@@ -53,8 +52,6 @@ test("more waypoints than Google takes are cut rather than silently ignored", ()
 });
 
 test("a route that rides is handed over whole, in transit mode", () => {
-  // Pins between two stations would be WALKED by the router that receives them, so the two ends are
-  // the whole of the link and Google plans its own ride between them.
   const url = new URL(
     googleMapsTransitUrl(point(40.7128, -74.006), point(40.7484, -73.9857)),
   );

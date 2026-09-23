@@ -1,10 +1,4 @@
-// A hand-written rail feed for the transit artifacts to be built from. Small enough to reason about
-// by hand and shaped like the things that go wrong: a route with a branch and a one-off pattern, two
-// curbs of one station under one name, an underground stop, a second route timetabled by frequency
-// rather than by trip, a Saturday service, and a holiday that swaps the two.
-//
-// Both the topology (scripts/transit.ts) and the timetable (scripts/transit-schedule.ts) are built
-// from this one feed, which is the point: the lane ids they hand each other have to agree.
+// One feed builds both the topology and the timetable, so the lane ids they share have to agree.
 
 import type { GtfsFeed, GtfsRow } from "../../scripts/gtfs";
 import type { LoadedFeed, TransitFeedSource } from "../../scripts/transit";
@@ -20,8 +14,7 @@ export const FIXTURE_SOURCE: TransitFeedSource = {
   underground: new Set(["Deep"]),
 };
 
-// The stops, all without a parent_station, so the ingest merges the two curbs of "Bay" the way it
-// merges Muni's.
+// No parent_station, so the ingest merges the two curbs of "Bay" the way it merges Muni's.
 const STOPS: readonly { id: string; name: string; lat: number; lng: number }[] =
   [
     { id: "A", name: "Alpha", lat: 40.7, lng: -74.0 },
@@ -34,8 +27,7 @@ const STOPS: readonly { id: string; name: string; lat: number; lng: number }[] =
     { id: "G", name: "Gulf", lat: 40.61, lng: -74.05 },
   ];
 
-// The three patterns of route L1: the trunk, the branch that turns at Echo off the other curb of
-// Bay, and a single working that goes no further than Bay.
+// Route L1: the trunk, a branch turning at Echo off Bay's other curb, and a working ending at Bay.
 const TRUNK: readonly [string, number][] = [
   ["A", 0],
   ["B", 120],
@@ -51,8 +43,7 @@ const ONE_OFF: readonly [string, number][] = [
   ["A", 0],
   ["B", 120],
 ];
-// Route L2, timetabled by frequencies.txt: its one trip is a template, and the frequency rows are
-// the service.
+// Timetabled by frequencies.txt: its one trip is a template.
 const SHUTTLE: readonly [string, number][] = [
   ["F", 0],
   ["G", 240],
@@ -69,8 +60,7 @@ export const SATURDAY_TRUNK_TRIPS = 5;
 export const SHUTTLE_HEADWAY = 600;
 export const SHUTTLE_BAND_START = 6 * 3600;
 export const SHUTTLE_BAND_END = 9 * 3600;
-// The Friday the feed turns into a Saturday: calendar_dates removes the weekday service and adds the
-// Saturday one.
+// calendar_dates swaps the weekday service for the Saturday one.
 export const HOLIDAY = 20260904;
 
 function clock(seconds: number): string {
@@ -181,7 +171,7 @@ export function fixtureFeed(): GtfsFeed {
         route_color: "445566",
         route_text_color: "000000",
       },
-      // A bus, to prove the route-type filter keeps it out of the artifact.
+      // A bus, to prove the route-type filter keeps it out.
       { route_id: "B1", route_type: "3", route_short_name: "B1" },
     ],
     trips,

@@ -41,13 +41,9 @@ import {
   type RouteWeights,
 } from "./cost";
 
-// What each scenic factor is called, looks like and moves on. The route panel and the settings page
-// both draw the same twelve sliders, so the metadata lives here rather than in either of them: two
-// tables would be two chances for a label, a color or a scale to drift.
+// Shared by the route panel and the settings page, so labels, colors and scales can't drift apart.
 
-// Everything else in the cost context: one slider each. The switches are in ./cost.ts, with the
-// types they are excluded by, so the two lists cannot drift apart. `allowTransit` is excluded there
-// too and has no row here: it is the planner's own flag, not a control.
+// `allowTransit` is excluded in ./cost.ts too: it's the planner's own flag, not a control.
 export type { GateKey };
 export type FactorKey = Exclude<keyof RouteWeights, GateKey | InternalFlag>;
 
@@ -59,10 +55,7 @@ export interface Factor {
   tint: string; // text color for the icon and chip
   color: string; // the slider's fill/thumb color (a CSS hex; matches the map overlay)
   signed?: boolean; // a bipolar −max..max slider (sun ↔ shade) rather than one-sided 0..max
-  // The layer a city omits when it has no data for this factor. The route panel reads the loaded
-  // graph instead, which is exact — but the settings page opens with no graph and must still say
-  // which factors this city can answer, and a city's layer list is the same fact authored ahead of
-  // time. Absent means every city has it.
+  // For the settings page, which has no graph to say what a city can answer; absent means every city.
   overlay?: OverlayId;
 }
 
@@ -70,17 +63,13 @@ export interface Gate {
   key: GateKey;
   label: string;
   Icon: ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
-  // The layer a city without this gate's data omits. Absent where the gate needs no data of its own,
-  // so every city offers it.
+  // Absent where the gate needs no data of its own, so every city offers it.
   overlay?: OverlayId;
-  // What the switch means when it is ON, for the panel's tooltip and the settings row.
   on: string;
   off: string;
 }
 
-// Ordered against the sliders below: a gate sits where the factor it shares its data with sits
-// — scaffolding beside `shelter`, ferries beside `ferry` — and crossings, which has no slider of
-// its own, comes last. Every list of the switches is drawn from here, so the order is settled once.
+// A gate sits beside the slider it shares data with; crossings, with no slider, comes last.
 export const GATES: readonly Gate[] = [
   {
     key: "allowSheds",
@@ -130,9 +119,7 @@ export const FACTORS: readonly Factor[] = [
     label: "Prefer shelter",
     Icon: MdWaterDrop,
     max: MAX_SHELTER_WEIGHT,
-    // Shelter is priced from the sidewalk-shed decks and the canopy over what they do not cover, plus
-    // any tunnel, which is sheltered whole; a city with no shed feed and nothing underground has
-    // nothing to shelter under at all (src/routing/cost.ts).
+    // A city with no shed feed and nothing underground has nothing to shelter under.
     overlay: "scaffolding",
     tint: "text-sky-600 dark:text-sky-400",
     color: "#0284c7",
@@ -158,9 +145,7 @@ export const FACTORS: readonly Factor[] = [
   {
     key: "historic",
     label: "Prefer historic areas",
-    // The overlay's own glyph and indigo — deliberately not the landmarks amber, which prices a
-    // different thing: passing one designated building, rather than walking inside a designated
-    // neighborhood.
+    // Not the landmarks amber, which prices passing one building rather than walking inside a district.
     Icon: MdMapsHomeWork,
     max: MAX_HISTORIC_WEIGHT,
     tint: "text-indigo-600 dark:text-indigo-400",
@@ -207,8 +192,7 @@ export const FACTORS: readonly Factor[] = [
     label: "Cross bridges",
     Icon: PiBridgeFill,
     max: MAX_BRIDGE_WEIGHT,
-    // Cyan, beside the ferries' blue: the nearest idea on the list, and deliberately not the same
-    // color, since only one of the two is a walk.
+    // Cyan beside the ferries' blue, deliberately distinct since only one of the two is a walk.
     tint: "text-cyan-600 dark:text-cyan-400",
     color: "#0891b2",
   },
@@ -236,10 +220,7 @@ export const FACTORS: readonly Factor[] = [
 export const factorPercent = (factor: Factor, weight: number): number =>
   Math.round((weight / factor.max) * 100);
 
-// The reading beside a factor's slider. No per cent sign anywhere: every number on this map is one
-// of these, they are all read against each other rather than against a quantity of anything, and
-// eleven of them in a row with a sign each is a lot of punctuation for no information. The signed
-// factor keeps its direction, which is the one thing its number does not say on its own.
+// No percent sign: these are read against each other, not as quantities.
 export function factorReading(factor: Factor, weight: number): string {
   const value = factorPercent(factor, weight);
   if (!factor.signed) {
@@ -251,12 +232,7 @@ export function factorReading(factor: Factor, weight: number): string {
   }
 }
 
-// A factor's slider, tracked in its own color. The two pages show the same weight, so they show it
-// through the same control rather than through two that have to be kept in step.
-// The steps a slider moves in, as percentages. Twenty positions either way rather than a hundred:
-// nobody is choosing between 63% and 64% tree cover, and a coarse step is what makes the same drag
-// land on the same number twice. The signed one is coarser still because it spends its travel on two
-// directions, so 10% keeps its two halves the same twenty steps the others get.
+// Coarse steps so the same drag lands on the same number twice; signed gets 10 for twenty per side.
 const STEP = 5;
 const SIGNED_STEP = 10;
 

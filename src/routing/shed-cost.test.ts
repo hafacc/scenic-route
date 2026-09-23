@@ -16,21 +16,17 @@ import { constantShadeField } from "./shade";
 import { DEFAULT_DECK_DEPTH_METERS, type EdgeDeck, shedField } from "./sheds";
 import { haversineMeters, type Snap } from "./snap";
 
-// The three scaffolding cost terms: a deck folded into the shade attribute, the shelter factor it
-// shares with the canopy, and the avoid penalty. The routes are checked on a diamond whose two halves
-// are a short shedded way and a longer bare detour, which is the choice the toggle actually faces.
+// The diamond's halves are a short shedded way and a longer bare detour, the choice the toggle faces.
 
 const SCALE = 1e-6;
 const NAME_NONE = 0xffff;
 const KIND_SIDEWALK = 0;
 const JULY = new Date(2026, 6, 15);
 const JANUARY = new Date(2026, 0, 15);
-// How far the lower half of the diamond has to bow out to be four times the upper half's walk — the
-// scale of detour avoiding scaffolding is meant to be worth.
+// The lower half bows out to four times the upper half's walk.
 const FOUR_TIMES = 0.006;
 
-// Each case builds its own graph reusing the same edge ids, so the edge-path cache cannot carry one
-// diamond's geometry into the next one's bearings.
+// Cases reuse edge ids, so one diamond's geometry must not leak into the next one's bearings.
 beforeEach(clearEdgePathCache);
 
 const noPref = (over: Partial<RouteWeights> = {}): RouteWeights => ({
@@ -49,8 +45,7 @@ const noPref = (over: Partial<RouteWeights> = {}): RouteWeights => ({
   transit: 0,
   allowFerries: false,
   allowSheds: true,
-  // The fixture draws no rail, so nothing can board it, and no crossing edges, which leaves the
-  // crossing gate free either way — stated because omitting it would read as "avoid crossings".
+  // Stated because omitting it would read as "avoid crossings".
   allowTransit: false,
   allowCrossings: true,
   ...over,
@@ -61,9 +56,7 @@ interface NodeSpec {
   lng: number;
 }
 
-// The fractions (0..1) the cost model reads off a walking edge. `shed` is the share standing under a
-// deck; `canopy` is the unsmoothed share with a crown directly overhead; `highway` is the one
-// nuisance attribute, the only factor that can push a meter's multiplier above 1.
+// `highway` is the only factor that can push a meter's multiplier above 1.
 interface EdgeAttrs {
   cover?: number;
   canopy?: number;
@@ -178,9 +171,7 @@ function buildGraph(
     names: [],
     geometry: new Uint8Array(0),
   } as unknown as RoutingGraph;
-  // The real field, then its sun nailed straight overhead so a deck shades everything it covers. What
-  // an oblique sun takes back off it is sheds.test.ts's subject; these cases are about how the shade,
-  // shelter and penalty terms compose once a share is decided.
+  // Sun nailed overhead so a deck shades all it covers; oblique sun is sheds.test.ts's subject.
   graph.sheds = shedField(graph, decks, date);
   graph.sheds.translate.fill(0);
   return graph;
@@ -200,9 +191,7 @@ function snapAtNode(graph: RoutingGraph, node: number, walkEdge: number): Snap {
   };
 }
 
-// A diamond: from 0 to 3 by the upper path (node 1, edges 1 and 2) or the lower one (node 2, edges 3
-// and 4), plus a snap stub at each end. `upperLat`/`lowerLat` set how far each bows out, so one side
-// can be made a genuine detour of the other — the corner-cross-back a shed forces on a real block.
+// `upperLat`/`lowerLat` set how far each half bows out, so one can be a genuine detour.
 function diamond(
   upper: EdgeAttrs,
   lower: EdgeAttrs,
@@ -234,7 +223,6 @@ function diamond(
   };
 }
 
-// The share of an edge under a deck, as the quantized byte the cost model actually reads.
 function shedOf(graph: RoutingGraph, edge: number): number {
   return (
     (graph.sheds as NonNullable<RoutingGraph["sheds"]>).coverage[edge] / 255
@@ -247,29 +235,26 @@ function upperTaken(result: RouteResult | null): boolean {
   );
 }
 
-// The walked length of a route, so a forced detour can be measured rather than only detected.
 function walkMeters(result: RouteResult | null): number {
   return result ? result.walkMeters : Number.NaN;
 }
 
 test("a deck shades its share of an edge whatever the sun is doing", () => {
   const { graph } = diamond({ shed: 0.5 }, {});
-  // A field where every edge is fully sunlit, so the only shade on the route is the scaffolding's.
+  // Every edge fully sunlit, so the only shade on the route is the scaffolding's.
   const sunlit = Math.fround(0.8); // as the field's Float32 row stores it
   graph.shade = constantShadeField(
     new Float32Array(graph.edgeCount).fill(sunlit),
   );
   const preferShade = noPref({ shade: -1 });
   const half = shedOf(graph, 1);
-  // Half decked: that share reads a fully shaded -0.8 and the rest its baked +0.8, so the two cancel.
+  // Half decked: that share reads -0.8 and the rest +0.8, so the two cancel.
   expect(edgeMultiplier(graph, 1, preferShade)).toBeCloseTo(
     1 + sunlit * (1 - 2 * half),
     12,
   );
-  // Bare: the baked sunlit attribute, which a shade preference charges for.
   expect(edgeMultiplier(graph, 3, preferShade)).toBeCloseTo(1 + sunlit, 12);
-  // Composited, not summed: a deck over an already shaded edge bottoms out at fully shaded, not past
-  // it, where summing the two would take the attribute below -1 and the multiplier with it.
+  // Composited, not summed, so a deck over shade bottoms out at fully shaded instead of below -1.
   const covered = diamond({ shed: 1 }, {}).graph;
   covered.shade = constantShadeField(
     new Float32Array(covered.edgeCount).fill(-sunlit),
@@ -278,8 +263,7 @@ test("a deck shades its share of an edge whatever the sun is doing", () => {
 });
 
 test("a sun preference walks around scaffolding, a shade preference under it", () => {
-  // The upper path is decked; the lower bows out slightly further, so it wins only when the deck's
-  // shade is worth something (or costs something).
+  // The lower path bows slightly further, so it wins only when the deck's shade matters.
   const { graph, start, dest } = diamond({ shed: 1 }, {}, 0.001, 0.0013);
   graph.shade = constantShadeField(new Float32Array(graph.edgeCount).fill(0.8));
   expect(upperTaken(findRoute(graph, start, dest, noPref()))).toBe(true);
@@ -301,7 +285,7 @@ test("shelter is the deck plus the canopy over what the deck does not cover", ()
     1 - expected,
     12,
   );
-  // Canopy alone, at the same weight, is worth only its tau — the deck is worth all of it.
+  // Canopy alone is worth only its tau; the deck is worth all of it.
   expect(edgeMultiplier(graph, 3, noPref({ shelter: 1 }))).toBeCloseTo(
     1 - tau * (graph.edgeDirectCanopy[3] / 255),
     12,
@@ -309,7 +293,6 @@ test("shelter is the deck plus the canopy over what the deck does not cover", ()
 });
 
 test("a route reports the shelter it walked under", () => {
-  // The decked, leafy way is also the shorter one, so this is what the route takes at any weight.
   const { graph, start, dest } = diamond(
     { shed: 0.4, canopy: 0.5 },
     { canopy: 1 },
@@ -330,10 +313,8 @@ test("a route reports the shelter it walked under", () => {
     sheltered / walkMeters(result),
     12,
   );
-  // The deck is worth more than the crowns beside it, so the mean sits above the canopy alone.
   expect(result?.factors.shelter).toBeGreaterThan(tau * 0.5);
 
-  // With no field built there is nothing overhead to report, whatever the canopy bytes say.
   graph.sheds = null;
   expect(findRoute(graph, start, dest, noPref())?.factors.shelter).toBe(0);
 });
@@ -349,11 +330,9 @@ test("the canopy half of shelter is seasonal and the deck half is not", () => {
   ).graph;
   const shelter = noPref({ shelter: 1 });
   expect(rainTau(JULY)).toBeGreaterThan(rainTau(JANUARY));
-  // A leafless crown keeps off far less rain, so the discount shrinks with the season.
   expect(edgeMultiplier(winter, 1, shelter)).toBeGreaterThan(
     edgeMultiplier(summer, 1, shelter),
   );
-  // The deck does not care what month it is.
   expect(edgeMultiplier(winter, 3, shelter)).toBeCloseTo(
     edgeMultiplier(summer, 3, shelter),
     12,
@@ -362,7 +341,6 @@ test("the canopy half of shelter is seasonal and the deck half is not", () => {
 
 test("a shelter preference walks the sheltered way in either season", () => {
   for (const date of [JULY, JANUARY]) {
-    // The decked path bows out further, so it is chosen only for the shelter.
     const { graph, start, dest } = diamond(
       { shed: 1 },
       {},
@@ -384,7 +362,6 @@ test("a shelter preference walks the sheltered way in either season", () => {
 test("the avoid penalty is charged per meter of deck, not per edge", () => {
   const { graph } = diamond({ shed: 0.1 }, { shed: 1 });
   const avoiding = noPref({ allowSheds: false });
-  // A tenth of the edge decked: nine tenths cost a plain meter, the tenth costs one plus the penalty.
   expect(edgeMultiplier(graph, 1, avoiding)).toBeCloseTo(
     1 + SHED_AVOID_PENALTY * shedOf(graph, 1),
     12,
@@ -396,7 +373,6 @@ test("the avoid penalty is charged per meter of deck, not per edge", () => {
 });
 
 test("a barred deck still shades and shelters what it stands over", () => {
-  // Half decked, with everything that would make the edge cheap: cover, canopy, and the deck's shade.
   const { graph } = diamond(
     { shed: 0.5, cover: 1, canopy: 1 },
     { cover: 1, canopy: 1 },
@@ -406,32 +382,26 @@ test("a barred deck still shades and shelters what it stands over", () => {
   const allowed = edgeMultiplier(graph, 1, noPref(tempting));
   const avoiding = noPref({ ...tempting, allowSheds: false });
   const shed = shedOf(graph, 1);
-  // The scenic factors read the deck exactly as they do when it is allowed — a deck someone asked not
-  // to walk under is still overhead — and only the decked share is repriced, at an undiscounted meter
-  // plus the whole penalty.
+  // The scenic factors still read the deck; only the decked share is repriced.
   expect(edgeMultiplier(graph, 1, avoiding)).toBeCloseTo(
     allowed * (1 - shed) + shed + SHED_AVOID_PENALTY * shed,
     12,
   );
-  // Which the identical bare edge beside it does not pay.
   expect(edgeMultiplier(graph, 1, avoiding)).toBeGreaterThan(
     edgeMultiplier(graph, 3, avoiding),
   );
 });
 
 test("avoiding buys a detour well past breaking even, and gives up beyond the penalty", () => {
-  // The shedded way is the short one; the bare alternative bows out four times as far, which is more
-  // than the corner-cross-back a real block face costs.
+  // Four times as far, more than the corner-cross-back a real block face costs.
   const { graph, start, dest } = diamond({ shed: 1 }, {}, 0.0002, FOUR_TIMES);
   const direct = findRoute(graph, start, dest, noPref());
   expect(upperTaken(direct)).toBe(true);
   const avoided = findRoute(graph, start, dest, noPref({ allowSheds: false }));
   expect(upperTaken(avoided)).toBe(false);
-  // What the toggle actually bought, in meters — the ratio the constant has to be sized past.
   expect(walkMeters(avoided) / walkMeters(direct)).toBeGreaterThan(4);
 
-  // Past the penalty's own worth of extra walking the shed is simply cheaper, and the route says so
-  // rather than failing: it is soft-infinite on purpose.
+  // Soft-infinite on purpose: past the penalty's worth of extra walking the shed is cheaper.
   const hopeless = diamond({ shed: 1 }, {}, 0.0002, 0.04);
   const conceded = findRoute(
     hopeless.graph,
@@ -444,10 +414,7 @@ test("avoiding buys a detour well past breaking even, and gives up beyond the pe
 });
 
 test("a decked edge never costs less than the same edge bare, at any weights", () => {
-  // What makes the toggle sound: nothing the deck earns can leave it cheaper than the bare edge beside
-  // it. The pricing charges the decked share a flat undiscounted meter, which is only a penalty while
-  // the multiplier is under 1 — and the signed shade axis and the highway penalty both push it over 1
-  // — so the avoid penalty is what has to dominate, and it is charged on the whole decked share.
+  // Shade and highway can push the multiplier over 1, so the avoid penalty must dominate.
   for (const shed of [0.05, 0.3, 0.6, 1]) {
     const bare = { cover: 1, canopy: 1, highway: 1 };
     const { graph } = diamond({ ...bare, shed }, bare);
@@ -479,7 +446,6 @@ test("a decked edge never costs less than the same edge bare, at any weights", (
 });
 
 test("an endpoint under scaffolding still routes while avoiding", () => {
-  // Every way out of the start is decked, which is what a door under a shed looks like.
   const { graph, start, dest } = diamond({ shed: 1 }, { shed: 1 });
   const avoiding = noPref({ allowSheds: false });
   const result = findRoute(graph, start, dest, avoiding);
@@ -501,8 +467,7 @@ test("no scaffolding attribute reaches 1, so every discount floor stays positive
   graph.shade = constantShadeField(
     new Float32Array(graph.edgeCount).fill(127 / 128),
   );
-  // Every weight at its extreme at once, with scaffolding allowed and barred: the floor is positive and no
-  // edge's multiplier can dip under it, which is what keeps the A* heuristic admissible.
+  // Every weight at its extreme: the floor stays positive and under every multiplier.
   for (const allowSheds of [true, false]) {
     for (const shade of [-1, 1]) {
       const weights = noPref({
@@ -537,7 +502,7 @@ test("an oblique sun takes shade off a deck, but not shelter and not the penalty
   const sheltered = edgeMultiplier(graph, 1, noPref({ shelter: 1 }));
   const avoided = edgeMultiplier(graph, 1, noPref({ allowSheds: false }));
 
-  // The sun square across the street and low enough to have slid the shadow half the deck's depth.
+  // The sun square across the street, low enough to slide the shadow half the deck's depth.
   sheds.sunAzimuth.fill(sheds.bearing[1] + Math.PI / 2);
   sheds.translate.fill(sheds.depth[1] / 2);
   const sunlit = Math.fround(0.8); // as the field's Float32 row stores it

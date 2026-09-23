@@ -1,31 +1,19 @@
-// A link that hands a route to Google Maps for real turn-by-turn navigation. Google's cross-platform
-// URL scheme is the whole of what is available: one link opens in a desktop browser and deep-links
-// into the Google Maps app on both phones. There is no way to pass it a polyline or import a route —
-// the `data=!4m...` blob in a copied Google Maps link is internal, unstable and not synthesizable —
-// and the platform-specific schemes (`google.navigation:`, `comgooglemaps://`) take a single
-// destination and no waypoints at all. So a route reaches Google as a few waypoints or not at all.
+// Google's URL scheme takes no polyline, so a route reaches Google as a few waypoints.
 
 import type { Waypoint } from "./waypoints";
 
-// Google documents "up to three waypoints on mobile browsers, and a maximum of nine waypoints
-// otherwise", and quietly ignores the ones it will not take rather than complaining — an over-limit
-// link degrades to a plain origin-to-destination walk. Nine regardless: the desktop and app cases get
-// the route they asked for, and a mobile browser gets what it would have got anyway.
+// Google takes 3 waypoints on mobile browsers and 9 elsewhere, silently dropping any extras.
 export const MAX_WAYPOINTS = 9;
 
-// Enough to place a point to about 0.1 m, which is finer than Google's own snapping.
+// About 0.1 m, finer than Google's own snapping.
 const COORD_DIGITS = 6;
 
 function coordinate({ lat, lng }: Waypoint): string {
   return `${lat.toFixed(COORD_DIGITS)},${lng.toFixed(COORD_DIGITS)}`;
 }
 
-// Origin and destination are the reader's OWN requested endpoints rather than the points we snapped
-// them to: Google re-snaps whatever it is given to its own network, so handing it our snap only
-// moves the walk's ends about for no gain.
-// A route that gets on a train reaches Google whole: pins between two stations would be WALKED, and
-// Google's own transit planner is closer to what the reader is holding than a nine-point walk
-// through the same city would be. Google plans its own ride; the button's title says so.
+// Endpoints are the requested ones, not our snaps, since Google re-snaps to its own network.
+// Transit goes as just the endpoints: pins between stations would be walked.
 export function googleMapsTransitUrl(
   origin: Waypoint,
   destination: Waypoint,

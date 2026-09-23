@@ -2,8 +2,7 @@ import { createDispatch } from "./dispatch";
 import { RoutingEngine } from "./engine";
 import type { RouterRequest, RouterResponse } from "./protocol";
 
-// Stated here rather than pulled in with the webworker lib, which redefines DOM types the rest of
-// the app is checked against.
+// Declared here because the webworker lib redefines DOM types the rest of the app is checked against.
 interface RouterScope {
   postMessage(response: RouterResponse): void;
   onmessage: ((event: MessageEvent<RouterRequest>) => void) | null;

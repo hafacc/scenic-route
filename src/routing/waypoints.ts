@@ -1,28 +1,4 @@
-// Squeezing a scenic route into the handful of points an outside router will accept. Google Maps
-// takes up to nine waypoints on a URL and nothing else — there is no way to hand it a polyline — so
-// a route it should follow has to be described by a few pins and its own walking router asked to
-// fill the gaps.
-//
-// The pins are picked by an exact dynamic program rather than by a "keep the sharpest corners" rule,
-// because the error decomposes. Once `a` and `b` are both pinned, what the outside router walks
-// between them is settled, and its error against our route's `a`..`b` stretch depends on no other
-// pin. Total error is then a plain sum over consecutive pinned pairs, which turns the choice into a
-// shortest path in a small DAG: positions along the route are the nodes, a leg is an edge carrying
-// that stretch's error, and the answer is the cheapest route-start-to-route-end path using at most
-// ten edges.
-//
-// A leg is scored by SCENIC VALUE LOST, not by geometric deviation: both stretches are priced with
-// the reader's own weighted cost, so the number says how much of the tree cover or the shade that
-// motivated the detour the outside router will not actually walk. Deviation would protect the shape
-// of the route rather than the reason for its shape.
-//
-// One candidate per intersection, not one per curb. This network draws a street corner as several
-// nodes — the curb, the far side of the crossing it meets, and an island for every piece a divided
-// roadway breaks that crossing into — and Google snaps every one of them to the same road node. On
-// real routes that had the DP spending about half its nine pins on pairs standing 7 to 32 m apart at
-// one junction, which is a pin describing nothing. So corners are walked in route order and one is
-// dropped when a chain of crossings joins it to the last corner kept; the earlier of a group
-// survives, which is also where the leg the pin holds actually begins.
+// Leg errors are independent once both ends are pinned, so an exact DP picks the pins; one per junction.
 
 import {
   crossingWait,
@@ -36,8 +12,7 @@ import { edgeKind, isTransitEdge, otherEnd, type RoutingGraph } from "./graph";
 import { NodeHeap } from "./node-heap";
 import { type RouteStep, stepFrom, stepSeconds } from "./search";
 
-// All the planner reads of a route. A `RouteResult` satisfies it, and so does the step list on its
-// own, which is all the worker is sent: the stitched path is the bulk of a result and prices nothing.
+// The worker is sent only the steps; the stitched path is bulky and prices nothing.
 export interface PlannedRoute {
   steps: readonly RouteStep[];
 }
@@ -51,18 +26,11 @@ export interface WaypointPlan {
   waypoints: Waypoint[]; // the pinned points, in route order
   lostSeconds: number; // effective seconds of scenic value the approximation gives up
   candidateCount: number; // corners the choice was made over, for diagnostics
-  // The route gets on a train, so there are no pins to give: a walking router handed the stations
-  // would walk between them. The caller hands the two ends to Google in transit mode instead.
+  // A walking router handed the stations would walk between them, so Google gets the ends in transit mode.
   rides: boolean;
 }
 
-// What we imitate the outside router with. Every scenic weight off leaves pure Tobler walking time,
-// which is the closest thing our graph has to what Google walks. Note that zeroing the weights is
-// not by itself enough to make it plain: `allowCrossings` defaults to false, which prices every
-// crossing at CROSSING_AVOID_MULTIPLE times its delay, so the flag has to be flipped too. Ferries
-// are barred because Google's walking mode will not put a walker on a boat of our choosing, and
-// scaffolding is allowed because Google has never heard of it. Trains are barred for the reason
-// ferries are, and more so: the proxy exists to describe a walk.
+// Plain Tobler walking; crossings must be freed explicitly, and boats and trains barred.
 export const PROXY_WEIGHTS: RouteWeights = {
   tree: 0,
   ferry: 0,
@@ -83,13 +51,10 @@ export const PROXY_WEIGHTS: RouteWeights = {
   allowCrossings: true,
 };
 
-// What a leg the proxy cannot walk at all is charged. The route crossed water on a ferry the proxy
-// is barred from, so no sequence of pins can describe that stretch; priced far above any real leg so
-// the plan spends as few such legs as it can, and finite so that a plan still comes out and the URL
-// still gets emitted — what Google does over the water is Google's business.
+// Finite so a plan still comes out when the route crosses water the proxy can't.
 const UNREACHABLE_LEG_SECONDS = 1e9;
 
-// Floating slack on the search radius, so a bound that is exactly the answer still admits it.
+// Floating slack, so a bound that is exactly the answer still admits it.
 const BOUND_SLACK_SECONDS = 1e-6;
 
 function nodeLat(graph: RoutingGraph, node: number): number {
@@ -100,12 +65,7 @@ function nodeLng(graph: RoutingGraph, node: number): number {
   return graph.originLng + graph.nodeQx[node] * graph.scale;
 }
 
-// Whether a node is a curb corner, the only kind of point worth pinning. Google snaps every
-// coordinate it is given to its own road network, and a mid-block point can land on the far side of
-// the street and turn one leg into an out-and-back. A node an actual crossing meets is standing on a
-// corner, which snaps where you meant; a node whose every edge is a crossing is a median island,
-// standing in the roadway; anything else is mid-block. Restricting the candidates this way is also
-// most of what keeps the search count down.
+// Google snaps a mid-block pin to either side of the street; a corner snaps where you meant.
 function isCorner(graph: RoutingGraph, node: number): boolean {
   if (graph.nodeMidRoadway[node] === 1) {
     return false;
@@ -119,11 +79,7 @@ function isCorner(graph: RoutingGraph, node: number): boolean {
   }
 }
 
-// Every node of the intersection `node` stands at: what a chain of crossings reaches from it without
-// ever setting foot on pavement in between. A marked crossing of a divided street is drawn as
-// several crossing edges chained through the islands in it, so the walk goes on through a
-// mid-roadway node and stops at the curb on the far side, however many pieces the crossing is in.
-// Bounded by that rule rather than by a distance: the islands of one junction are all it can reach.
+// Bounded by crossings chained through islands, not by distance.
 function junctionNodes(graph: RoutingGraph, node: number): Set<number> {
   const junction = new Set([node]);
   const frontier = [node];
@@ -146,14 +102,11 @@ function junctionNodes(graph: RoutingGraph, node: number): Set<number> {
   return junction;
 }
 
-// The route's own traversal of an edge, as one number. Which way it went along it is part of the
-// identity: a climb one way is a descent the other, and they are not priced the same.
+// Direction is part of the identity, since a climb one way is a descent the other.
 function directedEdge(edge: number, forward: boolean): number {
   return edge * 2 + (forward ? 1 : 0);
 }
 
-// The route as the sequence of graph nodes it passes through, with the running costs the DP prices
-// its legs against.
 interface RouteWalk {
   nodes: number[];
   valueCost: Float64Array; // cumulative reader-weighted cost from nodes[0]
@@ -170,9 +123,7 @@ function walkRoute(
   const valueCost: number[] = [0];
   const proxyCost: number[] = [0];
   const elapsedAt: number[] = [];
-  // The first step is the partial walk off the start snap and the last the partial onto the dest
-  // snap; neither runs between two graph nodes, so neither is a stretch any pin can carve. The clock
-  // still runs over them, because an edge is priced against the sun at the moment it is reached.
+  // The end partials run between no two nodes, so no pin carves them, but the clock still runs.
   let elapsed = 0;
   for (const [index, step] of route.steps.entries()) {
     const from = stepFrom(graph, step);
@@ -182,8 +133,7 @@ function walkRoute(
         valueCost[valueCost.length - 1] +
           effSeconds(graph, step.edge, weights, elapsed, from),
       );
-      // A ferry contributes something finite here whatever the proxy thinks of it: this sum is only
-      // ever read as a search radius, and pricing its span as a flat walk keeps the radius bounded.
+      // Only ever read as a search radius, so pricing a ferry as a flat walk keeps it bounded.
       proxyCost.push(
         proxyCost[proxyCost.length - 1] +
           (step.kind === "ferry"
@@ -206,14 +156,7 @@ function walkRoute(
   };
 }
 
-// One shortest-path tree per anchor is what makes the DP affordable: a single search from `a`
-// settles every position ahead of it, filling the whole cost(a, ·) row at once, so the cost matrix
-// costs a search per candidate rather than one per pair. The reader-weighted price of the proxy's
-// chosen path rides along the relaxation, which is the same number reconstructing through parent
-// pointers and re-summing would give, without the walk back.
-//
-// The arrays outlive one search and are cleared only where they were written; a fresh clear of every
-// node in the city would cost more than the searches it separated.
+// One search per anchor fills a whole cost row; arrays are cleared only where written.
 class ProxyExplorer {
   private readonly graph: RoutingGraph;
   private readonly weights: RouteWeights;
@@ -241,10 +184,7 @@ class ProxyExplorer {
     this.settled = new Uint8Array(graph.nodeCount);
   }
 
-  // Settle every node of `targets` reachable within `bound` of `source`. The bound is the proxy's
-  // price for the rest of the route, which the route itself already achieves, so no target we could
-  // usefully pin is ever cut off by it — only one on the far side of water the proxy cannot cross,
-  // which no radius would have reached.
+  // The bound is what the route itself achieves, so it never cuts off a useful target.
   run(
     source: number,
     elapsedAtSource: number,
@@ -287,9 +227,7 @@ class ProxyExplorer {
           continue; // the proxy walks; it cannot put anyone on a boat or a train
         }
         const neighbor = otherEnd(this.graph, edge, node);
-        // What PROXY_WEIGHTS price this edge at, written out: every scenic factor is 1 at those
-        // weights and a freely-spent crossing adds nothing, so the multiplier machinery would do a
-        // dozen multiplications to arrive back at the walk. `proxyPricesAWalk` pins the equality.
+        // At PROXY_WEIGHTS every factor is 1, so this is just the walk; `proxyPricesAWalk` pins it.
         const forward = edgeForward(this.graph, edge, node);
         const walked =
           this.graph.edgeLength[edge] *
@@ -306,17 +244,13 @@ class ProxyExplorer {
           relaxed === this.distance[neighbor] &&
           this.routeEdges.has(directedEdge(edge, forward))
         ) {
-          // Two ways of identical walking cost, one of them the route's own: the proxy is a guess at
-          // what Google walks and this is the walk we know it is being compared against, so the leg
-          // is not charged for a difference no walker would notice. Only the recorded price moves;
-          // the key is unchanged, so the heap entry already standing for this node still holds.
+          // Ties go to the route's own walk; only the recorded price moves, so the heap entry still holds.
           this.record(neighbor, node, edge, walked);
         }
       }
     }
   }
 
-  // What arriving at `neighbor` over `edge` costs the reader, and when it happens.
   private record(
     neighbor: number,
     node: number,
@@ -330,13 +264,12 @@ class ProxyExplorer {
       this.elapsed[node] + walked + crossingWait(this.graph, edge, node);
   }
 
-  // The reader's price for the proxy's walk to `node`, or null when the last search never reached it.
+  // Null when the last search never reached `node`.
   costTo(node: number): number | null {
     return this.settled[node] === 1 ? this.valueCost[node] : null;
   }
 }
 
-// The pins to hand an outside router so its route resembles this one, at most `limit` of them.
 // Exactly optimal over the corner candidates, given the proxy above.
 export function planWaypoints(
   graph: RoutingGraph,
@@ -344,8 +277,7 @@ export function planWaypoints(
   weights: RouteWeights,
   limit: number,
 ): WaypointPlan {
-  // A ride is not a stretch pins can describe — the walking router they are handed to would walk
-  // between the two stations — so a route with one is handed over whole and this says why.
+  // A walking router would walk between the stations, so a route that rides is handed over whole.
   if (route.steps.some((step) => step.kind === "ride")) {
     return {
       waypoints: [],
@@ -357,20 +289,13 @@ export function planWaypoints(
   const walk = walkRoute(graph, route, weights);
   const lastIndex = walk.nodes.length - 1;
   if (lastIndex <= 0) {
-    // A walk that never leaves one edge, or leaves it for one more: the ends are snaps part way
-    // along an edge, which no pin can carve and no leg can be drawn between.
+    // The ends are snaps part way along an edge, which no pin can carve and no leg can join.
     return { waypoints: [], lostSeconds: 0, candidateCount: 0, rides: false };
   } else {
-    // Positions the DP may stop at: the two ends of the interior walk, which are fixed, and the
-    // corners between them, one to a junction. A node the route already visited is skipped even
-    // where it is a corner — a stretch that ends where an earlier one began is a leg of no progress,
-    // which is not a thing the DAG's strictly forward legs can express and would spend a pin on
-    // nothing. Our graph is not supposed to produce one; this costs three lines and the alternative
-    // failure is a wedged tab.
+    // Revisited nodes are skipped: a backward leg can't be expressed in the DAG and would wedge the tab.
     const anchors = [0];
     const visited = new Set([walk.nodes[0]]);
-    // Seeded with the intersection the walk starts at, so a curb a crossing away from the origin is
-    // not pinned: anchor 0 already stands there.
+    // Seeded with the start's intersection, where anchor 0 already stands.
     let junction = junctionNodes(graph, walk.nodes[0]);
     for (let index = 1; index < lastIndex; index += 1) {
       const node = walk.nodes[index];
@@ -383,9 +308,7 @@ export function planWaypoints(
     anchors.push(lastIndex);
 
     const count = anchors.length;
-    // cost[a * count + b] is what pinning `a` then `b` and nothing between gives up: what the proxy
-    // spends walking a to b, priced by the reader's weights, less what the route's own a..b stretch
-    // costs the same way.
+    // What pinning a then b gives up: the proxy's a..b walk at the reader's weights, less the route's own.
     const cost = new Float64Array(count * count).fill(UNREACHABLE_LEG_SECONDS);
     const explorer = new ProxyExplorer(
       graph,
@@ -412,10 +335,6 @@ export function planWaypoints(
     }
 
     if (count === 2) {
-      // Nothing between the ends to choose over: every interior node stands mid-block, or the only
-      // corners are the ends' own. There is no choice to make, but the one leg still has a price —
-      // an outside router handed nothing but the ends is free to walk right past the reason for
-      // the route.
       return {
         waypoints: [],
         lostSeconds: cost[count - 1],
@@ -423,9 +342,7 @@ export function planWaypoints(
         rides: false,
       };
     } else {
-      // best[legs * count + to] is the least error reaching anchor `to` in exactly `legs` legs, and
-      // `legs - 1` pins spent. Legs run to one more than the pins allowed, since the last leg lands on
-      // the destination rather than on a pin.
+      // Legs run to one more than the pins allowed, since the last leg lands on the destination.
       const maxLegs = Math.min(limit, count - 2) + 1;
       const best = new Float64Array((maxLegs + 1) * count).fill(
         Number.POSITIVE_INFINITY,

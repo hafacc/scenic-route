@@ -1,11 +1,4 @@
-// The deploy's guard (scripts/check-sheds.ts), which is the only thing that ever sees the routing
-// graph and the committed shed artifact at once. The graph is built by the deploy and the artifact
-// travels in the checkout, so a refresh that rebuilds one without re-placing the other ships a map
-// with no scaffolding on it at all — the gate's own correct behavior, and silent.
-//
-// What the artifact has to agree with is the graph's DURABLE KEY SPACE, so the graphs here are real
-// GRPH bytes rather than stand-in blobs: the two things worth pinning are that a rebuild which moved
-// only the f32 lengths still passes, and that one which re-split a source still fails.
+// Real GRPH bytes, since the artifact must agree with the graph's durable key space, not its bytes.
 
 import { expect, test } from "bun:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -18,10 +11,8 @@ import { encodeGraph } from "./graph-bytes.fixture";
 
 const LAST_DAY = 3136;
 const KIND_SIDEWALK = 0;
-// The edge-length column's place in the header's section directory.
 const EDGE_LENGTH_SECTION = 8;
 
-// One edge as the durable key names it, plus the length that names nothing.
 interface Edge {
   sourceId: number;
   side: number;
@@ -35,8 +26,7 @@ const EDGES: readonly Edge[] = [
   { sourceId: 19, side: 4, ordinal: 0, length: 7.5 },
 ];
 
-// A GRPH file carrying exactly these edges: two nodes, no geometry, no names, no ferries. Enough
-// for `decodeGraph`, which is all the gate reads.
+// Just enough for `decodeGraph`, which is all the gate reads.
 function graphBytes(edges: readonly Edge[]): Uint8Array {
   return new Uint8Array(
     encodeGraph({
@@ -60,7 +50,6 @@ function graphBytes(edges: readonly Edge[]): Uint8Array {
   );
 }
 
-// Where the file carries its f32 lengths, which is the one column this test perturbs.
 function lengthsAt(bytes: Uint8Array): number {
   return new DataView(bytes.buffer).getUint32(
     64 + 8 * EDGE_LENGTH_SECTION,
@@ -68,8 +57,6 @@ function lengthsAt(bytes: Uint8Array): number {
   );
 }
 
-// A deploy on disk: the graph its build wrote, the version file beside it, and the artifact the
-// checkout carries — placed against `placedAgainst`, which is the whole question.
 async function deploy(
   graph: Uint8Array,
   placedAgainst: Uint8Array,
@@ -106,10 +93,7 @@ test("a deploy whose artifact names its own key space passes", async () => {
   await expect(checkSheds(join(dir, "nyc.bin"), dir)).resolves.toBeUndefined();
 });
 
-// The failure this gate had all along: the graph pass runs on the deploy's Linux and by hand on a
-// macOS laptop, and the geodesic and offset maths land a few f32 lengths a ulp apart between them.
-// Not one shed moves, and a gate on the graph's bytes could never be passed by an artifact placed on
-// the other machine.
+// Linux and macOS land a few f32 lengths a ulp apart; no shed moves, so this must pass.
 test("a rebuild that moved only the lengths still passes", async () => {
   const perturbed = new Uint8Array(GRAPH);
   const view = new DataView(perturbed.buffer);
@@ -128,8 +112,7 @@ test("a rebuild that moved only the lengths still passes", async () => {
 });
 
 test("a rebuild that split a source differently fails the deploy", async () => {
-  // The same street cut in three where it was cut in two: every span placed on the old ordinal 1
-  // now names a different stretch of pavement.
+  // Cut in three where it was cut in two, so old ordinal 1 names different pavement.
   const resplit = graphBytes([
     ...EDGES,
     { sourceId: 88, side: 1, ordinal: 2, length: 12.25 },
@@ -166,8 +149,7 @@ test("a version file that has drifted from the graph fails too", async () => {
     }),
   );
 
-  // The client takes what it gates on from this file rather than recomputing it, so a stale one
-  // blanks the map exactly as a stale artifact does.
+  // The client gates on this file, so a stale one blanks the map just as a stale artifact does.
   await expect(checkSheds(join(dir, "nyc.bin"), dir)).rejects.toThrow(
     "the deploy would serve a graph it names wrongly",
   );

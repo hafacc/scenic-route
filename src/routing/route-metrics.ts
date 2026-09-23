@@ -1,12 +1,4 @@
-// Properties of a finished route, as opposed to properties of the network it was found in. The
-// whole-city graph checks (crates/tiler/src/invariants.rs) hold every edge to what an edge can be
-// held to; these three hold a *walk* to what a walk should look like, which no edge can answer on
-// its own — whether a double crossing was worth taking, how far round the houses the walk went, and
-// whether a divided street was crossed in one move.
-//
-// Each is a pure function of the route and the graph, unit-tested on a hand-built network in
-// route-metrics.test.ts and then run over thousands of sampled real trips in
-// tests/route-sampling.test.ts — the same shape as the graph invariants.
+// Checks on a walk that no single edge can answer; run over sampled trips in tests/route-sampling.test.ts.
 
 import { edgePath, isTransitEdge, otherEnd, type RoutingGraph } from "./graph";
 import type { RouteResult } from "./search";
@@ -14,34 +6,22 @@ import { haversineMeters } from "./snap";
 
 const METERS_PER_DEGREE_LAT = 111_320;
 
-// How far a walker may go between the two crossings and still have them read as one reversal. A
-// street's own two crossings at one corner sit 0 m apart (they share the far curb node); the widest
-// case that still reads as "and straight back" is the corner wrap, a few meters of pavement.
+// A street's own two crossings share a curb node (0 m); a corner wrap is a few meters.
 export const REVERSAL_GAP_METERS = 20;
-// How anti-parallel the second crossing has to be to count as going back the way you came: -0.7 is
-// 135 degrees, so the two legs of a corner (a right angle, cosine 0) are never a reversal.
+// -0.7 is 135°, so a corner's right angle (cosine 0) is never a reversal.
 export const REVERSAL_COSINE = -0.7;
 
-// One "crossed the street and crossed straight back": two crossings the route takes one after the
-// other, pointing opposite ways, with almost no walking in between.
 export interface CrossingReversal {
   stepIndex: number; // the first of the two crossing steps
   name: string | null; // the street crossed, as the first crossing names it
   walkBetweenMeters: number; // pavement walked between leaving the first crossing and starting the second
   crossedMeters: number; // the two crossings' own lengths, i.e. what the reversal cost
   at: { lat: number; lng: number }; // where the first crossing starts, for a failure message
-  // Was there another way? True when the network joins the reversal's two ends by some path of no
-  // more than the meters the reversal itself spent, with those two crossings taken out. A reversal
-  // that is avoidable was BOUGHT — the cost model paid two crossings for greener pavement. One that
-  // is not was FORCED: the two pavement ends are not joined and going into the road is the only way
-  // round. This is the distinction the graph cannot make on its own, and it is the whole reason this
-  // check has to look at a walk.
+  // True when a path no longer than the reversal joins its ends without those crossings, so it was bought.
   avoidable: boolean;
 }
 
-// Is `to` within `budget` meters of `from` through the network with `banned` taken out? A Dijkstra
-// bounded by the budget, so it walks a corner's worth of edges and stops — the frontier never grows
-// past a few dozen nodes at the tens of meters a reversal costs.
+// Bounded by the budget, so the frontier stays at a few dozen nodes.
 function reachableWithout(
   graph: RoutingGraph,
   from: number,
@@ -50,8 +30,7 @@ function reachableWithout(
   banned: readonly [number, number],
 ): boolean {
   const best = new Map<number, number>([[from, 0]]);
-  // A linear-scan frontier: at these budgets it holds a handful of nodes, so a heap would cost more
-  // to maintain than it saves.
+  // A linear-scan frontier: at these budgets a heap would cost more than it saves.
   const frontier: number[] = [from];
   while (frontier.length > 0) {
     let at = 0;
@@ -87,7 +66,6 @@ function reachableWithout(
   return false;
 }
 
-// The unit direction of a step's travel, in a local meter frame.
 function stepDirection(
   graph: RoutingGraph,
   edge: number,
@@ -107,10 +85,7 @@ function stepDirection(
   };
 }
 
-// Every crossing reversal in the route. Two causes land here — the cost model buying greener
-// pavement for two crossings' worth of walking, and a corner whose two pavement ends are not joined,
-// where crossing out and back is the only way round — and each is tagged `avoidable` by asking the
-// network whether the second was reachable without them.
+// Tagged `avoidable` by asking the network whether the ends join without the crossings.
 export function crossingReversals(
   graph: RoutingGraph,
   result: RouteResult,
@@ -177,10 +152,7 @@ export function crossingReversals(
   return reversals;
 }
 
-// The most crossing edges the route traverses back to back. A plain street is one, a street with a
-// median is two — which is exactly why a crossing cannot be checked edge by edge, since half of a
-// median crossing is indistinguishable from a whole one until you see the walk go through it — and a
-// junction of several streets chains more. A long run is a route threading roadway to roadway.
+// Half a median crossing looks like a whole one until you see the walk go through it.
 export function longestCrossingRun(result: RouteResult): number {
   let longest = 0;
   let run = 0;
@@ -195,11 +167,7 @@ export function longestCrossingRun(result: RouteResult): number {
   return longest;
 }
 
-// Walked meters over the straight line between the two ends. Measured between the *snapped* points
-// rather than the requested ones, so it reports what the router did and not how far the query was
-// from the pavement. Ferry and rail spans are excluded from the numerator, being no part of a walk
-// (the sampling suite bars both, so for it this is the whole trip); a zero-length straight line has
-// no ratio.
+// Between the snapped points; ferry and rail spans are excluded, and a zero straight line has no ratio.
 export function detourRatio(result: RouteResult): number | null {
   const straight = haversineMeters(
     result.start.point.lat,

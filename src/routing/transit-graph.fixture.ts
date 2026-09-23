@@ -1,14 +1,4 @@
-// The synthetic routing graph the transit tests are run over: one straight kilometer of pavement
-// with a two-station line beside it, and a hand-written timetable for that line.
-//
-// Written as GRPH BYTES and decoded, rather than assembled as an object the way the ferry
-// fixture is. The transit cost model reads things the tiler puts in the side tables — which lane a
-// board edge departs against, which stop of it this platform is, which route a ride runs — so a
-// fixture that hand-set those fields would be asking the cost model about a graph no tiler writes.
-//
-// The line is quicker than the walk and dearer than it: at no transit penalty the ride wins, at the
-// top of the slider the walk does. That is the whole point of the geometry, so the numbers below are
-// chosen and not incidental — see the assertions in transit-cost.test.ts.
+// Written as GRPH bytes, not an object, since the transit cost model reads the tiler's side tables.
 
 import type { RouteWeights } from "./cost";
 import {
@@ -39,8 +29,7 @@ const KIND_ACCESS = 5;
 const KIND_BOARD = 6;
 const KIND_RIDE = 7;
 
-// The lane the board edges depart against, as TRNS hashes one. Any u32 will do; this is not one of
-// the graph's own numbers, it is the join key the timetable is keyed by.
+// Any u32; it's the join key the timetable is keyed by, not one of the graph's own numbers.
 export const LANE_ID = 0x1234_5678;
 // A lane the graph names and the timetable does not, for the "no schedule, no train" case.
 export const UNSCHEDULED_LANE = 0x0bad_0bad;
@@ -52,22 +41,13 @@ export const EAST_STATION = "East Street";
 export const ROUTE_SHORT_NAME = "Q";
 export const ROUTE_LONG_NAME = "Cross-town Local";
 
-// A kilometer and a bit of pavement, so the walk is ~900 s: long enough that a 180 s ride plus the
-// walks into and out of its two stations beats it outright — with room to spare for a trip that
-// starts part way along and has to come back — and short enough that the same ride at the top of the
-// transit slider does not.
+// A ~900 s walk: the ride beats it outright at no penalty but not at the top of the transit slider.
 const EAST_X = 14_000;
-// The line runs a hundred meters off the pavement, which is far enough that the two routes cover
-// different ground: the planner tells its cards apart by the cells they cross, and a line drawn on
-// top of the street it parallels would read as the same walk.
+// Far enough off the street that the planner, which compares cells crossed, sees two different routes.
 const STATION_Y = 900;
 export const SIDEWALK_COVER = 0.5;
 
-// The two ends are deliberately different kinds of stop: the west is a station with a way in, the
-// east a curbside stop the tiler bakes the shorter walk for, which is the only mark of the feed's
-// surface flag the graph keeps. Each carries its own base plus the walk out to the pavement, as the
-// tiler bakes it (crates/tiler/src/graph.rs), and it is taking that walk back off that tells the two
-// bases apart.
+// West is a station, east a curbside stop; taking the walk back off is what tells the two bases apart.
 const ACCESS_WALK_SECONDS = Math.round(
   haversineMeters(
     ORIGIN_LAT,
@@ -91,17 +71,13 @@ const NODES: readonly [number, number][] = [
   [EAST_X, STATION_Y], // 8 the east platform's
 ];
 
-// The longest board edge New York has: inside a transfer complex the station node is the members'
-// centroid and the platform stands on its own stop, a passage away. Opt-in, since every other test
-// here wants the platforms where their stations are.
+// The longest board edge in New York: a transfer complex's centroid to its platform. Opt-in.
 export const PLATFORM_SETBACK_METERS = 251;
 const PLATFORM_SETBACK_UNITS = Math.round(
   PLATFORM_SETBACK_METERS /
     haversineMeters(ORIGIN_LAT, ORIGIN_LNG, ORIGIN_LAT, ORIGIN_LNG + SCALE),
 );
 
-// Both platforms drawn back along the line toward each other, so each board edge spans the setback
-// and the ride between them shortens by two of them.
 const SETBACK_NODES: readonly (readonly [number, number])[] = NODES.map(
   (point, node): readonly [number, number] => {
     if (node === 5 || node === 7) {
@@ -137,9 +113,7 @@ const [MAIN, WEST_NAME, EAST_NAME, SHORT_NAME, LONG_NAME, ROUTE_ID] = [
   0, 1, 2, 3, 4, 5,
 ];
 
-// The free one-way step from a stop's arrival node onto its boarding node, which is what a rider
-// staying on the train takes. Every platform has one, and it is what makes a board and an alight at
-// the same stop impossible.
+// Every platform has one, which makes a board and an alight at the same stop impossible.
 function stayAboard(arrival: number, boarding: number): EdgeSpec {
   return {
     a: arrival,
@@ -151,17 +125,9 @@ function stayAboard(arrival: number, boarding: number): EdgeSpec {
   };
 }
 
-// Two sidewalks, the two station walks, and one westbound pattern: board, alight and ride at each of
-// its two stops. The eastbound half of the line is deliberately absent — one direction is enough to
-// ask every question here, and its absence is what makes a backwards ride visible if one is taken.
-//
-// Its stations stand on ONE node each, with a two-way door, which is the shape the tiler wrote
-// before it split them into a way in and a way out — and the shape every graph deployed before that
-// still carries, since the door bits read as 0. The split station below is the shape it writes now;
-// this one is what says the decoder still reads the other.
+// Westbound only, so a backwards ride shows; single-node stations are the pre-split shape.
 const EDGES: readonly EdgeSpec[] = [
-  // The pavement is half-shaded, so a factor mean over a route that rides has something to be wrong
-  // about: the ride carries no cover at all, and averaging it in would halve the number.
+  // Half-shaded, so averaging the coverless ride into a factor mean would visibly halve it.
   {
     a: 0,
     b: 1,
@@ -191,14 +157,11 @@ const EDGES: readonly EdgeSpec[] = [
   { a: 5, b: 8, kind: KIND_RIDE, seconds: RIDE_SECONDS, name: SHORT_NAME },
   { a: 4, b: 6, kind: KIND_BOARD, seconds: 0, name: SHORT_NAME },
   { a: 8, b: 4, kind: KIND_ACCESS, seconds: ALIGHT_SECONDS, name: NAME_NONE },
-  // Staying aboard, arrival node onto boarding node, at each of the two stops.
   stayAboard(7, 5),
   stayAboard(8, 6),
 ];
 
-// Two more ways east, for the planner: a dogleg with more cover than Main Street and a longer one
-// with more still, so a mode that wants trees has three walks to tell apart and the greenest of them
-// is not the quickest. Appended after the rail, so every node and edge id below is where it was.
+// Two greener doglegs, so the greenest walk isn't the quickest; appended to keep ids stable.
 const DETOUR_Y = 2_000; // ~220 m off the pavement, well past the 50 m two routes must differ by
 const DETOUR_NODES: readonly [number, number][] = [
   [EAST_X / 2, -DETOUR_Y],
@@ -235,15 +198,13 @@ export const WEST_ALIGHT = 5;
 export const RIDE_EDGE = 6;
 export const EAST_BOARD = 7;
 
-// The stop each board edge is at, along the pattern: the west station is its first and the east one
-// its second, which is what the timetable's offsets are indexed by.
+// The timetable's offsets are indexed by this stop order.
 const BOARD_TABLE: readonly [number, number, number, number][] = [
   [WEST_BOARD, LANE_ID, 0, 0],
   [EAST_BOARD, LANE_ID, 0, 1],
 ];
 const RIDE_TABLE: readonly [number, number][] = [[RIDE_EDGE, 0]];
 
-// The GRPH blob for this fixture, built from the same description the tiler's own writer takes.
 function graphBytes(
   lanes: readonly number[],
   nodes: readonly (readonly [number, number])[],
@@ -260,8 +221,7 @@ function graphBytes(
       a: spec.a,
       b: spec.b,
       kind: spec.kind,
-      // The true geodesic span between the two nodes, which is what keeps the A* walking floor a
-      // lower bound: the heuristic measures the same coordinates.
+      // The true geodesic span, which keeps the A* walking floor a lower bound.
       length: haversineMeters(
         lat(spec.a),
         lng(spec.a),
@@ -297,8 +257,7 @@ function graphBytes(
   });
 }
 
-// The fixture graph, with no timetable on it: hang one with `transitGraph().transit = ...`.
-// `lanes` overrides which lane each board edge departs against, for the unscheduled-lane case.
+// `lanes` overrides each board edge's lane, for the unscheduled-lane case.
 export function transitGraph(
   lanes: readonly number[] = BOARD_TABLE.map(([, lane]) => lane),
   {
@@ -315,7 +274,6 @@ export function transitGraph(
   });
 }
 
-// Weights with every scenic factor off, so a test's own numbers are the only thing pricing a route.
 export function transitWeights(
   overrides: Partial<RouteWeights> = {},
 ): RouteWeights {
@@ -336,8 +294,7 @@ export function transitWeights(
     allowFerries: true,
     allowTransit: true,
     allowSheds: true,
-    // The fixture draws no crossing, so this is free either way; stated because omitting it reads as
-    // "avoid crossings", which is not what any of these tests means.
+    // No crossings, but omitting it would read as "avoid crossings".
     allowCrossings: true,
     ...overrides,
   };
@@ -347,9 +304,7 @@ export const FIRST_DEPARTURE = 8 * 3600; // 08:00
 export const HEADWAY = 600;
 export const LAST_DEPARTURE = 10 * 3600; // 10:00, after which the line has stopped for the day
 
-// A timetable for the fixture's one lane: trains every ten minutes from 08:00 to 10:00, every day.
-// Hand-written as the record the reader decodes rather than as TSCH bytes — the format itself is
-// transit-schedule.test.ts's question, and this one is about what the router does with the answer.
+// Trains every ten minutes from 08:00 to 10:00, as the decoded record rather than TSCH bytes.
 export function fixtureTimetable(date: Date): TransitTimetable {
   const record: ScheduleRecord = {
     firstDay: 20200101,
@@ -370,26 +325,21 @@ export function fixtureTimetable(date: Date): TransitTimetable {
   return resolveTimetable(record, date, FIXTURE_TIME_ZONE);
 }
 
-// The fixture's instants are built with the local Date constructor, so its timetable is read in the
-// runner's own zone: the tests are about waits and transfers, not about where the reader is.
+// Instants use the local Date constructor, so the timetable is read in the runner's own zone.
 export const FIXTURE_TIME_ZONE =
   Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-// A departure instant on the fixture's day, given the seconds from midnight. A Wednesday, so the
-// everyday service runs.
+// A Wednesday, so the everyday service runs.
 export function departureAt(secondsOfDay: number): Date {
   return new Date(2026, 8, 2, 0, 0, secondsOfDay);
 }
 
-// The instant to leave at so the walker reaches the platform exactly as a train does: the band's
-// first departure, less however long the approach takes. Leaving a minute later than this is a
-// minute late for that train, and the test that wants a wait says so that way.
+// Leaving a minute later than this is a minute late for that train.
 export function departureReaching(approachSeconds: number): Date {
   return departureAt(FIRST_DEPARTURE - approachSeconds);
 }
 
-// A snap sitting exactly on a node, entered through one of its incident sidewalks — the only edges
-// a real snap index offers, since it never indexes a platform.
+// The only edges a real snap index offers, since it never indexes a platform.
 export function snapAtNode(
   graph: RoutingGraph,
   node: number,
@@ -408,12 +358,7 @@ export function snapAtNode(
   };
 }
 
-// A SPLIT station — one with no free crossover — and the avenue it stands under, as its own little
-// network rather than a switch on the graph above, so every node and edge id in that one stays
-// where it is. The avenue runs north-south with a pavement each side and a crossing at its southern
-// corner; the station has one node per direction, and the doors are what tell them apart: the two
-// on the east pavement reach the uptown platform, the lift on the west pavement the downtown one.
-// A rider who wants a train has to be on the right pavement, which is the whole point of the split.
+// A split station: the east pavement's doors reach uptown, the west's lift downtown; separate network.
 const AVENUE_HALF = 400; // ~34 m off the center line: one pavement each side
 const SPLIT_DOOR_Y = 600; // the doors, ~67 m north of the crossing
 const SPLIT_EXIT_Y = 200; // the exit-only door, nearer the crossing than the two-way one
@@ -428,7 +373,7 @@ export const SPLIT_CROSS_STREET = "FULTON ST";
 export const SPLIT_ROUTE_SHORT_NAME = "B";
 export const SPLIT_UPTOWN_LANE = 0x0101_0101;
 export const SPLIT_DOWNTOWN_LANE = 0x0202_0202;
-// Trains every two minutes, so the worst wait cannot make the ride dearer than walking the avenue.
+// Every two minutes, so the worst wait can't make the ride dearer than walking the avenue.
 export const SPLIT_HEADWAY = 120;
 
 const SPLIT_NAMES = [
@@ -452,8 +397,7 @@ const [
   SPLIT_ROUTE_ID,
 ] = [0, 1, 2, 3, 4, 5, 6, 7];
 
-// The corners and the doors. A station side stands on TWO nodes at the one point — the one its
-// doors lead in to and the one they lead out of — as the tiler places them.
+// A station side is two nodes at one point, the one its doors lead into and the one they lead out of.
 export const SPLIT_WEST_CORNER = 0;
 export const SPLIT_EAST_CORNER = 1;
 export const SPLIT_WEST_DOOR_NODE = 2;
@@ -473,8 +417,6 @@ const UPTOWN_PLATFORM = 15;
 const DOWNTOWN_PLATFORM = 16;
 const NORTH_PLATFORM = 17;
 const SOUTH_PLATFORM = 18;
-// Each platform's arrival node, standing where its boarding node does: the ride lands here and the
-// alight leaves here, with the stay-aboard edge between the two.
 const UPTOWN_ARRIVAL = 19;
 const DOWNTOWN_ARRIVAL = 20;
 const NORTH_ARRIVAL = 21;
@@ -509,8 +451,7 @@ const SPLIT_NODES: readonly [number, number][] = [
 const SIDE_EAST = 2;
 const SIDE_WEST = 4;
 
-// The walk down to the platform as the tiler bakes it: a base for the way in, plus the walk from
-// the station's own point out to the door at walking pace. A lift is the dearer base of the two.
+// A lift has the dearer base.
 function doorSeconds(station: number, door: number, elevator = false): number {
   const meters = haversineMeters(
     ORIGIN_LAT + SPLIT_NODES[station][1] * SCALE,
@@ -526,7 +467,6 @@ export const SPLIT_SOUTH_SIDEWALK = 1;
 export const SPLIT_EAST_SIDEWALK = 2;
 export const SPLIT_NORTH_SIDEWALK = 4;
 export const SPLIT_CROSSING = 5;
-// The uptown side's two-way stair, as the two one-way edges the tiler writes it as.
 export const SPLIT_EAST_DOOR = 6;
 export const SPLIT_EAST_DOOR_OUT = 7;
 export const SPLIT_EXIT_DOOR = 8;
@@ -536,8 +476,7 @@ export const SPLIT_ELEVATOR_DOOR_OUT = 11;
 export const SPLIT_UPTOWN_BOARD = 19;
 export const SPLIT_DOWNTOWN_BOARD = 24;
 
-// A door as the tiler writes it: one edge in, one edge out, unless the agency says a stair only
-// opens outwards. Both carry the station's name, the same seconds and the same kind.
+// One edge in and one out, unless the agency says a stair only opens outwards.
 function splitDoors(
   entry: number,
   exit: number,
@@ -572,8 +511,7 @@ function splitDoors(
   ];
 }
 
-// The change of train: a station side's exit round to its own entry, free and one-way. It is what
-// keeps a door-in, door-out walk through the station impossible while a change stays possible.
+// Free and one-way, which blocks a walk-through while a change stays possible.
 function splitTransfer(entry: number, exit: number, name: number): EdgeSpec {
   return {
     a: exit,
@@ -633,14 +571,11 @@ const SPLIT_EDGES: readonly EdgeSpec[] = [
     seconds: 0,
     name: CROSS_NAME,
   },
-  // The uptown side's two doors, both on the east pavement: a stair a rider may use either way, and
-  // one that only opens outwards.
   ...splitDoors(UPTOWN_ENTRY, UPTOWN_EXIT, SPLIT_EAST_DOOR_NODE, SPLIT_NAME),
   ...splitDoors(UPTOWN_ENTRY, UPTOWN_EXIT, SPLIT_EXIT_DOOR_NODE, SPLIT_NAME, {
     exitOnly: true,
   }),
   splitTransfer(UPTOWN_ENTRY, UPTOWN_EXIT, SPLIT_NAME),
-  // The downtown side's one door, a lift on the west pavement.
   ...splitDoors(
     DOWNTOWN_ENTRY,
     DOWNTOWN_EXIT,
@@ -653,8 +588,7 @@ const SPLIT_EDGES: readonly EdgeSpec[] = [
   splitTransfer(NORTH_ENTRY, NORTH_EXIT, NORTH_NAME),
   ...splitDoors(SOUTH_ENTRY, SOUTH_EXIT, SPLIT_SOUTH_PAVEMENT, SOUTH_NAME),
   splitTransfer(SOUTH_ENTRY, SOUTH_EXIT, SOUTH_NAME),
-  // Direction 0 boards from side 0's entry and runs north; direction 1 from side 1's. No edge joins
-  // the two sides: changing your mind means walking out and across.
+  // No edge joins the two sides: changing your mind means walking out and across.
   {
     a: UPTOWN_ENTRY,
     b: UPTOWN_PLATFORM,
@@ -731,9 +665,6 @@ const SPLIT_EDGES: readonly EdgeSpec[] = [
   stayAboard(SOUTH_ARRIVAL, SOUTH_PLATFORM),
 ];
 
-// Every door of the fixture with the street it opens onto, as the tiler reads it off the pavement it
-// cut the door into: the uptown side's stairs onto the east pavement, the downtown lift onto the
-// west, and the two stations up and down the line.
 const SPLIT_DOOR_STREETS: readonly {
   edge: number;
   street: number;
@@ -748,7 +679,6 @@ const SPLIT_DOOR_STREETS: readonly {
     : [];
 });
 
-// The split station's graph, with no timetable on it: hang one with `splitTimetable`.
 export function splitStationGraph(): RoutingGraph {
   const lat = (node: number): number =>
     ORIGIN_LAT + SPLIT_NODES[node][1] * SCALE;
@@ -811,7 +741,6 @@ export function splitStationGraph(): RoutingGraph {
   );
 }
 
-// A timetable for the split station's two directions, both running all day at a short headway.
 export function splitTimetable(date: Date): TransitTimetable {
   const record: ScheduleRecord = {
     firstDay: 20200101,
@@ -833,11 +762,7 @@ export function splitTimetable(date: Date): TransitTimetable {
   return resolveTimetable(record, date, FIXTURE_TIME_ZONE);
 }
 
-// A station with a two-way door on each pavement of an avenue, and the only crossing two kilometers
-// south of it: walking round is an hour and walking down one stair and up the other is four minutes.
-// On one station node that is what a router does — the station becomes a free underpass — so this is
-// the fixture that says the way in and the way out are different nodes. Two lines meet here as well,
-// which is the other half of the same question: a change of train still has to be possible.
+// The only crossing is 2 km away, so a single-node station would be a free underpass.
 const UNDERPASS_HALF = 400; // ~34 m off the center line: one pavement each side
 const UNDERPASS_SOUTH = -20_000; // the crossing, ~2.2 km down the avenue
 const UNDERPASS_NORTH = 20_000; // and the next station, as far the other way
@@ -892,7 +817,6 @@ const A_MID_PLATFORM = 11;
 const A_SOUTH_PLATFORM = 12;
 const B_MID_PLATFORM = 13;
 const B_NORTH_PLATFORM = 14;
-// Each platform's arrival node, at the same point as its boarding node.
 const A_MID_ARRIVAL = 15;
 const A_SOUTH_ARRIVAL = 16;
 const B_MID_ARRIVAL = 17;
@@ -930,7 +854,6 @@ function underpassDoorSeconds(station: number, door: number): number {
   return Math.round(90 + meters / WALK_METERS_PER_SECOND);
 }
 
-// A two-way door and the change of train behind it, as the tiler writes them.
 function underpassDoors(
   entry: number,
   exit: number,
@@ -1002,8 +925,7 @@ const UNDERPASS_EDGES: readonly EdgeSpec[] = [
   ...underpassDoors(MID_ENTRY, MID_EXIT, UNDERPASS_WEST_DOOR_NODE, UP_MID_NAME),
   ...underpassDoors(MID_ENTRY, MID_EXIT, UNDERPASS_EAST_DOOR_NODE, UP_MID_NAME),
   splitTransfer(MID_ENTRY, MID_EXIT, UP_MID_NAME),
-  // The station down the line opens onto the crossing's own corner, which is the case the door
-  // table is for: the step a route arrives along is the crossing, and it names no street at all.
+  // This door opens onto the crossing's corner, where the arriving step names no street.
   ...underpassDoors(
     UP_SOUTH_ENTRY,
     UP_SOUTH_EXIT,
@@ -1018,7 +940,6 @@ const UNDERPASS_EDGES: readonly EdgeSpec[] = [
     UP_NORTH_NAME,
   ),
   splitTransfer(UP_NORTH_ENTRY, UP_NORTH_EXIT, UP_NORTH_NAME),
-  // Line A comes up from the south and ends here; line B carries on north.
   {
     a: UP_SOUTH_ENTRY,
     b: A_SOUTH_PLATFORM,
@@ -1095,7 +1016,6 @@ const UNDERPASS_EDGES: readonly EdgeSpec[] = [
   stayAboard(B_NORTH_ARRIVAL, B_NORTH_PLATFORM),
 ];
 
-// Each door with the street it opens onto, as the tiler reads it off the pavement it cut it into.
 const UNDERPASS_DOOR_STREETS: readonly {
   edge: number;
   street: number;
@@ -1171,7 +1091,6 @@ export function underpassGraph(): RoutingGraph {
   return graph;
 }
 
-// Both of the underpass fixture's lines, running all day at the split station's headway.
 export function underpassTimetable(date: Date): TransitTimetable {
   const record: ScheduleRecord = {
     firstDay: 20200101,
@@ -1193,10 +1112,7 @@ export function underpassTimetable(date: Date): TransitTimetable {
   return resolveTimetable(record, date, FIXTURE_TIME_ZONE);
 }
 
-// A line calling at THREE stops along one pavement, which is what riding PAST a station looks like:
-// board at the west end, stay aboard through the middle stop, get off at the east one. The walk is
-// half as long again as the ride, so the train wins outright. Its own little network, so every node
-// and edge id above stays where it is.
+// Riding past a middle stop; the walk is half as long again as the ride, so the train wins outright.
 export const THREE_STOP_WEST = "West End";
 export const THREE_STOP_MIDDLE = "Middle";
 export const THREE_STOP_EAST = "East End";
@@ -1223,8 +1139,7 @@ const [
   THREE_STOP_ROUTE_ID,
 ] = [0, 1, 2, 3, 4, 5, 6];
 
-// Three pavement nodes, then each station's entry and exit, then each platform's boarding and
-// arrival node. The stations stand where the main fixture's do, so a door costs what one costs there.
+// Stations stand where the main fixture's do, so a door costs the same.
 export const THREE_STOP_PAVEMENT = [0, 1, 2];
 const threeStopEntry = (stop: number): number => 3 + stop * 2;
 const threeStopExit = (stop: number): number => 4 + stop * 2;
@@ -1245,7 +1160,7 @@ const THREE_STOP_NODES: readonly [number, number][] = [
 
 export const THREE_STOP_WEST_SIDEWALK = 0;
 export const THREE_STOP_EAST_SIDEWALK = 1;
-// The board edge at each stop, which is what says a leg boarded once and rode two stops.
+// Says a leg boarded once and rode two stops.
 export const THREE_STOP_BOARDS = [11, 14, 17];
 
 const THREE_STOP_EDGES: readonly EdgeSpec[] = [
@@ -1263,7 +1178,6 @@ const THREE_STOP_EDGES: readonly EdgeSpec[] = [
     seconds: 0,
     name: THREE_STOP_STREET,
   },
-  // Each station's way in, way out and change of train, in that order.
   ...[0, 1, 2].flatMap((stop): EdgeSpec[] => {
     const name = [
       THREE_STOP_WEST_NAME,
@@ -1290,7 +1204,6 @@ const THREE_STOP_EDGES: readonly EdgeSpec[] = [
       splitTransfer(threeStopEntry(stop), threeStopExit(stop), name),
     ];
   }),
-  // And each platform's board, alight and stay-aboard.
   ...[0, 1, 2].flatMap((stop): EdgeSpec[] => [
     {
       a: threeStopEntry(stop),
@@ -1376,8 +1289,7 @@ export function threeStopGraph(): RoutingGraph {
   return graph;
 }
 
-// The three-stop line's timetable: the same short headway the split station runs, so the worst wait
-// cannot make the ride dearer than the walk.
+// The split station's headway, so the worst wait can't make the ride dearer than the walk.
 export function threeStopTimetable(date: Date): TransitTimetable {
   const record: ScheduleRecord = {
     firstDay: 20200101,

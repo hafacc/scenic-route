@@ -1,7 +1,3 @@
-// What a timetable answers past the last day a SERVICE's own calendars cover: whether most of the
-// last six same-weekday days it does cover were running it. One record holds several agencies, so
-// the question is asked per service and not of the record.
-
 import { expect, test } from "bun:test";
 import {
   EXCEPTION_ADDED,
@@ -15,7 +11,7 @@ const WEEKDAYS = 0b001_1111; // Monday .. Friday
 const FRIDAY = 0b001_0000;
 const WEEKEND = 0b110_0000;
 
-// A feed whose calendars run to Friday 2026-08-28, the shape of the cached Muni one.
+// Calendars running to Friday 2026-08-28, the shape of the cached Muni feed.
 const SERVICES: readonly ServiceCalendar[] = [
   { mask: WEEKDAYS, startDay: 20_260_601, endDay: 20_260_828 },
   { mask: WEEKEND, startDay: 20_260_601, endDay: 20_260_828 },
@@ -36,7 +32,6 @@ test("a day inside the range reads its own calendars and its own exceptions", ()
 test("a day past every calendar runs the same weekday's ordinary service", () => {
   expect(servicesOn(SERVICES, NO_EXCEPTIONS, 20_260_904)).toEqual(new Set([0]));
   expect(servicesOn(SERVICES, NO_EXCEPTIONS, 20_260_905)).toEqual(new Set([1]));
-  // Months on, not just the week after.
   expect(servicesOn(SERVICES, NO_EXCEPTIONS, 20_261_225)).toEqual(new Set([0]));
 });
 
@@ -47,7 +42,7 @@ test("a day before every calendar starts still runs nothing", () => {
 });
 
 test("a holiday on the last covered same weekday is outvoted", () => {
-  // Friday the 28th ran a Sunday timetable; the five ordinary Fridays behind it say what a Friday is.
+  // Friday the 28th ran a Sunday timetable; the five ordinary Fridays behind it outvote it.
   const holiday: readonly ServiceException[] = [
     { day: 20_260_828, service: 0, type: EXCEPTION_REMOVED },
     { day: 20_260_828, service: 1, type: EXCEPTION_ADDED },
@@ -68,8 +63,7 @@ test("a calendar row written for two special weeks is outvoted", () => {
 });
 
 test("a service written only as calendar_dates rows rides the vote", () => {
-  // The shape SFMTA publishes: the weekday calendar row is canceled every weekday and an
-  // unscheduled service id added in its place, so the masks alone would board nothing.
+  // SFMTA cancels the weekday row every weekday and adds an unscheduled id, so masks alone board nothing.
   const services: readonly ServiceCalendar[] = [
     { mask: WEEKDAYS, startDay: 20_260_601, endDay: 20_260_828 },
     { mask: 0, startDay: 0, endDay: 0 },
@@ -101,17 +95,14 @@ test("calendars ending on different days vote over the latest of them", () => {
     { mask: WEEKDAYS, startDay: 20_260_601, endDay: 20_260_814 },
     { mask: WEEKDAYS, startDay: 20_260_601, endDay: 20_260_828 },
   ];
-  // The window is the last six Fridays to 2026-08-28; the retired calendar covers four of them, so
-  // the ordinary Friday there is both calendars together.
+  // The retired calendar covers four of the last six Fridays, so a Friday there is both calendars.
   expect(servicesOn(staggered, NO_EXCEPTIONS, 20_260_904)).toEqual(
     new Set([0, 1]),
   );
 });
 
 test("a stale service falls back while a live one beside it resolves normally", () => {
-  // One artifact, two agencies: the rail calendars run into next year, the bus ones ended in August.
-  // A feed-wide test would leave the bus resolving normally to nothing at all for the rest of the
-  // year, because the rail calendars still cover the day being asked about.
+  // A feed-wide test would leave the bus running nothing, since rail still covers the day.
   const mixed: readonly ServiceCalendar[] = [
     { mask: WEEKDAYS, startDay: 20_260_601, endDay: 20_270_108 }, // rail
     { mask: WEEKDAYS, startDay: 20_260_601, endDay: 20_260_828 }, // bus
@@ -119,7 +110,6 @@ test("a stale service falls back while a live one beside it resolves normally", 
   ];
   expect(servicesOn(mixed, NO_EXCEPTIONS, 20_260_904)).toEqual(new Set([0, 1]));
   expect(servicesOn(mixed, NO_EXCEPTIONS, 20_260_905)).toEqual(new Set([2]));
-  // The bus keeps its own holidays out of the vote, and the rail keeps its own inside the range.
   const holidays: readonly ServiceException[] = [
     { day: 20_260_828, service: 1, type: EXCEPTION_REMOVED },
     { day: 20_260_904, service: 0, type: EXCEPTION_REMOVED },
