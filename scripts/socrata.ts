@@ -235,7 +235,7 @@ function socrata(host: string): Socrata {
 }
 
 export const NYC_OPEN_DATA = socrata("data.cityofnewyork.us");
-export const DATA_SF = socrata("data.sfgov.org");
+export const DATA_SF = socrata("data.sf.gov");
 // New York State's portal: the MTA is a state authority and publishes its station data here.
 export const NY_STATE_OPEN_DATA = socrata("data.ny.gov");
 

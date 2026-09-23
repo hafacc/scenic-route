@@ -312,7 +312,7 @@ const SF_EAS: CsvFeed = {
   id: "sf",
   name: "SF EAS",
   url:
-    "https://data.sfgov.org/resource/ramy-di5m.csv?$select=address_number," +
+    "https://data.sf.gov/resource/ramy-di5m.csv?$select=address_number," +
     `address_number_suffix,street_full_street_name,latitude,longitude&$limit=${SF_LIMIT}`,
   limit: SF_LIMIT,
   columns: [
