@@ -1,12 +1,4 @@
-// New York's ferry routes never swap lanes over the water they share, measured on the real artifact
-// rather than a fixture: src/tiles/lines.test.ts pins the RULE on synthetic geometry, and this holds
-// the CITY to it, so a route pair that lies against each other in some way the rule did not
-// anticipate is caught.
-//
-// WHERE THIS RUNS. Not in `bun test src`. It reads data/ferries/nyc.bin, an LFS file that standard
-// CI deliberately checks out as a pointer (see .github/workflows/build.yml — the LFS payload burned
-// the account's whole bandwidth budget), so it runs on the manual deploy path beside
-// route-sampling.test.ts. `bun run test-routes` runs it.
+// Reads an LFS file that ordinary CI has only as a pointer, so it runs on the deploy path only.
 
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -20,16 +12,14 @@ test("no two of New York's ferry routes swap lanes over the water they share", (
     file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength),
     "ferr",
   );
-  // The same grid the layer laid the lanes out on, down to where its cells fall: a grid a fraction
-  // of a cell out would compare two routes' lanes across the step between one cell and the next.
+  // Must match the layer's grid exactly, or lanes get compared across a cell boundary.
   const midLat =
     data.polylines.reduce((sum, { lats }) => sum + lats[0], 0) /
     data.polylines.length;
   const cellLat = CELL_M / METERS_PER_DEGREE_LAT;
   const cellLng = CELL_M / metersPerLng(midLat);
 
-  // Per cell, the lanes each route holds at the vertices it has there. Routes are told apart by
-  // their color, which in this file is one per route.
+  // Routes are told apart by color, which is unique per route in this file.
   const cells = new Map<string, Map<string, number[]>>();
   data.polylines.forEach(({ lngs, lats }, index) => {
     const ribbon = data.ribbons?.[index];
@@ -56,15 +46,12 @@ test("no two of New York's ferry routes swap lanes over the water they share", (
         const gap = Math.min(...others) - Math.max(...lanes);
         const pair = `${route} ${other}`;
         sides.set(pair, (sides.get(pair) ?? new Set()).add(Math.sign(gap)));
-        // Not merely ordered: a route is fully present in a cell it runs through, so the two are a
-        // whole lane apart wherever they meet, and neither is drawn over the other. To a rounding
-        // error, since a lane track is a mean over a window and a gap of exactly one comes back a
-        // last-bit under it.
+        // A whole lane apart, less rounding: a lane is a windowed mean, so 1 can come back just under.
         expect(Math.abs(gap)).toBeGreaterThan(1 - 1e-9);
       }
     }
   }
-  expect(shared).toBeGreaterThan(50); // 71 in the committed file, so this cannot pass on nothing
+  expect(shared).toBeGreaterThan(50); // 71 in the committed file; guards against a vacuous pass
   for (const [pair, taken] of sides) {
     expect([pair, taken.size]).toEqual([pair, 1]);
   }

@@ -1,43 +1,16 @@
 name: sheds
 
-# The sidewalk-shed artifact and the two timetables, on three triggers: the daily cron, a push to
-# `main` that changes what the timetables are built from, and `workflow_dispatch` for a run started
-# by hand.
-#
-# The sheds are rebuilt from the DOB's feed, which regenerates around 09:47 ET, so the cron fires at
-# 15:00 UTC — 10:00 EST and 11:00 EDT, comfortably after it either way. GitHub's cron is UTC only and
-# is best-effort, delayed by minutes to an hour under load; that does not matter here, because
-# `update-sheds` reads the day the published artifact reached and replays everything the feed has put
-# out since. A run that is late, or that never happened, catches up on the next one.
-#
-# Scheduled workflows on a public repo are DISABLED after 60 days without a PUSH to the repository,
-# and only ever run from the default branch. A scheduled run completing does not reset that clock —
-# but a push does, from any actor, the automatic GITHUB_TOKEN included. So the daily commit below is
-# what keeps this schedule alive, and it is a push to `main` itself rather than to a side branch, so
-# there is no arrangement to preserve for the clock's sake.
-#
-# `workflow_dispatch` is the recovery hatch, and has to be: a disabled workflow cannot re-enable
-# itself, and a later push does not re-enable it either — that takes a person. Do NOT add a keepalive
-# scheme on top. GitHub blocked the widely-cited `keepalive-workflow` action in April 2025 as a terms
-# violation, so anything whose purpose is to game this timer is a policy risk rather than insurance.
-#
-# The `push` filter is the timetables' republish: a change to how they are built should reach
-# `public/` without waiting for tomorrow's cron. It names only what decides their bytes — the two
-# scripts, every module they import, what they read, and this workflow — so a push carrying anything
-# else does not run it, and
-# the paths this job itself commits (all under `public/`) are deliberately absent, so its own daily
-# commit cannot retrigger it. A push-triggered run costs nothing when the change did not move any
-# bytes: the commit step below compares what it rebuilt against what is committed and exits on
-# "nothing to commit".
+# The DOB feed regenerates ~09:47 ET, so 15:00 UTC is after it; a late run catches up the next day.
+# Schedules die after 60 days without a push, and this job's daily push to main keeps them alive.
+# A disabled workflow can't re-enable itself; don't add a keepalive, GitHub bans them as abuse.
+# The push paths are what decides the timetables' bytes; this job's own outputs must stay out.
 on:
   schedule:
     - cron: "0 15 * * *"
   push:
     branches: [main]
     paths:
-      # The two scripts and everything they import, transitively: a helper they read through decides
-      # their bytes exactly as their own code does, and one left out is a change that never reaches
-      # public/ until the next cron.
+      # The two scripts and everything they import, transitively.
       - "scripts/ferry-schedule.ts"
       - "scripts/transit-schedule.ts"
       - "scripts/alameda.ts"
@@ -75,67 +48,30 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      # NEVER `lfs: true` here. This job reads no building blob and no canopy blob, so it draws
-      # nothing against the account-wide 10 GiB a month of LFS bandwidth, and the shed artifact it
-      # does read is not tracked and may never be — `raw` serves an LFS file's pointer text rather
-      # than its bytes, which would break the client fetch outright. `actions/checkout` defaults to
-      # lfs: false; leave it. Its credentials are what the push below authenticates with.
+      # No LFS: it would spend the account's bandwidth, and `raw` serves an LFS file as its pointer.
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      # Reads yesterday's artifact out of this checkout, the DOB history as a shallow clone, the
-      # deployed graph off the Pages site (30 MB), and Socrata for the day's new permits only. It
-      # keeps nothing between runs: the artifact's own header says which day it was built through.
-      #
-      # New sheds are placed against the graph the SITE is serving, not one this checkout could build,
-      # so their durable edge keys are the ones the client will resolve. Where the deployed graph is
-      # not the one the artifact was placed against — the window between a push that moves a graph
-      # input and the deploy that serves it — the step says so and leaves the artifact alone, so the
-      # two timetable steps below still run and the day's commit still happens. Deploy promptly: the
-      # sheds stand still until the site serves the graph the artifact names.
-      #
-      # A runner shares its egress address with the whole fleet, and the anonymous Socrata pool is
-      # throttled per address. Absent on a fork, which reads unauthenticated instead.
-      # What this runner can reach, recorded whether or not the read below works. The failures are
-      # invisible from a laptop, so the only place the evidence exists is here; scripts/socrata-probe.sh
-      # says what each column distinguishes. Observational, and never allowed to fail the job.
+      # Runners share egress IPs and anonymous Socrata is throttled per IP, hence the app token.
+      # Records what this runner can reach, since those failures never reproduce from a laptop.
       - run: bash scripts/socrata-probe.sh
         continue-on-error: true
         env:
           SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
+      # Places sheds against the deployed graph, so their edge keys are the ones the client resolves.
       - run: bun run update-sheds
         env:
           SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
           SOCRATA_VERBOSE: "1"
 
-      # The ferry timetable, riding along because it wants exactly the same thing: a daily look at a
-      # feed that rarely moves. It re-reads both GTFS zips and opens a new timetable only when the
-      # schedule itself changed — a record's body is a pure function of the feeds, so an unchanged day
-      # rewrites identical bytes and falls through the "nothing to commit" check below.
-      #
-      # It writes public/ferry-schedule/ and nothing else. The raw zips under data/ferries/ are
-      # LFS-tracked and are deliberately NOT refreshed here: this job must never write an LFS object.
-      # They stay whatever the last human-run build read, and drift from the live schedule by design —
-      # the artifact is what the client reads.
+      # Writes only public/ferry-schedule/; the LFS zips under data/ferries/ must never be written here.
       - run: bun run update-ferry-schedule
 
-      # The rail timetable, on the same daily look at a feed that rarely moves. It reads the MTA's,
-      # Muni's and BART's GTFS zips and writes public/transit-schedule/ only — data/transit/ is the
-      # graph's topology input and is rebuilt by hand with the tiles, never here.
+      # Writes only public/transit-schedule/; data/transit/ is a graph input rebuilt by hand.
       - run: bun run update-transit-schedule
 
-      # One ordinary commit on `main` a day. Not a size problem: packed git deltas these files to
-      # 1.7-22 KB a day depending on the repack window, not the ~1 MB a day the raw size suggests
-      # (DESIGN.md has the measurement). What the raw size WOULD cost is LFS, which deltas nothing:
-      # never track these.
-      #
-      # It must never clobber a human push, so no `--force` and no `--force-with-lease` either — a
-      # lease is checked against what this checkout last fetched, which is exactly the push it would
-      # be overwriting. Instead the commit is built on the tip the push is aimed at, and a rejected
-      # push re-reads `main` and rebuilds it on the new one. Only these three directories are ever
-      # staged, so rebuilding is a fresh commit rather than a rebase and has nothing to conflict with.
-      #
-      # `build.yml` ignores all three paths, so the push does not fire a lint+test run.
+      # Never track these in LFS: git deltas them to a few KB a day, LFS would store every copy.
+      # No --force-with-lease: its lease is this checkout's fetch, which is the push it would clobber.
       - name: commit the artifacts
         run: |
           staged="$(mktemp -d)"
