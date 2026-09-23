@@ -1,10 +1,7 @@
 import { expect, test } from "bun:test";
 import { type PathSink, splinePath } from "./spline";
 
-// The fit's contract is two things a ferry route depends on and a Catmull-Rom does not give for
-// free: it passes through the vertices the feed published, and between two of them it stays inside
-// the box they bound. The second is what keeps a route hugging a shoreline off the bank — the
-// unlimited fit left that box by up to 72 m over New York's ferry geometry.
+// The contract: through every published vertex, and each span inside the box its endpoints bound.
 
 interface Span {
   fromX: number;
@@ -61,7 +58,6 @@ function pointAt(span: Span, at: number): { x: number; y: number } {
   };
 }
 
-// A deterministic pseudo-random walk, so a failure is reproducible.
 function walk(count: number, seed: number): { xs: number[]; ys: number[] } {
   const xs: number[] = [];
   const ys: number[] = [];
@@ -73,7 +69,7 @@ function walk(count: number, seed: number): { xs: number[]; ys: number[] } {
   let x = 0;
   let y = 0;
   for (let step = 0; step < count; step++) {
-    // Wildly uneven spans, which is what a GTFS shape looks like and where a spline misbehaves.
+    // Wildly uneven spans, like a GTFS shape.
     x += next() * 300 - 100;
     y += next() * 300 - 100;
     xs.push(x);

@@ -15,39 +15,24 @@ import {
   TILE_SIZE,
 } from "./sweep";
 
-// The swept shade of src/tiles/sweep.ts, rasterized on the GPU. The geometry and the model are that
-// file's — this only changes what the polygons are handed to. Canvas2D spends ~1.1 µs per moveTo/lineTo
-// binding into Skia, which over a park tile's ~50k vertices is 70% of the tile; the same loops writing
-// into a Float32Array cost 1.2 ms for all of them, so the fix is to stop feeding Canvas2D vertex by
-// vertex and union the polygons with stencil-then-cover instead of a nonzero fill.
-//
-// ONE context serves every tile: they are expensive and browsers cap a document at around 16. The tile
-// arrives as an OffscreenCanvas already committed to a 2D context, so the layer is drawn on this
-// module's own canvas and composed onto the tile. Where WebGL2 is missing or the context is lost,
-// `drawSweepGl` says so and src/tiles/shade.ts falls back to the Canvas2D sweep, which stays the
-// reference for both.
+// Canvas2D's per-vertex Skia calls were 70% of a park tile, so the same polygons go to the GPU here.
+// One context serves every tile: browsers cap a document at around 16.
 
-// Samples the shadow edges are resolved from. Stencil-then-cover paints whole pixels, so without
-// multisampling every edge comes out hard where a Canvas2D fill feathers it; 4 already leaves p50 |Δ|
-// against Canvas2D at 0, with the whole difference in the edge pixels.
+// Stencil-then-cover paints whole pixels, so edges need multisampling to feather like Canvas2D.
 const SAMPLES = 4;
 
-// Consecutive context losses before the layer gives up and stays on Canvas2D. A GPU reset is worth
-// rebuilding through; a driver that cannot hold a context is not worth retrying every tile.
+// Context losses before falling back to Canvas2D for good.
 const REBUILDS = 3;
 
-// The shade color the fills carry, on the 0..1 the shaders want. Read per tile rather than once:
-// it is the theme's, and a theme flip redraws every tile.
+// Read per tile, since a theme flip redraws every tile.
 function slate(): [number, number, number] {
   const [red, green, blue] = shadeRgb();
   return [red / 255, green / 255, blue / 255];
 }
 
-// Terminates a polygon in the index buffer, so one drawElements covers a whole layer.
 const RESTART = 0xffffffff;
 
-// The Path2D stand-in the cast* loops write into: coordinates go straight into a flat array and each
-// subpath becomes one restart-separated triangle fan, whose nonzero winding the stencil counts.
+// Each subpath becomes one restart-separated triangle fan, whose winding the stencil counts.
 class Geometry implements PolygonSink {
   points = new Float32Array(1 << 12);
   indices = new Uint32Array(1 << 11);
@@ -59,9 +44,7 @@ class Geometry implements PolygonSink {
     this.indicesAt = 0;
   }
 
-  // Room for one more vertex and the restart index that may precede it. The buffers start small and
-  // settle after a handful of tiles: the busiest layer over a park screenful is 25k vertices, which
-  // doubles its way to 256 KiB and stops.
+  // Room for one more vertex and the restart index that may precede it.
   private room(): void {
     if (this.pointsAt + 2 > this.points.length) {
       const wider = new Float32Array(this.points.length * 2);
@@ -95,7 +78,7 @@ class Geometry implements PolygonSink {
   }
 
   closePath(): void {
-    // A triangle fan closes itself; the restart index is written by the next moveTo.
+    // A triangle fan closes itself; the next moveTo writes the restart.
   }
 }
 
@@ -103,8 +86,7 @@ const COVER_VERTEX = `#version 300 es
 in vec2 point;
 void main() { gl_Position = vec4(point, 0.0, 1.0); }`;
 
-// The cast* loops work in tile pixels whatever the device ratio is, so the tile's own size is the
-// divisor and the viewport does the rest.
+// Input is in tile pixels at any device ratio; the viewport does the rest.
 const PATH_VERTEX = `#version 300 es
 in vec2 point;
 const float tile = ${TILE_SIZE}.0;
@@ -164,8 +146,7 @@ class Sweeper {
   private readonly quadArray: WebGLVertexArrayObject;
   private readonly pathBuffer: WebGLBuffer;
   private readonly indexBuffer: WebGLBuffer;
-  // One multisampled color+stencil target serves both layers in turn, and the crowns are parked in
-  // the resolve texture while the buildings reuse it.
+  // One multisampled target serves both layers; the crowns wait in the resolve texture meanwhile.
   private readonly target: WebGLFramebuffer;
   private readonly resolved: WebGLFramebuffer;
   private readonly texture: WebGLTexture;
@@ -273,9 +254,7 @@ class Sweeper {
     return this.gl.isContextLost();
   }
 
-  // One polygon set unioned by its nonzero winding and painted once: the fans go into the stencil with
-  // wrapping increments, then a full-screen triangle paints wherever the count came out non-zero and
-  // zeroes it again on the way past.
+  // Nonzero union: fans count into the stencil, then a full-screen triangle paints and clears it.
   private stencilCover(
     geometry: Geometry,
     tint: [number, number, number, number],
@@ -285,8 +264,7 @@ class Sweeper {
       return;
     }
     gl.bindVertexArray(this.pathArray);
-    // The element buffer comes back with the array object, but the ARRAY_BUFFER binding point is not
-    // its state: without this the upload would land in whichever buffer was bound last.
+    // ARRAY_BUFFER isn't vertex array state, so rebind it or the upload lands elsewhere.
     gl.bindBuffer(gl.ARRAY_BUFFER, this.pathBuffer);
     gl.bufferData(
       gl.ARRAY_BUFFER,
@@ -321,16 +299,13 @@ class Sweeper {
     gl.disable(gl.STENCIL_TEST);
   }
 
-  // The bases punched out of whatever is on the target: shade on a roof is not ground shade.
+  // Shade on a roof is not ground shade.
   private punch(): void {
     this.gl.blendFunc(this.gl.ZERO, this.gl.ONE_MINUS_SRC_ALPHA);
     this.stencilCover(this.bases, [0, 0, 0, 1]);
   }
 
-  // One tile onto the shared canvas, at the pyramid's own scale. Each sun sample's shadows are unioned
-  // by one stencil-then-cover and the samples accumulate at 1/n opacity, so the layer's alpha IS the
-  // shaded fraction; the crowns then compose over that at the canopy's tau. False when nothing reached
-  // the tile, which leaves it as untouched as the Canvas2D sweep leaves it.
+  // Same compositing as drawSweep in src/tiles/sweep.ts; false when nothing reached the tile.
   draw(ground: SweptGround, coords: TileCoords, { tau }: ShadeParams): boolean {
     const { gl } = this;
     const { chunks, decks, samples, maxShadowMeters } = ground;
@@ -339,7 +314,6 @@ class Sweeper {
     const [red, green, blue] = slate();
 
     this.crowns.reset();
-    // Trunks ride with the crowns; see the note in src/tiles/sweep.ts.
     const crowns =
       castCrowns(this.crowns, chunks, samples[0], maxShadowMeters, frame) +
       castTrunks(
@@ -397,8 +371,7 @@ class Sweeper {
     if (drawn === 0 && crowns === 0 && sheds === 0) {
       return false;
     }
-    // The decks compose over the samples rather than accumulating with them; the note in
-    // src/tiles/sweep.ts says why.
+    // Decks compose over the samples rather than accumulating with them, as in sweep.ts.
     if (sheds > 0) {
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
       this.stencilCover(this.sheds, [red, green, blue, 1]);
@@ -420,8 +393,7 @@ class Sweeper {
     return true;
   }
 
-  // Hands the context back rather than waiting for the GC to notice it: a browser caps a document at
-  // around 16, and a display change that rebuilds at a new size would otherwise strand this one.
+  // Release the context now, not at GC: browsers cap a document at around 16.
   dispose(): void {
     this.gl.getExtension("WEBGL_lose_context")?.loseContext();
   }
@@ -444,13 +416,9 @@ class Sweeper {
 }
 
 let sweeper: Sweeper | null = null;
-// Losses and outright failures left before the layer stays on Canvas2D for good: a GPU reset is worth
-// rebuilding through, a driver that cannot hold a context is not worth retrying every tile. Resizing
-// for a new device ratio is not one of these.
+// Resizing for a new device ratio doesn't count against this.
 let attempts = REBUILDS;
 
-// The shared sweeper at this tile size, rebuilt when the device ratio changes under it or the context
-// was lost. Null once WebGL2 has been counted out.
 function sweeperFor(size: number): Sweeper | null {
   if (sweeper?.lost) {
     sweeper = null;
@@ -472,8 +440,7 @@ function sweeperFor(size: number): Sweeper | null {
   return sweeper;
 }
 
-// One tile swept on the GPU and composed onto its canvas. False where the GPU could not do it and the
-// Canvas2D sweep has to: no WebGL2, or a context that went away mid-tile.
+// False when the caller must fall back to the Canvas2D sweep.
 export function drawSweepGl(
   context: OffscreenCanvasRenderingContext2D,
   ground: SweptGround,

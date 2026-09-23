@@ -5,15 +5,13 @@ import { projectX, projectY } from "./mercator";
 import { packRuns, pixelsPerMeter, type ShedDecks } from "./shed-decks";
 import { castSheds, crownSegments, frameFor, type PolygonSink } from "./sweep";
 
-// A shed deck is the one caster the client carries that no baked pyramid has a copy of, so nothing
-// else can catch it being thrown the wrong length, the wrong way round, or wound so that it subtracts
-// from the shadows it overlaps.
+// No baked pyramid carries shed decks, so only these tests catch their shadows going wrong.
 
 const DEGREES = Math.PI / 180;
 const MAX_SHADOW_METERS = 500;
 const CENTER = { lat: 40.75, lng: -73.98 }; // midtown, where the sheds are
 
-// The tile the decks sit in, deep enough that a 4 m deck is several pixels across.
+// Deep enough that a 4 m deck is several pixels across.
 const ZOOM = 17;
 const FRAME = frameFor({
   x: Math.floor(projectX(CENTER.lng, ZOOM) / 256),
@@ -21,8 +19,7 @@ const FRAME = frameFor({
   z: ZOOM,
 });
 
-// The sun as a sample states it: the ground direction the shadow runs in, and its length per meter of
-// caster height. Azimuth is a compass bearing, so the shadow runs the opposite way.
+// Azimuth is a compass bearing, so the shadow runs the opposite way.
 function sunAt(elevationDeg: number, azimuthDeg: number): SunSample {
   return {
     east: -Math.sin(azimuthDeg * DEGREES),
@@ -31,13 +28,10 @@ function sunAt(elevationDeg: number, azimuthDeg: number): SunSample {
   };
 }
 
-// A deck's depth here is the caster's input rather than a constant, so a case that cares states one;
-// this is the middle of what the placement measures and what an unmeasured span falls back to.
+// What an unmeasured span falls back to.
 const DEPTH_METERS = 4;
 
-// One deck along a run of coordinates, ringed and packed by the production geometry so that what is
-// cast here is what the display draws — the band centered on the run rather than pinned to a curb,
-// since there is no graph under these to say which side the building is.
+// Ringed by the production geometry, centered on the run since there's no graph to say which side.
 function deckAlong(
   path: { lat: number; lng: number }[],
   depth = DEPTH_METERS,
@@ -55,7 +49,6 @@ function deckAlong(
   ]);
 }
 
-// Every polygon the cast emitted, in tile pixels.
 class Recorder implements PolygonSink {
   readonly rings: [number, number][][] = [];
 
@@ -70,7 +63,6 @@ class Recorder implements PolygonSink {
   closePath(): void {}
 }
 
-// Twice the area a ring encloses, positive for the winding a nonzero fill has to see everywhere.
 function signedDoubleArea(ring: [number, number][]): number {
   let sum = 0;
   for (let vertex = 0; vertex < ring.length; vertex++) {
@@ -81,7 +73,6 @@ function signedDoubleArea(ring: [number, number][]): number {
   return sum;
 }
 
-// The middle of everything the cast emitted, in tile pixels.
 function center(rings: [number, number][][]): { x: number; y: number } {
   const xs = rings.flatMap((ring) => ring.map(([x]) => x));
   const ys = rings.flatMap((ring) => ring.map(([, y]) => y));
@@ -91,7 +82,6 @@ function center(rings: [number, number][][]): { x: number; y: number } {
   };
 }
 
-// The middle of a deck's own box, in tile pixels.
 function deckCenter({ boxes }: ShedDecks, deck = 0): { x: number; y: number } {
   return {
     x:
@@ -103,7 +93,6 @@ function deckCenter({ boxes }: ShedDecks, deck = 0): { x: number; y: number } {
   };
 }
 
-// A deck running east-west through the tile's center, and where its own middle lands in tile pixels.
 const STRAIGHT = deckAlong([
   { lat: CENTER.lat, lng: CENTER.lng - 0.0004 },
   { lat: CENTER.lat, lng: CENTER.lng + 0.0004 },
@@ -121,14 +110,12 @@ test("throws the deck its own depth wide, at the deck's own height", () => {
   const rings = cast(STRAIGHT, sunAt(elevation, 180), MAX_SHADOW_METERS).rings;
   const xs = rings.flatMap((ring) => ring.map(([x]) => x));
   const ys = rings.flatMap((ring) => ring.map(([, y]) => y));
-  // A sun due south throws north, which is up the screen: the east-west run is the deck's own, the
-  // north-south one is its depth, and the whole thing sits a shadow's length above the deck.
+  // A sun due south throws north, up the screen.
   expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(
     (STRAIGHT.boxes[2] - STRAIGHT.boxes[0]) * FRAME.scale,
     6,
   );
-  // The band's own meters, which src/tiles/shed-decks.ts measures at the city's reference latitude
-  // rather than at this tile's.
+  // src/tiles/shed-decks.ts measures at the city's reference latitude, not this tile's.
   expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(
     DEPTH_METERS * pixelsPerMeter(ZOOM),
     6,
@@ -153,7 +140,6 @@ test("runs the shadow the way the sun points, however far it reaches", () => {
 });
 
 test("stops at the shadow clamp", () => {
-  // A sun on the horizon would otherwise throw the deck out of the world.
   const moved = center(cast(STRAIGHT, sunAt(0.05, 180), 10).rings);
   expect(STRAIGHT_CENTER.y - moved.y).toBeCloseTo(10 * FRAME.pixelsPerMeter, 6);
 });
@@ -167,7 +153,6 @@ test("winds every polygon positively, bends included", () => {
   ]);
   for (const azimuth of [0, 45, 120, 200, 300]) {
     const { rings } = cast(bent, sunAt(25, azimuth), MAX_SHADOW_METERS);
-    // The deck's own ring, displaced: one polygon however many bends it turns through.
     expect(rings.length).toBe(1);
     expect(rings[0].length).toBe(8);
     for (const ring of rings) {
@@ -177,8 +162,7 @@ test("winds every polygon positively, bends included", () => {
 });
 
 test("throws a deck that closes on itself as the annulus it is", () => {
-  // A wrap all the way round a block: the shadow has to keep the hole in the middle, which is the
-  // ring's own two loops rather than one polygon per bend.
+  // A wrap round a block has to keep the hole in the middle.
   const block = 0.0004;
   const ringed = packRuns([
     {
@@ -197,7 +181,6 @@ test("throws a deck that closes on itself as the annulus it is", () => {
   expect(rings.length).toBe(1);
   const ring = rings[0];
   expect(signedDoubleArea(ring)).toBeGreaterThan(0);
-  // The band around a ~34 m block at 4 m deep, not the block itself.
   const area = signedDoubleArea(ring) / 2 / FRAME.pixelsPerMeter ** 2;
   expect(area).toBeGreaterThan(400);
   expect(area).toBeLessThan(700);
@@ -216,8 +199,7 @@ test("skips a deck whose shadow never reaches the tile", () => {
 });
 
 test("each deck is thrown at its own depth, not at the set's first", () => {
-  // Two straight runs twenty-odd meters apart in latitude, so their bands cannot be confused, cast in
-  // one call: a caster reading one depth for the whole set would throw both the same width.
+  // One call, so a caster reading one depth for the whole set would throw both the same width.
   const NARROW = 2.5;
   const WIDE = 6;
   const decks = packRuns(
@@ -251,11 +233,9 @@ test("each deck is thrown at its own depth, not at the set's first", () => {
   expect(heights[1]).toBeCloseTo(WIDE, 6);
 });
 
-// A crown's slices are the other thing only this side can be caught on. The bands here are the ones
-// crates/tiler/src/crown.rs cuts, and the pyramid it bakes hands over to this sweep at one zoom.
+// The bands crates/tiler/src/crown.rs cuts, which must match at the handoff zoom.
 
 test("nests a crown's slices around its widest section", () => {
-  // A 10 m crown at a 5 degree sun: 0.6 * 10 * 11.43 = 68.6 m of smear over 3.6 m pixels.
   const low = crownSegments(10, 11.43, MAX_SHADOW_METERS, 3.6);
   const middle = 0.7 * 10 * 11.43;
   expect(low.map(({ level }) => level)).toEqual([0, 1, 2, 3]);
@@ -268,22 +248,17 @@ test("nests a crown's slices around its widest section", () => {
       expect(toM).toBeGreaterThan(low[slice - 1].toM);
     }
   }
-  // Every band is inside the crown, and the innermost one all but spans it.
   expect(low[3].fromM).toBeGreaterThan(0.4 * 10 * 11.43);
   expect(low[3].toM).toBeLessThan(10 * 11.43);
   expect(low[3].toM - low[3].fromM).toBeGreaterThan(0.96 * 0.6 * 10 * 11.43);
 
-  // The same crown at a 60 degree sun smears 3.5 m, under a pixel: one translated outline.
   const high = crownSegments(10, 0.577, MAX_SHADOW_METERS, 3.6);
   expect(high.map(({ level }) => level)).toEqual([0]);
   expect(high[0].toM).toBeCloseTo(high[0].fromM, 9);
 });
 
 test("cuts the bands the tiler cuts", () => {
-  // (height, shadow per height, meters per pixel) and the slices they have to cut, in meters of
-  // shadow displacement. Duplicated verbatim in `cuts_the_bands_the_client_cuts` in
-  // crates/tiler/src/crown.rs: a table on each side is what catches either half drifting from the
-  // other at the zoom they hand over.
+  // Duplicated verbatim in `cuts_the_bands_the_client_cuts` in crates/tiler/src/crown.rs.
   const cases: [number, number, number, [number, number, number][]][] = [
     [
       10,

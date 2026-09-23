@@ -1,19 +1,7 @@
-// The basemap's colors: one dictionary per theme.
-//
-// The light one is matched to CARTO Voyager, the raster style this app drew on until the switch to
-// Protomaps. Every value in it was sampled from Voyager's own tiles rather than picked by eye:
-// renders of the same six viewports were pixel-counted, and the dominant colors came out as the
-// cream blocks (#f6efe4), the pale land behind them (#fbf8f3), arterials from #fefdd7 to #ffe9a5,
-// water #d5e8eb and the navy place labels (#405c78).
-//
-// This is only the color half of a style. What each feature is DRAWN as — widths, which zoom it
-// appears at, how densely it is labeled — lives in ./rules.ts, because Protomaps keeps the two
-// apart. That separation is why a second color scheme costs a file like this one and nothing else.
-
+// The light flavor is sampled from CARTO Voyager's tiles; widths and zooms live in ./rules.ts.
 import type { ThemeName } from "../theme/palette";
 
-// Protomaps does not export its Flavor type, and the shape is a flat dictionary of color strings
-// with two nested groups, so it is spelled out here rather than borrowed.
+// Protomaps does not export its Flavor type.
 export interface Flavor {
   [key: string]: string | Record<string, string>;
 }
@@ -45,8 +33,7 @@ export const VOYAGER: Flavor = {
   water: "#d5e8eb",
   buildings: "#e9dcc4",
 
-  // Voyager draws a hairline warm casing under every road and fills minor streets pure white; only
-  // the arterials carry the yellow, and the motorway a shade deeper than the avenue.
+  // Voyager fills minor streets white over a warm hairline casing; only arterials carry the yellow.
   other: "#faf6ee",
   minor_service: "#faf6ee",
   minor_a: "#ffffff",
@@ -87,7 +74,6 @@ export const VOYAGER: Flavor = {
   railway: "#d3c9b7",
   boundaries: "#bcae99",
 
-  // Labels are the half of Voyager that reads as "Voyager": warm-gray street names, navy places.
   roads_label_minor: "#8d97a5",
   roads_label_minor_halo: "#ffffff",
   roads_label_major: "#7a8594",
@@ -124,21 +110,7 @@ export const VOYAGER: Flavor = {
   },
 };
 
-// The night map. Not the light one inverted — that is what the app used to do in CSS, and it put
-// near-black streets on a brown ground, because inverting a style turns its brightest, most
-// important lines into its darkest.
-//
-// The rule a dark map runs on is the opposite of a light one's: on paper the land is bright and the
-// ink is dark, so the roads are cut out of the ground as white; at night the ground is dark and the
-// roads are the lit thing on it. So the ground here is a deep blue-slate — not black, because the
-// shade wash and the overlays still have to get darker than it — and everything the reader follows
-// is a step lighter than the ground, in the same order of importance the light style uses: minor
-// streets legible, arterials clearly brighter, motorways warm. Water goes DARKER than the land
-// rather than lighter, which is what keeps a coastline readable when the land is dark too.
-//
-// The ground is also lighter than a night map usually goes, and deliberately: the shade overlay
-// draws SHADOWS on it, and a shadow needs somewhere to fall. On a near-black ground the wash had
-// nothing left to take away and the sunniest street looked the same as the shadiest.
+// Not an inversion: the ground stays light enough for shade to darken, and water sits below land.
 export const MIDNIGHT: Flavor = {
   background: "#202730",
   earth: "#2a323d",
@@ -166,9 +138,7 @@ export const MIDNIGHT: Flavor = {
   water: "#141b26",
   buildings: "#333c48",
 
-  // The lit half of the map. Minor streets sit clearly above the ground, arterials clearly above
-  // them, and the motorway carries the warmth Voyager gives it rather than going brighter still — a
-  // city's worth of motorway at full brightness is all a reader would see.
+  // The motorway gets warmth rather than brightness, or a city of motorway is all a reader would see.
   other: "#353e49",
   minor_service: "#353e49",
   minor_a: "#47515f",
@@ -209,9 +179,6 @@ export const MIDNIGHT: Flavor = {
   railway: "#414a56",
   boundaries: "#66717f",
 
-  // Labels are read against the ground, so they take the halo the light style gives them and swap
-  // which side is dark: light type, ground-colored halo. Places stay the coolest and brightest
-  // thing on the map, which is the one echo of Voyager's navy that survives the move to night.
   roads_label_minor: "#9aa5b3",
   roads_label_minor_halo: "#1f252d",
   roads_label_major: "#afbac7",

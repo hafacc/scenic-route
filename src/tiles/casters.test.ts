@@ -8,9 +8,7 @@ import {
 } from "./casters";
 import { projectX, projectY } from "./mercator";
 
-// The decoder against a chunk written the way crates/tiler/src/caster_chunks.rs writes one. Both bugs
-// these pin cost a whole render: the delta chain restarts per RECORD, not per chunk, and the convex
-// hulls have to live outside `points`, which only carries ring ends and so must stay contiguous.
+// Chunks written as crates/tiler/src/caster_chunks.rs writes them.
 
 const ORIGIN_LNG = -74.0114;
 const ORIGIN_LAT = 40.713;
@@ -29,8 +27,7 @@ function zigzag(value: number): number {
   return value < 0 ? -2 * value - 1 : 2 * value;
 }
 
-// One building: its height in decimeters and its rings in degrees, quantized about the chunk origin
-// with the delta chain running across the rings and restarting here.
+// Height in decimeters; the delta chain runs across the rings and restarts per record.
 function encodeBuilding(
   bytes: number[],
   heightDm: number,
@@ -41,7 +38,6 @@ function encodeBuilding(
   encodeRings(bytes, rings, [0, 0]);
 }
 
-// One crown: its height, how many slices it carries, then per slice a ring count and those rings.
 function encodeCrown(
   bytes: number[],
   heightDm: number,
@@ -74,8 +70,7 @@ function encodeRings(
   }
 }
 
-// The trunk section: its own chain of deltas about the chunk origin, then a radius in centimeters and
-// a height in decimeters.
+// Radius in centimeters, height in decimeters.
 function encodeTrunks(
   bytes: number[],
   trunks: [lng: number, lat: number, radiusCm: number, heightDm: number][],
@@ -122,8 +117,7 @@ function chunk(
   return buffer;
 }
 
-// A courtyard building, a plain one and a crown. The first record's hull is what would corrupt the
-// second's ring range if the two shared a buffer.
+// The courtyard's hull would corrupt the next record's ring range if hulls shared the ring buffer.
 const COURTYARD: [number, number][][] = [
   [
     [-74.01, 40.71],
@@ -146,7 +140,6 @@ const PLAIN: [number, number][][] = [
     [-74.008, 40.7112],
   ],
 ];
-// A crown as it ships: its outline, then the slice that outline insets to.
 const CROWN: [number, number][][][] = [
   [
     [
@@ -169,14 +162,10 @@ test("decodes a chunk's records, rings and heights", () => {
 
   expect(decoded.buildings).toBe(2);
   expect(decoded.records.length - 1).toBe(3);
-  // Decimeters in the blob, meters out, through a Float32Array.
   for (const [record, height] of [10, 10.1, 5].entries()) {
     expect(decoded.heights[record]).toBeCloseTo(height, 5);
   }
-  // The courtyard's two rings, one for the plain footprint, then the crown's two slices.
   expect([...decoded.records]).toEqual([0, 2, 3, 5]);
-  // Which slice a ring is in is what says how far down the shadow it is swept; a footprint's rings
-  // are all level 0.
   expect([...decoded.levels]).toEqual([0, 0, 0, 0, 1]);
 
   const flat = [COURTYARD, PLAIN, CROWN.flat()];
@@ -186,7 +175,6 @@ test("decodes a chunk's records, rings and heights", () => {
       const from = decoded.rings[at];
       expect(decoded.rings[at + 1] - from).toBe(ring.length);
       for (const [vertex, [lng, lat]] of ring.entries()) {
-        // Half a quantization unit in degrees, in zoom-0 world pixels.
         const tolerance = (SCALE / 2) * (256 / 360);
         expect(decoded.points[(from + vertex) * 2]).toBeCloseTo(
           projectX(lng, 0),
@@ -203,8 +191,6 @@ test("decodes a chunk's records, rings and heights", () => {
 test("keeps a hull off the ring buffer and winds it positively", () => {
   const decoded = decodeChunk(chunk([COURTYARD, PLAIN], [CROWN]));
 
-  // A hull per RING now, since a crown's slices are swept as well: the courtyard's outer ring and its
-  // hole, the plain footprint, and the crown's two triangular slices.
   expect([...decoded.hulls].filter((_, index) => index % 2 === 1)).toEqual([
     4, 4, 4, 3, 3,
   ]);
@@ -244,7 +230,7 @@ test("decodes the trunks as points with a radius, a height and a box", () => {
   expect(decoded.trunkMaxHeight).toBeCloseTo(5.2, 6);
   expect(decoded.trunks[0]).toBeCloseTo(projectX(-74.009, 0), 6);
   expect(decoded.trunks[3]).toBeCloseTo(projectY(40.7115, 0), 6);
-  // North is a SMALLER world y, so the higher latitude is the box's top.
+  // North is a smaller world y.
   expect([...decoded.trunkBox]).toEqual([
     decoded.trunks[0],
     decoded.trunks[3],
@@ -262,14 +248,10 @@ test("reads a ring's winding rather than its stored order", () => {
   expect(forward.wound[1]).not.toBe(backward.wound[1]);
 });
 
-// The gather's completeness, which is what stands between a dropped chunk and a tile that renders its
-// buildings as sunlit ground. A chunk the manifest lists always has geometry in it, so anything short
-// of every listed chunk arriving is a hole, not an empty patch of city.
-
 const MANIFEST: CasterManifest = {
   chunkZoom: 15,
   coordScale: SCALE,
-  maxShadowMeters: 0, // no halo, so the gather asks for exactly the cells the box covers
+  maxShadowMeters: 0, // no halo
   chunks: [
     { x: 100, y: 200, bytes: 0 },
     { x: 101, y: 200, bytes: 0 },
@@ -278,7 +260,6 @@ const MANIFEST: CasterManifest = {
   ],
 };
 
-// The zoom-0 world-pixel box covering chunk cells `from` to `to` on one row, at chunkZoom 15.
 function boxOver(from: number, to: number): [number, number, number, number] {
   const cell = 256 / 2 ** MANIFEST.chunkZoom;
   return [from * cell, 200 * cell, to * cell, 200 * cell];

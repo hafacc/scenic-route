@@ -1,8 +1,7 @@
 import { expect, test } from "bun:test";
 import { coversACity, fileRequest, isGraph, pageFor, shadeKey } from "./policy";
 
-// A deploy under a basePath, which is the only shape that ever runs in production — the worker's
-// scope is its own directory and every path it files is relative to that.
+// Production always deploys under a basePath, and paths are filed relative to the worker's scope.
 const SCOPE = "https://hafaio.github.io/scenic-route/";
 
 test("the exported app goes in the shell store", () => {
@@ -10,11 +9,10 @@ test("the exported app goes in the shell store", () => {
     "",
     "index.html",
     "manifest.webmanifest",
-    // Reachable both as the path a link names and as the file the export wrote.
     "explorer",
     "explorer.html",
     "_next/static/chunks/main-abc123.js",
-    // The routing worker is one more content-hashed chunk, fetched by a Worker not by the document.
+    // The routing worker is a content-hashed chunk too.
     "_next/static/chunks/7kq3ldz9wcvbt.js",
     "icons/icon-512.png",
   ]) {
@@ -42,7 +40,6 @@ test("the search files are kept with the graph, not with the evictable tiles", (
   );
 });
 
-// The rule that keeps a new layer from being silently left out of the offline story.
 test("data the worker has never heard of still lands in the overlay store", () => {
   expect(fileRequest(`${SCOPE}some-future-layer/nyc.bin`, SCOPE)).toEqual({
     path: "some-future-layer/nyc.bin",
@@ -75,7 +72,6 @@ test("the daily feeds are cached, but network first", () => {
   expect(
     fileRequest(`${base}/public/ferry-schedule/nyc.bin`, SCOPE)?.fresh,
   ).toBe(true);
-  // Anything else on that host is somebody else's file.
   expect(fileRequest(`${base}/README.md`, SCOPE)).toBeNull();
 });
 
@@ -100,8 +96,7 @@ test("the three shade shapes give up their city and bin", () => {
   });
 });
 
-// buckets.json sits exactly where a bin directory would, and it is what the season lookup reads —
-// filing it under a bin would make the purge able to delete the map it purges by.
+// Filing it under a bin would let the purge delete the map it purges by.
 test("the bin manifests are not themselves bins", () => {
   expect(shadeKey("tiles/shade/nyc/buckets.json")).toBeNull();
   expect(shadeKey("routing/shade/nyc/bins.json")).toBeNull();
@@ -117,28 +112,20 @@ test("nothing else claims to be shade", () => {
   }
 });
 
-// A share link's fragment rides along on the navigation's request URL in the worker, and filing by
-// the whole href would give the one exported page a cache entry per link ever opened.
 test("a fragment does not become part of the path either", () => {
   expect(
     fileRequest(`${SCOPE}#at=40.7484,-73.9857,17&layers=shade`, SCOPE),
   ).toEqual({ path: "", store: "shell", fresh: false });
 });
 
-// The graph is fetched once and then read from memory all session, so its last-read time never
-// moves. Under a least-recently-read eviction that makes the one artifact a walk cannot do without
-// the FIRST thing out of the store; nothing evicts it.
 test("a city graph is recognizable, so eviction can leave it alone", () => {
   expect(isGraph("routing/nyc.bin")).toBe(true);
   expect(isGraph("routing/sf.bin")).toBe(true);
-  // Not the things that sit beside it and are meant to rotate.
-  expect(isGraph("routing/nyc.stranded.bin")).toBe(true); // shares the graph's fate; it is tiny
+  expect(isGraph("routing/nyc.stranded.bin")).toBe(true); // tiny, so it shares the graph's fate
   expect(isGraph("routing/shade/nyc/12.bin")).toBe(false);
   expect(isGraph("casters/5232/6162.bin")).toBe(false);
 });
 
-// The basemap answers for the whole planet; this app routes across two regions of it. Panning across
-// an ocean must not fill the cache with ground nothing else in the app knows anything about.
 const CITIES = [
   { west: -74.2555, south: 40.4968, east: -73.6995, north: 40.9155 }, // New York
   { west: -122.5141, south: 37.6655, east: -122.114, north: 37.9059 }, // the Bay Area
@@ -156,8 +143,6 @@ test("a basemap tile over a city is cached, under a key without its API key", ()
     path: "tiles/v4/15/9649/12315.mvt",
     store: "overlay",
     fresh: false,
-    // The key rides in the query string, so keying by the full URL would orphan every cached tile
-    // the moment the key is rotated.
     cacheKey: "https://api.protomaps.com/tiles/v4/15/9649/12315.mvt",
   });
 });
@@ -178,8 +163,6 @@ test("a basemap tile somewhere else is not cached at all", () => {
   }
 });
 
-// A low-zoom tile is enormous and mostly not the city; keeping it anyway is what lets the reader zoom
-// in from a world view rather than starting on a blank one.
 test("a low-zoom tile that merely covers a city is kept", () => {
   expect(coversACity("tiles/v4/0/0/0.mvt", CITIES)).toBe(true);
   expect(coversACity("tiles/v4/4/4/6.mvt", CITIES)).toBe(true); // eastern US
@@ -191,8 +174,7 @@ test("nothing else on that host is a tile", () => {
   expect(coversACity("tiles/v4/15/9649/12315.mvt/extra", CITIES)).toBe(false);
 });
 
-// Naming a point picked off the map needs no host at all: the answer comes out of the city's own
-// address file and name index, which are files under the scope. Nothing outside it is filed.
+// Reverse geocoding reads only files under the scope.
 test("no outside host is cached to name a point", () => {
   expect(
     fileRequest(

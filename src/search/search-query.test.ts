@@ -1,6 +1,4 @@
-// The query side of SRCH, against indexes small enough to reason about — plus one property test
-// over a random corpus, which is the only thing that checks the front-coding, the block restarts and
-// the delta-varint postings all agree with each other rather than each being plausible alone.
+// Only the random-corpus property test checks that front-coding, restarts and postings all agree.
 
 import { expect, test } from "bun:test";
 import { encodeAddresses } from "../../scripts/addresses";
@@ -21,8 +19,7 @@ import {
   splitTrailingPlace,
 } from "./search-query";
 
-// Somewhere for documents whose test is not about where they are. Everything sits on top of the
-// center unless it says otherwise, so distance drops out of the ordering.
+// Documents sit on the center unless a test says otherwise, so distance drops out of the ordering.
 const HERE = { lat: 40.73, lng: -73.99 };
 
 const DEFAULT_PROMINENCE = 120;
@@ -109,7 +106,7 @@ test("every word of every name finds its own document, whole or as a prefix", ()
     });
   });
   const index = build(docs);
-  // Wide enough that nothing is cut for want of room: the claim is findability, not ordering.
+  // Wide enough that nothing is cut: the claim is findability, not ordering.
   const limit = docs.length * 2;
   for (const doc of docs) {
     for (const word of doc.tokens) {
@@ -118,21 +115,17 @@ test("every word of every name finds its own document, whole or as a prefix", ()
         expect(names(index, word.slice(0, length), limit)).toContain(doc.name);
       }
     }
-    // And by the whole name, which is the query someone who knows what they want types.
     expect(names(index, doc.name, limit)).toContain(doc.name);
   }
 });
 
 test("a prefix run spanning several front-coded blocks comes back whole", () => {
-  // Forty-one tokens under one prefix, which is three blocks of sixteen and a bit: the run starts
-  // inside one block, crosses two boundaries and stops inside another.
+  // Forty-one tokens: the run starts inside one block, crosses two boundaries and stops in another.
   const docs = Array.from({ length: 41 }, (_, index) =>
     place(`alpha${String(index).padStart(3, "0")}`),
   );
   const index = build([...docs, place("beta"), place("zulu")]);
   expect(names(index, "alpha", 100)).toHaveLength(41);
-  // Named in full it leads the run, with the forty near-spellings of it behind — a corpus where
-  // every name is two edits from every other is what the fuzzy pass is for and what it does here.
   expect(names(index, "alpha007", 100)[0]).toBe("alpha007");
 });
 
@@ -162,7 +155,6 @@ test("two words find a document in either order, and one that matches nothing do
   ]);
   expect(names(index, "joes pizza")[0]).toBe("Joes Pizza");
   expect(names(index, "pizza joes")[0]).toBe("Joes Pizza");
-  // Every word has to be matched before a relaxed result is considered, so the full-AND hit leads.
   expect(names(index, "joes pizza broadway")[0]).toBe("Joes Pizza");
 });
 
@@ -179,22 +171,18 @@ test("a word the name does not contain still answers, below anything that matche
 });
 
 test("two words of a query cannot both be answered by one word of a name", () => {
-  // "shake sh" at the real corpus: both words reach the single word of "Shake Top DeLite", which
-  // used to count as a name that answered the whole query, while Shake Shack — which answers a word
-  // with each of its own — counted the same and lost the tie on distance.
+  // Both words reach the one word "Shake", which must not count as answering the whole query.
   const index = build([
     place("Shake Top DeLite", { lat: HERE.lat, lng: HERE.lng }),
     place("Shake Shack", { lat: HERE.lat + 0.02, lng: HERE.lng }),
   ]);
   expect(names(index, "shake sh")[0]).toBe("Shake Shack");
-  // One of the two is still a match, so the doubled-up name is offered rather than dropped.
   expect(names(index, "shake sh")).toContain("Shake Top DeLite");
   expect(names(index, "shake")[0]).toBe("Shake Top DeLite");
 });
 
 test("a word may take a name word from an earlier one that has another", () => {
-  // "sh shake": the first word could take "Shake", which would leave the second with nothing. The
-  // pairing has to be the best one available, not the first one found.
+  // The first word could take "Shake" and starve the second; the pairing must be the best one.
   const index = build([place("Shake Shack")]);
   const hits = searchNames(index, { text: "sh shake", center: HERE, limit: 5 });
   const whole = searchNames(index, {
@@ -250,7 +238,6 @@ test("the two ranking factors are monotone over their whole range", () => {
   expect(distanceFactor(0)).toBeCloseTo(1, 6);
   expect(distanceFactor(0)).toBeGreaterThan(distanceFactor(500));
   expect(distanceFactor(500)).toBeGreaterThan(distanceFactor(5000));
-  // The floor is what keeps a uniquely-named place on the far side of the city reachable.
   expect(distanceFactor(1e6)).toBeCloseTo(0.25, 6);
 });
 
@@ -345,7 +332,6 @@ test("coordinates come back where the documents were, whatever order they were w
   }
 });
 
-// A street of the ADDR file as this index holds one: its name, and the ordinal a place on it carries.
 function street(name: string, streetIndex: number): SearchDoc {
   return place(name, { kind: "street", streetIndex, prominence: 110 });
 }
@@ -360,13 +346,10 @@ test("a place is found by its name and the street it is on, which its name never
     street("E Houston St", 7),
     street("Grand St", 12),
   ]);
-  // Three of the five words are the street's rather than the deli's, and before the link this was an
-  // empty list — not a wrong answer, no answer.
   expect(names(index, "Katz's Delicatessen E Houston St")).toEqual([
     "Katz's Delicatessen",
   ]);
-  // The link is to the street the place actually sits on, so naming another street's does not
-  // answer: the deli is not on Grand Street.
+  // The deli is not on Grand Street.
   expect(names(index, "Katz's Delicatessen Grand St")).toEqual([]);
 });
 
@@ -386,9 +369,7 @@ test("a street that answers the whole query is not buried under the shops on it"
     place("Bedford Galleries", { streetIndex: 3 }),
     street("Bedford Avenue", 3),
   ]);
-  // Every shop on Bedford Avenue can borrow the word "av" from the street it sits on, which is what
-  // answers "Katz's Delicatessen E Houston St" — and what would put a dozen shops above the street
-  // itself for someone who typed nothing but its name.
+  // Every shop on Bedford Avenue can borrow "av" from it, which must not bury the street itself.
   expect(names(index, "bedford av")[0]).toBe("Bedford Avenue");
 });
 
@@ -399,8 +380,7 @@ test("a street the query names in full leads the places that only carry its word
     street("Court Street", 3),
     street("Stable Court", 4),
   ]);
-  // A bare street name is a query about the street. Stable Court is made of the same two words and
-  // is not it: what was typed has to start where the name does.
+  // Stable Court has the same two words, but what was typed must start where the name does.
   expect(names(index, "court st")).toEqual([
     "Court Street",
     "Court Street Post Office",
@@ -424,8 +404,7 @@ test("the avenue the query spells in full beats the one it only opens", () => {
       tokens: streetTokens("57 AVE", "57th Avenue"),
     }),
   ]);
-  // Both names start with what was typed. Only one of them is spelled by it — "5" is a word of 5 AVE
-  // and merely the first character of 57 AVE — and the whole-name lift is for the one that is.
+  // "5" is a word of 5 AVE but only the first character of 57 AVE.
   expect(names(index, "5 av")).toEqual(["5th Avenue", "57th Avenue"]);
 });
 
@@ -439,7 +418,6 @@ test("a name spells out the numbers in it, and only a name that has one", () => 
     "street",
   ]);
   expect(spelledOrdinals(["court", "street"])).toBeNull();
-  // Past the streets either city numbers there is no word for it, so the name reads as it is.
   expect(spelledOrdinals(["10000", "street"])).toBeNull();
 });
 
@@ -448,8 +426,7 @@ test("the place a query ends in is cut at an offset into the query itself", () =
     text: "312 Court St",
     placeIndex: 0,
   });
-  // Turkish İ lowercases to two code points, so an offset measured in the lowered text would cut the
-  // rest of the query a character short — "İstiklal Cadde" rather than "İstiklal Caddesi".
+  // Turkish İ lowercases to two code points.
   expect(splitTrailingPlace(["Brooklyn"], "İstiklal Caddesi Brooklyn")).toEqual(
     {
       text: "İstiklal Caddesi",
@@ -459,9 +436,7 @@ test("the place a query ends in is cut at an offset into the query itself", () =
 });
 
 test("a door on a street the query only opened is not the top of the scale", () => {
-  // The doorway is underfoot and the avenue is three kilometers north, which is the arrangement that
-  // used to decide it: a real house number on a street the query merely opened was scored above
-  // everything a name can reach, so "5 Av" answered with a door on Avenue A.
+  // The doorway is underfoot and the avenue is three kilometers north.
   const AVENUE_A = HERE;
   const FIFTH = { lat: HERE.lat + 0.027, lng: HERE.lng };
   const addresses = decodeAddresses(
@@ -505,7 +480,6 @@ test("a door on a street the query only opened is not the top of the scale", () 
       (hit) => hit.name,
     );
   expect(answers("5 Av")[0]).toBe("5th Avenue");
-  // And a reader who names the whole street still gets the door, wherever it is.
   expect(answers("5 Avenue A")[0]).toBe("5 Avenue A");
 });
 
@@ -515,8 +489,7 @@ test("a neighborhood the query names is not the school named after it", () => {
     place("Williamsburg Montessori School", { prominence: 150 }),
     place("Williamsburg", { kind: "neighborhood", prominence: 150, ...away }),
   ]);
-  // The district is three kilometers off and the school is underfoot, because a district is filed at
-  // its middle and half of it is nowhere near that. Naming the whole of it is what says so.
+  // The district is 3 km off and the school underfoot, since a district is filed at its middle.
   expect(names(index, "williamsburg")[0]).toBe("Williamsburg");
 });
 
@@ -543,7 +516,7 @@ test("the kinds a caller asks for are the only ones answered, and every kind sti
     kinds: ["place"],
   });
   expect(places).toEqual([]);
-  // Still matched, though: it is what answers the place on it.
+  // Still matched, since it answers the place on it.
   const linked = searchNames(index, {
     text: "joes pizza carmine",
     center: HERE,
@@ -553,7 +526,6 @@ test("the kinds a caller asks for are the only ones answered, and every kind sti
   expect(linked.map((hit) => hit.name)).toEqual(["Joes Pizza"]);
 });
 
-// New York's boroughs, as the two places a query can name at its end.
 const BOROUGHS = decodeAddresses(
   encodeAddresses([
     {
@@ -589,7 +561,7 @@ test("a borough named at the end of a query is where the answer is measured from
     });
     return { lat: hit.lat, lng: hit.lng };
   };
-  // No pizzeria is called "Brooklyn", and the word is what says which of the two was meant.
+  // No pizzeria is called "Brooklyn", so the word says which of the two was meant.
   expect(named("joes pizza brooklyn").lat).toBeCloseTo(BROOKLYN.lat, 3);
   expect(named("joes pizza").lat).toBeCloseTo(MANHATTAN.lat, 3);
 });
@@ -599,8 +571,7 @@ test("a query that only names a borough keeps its words", () => {
     place("Brooklyn Bagel", { ...MANHATTAN, placeIndex: 1 }),
     place("Bagel Shop", { ...BROOKLYN, placeIndex: 0 }),
   ]);
-  // Stripping "Brooklyn" here would answer with every bagel in Brooklyn instead of the shop named
-  // after it, so the whole text is searched as well and the name that carries the word wins.
+  // The whole text is searched too, so a name carrying the borough wins over stripping it.
   const [hit] = searchCity(index, BOROUGHS, {
     text: "brooklyn bagel",
     center: MANHATTAN,
@@ -632,41 +603,34 @@ test("a word spelled wrong finds the name, under the one spelled right", () => {
     place("Katzs Delicatessen"),
     place("Kanz Express Delicatessen"),
   ]);
-  // Two letters out of eleven, which is what the walk allows a word this long.
+  // Two edits in eleven letters, which the walk allows a word this long.
   expect(names(index, "katzs delicatesen")).toEqual([
     "Katzs Delicatessen",
     "Kanz Express Delicatessen",
   ]);
-  // And spelled right, the correction is still there but cannot overtake: a match one edit away is
-  // worth a little over half of the same match spelled properly.
+  // A match one edit away is worth a little over half of the same match spelled right.
   expect(names(index, "katzs delicatessen")[0]).toBe("Katzs Delicatessen");
 });
 
 test("a word of three letters is never corrected, a word of four is", () => {
   const index = build([place("Bath House"), place("Path House")]);
   expect(names(index, "bath")).toEqual(["Bath House", "Path House"]);
-  // At three letters every word in a city is a letter from every other, so nothing is looked for.
   expect(names(index, "bat")).toEqual(["Bath House"]);
 });
 
 test("a query that is already answered plentifully is not corrected", () => {
-  // Twenty-five names the query matches outright, and one it only nearly matches: the fuzzy pass
-  // costs a walk over the whole dictionary and is not worth paying when the answer is already there.
+  // The fuzzy pass costs a dictionary walk, so it is skipped when enough results match outright.
   const docs = Array.from({ length: 25 }, (_, at) =>
     place(`Pizza Place ${String(at).padStart(2, "0")}`),
   );
-  // Prominent enough to lead the list if it were matched at all, so its absence is the pass never
-  // having run rather than the ranking having buried it.
+  // Prominent enough to lead if matched at all, so its absence means the pass never ran.
   const index = build([...docs, place("Pizzo Place", { prominence: 255 })]);
   expect(names(index, "pizza place")).not.toContain("Pizzo Place");
-  // Thin the answer to one and the same near miss is found.
   expect(names(index, "pizza place 07")).toContain("Pizzo Place");
 });
 
 test("a street spelled out in words is the one whose every word was spelled", () => {
-  // The one the query names in full is three kilometers away and the one it half-names is underfoot,
-  // so nothing but the words can put it first — which is the whole point: a street named entirely is
-  // measured on the flat curve a door is, and distance stops deciding it.
+  // The fully named street is 3 km off and the half-named one underfoot; only the words can win.
   const away = { lat: HERE.lat + 0.027, lng: HERE.lng };
   const index = build([
     place("5th Avenue", {
@@ -683,9 +647,7 @@ test("a street spelled out in words is the one whose every word was spelled", ()
       tokens: streetTokens("55 AVE", "55th Avenue"),
     }),
   ]);
-  // 55 AVE carries the word `fifth` as genuinely as 5 AVE does — it is spoken "fifty fifth" — so
-  // both answer. What separates them is that the query is the whole of one name and two thirds of
-  // the other, which is only visible against the spelling the query was typed in.
+  // 55 AVE carries `fifth` too; only the spelled-out reading shows it is two thirds named.
   expect(names(index, "fifth avenue")).toEqual(["5th Avenue", "55th Avenue"]);
   expect(names(index, "fifth ave")).toEqual(["5th Avenue", "55th Avenue"]);
   expect(names(index, "fifty fifth avenue")[0]).toBe("55th Avenue");

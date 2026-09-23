@@ -11,10 +11,6 @@ import type {
 import { tileRatio } from "./raster";
 import type { ShedDecks } from "./shed-decks";
 
-// The main-thread half of the off-thread rasterizer. Every canvas overlay that used to project its
-// geometry inside createTile subclasses this instead: the tile canvas is handed to the worker and
-// returned to Leaflet immediately, so nothing about drawing it lands in a pan or pinch frame.
-
 const TILE_SIZE = 256;
 
 interface PendingTile {
@@ -22,23 +18,16 @@ interface PendingTile {
   done: L.DoneCallback;
 }
 
-// One worker for all of them: the blobs it decodes are shared between overlays, and the scratch
-// buffers the draws reuse rely on one tile being rasterized at a time.
+// One worker: blobs are shared across overlays, and draws reuse scratch buffers one tile at a time.
 let worker: Worker | undefined;
 const pending = new Map<number, PendingTile>();
 let nextTileKey = 0;
 
-// Every worker-drawn layer on the map. The theme is not a per-layer fact, so the flip is handled
-// once here rather than by each of them subscribing: tell the worker, then ask every layer for its
-// tiles again. Leaflet keeps a drawn tile forever otherwise — it has no idea the pixels went stale.
+// Leaflet keeps a drawn tile forever, so a theme flip must redraw every layer.
 const layers = new Set<WorkerTileLayer>();
 
 function repaintForTheme(): void {
-  // Told through the existing worker rather than `tileWorker()`, which would START one for a map
-  // that has none of these layers on it. A worker that does not exist yet is told the theme as it
-  // starts, and this must reach one that does even when nothing is drawn through it right now — the
-  // worker outlives the layers, so an overlay switched off across a flip and back on afterwards
-  // would otherwise paint in the theme the page loaded in.
+  // Not `tileWorker()`, which would start one; told even with no layers, since the worker outlives them.
   if (worker) {
     const message: ToWorker = { type: "theme", theme: currentTheme() };
     worker.postMessage(message);
@@ -63,12 +52,10 @@ function tileWorker(): Worker {
         entry?.done(data.error ? new Error(data.error) : undefined, entry.tile);
       },
     );
-    // Data paths are relative so they pick up the deploy's basePath, and a worker would resolve
-    // those against its own chunk URL, so it gets the document's base to resolve them against.
+    // A worker resolves relative URLs against its own chunk, not the document.
     const init: ToWorker = { type: "init", base: document.baseURI };
     started.postMessage(init);
-    // Before any draw, so the first tile is painted in the theme the page loaded in rather than in
-    // the light default and then again a moment later.
+    // Before any draw, so the first tile isn't painted in the light default.
     const theme: ToWorker = { type: "theme", theme: currentTheme() };
     started.postMessage(theme);
     worker = started;
@@ -76,22 +63,18 @@ function tileWorker(): Worker {
   return worker;
 }
 
-// Warm source tiles a layer will want shortly. No canvas is transferred and nothing is drawn, so
-// this rides the same worker without a layer of its own.
 export function prefetchShadeTiles(message: ShadePrefetchMessage): void {
   tileWorker().postMessage(message);
 }
 
-// The date's shed decks, for the shadows the swept shade tiles cast. Copied rather than transferred:
-// the display overlay draws from the same arrays on this side. Messages are delivered in order, so a
-// draw posted after this one already sees them.
+// Copied, not transferred: the display overlay draws from the same arrays here.
 export function sendShedDecks(decks: ShedDecks): void {
   const message: ToWorker = { type: "shed-decks", decks };
   tileWorker().postMessage(message);
 }
 
 export default class WorkerTileLayer extends L.GridLayer {
-  // The keys the worker knows its in-flight tiles by, weakly held so a dropped tile stays collectable.
+  // Weak, so a dropped tile stays collectable.
   private readonly tileKeys = new WeakMap<HTMLElement, number>();
 
   constructor(
@@ -136,8 +119,7 @@ export default class WorkerTileLayer extends L.GridLayer {
     return tile;
   }
 
-  // Leaflet threw the tile away — off the map, or scrolled out of the buffer — possibly before its
-  // data arrived, so tell the worker to skip whatever is left of it.
+  // Possibly before its data arrived, so the worker skips what's left of it.
   private discard(tile: HTMLElement): void {
     const tileKey = this.tileKeys.get(tile);
     if (tileKey !== undefined) {

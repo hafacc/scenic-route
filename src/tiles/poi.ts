@@ -6,29 +6,24 @@ import type { TileRenderer } from "./renderer";
 import { themeName } from "./theme";
 import { type Cursor, readVarint } from "./varint";
 
-// A point-of-interest overlay: the committed POI points (landmarks, public art) drawn as colored
-// canvas dots at every zoom. Unlike the tree dots there is no raster pyramid below — a few thousand
-// points draw live cheaply — so one canvas GridLayer covers the whole zoom range.
+// A few thousand points draw live cheaply, so unlike tree dots there is no raster pyramid.
 
 const TILE_SIZE = 256;
 const BASE_RADIUS_PX = 3.5;
-const CELL_DEG = 0.004; // ~440 m spatial buckets, so a tile query scans only nearby points
-const LABEL_MIN_ZOOM = 16; // labels only when zoomed in enough to be sparse and readable
+const CELL_DEG = 0.004; // ~440 m buckets
+const LABEL_MIN_ZOOM = 16; // sparse enough to read from here
 
 interface Points {
   lngs: Float64Array;
   lats: Float64Array;
-  names: string[]; // per point, its label ("" when the source named none)
-  // Point indices bucketed by `${floor(lng/CELL_DEG)},${floor(lat/CELL_DEG)}`, so a tile draw touches
-  // only the cells it overlaps rather than the whole city.
+  names: string[]; // "" when the source named none
+  // Point indices by `${floor(lng/CELL_DEG)},${floor(lat/CELL_DEG)}`.
   buckets: Map<string, number[]>;
-  // Per zoom, the placed labels; filled on the first tile that needs it. Only the five label zooms
-  // can ever be in here, so nothing is evicted.
+  // Per zoom; only the five label zooms can land here, so nothing is evicted.
   labels: Map<number, PlacedLabels>;
 }
 
-// Decode the shared point layout (magic LMRK / ARTW): the 40-byte header, then per-point
-// zigzag-varint (lng, lat) deltas in sorted order. Mirrors crates/tiler/src/binfmt.rs read_points.
+// The shared point layout (LMRK / ARTW), mirroring crates/tiler/src/binfmt.rs read_points.
 export function decodePoints(buffer: ArrayBuffer, magic: string): Points {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
@@ -62,7 +57,7 @@ export function decodePoints(buffer: ArrayBuffer, magic: string): Points {
       buckets.set(key, [point]);
     }
   }
-  // The trailing name blob: per point (in the same sorted order) a u16 UTF-8 length and its bytes.
+  // The trailing name blob: per point, a u16 UTF-8 length then its bytes.
   const decoder = new TextDecoder();
   const names: string[] = new Array(count);
   for (let point = 0; point < count; point++) {
@@ -76,7 +71,6 @@ export function decodePoints(buffer: ArrayBuffer, magic: string): Points {
   return { lngs, lats, names, buckets, labels: new Map() };
 }
 
-// One in-flight fetch per served blob, shared by every tile that needs it and cached once decoded.
 const loaded = new Map<string, Promise<Points>>();
 
 function loadPoints({ url, magic }: PoiParams): Promise<Points> {
@@ -142,9 +136,7 @@ function drawTileLabels(
   );
 }
 
-// Every point the tile overlaps, projected at the tile's own zoom and filled as a colored disc
-// with a faint dark outline so it reads on any background. The dot grows a little as the map zooms
-// in. The spatial buckets keep this to the points actually near the tile.
+// A faint dark outline so a dot reads on any background.
 function draw(
   context: OffscreenCanvasRenderingContext2D,
   points: Points,

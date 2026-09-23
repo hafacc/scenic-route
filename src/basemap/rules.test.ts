@@ -3,11 +3,7 @@ import { paintRules } from "protomaps-leaflet";
 import { VOYAGER } from "./flavor";
 import { basemapPaintRules } from "./rules";
 
-// The borough lines that used to run through the middle of New York came from Protomaps' own
-// boundary rules. This pins the outcome rather than the mechanism — that the library still HAS such
-// rules, and that none of them survives here — so a release that renames the layer fails on this
-// line rather than on someone's map.
-
+// Pins that the library still has boundary rules and none survive, so a layer rename fails here.
 const boundaries = (rules: readonly { dataLayer: string }[]) =>
   rules.filter((rule) => rule.dataLayer === "boundaries");
 

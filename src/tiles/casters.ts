@@ -2,14 +2,7 @@ import { resolveUrl } from "./base-url";
 import { projectX, projectY } from "./mercator";
 import { type Cursor, readUnsignedVarint, readVarint } from "./varint";
 
-// The shadow casters as vectors, one chunk per z15 tile (public/casters, magic `CSTR`; layout in
-// scripts/README.md). Fetched, decoded and cached here so src/tiles/sweep.ts can generate the shadows
-// deep in, where the baked pyramid would only be magnified.
-//
-// A chunk's rings land as ZOOM-0 world pixels rather than degrees: Mercator is the same projection at
-// every zoom up to a factor of 2^z, so projecting once at decode turns the per-vertex draw cost into a
-// multiply and a subtract — and, since it is conformal, a translation down the shadow into a constant
-// pixel offset rather than a per-vertex reprojection.
+// One chunk per z15 tile (magic `CSTR`; layout in scripts/README.md), decoded to zoom-0 pixels.
 
 const CHUNK_URL = "casters/{x}/{y}.bin";
 const MANIFEST_URL = "casters/manifest.json";
@@ -21,14 +14,10 @@ const TILE_SIZE = 256;
 
 export const EQUATOR_METERS_PER_PIXEL = 156_543.033_92;
 
-// A footprint whose convex hull over-fills it by less than this is swept as that one hull rather than
-// as an exact Minkowski sum. Keep in sync with MIN_CONCAVITY_M2 in crates/tiler/src/shade.rs.
+// Below this hull over-fill, sweep the hull; keep in sync with crates/tiler/src/shade.rs.
 const MIN_CONCAVITY_M2 = 200;
 
-// Decoded chunks held between draws. Sized off the measured worst case: a screenful of z15 tiles over
-// a canopy-heavy park gathers 48 chunks, which the crown slices took from 43 MiB decoded to about 100,
-// and a working set that does not fit would re-fetch on every pan. The geometry is sun-independent, so
-// holding it also means a scrub through the clock re-sweeps out of the cache without a fetch.
+// A screenful over a canopy-heavy park decodes to ~100 MiB; a smaller cache re-fetches on every pan.
 const CACHE_BYTES = 160 * 1024 * 1024;
 
 export interface CasterManifest {
@@ -38,26 +27,20 @@ export interface CasterManifest {
   chunks: { x: number; y: number; bytes: number }[];
 }
 
-// One z15 chunk's casters, flattened so a draw walks typed arrays rather than objects. Ring `r` covers
-// `points[2 * rings[r]]` up to `2 * rings[r + 1]`, and record `i` owns rings `records[i]` up to
-// `records[i + 1]`. A footprint's are its outer ring then its holes; a crown's are its SLICES, and
-// `levels` is what says which slice a ring belongs to and so how far down the shadow it is swept.
+// Ring r spans points[2 * rings[r]] to 2 * rings[r + 1]; a footprint's rings are outer then holes.
 export interface CasterChunk {
   points: Float64Array; // x/y interleaved, zoom-0 world pixels
   rings: Uint32Array;
   records: Uint32Array;
   heights: Float32Array; // meters
   boxes: Float64Array; // per record, the box of everything it casts from, as minX, minY, maxX, maxY
-  // Per RING, its convex hull as a start vertex and a count into `hullPoints`, positively wound. Zero
-  // where the ring is concave enough to need the exact sweep, and for a footprint's holes. Held apart
-  // from `points` because `rings` gives only ring ends, so the rings have to stay contiguous.
+  // Per ring, a start and count into `hullPoints`, positively wound; count 0 needs the exact sweep.
   hulls: Uint32Array;
   hullPoints: Float64Array;
   wound: Uint8Array; // per ring, 1 when its own winding is already positive in world pixels
   levels: Uint8Array; // per ring, which slice of its crown it is; 0 for every footprint ring
   buildings: number; // records below this are footprints, the rest crowns
-  // The census trunks, which are points rather than records: x/y interleaved in zoom-0 world pixels,
-  // then per trunk a radius and the height it stands to, both in meters.
+  // x/y interleaved in zoom-0 world pixels; radii and heights in meters.
   trunks: Float64Array;
   trunkRadii: Float32Array;
   trunkHeights: Float32Array;
@@ -66,12 +49,7 @@ export interface CasterChunk {
   bytes: number;
 }
 
-// Twice the area a ring of `count` vertices encloses, signed positive for the winding a nonzero fill
-// must see everywhere or two overlapping shadows will subtract instead of union.
-//
-// Taken about the ring's OWN first vertex, which is also why the closing edge contributes nothing. A
-// building spans ~1e-5 of a zoom-0 pixel against coordinates near 78, so the shoelace terms of the
-// absolute coordinates cancel down to rounding and the sign comes out of the noise.
+// About the first vertex: a building is ~1e-5 zoom-0 px across, so absolute terms cancel to rounding.
 function signedDoubleArea(
   points: number[],
   count: number,
@@ -92,9 +70,7 @@ function signedDoubleArea(
   return sum;
 }
 
-// Andrew's monotone chain over one ring, as vertex indices into `points`. Mirrors `convex_hull` in
-// crates/tiler/src/shade.rs: collinear points are dropped, which only makes the sweep that reads it
-// back cheaper.
+// Mirrors `convex_hull` in crates/tiler/src/shade.rs; collinear points are dropped.
 function convexHull(points: number[], from: number, to: number): number[] {
   const order = Array.from({ length: to - from }, (_, index) => from + index);
   order.sort(
@@ -132,9 +108,6 @@ function convexHull(points: number[], from: number, to: number): number[] {
   return hull;
 }
 
-// Walk one chunk back: the 44-byte header, then the buildings — a height, a ring count and per ring a
-// vertex count and the running zigzag deltas — then the crowns, the same but with a SLICE count and a
-// ring count per slice, then the trunks as their own chain of deltas, a radius and a height apiece.
 export function decodeChunk(buffer: ArrayBuffer): CasterChunk {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
@@ -150,8 +123,7 @@ export function decodeChunk(buffer: ArrayBuffer): CasterChunk {
   const scale = view.getFloat64(32, true);
   const cursor: Cursor = { offset: view.getUint16(6, true) };
 
-  // A chunk spans under a kilometer, so its own origin's scale stands for all of it — this only weighs
-  // a footprint against its hull, against a 200 m² threshold.
+  // The origin's scale is close enough over a chunk to weigh a footprint against its hull.
   const metersPerPoint =
     EQUATOR_METERS_PER_PIXEL * Math.cos((originLat * Math.PI) / 180);
   const points: number[] = [];
@@ -164,8 +136,6 @@ export function decodeChunk(buffer: ArrayBuffer): CasterChunk {
   const heights = new Float32Array(count);
   const boxes = new Float64Array(count * 4);
 
-  // One ring's vertices, carrying the record's running delta chain on, plus what a sweep reads off it:
-  // its winding, its slice, and the convex hull that stands in for it when it is barely concave.
   const readRing = (level: number, quantized: [number, number]): void => {
     const vertices = readUnsignedVarint(bytes, cursor);
     const start = points.length / 2;
@@ -186,7 +156,7 @@ export function decodeChunk(buffer: ArrayBuffer): CasterChunk {
 
     const hull = convexHull(points, start, end);
     if (hull.length < 3) {
-      return; // a ring with no area; the exact sweep handles it and produces nothing
+      return; // no area; the exact sweep produces nothing
     }
     const hullArea = signedDoubleArea(
       points,
@@ -198,7 +168,7 @@ export function decodeChunk(buffer: ArrayBuffer): CasterChunk {
       metersPerPoint *
       metersPerPoint;
     if (concavity >= MIN_CONCAVITY_M2) {
-      return; // a courtyard, an L-block, a park's canopy: swept exactly, so its notches stay unshaded
+      return; // swept exactly, so its notches stay unshaded
     }
     if (hullArea < 0) {
       hull.reverse();
@@ -211,7 +181,7 @@ export function decodeChunk(buffer: ArrayBuffer): CasterChunk {
   };
 
   for (let record = 0; record < count; record++) {
-    // The chain runs across a record's rings but restarts at the chunk origin for each record.
+    // Deltas chain across a record's rings but restart at the chunk origin per record.
     const quantized: [number, number] = [0, 0];
     heights[record] = readUnsignedVarint(bytes, cursor) / DECIMETERS_PER_METER;
     if (record < buildings) {
@@ -231,8 +201,7 @@ export function decodeChunk(buffer: ArrayBuffer): CasterChunk {
         }
       }
     }
-    // The box a record is gathered by covers its OUTERMOST rings — a footprint's outer ring, a crown's
-    // widest slice — which every other ring of it sits inside.
+    // Only the outermost rings (outer ring, widest slice), which contain the rest.
     let minX = Number.POSITIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
@@ -316,12 +285,7 @@ export function decodeChunk(buffer: ArrayBuffer): CasterChunk {
 
 let manifest: Promise<CasterManifest | null> | null = null;
 
-// The chunk grid, or null where the deploy carries no casters — then the shade layer stays on the
-// baked pyramid at every zoom.
-//
-// A 404 is a fact about the deploy and is remembered; a fetch that never arrived is a fact about the
-// network and is not, or one offline moment would pin the whole session to the baked pyramid long
-// after the connection came back.
+// Null without casters; a 404 is remembered but a network failure is retried.
 export function casterManifest(): Promise<CasterManifest | null> {
   if (!manifest) {
     manifest = fetch(resolveUrl(MANIFEST_URL))
@@ -334,7 +298,7 @@ export function casterManifest(): Promise<CasterManifest | null> {
   return manifest;
 }
 
-// Which chunks were written, so the halo around a viewport does not turn its empty tiles into 404s.
+// So the halo around a viewport doesn't request unwritten chunks.
 const written = new WeakMap<CasterManifest, Set<string>>();
 
 function exists(manifest: CasterManifest, key: string): boolean {
@@ -357,7 +321,7 @@ let cached = 0;
 function fetchChunk(key: string): Promise<CasterChunk | null> {
   const hit = cache.get(key);
   if (hit) {
-    // Map iterates in insertion order, so re-inserting is what makes the eviction below an LRU.
+    // Map iterates in insertion order, so re-inserting makes the eviction below an LRU.
     cache.delete(key);
     cache.set(key, hit);
     return hit.chunk;
@@ -385,8 +349,7 @@ function fetchChunk(key: string): Promise<CasterChunk | null> {
         }
         return chunk;
       })
-      // A chunk that failed draws as nothing, but is dropped rather than cached, so the next tile over
-      // the same ground tries again.
+      // Not cached, so the next tile over the same ground retries.
       .catch(() => {
         cache.delete(key);
         return null;
@@ -396,17 +359,13 @@ function fetchChunk(key: string): Promise<CasterChunk | null> {
   return entry.chunk;
 }
 
-// The casters gathered for one tile, and whether that is all of them. A chunk the manifest lists but
-// the fetch never delivered leaves a hole in the geometry, and a hole in shadow geometry does not read
-// as "unknown" — it reads as sunlight, over ground the app is asked to route through. So the gather
-// says so, and the tile falls back to the baked pyramid rather than drawing a confident lie.
+// A missing chunk would read as sunlight, so an incomplete gather falls back to the baked pyramid.
 export interface CasterGather {
   chunks: CasterChunk[];
   complete: boolean;
 }
 
-// Every chunk whose casters can throw a shadow into a zoom-0 world-pixel box: the box grown by the
-// manifest's shadow reach, in chunks that were written.
+// Every chunk whose shadows can reach a zoom-0 world-pixel box.
 export async function chunksFor(
   manifest: CasterManifest,
   west: number,

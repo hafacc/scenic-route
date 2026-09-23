@@ -14,21 +14,9 @@ import {
   searchCity,
 } from "./search-query";
 
-// The search box's own thread. It owns one city's SRCH index (./search-format.ts) and the address
-// file the labels come out of, and answers a keystroke against them.
-//
-// Off the main thread because of what a keystroke costs here: New York's index is twelve megabytes
-// that have to be gunzipped and walked once before anything can be answered, and the answer itself
-// reads posting lists that can run to tens of thousands of entries. None of that may land in the
-// frame a map pan is drawing — and the load in particular would otherwise freeze the app for the
-// half second it takes.
-//
-// The query itself is ./search-query.ts, which knows nothing about workers: this is a message loop
-// around it, so a test can ask the same question of the same code without one.
+// Off the main thread: loading NYC's 12 MB index would freeze the app for half a second.
 
-// `self` types as a Window under the app's dom lib, so the worker scope is named through globalThis
-// instead of pulling the conflicting webworker lib into the build — the same dodge src/tiles/worker.ts
-// uses.
+// `self` types as Window under the dom lib, so the worker scope goes through globalThis instead.
 const scope = globalThis as unknown as {
   onmessage: ((event: MessageEvent<ToSearchWorker>) => void) | null;
   postMessage(message: FromSearchWorker): void;
@@ -41,8 +29,7 @@ interface Loaded {
 }
 
 let loaded: Loaded | null = null;
-// The city a load is running for, so a second init for the same one does not start a second fetch
-// and a switch away from it makes its answer stale on arrival.
+// So a repeat init doesn't refetch, and a switch away makes the in-flight answer stale.
 let wanted: string | null = null;
 
 async function load({
@@ -56,8 +43,7 @@ async function load({
   wanted = city;
   loaded = null;
   try {
-    // Together, because neither is any use without the other: an index whose labels cannot be built
-    // would list "Katz's Delicatessen" five times with nothing to tell the branches apart.
+    // Neither is useful alone: without labels, chain branches are indistinguishable.
     const [index, addresses] = await Promise.all([
       fetchIndex(searchUrl),
       fetchAddresses(addressUrl),
@@ -80,15 +66,13 @@ async function fetchIndex(url: string): Promise<SearchIndex> {
   if (!response.ok || response.body === null) {
     throw new Error(`${url}: ${response.status} ${response.statusText}`);
   }
-  // Shipped gzipped and unpacked here, as the address file is: Pages serves .bin uncompressed.
+  // Gzipped because Pages serves .bin uncompressed.
   const unpacked = response.body.pipeThrough(new DecompressionStream("gzip"));
   const bytes = await new Response(unpacked).arrayBuffer();
   return decodeSearchIndex(new Uint8Array(bytes));
 }
 
-// An unloaded index answers nothing rather than not answering: the page holds its questions until
-// `ready`, so an empty list here is only reachable in the moment after a city switch, and a silence
-// would leave the asking side waiting forever.
+// Answer empty rather than stay silent, or the asking side would wait forever.
 function look(city: Loaded | null, request: CityRequest): IndexHit[] {
   if (city === null) {
     return [];
@@ -97,8 +81,7 @@ function look(city: Loaded | null, request: CityRequest): IndexHit[] {
   }
 }
 
-// The same silence-is-not-an-option rule as `look`: a point asked about before the files land is
-// answered with null, and the caller leaves the pin reading "Dropped pin".
+// Likewise answers null rather than silence before the files land.
 function name(
   city: Loaded | null,
   at: { lat: number; lng: number },

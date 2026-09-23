@@ -1,18 +1,14 @@
 import { expect, test } from "bun:test";
 import { MAX_ROUNDING_PX, type PathSink, roundedPath } from "./ferry-curve";
 
-// Rounding's contract is what a fit could not give: the drawn line is the published line except
-// within a corner's own neighborhood, it never reaches past a vertex, and it only ever cuts a
-// corner short — so it cannot bow a leg out over the water it shares or onto the bank beside it.
+// Rounding only cuts corners short, so it can never bow a leg out over shared water or the bank.
 
 interface Point {
   x: number;
   y: number;
 }
 
-// The path the sink was handed, flattened to points: a `lineTo` as its endpoint, a curve as 64
-// samples along it, which is dense enough that a fillet's furthest point is measured to well under a
-// hundredth of a pixel.
+// A curve becomes 64 samples, enough to measure a fillet's furthest point to under 0.01 px.
 function drawn(xs: readonly number[], ys: readonly number[]): Point[] {
   const points: Point[] = [];
   let atX = 0;
@@ -119,8 +115,7 @@ function walk(count: number, seed: number): { xs: number[]; ys: number[] } {
   let x = 0;
   let y = 0;
   for (let step = 0; step < count; step++) {
-    // Wildly uneven spans, and short ones a corner could overrun: a tenth of the turns in New York's
-    // ferry file have a segment under a pixel beside them even at z15.
+    // Uneven and sub-pixel spans: a tenth of NYC's ferry turns have a sub-pixel segment even at z15.
     const span = step % 3 === 0 ? 6 : 300;
     x += next() * span - span / 3;
     y += next() * span - span / 3;
@@ -151,8 +146,7 @@ test("rounding a corner only ever shortens the line", () => {
         ys[segment + 1] - ys[segment],
       );
     }
-    // A fillet is inside the triangle it cuts off, so it is shorter than the two sides it replaces.
-    // Anything longer would be a corner overrunning its segment and folding the line back.
+    // A fillet lies inside the triangle it cuts off, so it is shorter than the two sides it replaces.
     expect(length(drawn(xs, ys))).toBeLessThanOrEqual(published + 1e-9);
   }
 });
@@ -175,8 +169,7 @@ test("a straight run is drawn as one straight segment", () => {
 });
 
 test("a reversal into a slip is rounded, not looped past", () => {
-  // 175° back on itself, which is what a ferry shape does backing out of its berth: fitted through,
-  // the old spline drew a loop over the pier.
+  // 175° back on itself, as a ferry backing out of its berth.
   const turn = (175 * Math.PI) / 180;
   const xs = [0, 400, 400 + 400 * Math.cos(turn)];
   const ys = [0, 0, 400 * Math.sin(turn)];

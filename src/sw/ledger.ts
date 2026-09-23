@@ -1,27 +1,12 @@
-// What the caches hold, and in what order it may go.
-//
-// The Cache API will not say how big a cache is, and finding out means reading every entry back out
-// of it. So the worker keeps its own book: a row per cached response with its size and when it was
-// last read, plus a running total per store, updated in the same transaction as the rows so the
-// total cannot drift from what it claims to sum.
-//
-// Kept apart from worker.ts because it is the one part of the worker with durable state of its own,
-// and because everything here is ordinary IndexedDB rather than anything service-worker-shaped.
-//
-// Every operation issues its follow-up request from inside the previous one's `onsuccess` rather
-// than `await`ing between them. An IndexedDB transaction commits as soon as its requests settle with
-// nothing new queued, so an `await` in the middle of one is a transaction that has already closed by
-// the time the next line runs.
+// The Cache API won't report sizes, so the worker keeps per-entry sizes and read times itself.
+// Chain requests in `onsuccess`, not `await`: an IndexedDB transaction commits when idle.
 
 const DB_NAME = "scenic-route-sw";
 const DB_VERSION = 2;
 const ENTRIES = "entries";
 const TOTALS = "totals";
-// The worker's own settings, as against its accounting. Kept here rather than in a cache because it
-// has to outlive a deploy: `wipe()` empties the two stores above by name and leaves this one, which
-// is the point — the reader's cap is not something a release gets to forget.
+// Survives a deploy, since `wipe()` clears only the accounting stores.
 const CONFIG = "config";
-// Oldest-read first within one store, which is the order an eviction walks.
 const BY_AGE = "by-age";
 
 interface Row {
@@ -41,9 +26,7 @@ let opening: Promise<IDBDatabase> | null = null;
 function open(): Promise<IDBDatabase> {
   opening ??= new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    // Additive: a version bump creates what is missing and leaves what is there. Dropping the
-    // stores and rebuilding them would throw away the accounting for caches that survived the
-    // upgrade, and an unaccounted cache is one nothing can evict from until it has been refilled.
+    // Additive, since dropping stores would leave surviving caches unaccounted and so unevictable.
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(ENTRIES)) {
@@ -58,10 +41,7 @@ function open(): Promise<IDBDatabase> {
         db.createObjectStore(CONFIG, { keyPath: "key" });
       }
     };
-    // The page reads this book too (the settings page's "kept" figure), so two agents now hold
-    // connections to it. Same version, they coexist; a version bump does not — an open connection
-    // blocks the upgrade, and without these two the pending open would simply never settle and the
-    // holder would never let go.
+    // The page opens this too, and an open connection blocks an upgrade without these handlers.
     request.onblocked = () => {
       reject(new Error("the ledger is open elsewhere at an older version"));
     };
@@ -77,8 +57,7 @@ function open(): Promise<IDBDatabase> {
       reject(request.error);
     };
   }).catch((error: unknown) => {
-    // A browser with storage switched off, or a private window that refuses. Retried next time; the
-    // callers all treat a failure here as "no accounting", not as a failure to cache.
+    // Storage off or refused in a private window; retried next time, and callers skip accounting.
     opening = null;
     throw error;
   });
@@ -110,9 +89,7 @@ function addTotal(totals: IDBObjectStore, store: string, delta: number): void {
   };
 }
 
-// Write one entry down. An entry that was already there is REPLACED rather than added, so a re-fetch
-// of the same tile does not count twice — which is the whole reason the total is kept beside the
-// rows rather than added up from puts.
+// Replaces an existing entry, so a re-fetch isn't counted twice in the total.
 export async function record(
   store: string,
   url: string,
@@ -132,8 +109,6 @@ export async function record(
   await finished(transaction);
 }
 
-// Mark an entry read, so an eviction takes what nobody has looked at in a while. Callers throttle
-// this: a pan asks for dozens of tiles and every one of them is a hit.
 export async function touch(
   store: string,
   url: string,
@@ -179,9 +154,7 @@ export async function forget(store: string, urls: string[]): Promise<void> {
   await finished(transaction);
 }
 
-// Which entries have to go for this store to fit under its cap, oldest read first. Returned rather
-// than deleted here because the cache and the book have to change together, and only the caller
-// holds the cache.
+// Returned rather than deleted, since only the caller holds the cache that must change with it.
 export async function overflowing(
   store: string,
   cap: number,
@@ -219,9 +192,7 @@ export async function overflowing(
   return doomed;
 }
 
-// What each store is holding, for the page to report. Read straight out of the book rather than
-// asked of the worker, because it is ordinary same-origin IndexedDB and a worker that has been
-// stopped between requests would have to be woken to answer.
+// Read by the page directly, so a stopped worker needn't be woken to answer.
 export async function totals(): Promise<Record<string, number>> {
   const db = await open();
   const transaction = db.transaction(TOTALS, "readonly");
@@ -236,7 +207,6 @@ export async function totals(): Promise<Record<string, number>> {
   return held;
 }
 
-// One of the worker's own settings, which survive a deploy where the accounting does not.
 export async function readConfig(key: string): Promise<unknown> {
   const db = await open();
   const transaction = db.transaction(CONFIG, "readonly");
@@ -256,8 +226,6 @@ export async function writeConfig(key: string, value: unknown): Promise<void> {
   await finished(transaction);
 }
 
-// The accounting only, for a deploy: activate deletes every cache not carrying the new version, and
-// the book is then about caches that no longer exist. The config store is deliberately not touched.
 export async function wipe(): Promise<void> {
   const db = await open();
   const transaction = db.transaction([ENTRIES, TOTALS], "readwrite");

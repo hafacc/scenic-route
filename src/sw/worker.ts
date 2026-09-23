@@ -17,21 +17,14 @@ import {
 } from "./policy";
 import type { ReleaseReply } from "./update";
 
-// The service worker. It owns storage policy — what may enter a cache, what evicts what, and when a
-// deploy destroys the lot — and nothing else. It never decides what to fetch: the page asks for
-// exactly what it asks for today, and learns about failures the same way it would with no worker
-// installed, because a cache miss while offline rejects rather than answering with a 404.
-//
-// Built by scripts/build-sw.ts into out/sw.js, which is what the deploy serves. The committed
-// public/sw.js is a stub with no caching at all, and is what a dev server serves.
+// Owns storage policy only; an offline cache miss rejects rather than answering 404.
+// Built by scripts/build-sw.ts into out/sw.js; the committed public/sw.js is a no-cache dev stub.
 
-// Replaced at build time. The version is the deploy's git sha, so any deploy at all is a new set of
-// cache names and the old ones go on activate; the precache list is the exported shell.
+// Replaced at build time; the version is the deploy's git sha, so every deploy gets new cache names.
 declare const SW_VERSION: string;
 declare const SW_PRECACHE: readonly string[];
-// The owner's deploy marker, from src/sw/update.ts. Reported on request and compared by the page.
+// The owner's deploy marker, from src/sw/update.ts.
 declare const SW_RELEASE: number;
-// The cities' extents, so the basemap is kept only over ground this app can route across.
 declare const SW_CITIES: readonly {
   west: number;
   south: number;
@@ -53,9 +46,7 @@ interface MessageEventLike extends ExtendableEventLike {
   ports: readonly MessagePort[];
 }
 
-// `self` types as a Window under the app's dom lib, so the worker scope is named through globalThis
-// instead of pulling the conflicting webworker lib into the build — the same dodge src/tiles/worker.ts
-// uses.
+// `self` types as a Window under the dom lib, and the webworker lib conflicts with it.
 const scope = globalThis as unknown as {
   addEventListener(
     type: "install" | "activate",
@@ -74,41 +65,20 @@ const scope = globalThis as unknown as {
   skipWaiting(): Promise<void>;
 };
 
-// What each store may grow to. The shell has no cap — it is precached, bounded by the export, and
-// losing a piece of it is the one thing that would stop the app opening at all.
-//
-// Neither number is a quota: the quota is a large fraction of the disk and both are well under it.
-// They are sized so ONE city fits comfortably and a second city's residue is what gets pushed out —
-// New York walked over at every zoom comes to roughly 400 MB of overlay, so a gigabyte leaves room
-// to wander without ever evicting ground the reader is still using. Routing is generous for the same
-// reason from the other end: it holds one graph per city plus one day of bins and the two files the
-// search box answers from, about 71 MB for both cities together, and evicting any of it mid-walk is
-// exactly what the split exists to prevent.
-// The overlay figure here is only the starting point: the reader's own, once they have chosen one,
-// is in the book (OVERLAY_CAP). Routing's is not offered as a setting at all.
+// Sized so one city fits (NYC at every zoom is ~400 MB of overlay; routing for both is ~71 MB).
+// The shell is uncapped since losing any of it stops the app opening; OVERLAY_CAP overrides overlay.
 const CAPS: Partial<Record<Store, number>> = {
   routing: 128 * 1024 * 1024,
   overlay: 1024 * 1024 * 1024,
 };
 
-// The reader's overlay cap, read from the book once and then held: it is asked for on the way into
-// every cache write, and the worker is stopped and restarted often enough that re-reading it each
-// time would put an IndexedDB round trip on that path.
-//
-// Three states, and they have to stay three: `undefined` is "not read yet", which is the only one
-// the built-in figure covers; `null` is the reader choosing NO cap, which the built-in figure would
-// silently override; and a number is theirs. Collapsing the first two makes "everything I look at"
-// mean "one gigabyte, permanently".
+// `undefined` is not read yet (use the built-in cap); `null` is the reader's choice of no cap.
 const OVERLAY_CAP = "overlay-cap";
 let overlayCap: number | null | undefined;
-// The page's message is what STARTS a stopped worker, so it routinely arrives before this read
-// comes back — and the value it comes back with is then the one from before that message. Once a
-// message has set the cap, the read has nothing left to say.
+// The page's message starts a stopped worker, so it can beat this read, which is then stale.
 let capFromPage = false;
 const capLoaded = readConfig(OVERLAY_CAP)
   .then((stored) => {
-    // Nothing written down at all leaves it `undefined`, which is the built-in figure. A stored
-    // `null` is the reader's "no cap" and is not the same answer.
     if (!capFromPage && stored !== undefined) {
       overlayCap = typeof stored === "number" ? stored : null;
     }
@@ -123,9 +93,7 @@ function capFor(which: Store): number {
   }
 }
 
-// How stale an entry's read time may be before a hit is worth writing down. A pan asks for dozens of
-// tiles at once and every one of them is a hit; recording each would put the eviction order's own
-// bookkeeping on the critical path of every draw.
+// A pan hits dozens of tiles at once, so a hit's read time is recorded only when this stale.
 const TOUCH_AFTER_MS = 10 * 60 * 1000;
 
 const STORES: Record<Store, string> = {
@@ -135,9 +103,7 @@ const STORES: Record<Store, string> = {
 };
 const CURRENT = new Set(Object.values(STORES));
 
-// Where a city's kept shade season is written down, so the rule survives the browser stopping the
-// worker between requests. Under the scope and inside a real cache, because that is the only storage
-// a worker has that a deploy's purge already knows how to destroy.
+// Kept in a real cache so it survives worker restarts and a deploy's purge destroys it.
 const seasonMarker = (city: string): string =>
   `${scope.registration.scope}__sw/shade-season/${city}`;
 
@@ -152,11 +118,7 @@ scope.addEventListener("install", (event) => {
   );
 });
 
-// Deliberately no skipWaiting on install: a new deploy takes over when the last tab closes, or on
-// the installed app's next launch. The cost is running one deploy behind for a session; the
-// alternative is a just-activated worker purging chunks a still-open page is about to lazily import.
-// The one way out is the reader tapping the offer a raised SW_RELEASE makes — see the message
-// handler, where the page that asks for it is also the page that reloads.
+// No skipWaiting on install: activating would purge chunks a still-open page may lazily import.
 scope.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
@@ -165,20 +127,14 @@ scope.addEventListener("activate", (event) => {
           await caches.delete(name);
         }
       }
-      // The book is about caches that no longer exist.
       await wipe().catch(() => {});
-      // Not the same thing as skipWaiting: this only takes clients an older worker has already let
-      // go of, and on a first-ever visit it is what puts the page under the worker without a reload.
+      // Only takes clients an older worker let go of; on a first visit it avoids needing a reload.
       await scope.clients.claim();
     })(),
   );
 });
 
-// The page's half of the two settings the worker owns, plus the two messages the update offer is
-// made of. The settings are told rather than asked: the worker is stopped between requests, so
-// anything it had to be woken to answer would be a round trip on the settings page's first paint.
-// The marker is the one thing that has to be asked for, since only a parked worker knows its own,
-// and it answers over the port the asker sends. See components/service-worker.tsx.
+// Settings are pushed rather than queried, since waking a stopped worker costs the page a round trip.
 scope.addEventListener("message", (event) => {
   const message = event.data as
     | { type: "overlay-cap"; bytes: number | null }
@@ -194,16 +150,12 @@ scope.addEventListener("message", (event) => {
     const reply: ReleaseReply = { release: SW_RELEASE };
     event.ports[0]?.postMessage(reply);
   } else if (message?.type === "skip-waiting") {
-    // The only path to skipWaiting there is. Every open page reloads on the hand-over this starts,
-    // the one that asked and the ones that did not, because the activation behind it deletes the
-    // shell all of them are still lazily importing chunks out of.
+    // Every open page must reload on the hand-over, since activation deletes the shell they import.
     event.waitUntil(scope.skipWaiting());
   }
 });
 
-// A cap the reader lowered takes effect now rather than at the next tile: the point of choosing a
-// smaller one is usually to get the space back. `null` is "no cap", which is stored as such so it
-// survives a restart — falling back to the built-in figure would silently re-impose one.
+// Evicts now, since a lowered cap is usually meant to get the space back.
 async function setOverlayCap(bytes: number | null): Promise<void> {
   capFromPage = true;
   overlayCap = bytes;
@@ -211,8 +163,7 @@ async function setOverlayCap(bytes: number | null): Promise<void> {
   await evict("overlay", capFor("overlay"));
 }
 
-// Only the worker can do this: the cache carries the deploy's own sha in its name, which the page
-// has no way to know.
+// Only the worker can do this, since the cache name carries the deploy's sha.
 async function clearOverlays(): Promise<void> {
   const cache = await caches.open(STORES.overlay);
   const keys = await cache.keys();
@@ -238,15 +189,9 @@ scope.addEventListener("fetch", (event) => {
   if (filed) {
     event.respondWith(serve(event, filed));
   }
-  // Everything else — the basemap, Firestore, auth — goes without `respondWith`, which leaves it
-  // behaving exactly as it would with no worker installed.
 });
 
-// The one request that cannot be answered with a cached Response object. Turbopack hands a worker
-// its bootstrap config in the script URL's FRAGMENT, and a fragment is not part of a request's URL
-// as far as fetch is concerned — so a worker whose script came back as a stored Response takes that
-// Response's fragment-less URL as its own `location`, finds no config, and throws before it starts.
-// A network response, or a fresh Response built from a stored body, leaves the fragment alone.
+// Turbopack passes worker config in the URL fragment, which a stored Response's URL drops; rewrap it.
 async function serveWorkerScript(event: FetchEventLike): Promise<Response> {
   const { request } = event;
   const cache = await caches.open(STORES.shell);
@@ -274,8 +219,7 @@ async function serve(event: FetchEventLike, filed: Filed): Promise<Response> {
   }
   const cache = await caches.open(STORES[filed.store]);
   if (filed.fresh) {
-    // The daily feeds. A stale shed permit or ferry timetable is worse than a slow one, so the
-    // network wins whenever there is one; the cache is only what an offline walk falls back to.
+    // Daily feeds: network first, since a stale permit or timetable is worse than a slow one.
     try {
       const response = await fetch(request);
       if (response.ok) {
@@ -297,10 +241,7 @@ async function serve(event: FetchEventLike, filed: Filed): Promise<Response> {
     return hit;
   }
   const response = await fetch(request);
-  // Only 200s. A 404 is a fact about the deploy — the shade pyramids are sparse on purpose, and a
-  // caster chunk over water was never written — and storing one would freeze that fact past the
-  // deploy that changes it. Leaving it uncached also keeps the page's own distinction intact: a 404
-  // is "nothing here", a rejected fetch is "could not reach", and the two must not converge.
+  // Not 404s: the pyramids are sparse on purpose, and a cached one would outlive the next deploy.
   if (response.ok) {
     event.waitUntil(store(filed.store, key, response.clone()));
     event.waitUntil(keepOneSeason(filed.path));
@@ -308,16 +249,14 @@ async function serve(event: FetchEventLike, filed: Filed): Promise<Response> {
   return response;
 }
 
-// Everything that writes to a cache goes through here, so nothing can land in one without also
-// landing in the book that bounds it.
+// Every cache write goes through here so the ledger that bounds it stays in step.
 async function store(
   which: Store,
   key: string,
   response: Response,
 ): Promise<void> {
   const cache = await caches.open(STORES[which]);
-  // Read out as a blob first, so a retry has something to build a second Response from: a Response
-  // whose body a failed `put` already touched cannot be cloned.
+  // A Response whose body a failed `put` touched can't be cloned, so buffer it for the retry.
   const body = await response.blob();
   await capLoaded;
   const cap = capFor(which);
@@ -329,10 +268,7 @@ async function store(
     });
   let stored = await put(cache, key, copy());
   if (!stored) {
-    // Out of quota, whatever this store's own cap says — the browser's is origin-wide and something
-    // else may have filled it. Nothing here is irreplaceable, so free half of this store and take
-    // one more run at it. If that fails too, the response has already gone to the page and the only
-    // thing lost is having kept it.
+    // Out of the origin-wide quota, which something else may have filled; free half and retry once.
     await evict(which, cap === Number.POSITIVE_INFINITY ? 0 : cap / 2);
     stored = await put(cache, key, copy());
   }
@@ -342,8 +278,6 @@ async function store(
   }
 }
 
-// Whether it went in. A cache write can fail for one reason worth acting on — the quota — and the
-// book must not claim bytes the cache does not hold.
 async function put(
   cache: Cache,
   key: string,
@@ -357,7 +291,6 @@ async function put(
   }
 }
 
-// A hit, written down only when the entry's recorded read time has gone stale — see TOUCH_AFTER_MS.
 const lastRead = new Map<string, number>();
 
 async function read(which: Store, url: string): Promise<void> {
@@ -369,7 +302,6 @@ async function read(which: Store, url: string): Promise<void> {
   await touch(which, url, now).catch(() => {});
 }
 
-// Drop the least recently read entries until the store fits.
 async function evict(which: Store, cap: number): Promise<void> {
   if (cap === Number.POSITIVE_INFINITY) {
     return;
@@ -389,10 +321,7 @@ async function evict(which: Store, cap: number): Promise<void> {
   await forget(which, doomed).catch(() => {});
 }
 
-// A navigation, answered by the one page the export has. The precache holds it as `index.html`,
-// while the address bar asks for the directory and a share link asks for it with a `#at=...` on the
-// end; all three are the same page. Nothing here is written back — the precache owns the shell, and
-// caching navigations would file one copy of it per share link.
+// Not written back, since caching navigations would file one copy of the page per share link.
 async function servePage(request: Request, path: string): Promise<Response> {
   const cache = await caches.open(STORES.shell);
   const page = await cache.match(
@@ -401,13 +330,7 @@ async function servePage(request: Request, path: string): Promise<Response> {
   return page ?? (await fetch(request));
 }
 
-// One day of shade, which is one SEASON of the baked pyramids: a season is sunrise to sunset for one
-// day, seven to eleven bins of it. The worker does not know which day the reader picked and does not
-// need to — the page only ever asks for the picked day's bins, so keeping the season of the last one
-// asked for keeps exactly that day.
-//
-// Reconciled by season rather than by bin index because the two display pyramids and the routing
-// fractions all number their bins the same way, so one lookup covers all three.
+// Keeps one shade season (a day's bins); the page only asks for the picked day, so keep the latest.
 const kept = new Map<string, number>();
 const purging = new Set<string>();
 
@@ -419,13 +342,13 @@ async function keepOneSeason(path: string): Promise<void> {
   const table = await seasonsFor(key.city);
   const season = table?.get(key.bin);
   if (!table || season === undefined) {
-    return; // no season map to reconcile against; better to keep everything than to guess
+    return;
   }
   const marked = kept.get(key.city) ?? (await markedSeason(key.city));
   if (marked === season || purging.has(key.city)) {
     return;
   }
-  // Written before the sweep, not after: the next request must not start a second one.
+  // Set before the sweep so the next request doesn't start a second one.
   kept.set(key.city, season);
   purging.add(key.city);
   try {
@@ -474,9 +397,7 @@ async function purgeOtherSeasons(
   }
 }
 
-// Bin index to season, from the display pyramid's own manifest. Fetched through the worker's cache
-// like anything else, so the rule still applies on a walk with no network — and memoised, since the
-// browser keeps the worker alive across a burst of tile requests and this is read on every one.
+// Bin index to season, read through the cache so it works offline.
 const tables = new Map<string, Promise<ReadonlyMap<number, number> | null>>();
 
 function seasonsFor(city: string): Promise<ReadonlyMap<number, number> | null> {
@@ -500,7 +421,7 @@ function seasonsFor(city: string): Promise<ReadonlyMap<number, number> | null> {
     }[];
     return new Map(buckets.map(({ index, season }) => [index, season]));
   })().catch(() => {
-    tables.delete(city); // a lookup that could not be reached is retried, not remembered as absent
+    tables.delete(city); // retry an unreachable lookup rather than remember it as absent
     return null;
   });
   tables.set(city, request);

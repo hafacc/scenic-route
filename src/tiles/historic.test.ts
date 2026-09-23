@@ -5,9 +5,7 @@ import { decodeHistoric, historicRenderer } from "./historic";
 import { projectX, projectY } from "./mercator";
 import type { HistoricParams } from "./protocol";
 
-// HDST rides the shared polygon layout, so these run the real encoder (scripts/geometry.ts) into the
-// real decoder (./historic.ts): a change to one that the other did not follow fails here rather than
-// painting a city wrong.
+// Runs the real encoder (scripts/geometry.ts) into the real decoder, so a one-sided change fails.
 
 const TILE_SIZE = 256;
 const QUANTIZATION_DEG = 2e-6; // a coordinate survives the 1e-6 quantization to within a step
@@ -23,8 +21,7 @@ function square(west: number, south: number, size: number): Polygon {
   ];
 }
 
-// A parent district and one of its extensions, straddling a bucket boundary so both are gathered by
-// the tile that spans them, then a third district far enough north to be in neither bucket.
+// Two districts straddling a bucket boundary, and a third north of both buckets.
 const DISTRICTS: readonly Polygon[] = [
   square(-73.9825, 40.671, 0.002),
   square(-73.9795, 40.6715, 0.001),

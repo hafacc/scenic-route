@@ -29,8 +29,6 @@ test("a point in the city is zero from it, one outside is its ground distance", 
   expect(containsPoint(DEFAULT_CITY, north)).toBe(false);
 });
 
-// A degree of longitude is shorter than a degree of latitude away from the equator, so an east-west
-// gap must not be measured in raw degrees.
 test("an east-west gap is scaled by latitude", () => {
   const { bounds } = DEFAULT_CITY;
   const lat = (bounds.north + bounds.south) / 2;
@@ -45,8 +43,6 @@ test("a point far outside every city still resolves to the nearest one", () => {
   expect(CITIES).toContain(nearestCity(sanFrancisco));
 });
 
-// The name is a label in the switcher and a noun in a sentence, and the two differ once one of these
-// is a region: "outside New York City", but "outside the Bay Area".
 test("a region's name takes an article in a sentence and a city's does not", () => {
   const bay = cityById("sf");
   expect(bay && cityInSentence(bay)).toBe("the Bay Area");
@@ -59,8 +55,7 @@ test("an unknown or absent city id resolves to nothing rather than a default", (
   expect(cityById(null)).toBeNull();
 });
 
-// What the camera reads to decide the active city: a view naming exactly one city hands it over, and
-// one naming several or none leaves the city alone.
+// The camera hands over the city only when a view names exactly one.
 test("a view reports every city it overlaps, however little", () => {
   const { bounds } = DEFAULT_CITY;
   const clipped = {

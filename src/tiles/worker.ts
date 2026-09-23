@@ -16,27 +16,16 @@ import { setShedDecks } from "./sweep";
 import { setWorkerTheme } from "./theme";
 import { treeDotsRenderer } from "./tree-dots";
 
-// The tile rasterizer. Projecting every street vertex, tree or POI in a tile and issuing the canvas
-// ops for it is the single heaviest thing the map does, and on the main thread it lands squarely in
-// the frames a pan or a pinch needs. Here it runs off-thread against an OffscreenCanvas the layer
-// transferred over, so the compositor keeps the transferred canvas up to date on its own.
-//
-// Everything the draws need beyond their own binary data arrives in the messages: there is no map,
-// no DOM, and no access to the app's stores from in here.
-
-// `self` types as a Window under the app's dom lib, so the worker scope is named through globalThis
-// instead of pulling the conflicting webworker lib into the build.
+// `self` types as a Window under the app's dom lib, and the webworker lib conflicts with it.
 const scope = globalThis as unknown as {
   onmessage: ((event: MessageEvent<ToWorker>) => void) | null;
   postMessage(message: DoneMessage): void;
 };
 
-// Tiles whose data is still loading, and of those the ones Leaflet has since dropped.
+// Tiles still loading, and the subset Leaflet has since dropped.
 const inFlight = new Set<number>();
 const canceled = new Set<number>();
-// Painted tiles still on the map, by the detach that stops watching them for a lost context. The
-// canvas is the only copy of its pixels and only this side can reach it, so only this side can put
-// them back — see ./repaint.
+// Only this side can reach a transferred canvas, so only it can repaint a lost context.
 const live = new Map<number, () => void>();
 
 function forget(tileKey: number): void {
@@ -58,8 +47,7 @@ async function run<Params, Data>(
     const paint = repeatable(context, ratio, (target) => {
       renderer.draw(target, data, coords, params, ratio);
     });
-    // Registered before the first paint, not after: the context can already be lost by the time the
-    // data lands, and then this paint draws nothing and the restore is the one that shows the tile.
+    // Registered before painting: the context may already be lost, and then the restore paints it.
     live.set(tileKey, repaintOnRestore(canvas, paint));
     paint();
   }
@@ -95,7 +83,7 @@ function rasterize(message: DrawMessage): Promise<void> {
 
 function finish(tileKey: number, error?: string): void {
   inFlight.delete(tileKey);
-  // A dropped tile's canvas is detached and Leaflet has forgotten it, so there is nothing to report.
+  // Leaflet has already forgotten a dropped tile, so there is nothing to report.
   if (!canceled.delete(tileKey)) {
     scope.postMessage({ type: "done", tileKey, error });
   }
@@ -111,8 +99,7 @@ scope.onmessage = ({ data: message }) => {
   } else if (message.type === "theme") {
     setWorkerTheme(message.theme);
   } else if (message.type === "cancel") {
-    // Also where a painted tile is released: its watcher holds the canvas and the decoded data, and
-    // Leaflet unloads tiles on every pan.
+    // Also releases a painted tile, whose watcher holds the canvas and the decoded data.
     forget(message.tileKey);
     if (inFlight.has(message.tileKey)) {
       canceled.add(message.tileKey);

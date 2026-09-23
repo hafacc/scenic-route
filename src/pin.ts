@@ -36,7 +36,7 @@ export interface PinDoc {
 }
 
 export const pinConverter: FirestoreDataConverter<Pin, PinDoc> = {
-  // pins are written raw with serverTimestamp() sentinels, never through this converter
+  // Pins are written raw with serverTimestamp() sentinels.
   toFirestore(): PinDoc {
     throw new Error("pinConverter is read-only");
   },
@@ -45,7 +45,7 @@ export const pinConverter: FirestoreDataConverter<Pin, PinDoc> = {
     options?: SnapshotOptions,
   ): Pin {
     const data = snapshot.data(options);
-    // without the "estimate" option an unresolved server timestamp reads as null; fall back to now
+    // Without the "estimate" option an unresolved server timestamp reads as null.
     return {
       id: snapshot.id,
       lat: data.lat,

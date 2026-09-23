@@ -22,12 +22,8 @@ import {
   traceDeck,
 } from "./shed-decks";
 
-// The grid is a pure filter: it has to hand a tile exactly the decks a scan over every box would, and
-// hand each of them over once. A deck wider than a cell sits in several of them, which is where a
-// naive walk would draw it twice.
+// The grid must match a scan over every box, once each, though a wide deck sits in several cells.
 
-// A deterministic spread of boxes over roughly the city's extent in zoom-0 world pixels, sized from a
-// few meters to several cells across.
 function boxesOf(count: number): Float64Array {
   const boxes = new Float64Array(count * 4);
   let seed = 12345;
@@ -104,14 +100,12 @@ test("a window off the grid, and a day with no decks at all, visit nothing", () 
   expect(visited(NO_DECKS, 0, 0, 200, 200)).toEqual([]);
 });
 
-// A shed that wraps a corner is several spans meeting at the node the wrap walked through, and they
-// have to come back out as ONE deck or the two bands leave a notch between them. The artifact stores
-// them longest first, so nothing about the order can be assumed.
+// Spans meeting at a corner must come out as one deck, whatever order the artifact stores them in.
 
 const SCALE = 1e-6;
-const CORNER = 0.001; // a block, in degrees, which is plenty for whether the runs join
+const CORNER = 0.001; // degrees
 
-// A square block: node n at corner n, edge e from node e to node (e + 1) % 4.
+// Node n at corner n, edge e from node e to node (e + 1) % 4.
 const BLOCK_NODES = [
   { lat: 0, lng: 0 },
   { lat: 0, lng: CORNER },
@@ -119,7 +113,7 @@ const BLOCK_NODES = [
   { lat: -CORNER, lng: 0 },
 ];
 
-// The edge-path cache is keyed on edge id alone, so a fixture's geometry would otherwise leak.
+// The edge-path cache is keyed on edge id alone, so fixtures would otherwise leak into each other.
 beforeEach(clearEdgePathCache);
 
 function blockGraph(): RoutingGraph {
@@ -160,10 +154,7 @@ const span = (edge: number, t0 = 0, t1 = 1, depth = 0): ShedSpan => ({
   depth,
 });
 
-// A deck stands between the building line and the curb, not on the sidewalk's own line, so a vertex
-// lands a meter or two off the node it belongs to and a corner comes back as TWO vertices a step
-// apart. Both are matched within a few meters and consecutive repeats collapse, so what these assert
-// is the walk order rather than the offset — which has its own test below.
+// Decks sit off the sidewalk line, so vertices match nodes within meters; this checks walk order only.
 const NEAR_METERS = 5;
 
 function runNodes(graph: RoutingGraph, shed: Shed): number[][] {
@@ -187,7 +178,7 @@ function runNodes(graph: RoutingGraph, shed: Shed): number[][] {
 }
 
 test("a wrap around two corners comes out as one deck in walk order", () => {
-  // Longest first, as the artifact stores them: the middle span, then an end, then the other end.
+  // Longest first, as the artifact stores them.
   const shed = shedOf([span(1), span(2), span(0)]);
   expect(runNodes(blockGraph(), shed)).toEqual([[0, 1, 2, 3]]);
 });
@@ -197,8 +188,7 @@ test("a wrap that closes on itself is one deck, not a repeated one", () => {
   const shed = shedOf([0, 1, 2, 3].map((edge) => span(edge)));
   const [loop, ...rest] = runNodes(graph, shed);
   expect(rest).toEqual([]);
-  // Four corners, each once: the walk closing is the run's own flag rather than a repeated vertex
-  // or a second deck starting where it closed.
+  // Four corners, each once; closing is the run's flag, not a repeated vertex.
   expect(loop).toEqual([1, 2, 3, 0]);
   expect(shedRuns(graph, shed)[0].closed).toBe(true);
 });
@@ -216,19 +206,13 @@ test("two sheds meeting at the same corner stay two decks", () => {
   expect(shedRuns(graph, shedOf([span(1)])).length).toBe(1);
 });
 
-// The acceptance test the flat 4 m band failed: a deck has to meet the building it stands against.
-// Edge 0 runs east along the bottom of the block, geometry-left of its own direction is north, and
-// the sidewalk's baked line sits one `sidewalkInsetMeters` out from the curb — so the deck's far
-// edge has to land on the building line whatever the pavement measures, and its near edge a hand's
-// breadth off the curb.
+// A deck has to reach the building line and stop a hand's breadth off the curb.
 
-const INSET_METERS = 2; // the manifest's streets.sidewalkInsetMeters, which the graph bakes at
+const INSET_METERS = 2; // the manifest's streets.sidewalkInsetMeters
 const CURB_MARGIN_METERS = 0.3;
 const FALLBACK_METERS = 4; // what a span with no measured depth falls back to
 
-// One straight deck's two long edges, as meters north of the sidewalk's own line — the building side
-// being north here, since the edge runs east. Measured off the RING rather than off the run, since
-// the ring is what both readers draw.
+// Meters north of the sidewalk line, measured off the ring since that's what both readers draw.
 function bandEdges(depth: number): { curb: number; building: number } {
   const graph = blockGraph();
   const [run] = shedRuns(graph, shedOf([span(0, 0, 1, depth)]));
@@ -251,13 +235,12 @@ test("the band runs from just off the curb out to the building line", () => {
 });
 
 test("a deck measured narrower than one can be built reaches over the roadway", () => {
-  // The building line is where the measurement put it; the width missing from what DOB's rules
-  // allow to be built comes off the curb side, which is the estimate rather than the evidence.
+  // Width below DOB's buildable minimum comes off the curb side; the building line was measured.
   const measured = 1.2;
   const { curb, building } = bandEdges(measured);
   expect(building).toBeCloseTo(measured - INSET_METERS + CURB_MARGIN_METERS, 6);
   expect(building - curb).toBeCloseTo(MIN_DECK_DEPTH_METERS, 6);
-  expect(curb).toBeLessThan(-INSET_METERS); // out past the curb itself
+  expect(curb).toBeLessThan(-INSET_METERS); // past the curb
 });
 
 test("a span with no measured depth falls back rather than collapsing", () => {
@@ -269,7 +252,6 @@ test("a span with no measured depth falls back rather than collapsing", () => {
   );
 });
 
-// The depth each of a run's segments carries, in meters.
 function runDepths(run: DeckRun): number[] {
   return [...run.building].map(
     (edge, segment) => Math.abs(edge - run.curb[segment]) / pixelsPerMeter(0),
@@ -277,8 +259,7 @@ function runDepths(run: DeckRun): number[] {
 }
 
 test("a corner onto a pavement of another width stays one deck", () => {
-  // The ring states a width per segment, so a shed turning off a wide street onto a narrow one is
-  // one deck that steps at the corner — which is exactly where a stroke had to break.
+  // A width per segment, so a shed turning onto a narrower street stays one deck.
   const graph = blockGraph();
   const [wrapped, ...rest] = shedRuns(
     graph,
@@ -290,11 +271,8 @@ test("a corner onto a pavement of another width stays one deck", () => {
   ).toEqual([6, 2.5]);
 });
 
-// The ring is the deck's own polygon: out along the building edge and back along the curb, so its
-// vertices come in pairs straddling the run and it winds positively however the sidewalk it stands
-// on was baked. Both readers depend on all three.
+// Rings pair vertices across the run and wind positively whichever side the sidewalk was baked to.
 
-// Twice the area a ring encloses, positive for the winding a nonzero fill has to see.
 function signedDoubleArea(ring: Float64Array): number {
   let sum = 0;
   const count = ring.length / 2;
@@ -307,7 +285,6 @@ function signedDoubleArea(ring: Float64Array): number {
   return sum;
 }
 
-// The width the ring carries at each pair, in meters.
 function ringWidths(ring: Float64Array): number[] {
   const widths: number[] = [];
   const count = ring.length / 4;
@@ -323,7 +300,6 @@ function ringWidths(ring: Float64Array): number[] {
   return widths;
 }
 
-// Every ring vertex as meters east and north of a block node.
 function ringAround(ring: Float64Array, node: number): [number, number][] {
   const scale = pixelsPerMeter(0);
   const originX = projectX(BLOCK_NODES[node].lng, 0);
@@ -340,8 +316,7 @@ function ringAround(ring: Float64Array, node: number): [number, number][] {
 
 test("a ring is a strip of paired vertices, positively wound", () => {
   const graph = blockGraph();
-  // Edge 0 runs east along the top of the block and edge 2 west along the bottom, so between them
-  // the walk leaves along the building edge on one and along the curb edge on the other.
+  // Opposite edges, so one walks out along the building edge and the other along the curb.
   for (const edge of [0, 2]) {
     for (const depth of [2.5, 6]) {
       const [run] = shedRuns(graph, shedOf([span(edge, 0, 1, depth)]));
@@ -360,9 +335,7 @@ test("a corner turns where the two offset lines meet", () => {
   const [run] = shedRuns(graph, shedOf([span(0, 0, 1, 6), span(1, 0, 1, 2.5)]));
   const ring = deckRing(run);
   expect(signedDoubleArea(ring)).toBeGreaterThan(0);
-  // Node 1 is the block's north-east corner: the 6 m deck runs east to it with its building line
-  // 4.3 m north, the 2.5 m deck runs south from it with its own 0.8 m east, and the corner of the
-  // band is where those two lines cross. Both curb edges sit 1.7 m the other side of their line.
+  // The band's corner is where the two building lines cross: 4.3 m north and 0.8 m east of node 1.
   const near = (east: number, north: number): boolean =>
     ringAround(ring, 1).some(
       ([atEast, atNorth]) =>
@@ -381,15 +354,13 @@ test("a wrap that closes on itself rings as an annulus", () => {
   );
   expect(run.closed).toBe(true);
   const ring = deckRing(run);
-  // The repeat of the first vertex closes the loop, and its pair lands back on the first pair — the
-  // slit that joins the two loops, which is what leaves the annulus with no notch in it.
+  // The repeated first pair is the zero-width slit joining the two loops.
   expect(ring.length).toBe((run.xs.length + 1) * 4);
   const count = ring.length / 2;
   expect(ring[0]).toBeCloseTo(ring[(count / 2 - 1) * 2], 9);
   expect(ring[1]).toBeCloseTo(ring[(count / 2 - 1) * 2 + 1], 9);
   expect(signedDoubleArea(ring)).toBeGreaterThan(0);
-  // The annulus is the two loops' difference rather than the whole block, so it comes out at the
-  // perimeter times the depth rather than at a hundred times that.
+  // The annulus, not the whole block: about perimeter times depth.
   const area = signedDoubleArea(ring) / 2 / pixelsPerMeter(0) ** 2;
   expect(area).toBeGreaterThan(1000);
   expect(area).toBeLessThan(2500);
@@ -422,13 +393,11 @@ test("a band under the minimum width opens out about its own middle", () => {
   expect(spread(asDrawn)).toBeCloseTo(4 * pixelsPerMeter(0), 9);
   const opened = traced(8 * pixelsPerMeter(0));
   expect(spread(opened)).toBeCloseTo(8 * pixelsPerMeter(0), 9);
-  // Opened about the middle: the band's own center has not moved.
   const middle = (points: { x: number; y: number }[]): number =>
     (Math.max(...points.map(({ y }) => y)) +
       Math.min(...points.map(({ y }) => y))) /
     2;
   expect(middle(opened)).toBeCloseTo(middle(asDrawn), 9);
-  // A band already wider than the floor is left exactly as it stands.
   expect(spread(traced(pixelsPerMeter(0)))).toBeCloseTo(
     4 * pixelsPerMeter(0),
     9,

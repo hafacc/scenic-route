@@ -43,7 +43,7 @@ const firebaseConfig = {
 const PINS = "pins";
 const FEEDBACK = "feedback";
 
-// the newest notes; older ones stay reachable in the Firebase console
+// Older notes stay reachable in the Firebase console.
 const FEEDBACK_LIMIT = 200;
 
 export interface AuthInfo {
@@ -80,7 +80,7 @@ function ensureDb(): Firestore {
   return dbInstance;
 }
 
-// onIdTokenChanged (not onAuthStateChanged) so an admin promotion propagates on token refresh without re-login
+// onIdTokenChanged, not onAuthStateChanged, so an admin promotion lands without re-login.
 export function watchAuth(
   callback: (info: AuthInfo | null) => void,
 ): () => void {
@@ -91,13 +91,12 @@ export function watchAuth(
       callback(null);
       return;
     }
-    // fall back to a non-admin session on a failed token refresh
     let admin = false;
     try {
       const result = await user.getIdTokenResult();
       admin = result.claims.admin === true;
     } catch {}
-    // drop stale completions so a late token fetch can't revive a signed-out session
+    // A late token fetch must not revive a signed-out session.
     if (invocation !== latestInvocation) {
       return;
     }
@@ -117,7 +116,7 @@ export async function sendPasswordReset(email: string): Promise<void> {
   await sendPasswordResetEmail(ensureAuth(), email);
 }
 
-// force-refresh so a newly-granted admin claim is picked up without re-login; watchAuth then re-fires
+// Picks up a newly granted admin claim without re-login; watchAuth then re-fires.
 export async function refreshClaims(): Promise<void> {
   const user = ensureAuth().currentUser;
   if (!user) {
@@ -126,17 +125,14 @@ export async function refreshClaims(): Promise<void> {
   await user.getIdToken(true);
 }
 
-// One document per signed-in reader, holding their settings (src/settings/sync.ts). Separate from
-// the pins collection in every way that matters: it is per-uid rather than shared, it needs no admin
-// claim, and it is a convenience — the app works signed out and keeps working if this never loads.
+// Per-uid and optional: the app works signed out and keeps working if this never loads.
 const SETTINGS = "settings";
 
 function settingsDoc(uid: string) {
   return doc(ensureDb(), SETTINGS, uid);
 }
 
-// The reader's stored settings, and every later change another device makes. `undefined` where they
-// have never synced, which is the first sign-in and is not an error.
+// `undefined` until the first sync, which is not an error.
 export function watchSettings(
   uid: string,
   callback: (document: unknown | undefined) => void,
@@ -176,7 +172,7 @@ export function watchPins(
   return onSnapshot(
     q,
     (snapshot) => {
-      // "estimate" so freshly-created pins don't surface as null before server-ack
+      // "estimate" so fresh pins don't surface with null timestamps before the server acks.
       callback(
         snapshot.docs.map((docSnap) =>
           docSnap.data({ serverTimestamps: "estimate" }),
@@ -225,15 +221,10 @@ function rawFeedbackCollection(): CollectionReference {
   return collection(ensureDb(), FEEDBACK);
 }
 
-// Whether a note is still sitting in Firestore's queue. The queue drains itself, but only once
-// something in the session has built the Firestore instance, and a signed-out visitor touches
-// nothing that does — so without this their note would wait in IndexedDB through every later visit.
-// The flag outlives the tab, which is the whole point; it is what a later launch reads to know it
-// has to open the connection at all.
+// Firestore drains its queue only once built, so this tells a later launch to open a connection.
 const PENDING_FEEDBACK_KEY = "scenic-route:feedback-pending";
 
-// Reached for rather than asked about, the way src/settings/store.ts reaches for localStorage: a
-// browser can refuse storage outright, and a note that cannot be bookkept is still worth sending.
+// A browser can refuse storage outright, and a note that can't be bookkept is still worth sending.
 function markPendingFeedback(pending: boolean): void {
   try {
     if (pending) {
@@ -252,17 +243,13 @@ function feedbackPending(): boolean {
   }
 }
 
-// Clears the flag once Firestore has nothing left to send, which is not the same moment as any one
-// note being acknowledged: a second note typed while the first was in flight is still in the queue,
-// and clearing on the first note's answer would leave the second for nobody to flush. A refused
-// write leaves the queue as surely as an accepted one, so this settles for both.
+// Clears on an empty queue, not on one note's ack, or a second in-flight note would never flush.
 async function clearPendingWhenDrained(): Promise<void> {
   await waitForPendingWrites(ensureDb());
   markPendingFeedback(false);
 }
 
-// Not awaited by the dialog: offline this write queues in the persistent cache and goes out on the
-// next launch, so a rejection here means the rules refused it, not that the sender is offline.
+// Offline writes queue in the persistent cache, so a rejection means the rules refused it.
 export async function sendFeedback(text: string): Promise<void> {
   markPendingFeedback(true);
   try {
@@ -275,11 +262,7 @@ export async function sendFeedback(text: string): Promise<void> {
   }
 }
 
-// Sends what an earlier visit left queued, and is why the promise above ever resolves for a visitor
-// who is signed out. Firestore transmits its own queue as soon as it is running, so this only has to
-// make it run: waitForPendingWrites is both the ask that starts the connection and the answer to
-// when the queue is empty. It never resolves while the device is offline, which leaves the flag set
-// for the launch after this one.
+// waitForPendingWrites starts the connection and resolves once drained; offline, the flag waits.
 export async function flushPendingFeedback(): Promise<void> {
   if (feedbackPending()) {
     await clearPendingWhenDrained();
@@ -290,7 +273,7 @@ export function watchFeedback(
   callback: (notes: Feedback[]) => void,
   onError?: (error: FirestoreError) => void,
 ): () => void {
-  // ordered on one field only, so this needs no composite index
+  // One order field, so no composite index is needed.
   const newest = query(
     rawFeedbackCollection().withConverter(feedbackConverter),
     orderBy("createdAt", "desc"),
@@ -311,9 +294,7 @@ export function watchFeedback(
   );
 }
 
-// Reading a note is the whole of dealing with it, so the only thing to do afterwards is throw it
-// away. There is no undo and no copy: the sender cannot see their note either, so this is the last
-// place it exists.
+// No undo: the sender can't see their note either, so this is the last copy.
 export async function deleteFeedback(feedbackId: string): Promise<void> {
   await deleteDoc(doc(rawFeedbackCollection(), feedbackId));
 }
