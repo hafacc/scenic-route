@@ -1,6 +1,4 @@
-// The scenic POI sets (landmarks, public art) as points with names, and the test for which ones a
-// route passes. Shares the LMRK/ARTW point layout the map overlay reads, but keeps only the flat
-// arrays the directions need — no spatial buckets. Pure data + geometry; no React or Leaflet.
+// Shares the LMRK/ARTW layout the map overlay reads, keeping only the flat arrays the directions need.
 
 import type { RoutingGraph } from "./graph";
 import { edgePath } from "./graph";
@@ -27,9 +25,7 @@ function readVarint(bytes: Uint8Array, cursor: { offset: number }): number {
   return (value >>> 1) ^ -(value & 1);
 }
 
-// Decode the shared point layout (magic LMRK / ARTW): a 40-byte header, per-point zigzag-varint
-// (lng, lat) deltas, then the trailing name blob (u16 length + UTF-8 per point). Mirrors
-// crates/tiler/src/binfmt.rs read_points plus the client-only name blob.
+// Mirrors crates/tiler/src/binfmt.rs read_points, plus the client-only trailing name blob.
 export function decodePois(buffer: ArrayBuffer, magic: string): PoiSet {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
@@ -88,8 +84,6 @@ export function loadPois(url: string, magic: string): Promise<PoiSet> {
   return request;
 }
 
-// One POI the route passes: which step it is nearest (so it slots under the right maneuver) and how
-// far along the whole route the nearest point is (so a cluster lists in the order you reach them).
 export interface PassedPoi {
   name: string;
   kind: PoiKind;
@@ -100,9 +94,7 @@ export interface PassedPoi {
 
 const METERS_PER_DEGREE_LAT = 111_320;
 
-// The steps nothing beside is passed on foot: the three a walker is carried along, and the walk into
-// a station, which the graph draws as a straight chord from the street to a mezzanine and would
-// otherwise report every statue the concourse runs under.
+// A station walk is a straight chord under the concourse, so it would report every statue above it.
 const CARRIED: ReadonlySet<string> = new Set<string>([
   "ferry",
   "board",
@@ -110,9 +102,7 @@ const CARRIED: ReadonlySet<string> = new Set<string>([
   "access",
 ]);
 
-// Meters from a point to a segment, in a local flat approximation (the legs are short and the whole
-// thing is a proximity test, so the equirectangular error is negligible). Also returns the clamped
-// projection parameter `t` in [0, 1], so the caller can place the nearest point along the polyline.
+// A flat approximation is negligible at these lengths.
 function pointSegmentMeters(
   lat: number,
   lng: number,
@@ -134,12 +124,7 @@ function pointSegmentMeters(
   return { distance: Math.hypot(px - t * dx, py - t * dy), t };
 }
 
-// The POIs a route passes: those within a set's `thresholdMeters` of any route step's walked polyline
-// — "adjacent", the sidewalk the fan-out reached from. The threshold is per set because a landmark's
-// point is its lot centroid, which for a big building sits well back from the frontage you walk past,
-// while an artwork is a precise point; landmarks want the wider radius. Each POI is tagged with its
-// nearest step so the directions insert it in order, kept once, and unnamed points are skipped.
-// Route ferry steps are ignored (nobody passes a landmark mid-crossing).
+// Per-set thresholds: a landmark's point is its lot centroid, set back from the frontage, unlike art.
 export function passedPois(
   graph: RoutingGraph,
   result: RouteResult,
@@ -169,10 +154,6 @@ export function passedPois(
   const marginLat = maxThreshold / METERS_PER_DEGREE_LAT;
   const marginLng = maxThreshold / metersPerLng;
 
-  // The walked polyline of each step (the carried ones skipped) in travel order, with the cumulative
-  // meter distance to each vertex, so a POI's nearest point can be placed along the route. Computed
-  // once. A ride is a chord from one platform to the next, so everything the train runs UNDER would
-  // otherwise be reported as passed — the statues of Union Square, spliced in after the boarding.
   const stepPolys: ({
     lngs: number[];
     lats: number[];
@@ -200,7 +181,6 @@ export function passedPois(
     return { lngs: polyLngs, lats: polyLats, cum, total: cum[cum.length - 1] };
   });
 
-  // Cumulative walked length before each step, so a within-step fraction maps to a route distance.
   const stepStart = new Array<number>(result.steps.length);
   let running = 0;
   for (let step = 0; step < result.steps.length; step++) {

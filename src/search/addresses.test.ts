@@ -11,13 +11,7 @@ import {
 import { type AddressIndex, decodeAddresses } from "./addresses";
 import { type CityHit, decodeSearchIndex, searchCity } from "./search-query";
 
-// The decoder against raw ADDR bytes, written here rather than by the builder so these hold whatever
-// the pipeline does. What they pin is the half of the format a reader sees: which number comes back
-// for what was typed, that it is always a number the file actually has, and that a name several
-// streets share answers with all of them rather than with a silent pick.
-//
-// Which street a query names is the search index's answer now, so these run the whole house-number
-// path — a street is a document there, matched by name, and its run decoded for the number.
+// Raw ADDR bytes written here, not by the builder, so these hold whatever the pipeline does.
 
 function varint(value: number, into: number[]): void {
   let rest = value;
@@ -46,7 +40,6 @@ interface Street {
   addresses: [written: string, lat: number, lng: number][];
 }
 
-// The streets in the order the format asks for, by (name, place).
 function fileOf(streets: Street[]): Uint8Array {
   const names = [...new Set(streets.map((street) => street.name))];
   const places = [
@@ -89,7 +82,7 @@ function fileOf(streets: Street[]): Uint8Array {
   return Uint8Array.from(bytes);
 }
 
-// New York, where a street name is not a street: two of these Court Streets are two boroughs apart.
+// Two of these Court Streets are two boroughs apart.
 const NYC_FILE = fileOf([
   {
     name: "31 AVE",
@@ -156,7 +149,6 @@ const SF = decodeAddresses(
   ]),
 );
 
-// Everything an address query needs: the file, and an index over its streets.
 function cityOf(addresses: AddressIndex): {
   addresses: AddressIndex;
   index: ReturnType<typeof decodeSearchIndex>;
@@ -170,10 +162,8 @@ function cityOf(addresses: AddressIndex): {
 const NYC_CITY = cityOf(NYC);
 const SF_CITY = cityOf(SF);
 
-// Lower Manhattan, which is where the map is pointing unless a test says otherwise.
 const DOWNTOWN = { lat: 40.71, lng: -74.01 };
 
-// The row as the box shows it: the name and the line under it.
 function line(hit: CityHit): string {
   return [hit.name, hit.label].filter(Boolean).join(", ");
 }
@@ -189,7 +179,7 @@ function answers(
   return searchCity(city.index, city.addresses, { text, center, limit: 5 });
 }
 
-// A house number and nothing else: the street rows the same query matches are not addresses.
+// Only the doors: street rows the same query matches are not addresses.
 function doors(
   city: {
     addresses: AddressIndex;
@@ -209,7 +199,6 @@ test("a house number the file has is the answer, at its own coordinates", () => 
   expect(hit.lng).toBeCloseTo(-74.0102, 5);
 });
 
-// The pin must never claim to be an address the file does not have.
 test("a number the street lacks comes back as the nearest one, under its real number", () => {
   const [hit] = doors(NYC_CITY, "121 Broadway");
   expect(line(hit)).toBe("119 Broadway, Manhattan");
@@ -221,8 +210,7 @@ test("a number past the end of the street is not answered at all", () => {
   expect(doors(NYC_CITY, "9999 Broadway")).toEqual([]);
 });
 
-// The whole reason a street is a name and a place: one of these is in Brooklyn and one is not, and
-// picking either on the reader's behalf would be picking wrong half the time with no sign of it.
+// One of these is in Brooklyn and one isn't; picking either for the reader would be wrong half the time.
 test("a name several streets share answers with every one of them, each labeled", () => {
   const hits = doors(NYC_CITY, "312 Court St");
   expect(hits.map(line).sort()).toEqual([
@@ -236,13 +224,13 @@ test("naming the borough picks that one street and drops the others", () => {
   expect(doors(NYC_CITY, "312 Court St Brooklyn").map(line)).toEqual([
     "312 Court Street, Brooklyn",
   ]);
-  // The way the list itself writes it, which is the form a reader is most likely to type back.
+  // As the list writes it, which is how a reader will type it back.
   expect(doors(NYC_CITY, "312 Court Street, Staten Island").map(line)).toEqual([
     "312 Court Street, Staten Island",
   ]);
 });
 
-// Stripping it would leave nothing to search for, so it is not a place here — it is the street text.
+// Stripping it would leave nothing to search for.
 test("a place name on its own is not stripped", () => {
   expect(doors(NYC_CITY, "312 Brooklyn")).toEqual([]);
 });
@@ -261,8 +249,7 @@ test("a city that is one place says nothing about which place it is", () => {
   expect(line(hit)).toBe("269 Avila Street");
 });
 
-// The list prints "5th Avenue" and the sign says "5 AV"; a search that only knew the first found no
-// numbered street in New York at all.
+// The list prints "5th Avenue" and the sign says "5 AV".
 test("a numbered street answers to the sign as well as to what we print", () => {
   for (const query of [
     "350 5 Av",
@@ -313,8 +300,6 @@ test("a street the file has never heard of has no addresses on it", () => {
   expect(doors(NYC_CITY, "123 Nowhere Ave")).toEqual([]);
 });
 
-// A door leads a list, because it is the most precise answer anything here can give and the street
-// it is on is the coarsest.
 test("the door outranks the street it is on", () => {
   const hits = answers(NYC_CITY, "123 Broadway");
   expect(line(hits[0])).toBe("123 Broadway, Manhattan");
@@ -323,7 +308,6 @@ test("the door outranks the street it is on", () => {
   ).toBe(true);
 });
 
-// The street search answers a bare name, and better: this one would have to guess a number.
 test("a query with no house number is not an address query", () => {
   const hits = answers(NYC_CITY, "Broadway");
   expect(hits.map((hit) => hit.name)).toEqual(["Broadway"]);

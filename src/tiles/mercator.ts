@@ -1,8 +1,4 @@
-// Leaflet's EPSG:3857 projection as pure functions. The tile draws run in a worker, where leaflet
-// itself cannot even be imported (its browser sniffing reads `document` at module scope), so the
-// handful of map.project / map.unproject calls the draws make are transcribed here. Every constant
-// and every operation mirrors L.CRS.EPSG3857 (SphericalMercator + its Transformation) exactly, so a
-// worker-drawn tile lands on the same pixels the main thread drew it on.
+// L.CRS.EPSG3857 transcribed exactly: leaflet reads `document` at import, so can't load in a worker.
 
 const EARTH_RADIUS = 6_378_137;
 const MAX_LATITUDE = 85.051_128_779_8;
@@ -15,8 +11,6 @@ export interface LatLng {
   lng: number;
 }
 
-// Split into scalar functions rather than one returning a point: these run per vertex, and the
-// draws want the two coordinates separately anyway.
 export function projectX(lng: number, zoom: number): number {
   const mercatorX = EARTH_RADIUS * lng * RADIANS_PER_DEGREE;
   return 256 * 2 ** zoom * (TRANSFORM_SCALE * mercatorX + 0.5);

@@ -1,6 +1,4 @@
-// The timetable path end to end: build a two-terminal schedule with the real encoder, decode it with
-// the client's, and check what the router asks of it — the wait to the next sailing, that the two
-// directions are separate timetables, and that the last boat of the night is the last boat.
+// The real encoder and the client's decoder, checked against what the router asks.
 
 import { expect, test } from "bun:test";
 import { buildTimetable, encodeTimetable } from "../../scripts/ferry-schedule";
@@ -9,8 +7,7 @@ import { effSeconds, type RouteWeights, rawSeconds } from "./cost";
 import { decodeSchedule, resolveTimetable } from "./ferry-schedule";
 import type { RoutingGraph } from "./graph";
 
-// The fixtures below build their instants with the local Date constructor, so their timetables are
-// read in the runner's own zone.
+// Instants use the local Date constructor, so timetables are read in the runner's own zone.
 const LOCAL_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 const KIND_FERRY = 4;
@@ -33,15 +30,12 @@ const weights = (ferry: number): RouteWeights => ({
   transit: 0,
   allowFerries: true,
   allowSheds: true,
-  // The fixture draws no rail, so nothing can board it, and no crossing edges, which leaves the
-  // crossing gate free either way — stated because omitting it would read as "avoid crossings".
+  // Stated because omitting it would read as "avoid crossings".
   allowTransit: false,
   allowCrossings: true,
 });
 
-// A feed with one ferry route running both ways between two terminals. `outbound` and `inbound` are
-// "HH:MM" departure lists, deliberately different: a timetable is not symmetric, and the whole point
-// of the directional lane is that the reverse leg reads its own list.
+// Deliberately asymmetric, so the reverse leg must read its own list.
 function feedOf(
   outbound: string[],
   inbound: string[],
@@ -96,7 +90,6 @@ function feedOf(
       { stop_id: "south", stop_name: SOUTH },
     ],
     stopTimes,
-    // A Monday-to-Friday service spanning the days these tests route on.
     calendar: [
       {
         service_id: "weekday",
@@ -118,7 +111,6 @@ function feedOf(
   };
 }
 
-// One ferry edge, node 0 (north) to node 1 (south), with a baked figure the timetable should beat.
 function graphOf(bakedSeconds: number): RoutingGraph {
   return {
     edgeCount: 1,
@@ -136,7 +128,6 @@ function graphOf(bakedSeconds: number): RoutingGraph {
   } as unknown as RoutingGraph;
 }
 
-// Resolve a feed's timetable against the graph, departing at `clock` on a Wednesday.
 function timetableAt(
   graph: RoutingGraph,
   feed: GtfsFeed,
@@ -162,7 +153,6 @@ test("the wait is the wait for the next sailing, not half a headway", () => {
   );
   // Arriving at 08:10 misses the 08:00 and waits 50 minutes for the 09:00, then crosses 25.
   expect(rawSeconds(graph, 0, 0, 0)).toBeCloseTo(50 * 60 + 25 * 60, 6);
-  // Reaching the terminal an hour into the walk catches the 10:00 instead: 50 minutes again.
   expect(rawSeconds(graph, 0, 0, HOUR)).toBeCloseTo(50 * 60 + 25 * 60, 6);
 });
 
@@ -172,8 +162,7 @@ test("the two directions read their own timetables", () => {
     feedOf(["08:00", "09:00"], ["08:15", "08:45"]),
     "08:05",
   );
-  // Boarding north (node 0) waits 55 minutes for the 09:00; boarding south (node 1) waits 10 for the
-  // 08:15. A symmetric per-edge figure could not tell these apart.
+  // A symmetric per-edge figure could not tell these two waits apart.
   expect(rawSeconds(graph, 0, 0, 0)).toBeCloseTo(55 * 60 + 25 * 60, 6);
   expect(rawSeconds(graph, 0, 1, 0)).toBeCloseTo(10 * 60 + 25 * 60, 6);
 });
@@ -184,8 +173,7 @@ test("after the last boat the ferry is unusable rather than cheap", () => {
     feedOf(["08:00"], ["08:30"]),
     "23:30",
   );
-  // No sailing left today and none tomorrow within reach of the walk clock, so the edge costs
-  // Infinity — the search drops it and walks instead of pricing a wait until morning.
+  // Infinity drops the edge so the search walks instead of pricing a wait until morning.
   expect(rawSeconds(graph, 0, 0, 0)).toBe(Number.POSITIVE_INFINITY);
   expect(effSeconds(graph, 0, weights(0.5), 0, 0)).toBe(
     Number.POSITIVE_INFINITY,
@@ -198,9 +186,7 @@ test("a sailing on the next service day is reachable across midnight", () => {
     feedOf(["00:30", "08:00"], ["00:45"]),
     "23:50",
   );
-  // The 00:30 belongs to Thursday's service day, which has not begun at 23:50 on Wednesday. Only the
-  // three-day window makes it visible; without it the last boat would read as the 08:00 that morning,
-  // long gone. 40 minutes out, so it sits inside the wait cap.
+  // The 00:30 is Thursday's service day; only the three-day window sees it at 23:50 Wednesday.
   expect(rawSeconds(graph, 0, 0, 0)).toBeCloseTo(40 * 60 + 25 * 60, 6);
 });
 
@@ -226,7 +212,7 @@ test("the ferry weight discounts the crossing and never the wait", () => {
     wait + crossing,
     6,
   );
-  // Half weight halves the crossing alone: standing on a pier is not the part anyone likes.
+  // Half weight halves the crossing alone, not the pier wait.
   expect(effSeconds(graph, 0, weights(0.5), 0, 0)).toBeCloseTo(
     wait + crossing / 2,
     6,
@@ -258,9 +244,7 @@ test("the departure instant is continuous, not snapped to the clock slider's ste
   ]);
   const { record } = decodeSchedule(encodeTimetable(built, 20260101, 0));
   const graph = graphOf(600);
-  // All three instants fall inside one 15-minute step of the clock control, and two of them carry
-  // seconds. Tracking "now" resolves the true wall clock, so the wait has to shorten by the real
-  // elapsed time rather than reading the same bucketed figure three times.
+  // Within one 15-minute clock step, so the wait must track real seconds, not a bucketed figure.
   const waits = [
     new Date(2026, 7, 12, 9, 0, 0),
     new Date(2026, 7, 12, 9, 3, 20),
@@ -275,7 +259,7 @@ test("the departure instant is continuous, not snapped to the clock slider's ste
 test("a run that only sails at weekends is unavailable on a weekday, not averaged", () => {
   const feed = feedOf(["08:00", "09:00"], ["08:30"]);
   for (const row of feed.calendar) {
-    // Weekends only, which is what the South Brooklyn and Governors Island runs actually are.
+    // Weekends only, as the South Brooklyn and Governors Island runs are.
     for (const day of [
       "monday",
       "tuesday",
@@ -292,8 +276,7 @@ test("a run that only sails at weekends is unavailable on a weekday, not average
   const { record } = decodeSchedule(encodeTimetable(built, 20260101, 0));
 
   const graph = graphOf(600);
-  // Wednesday: the lane exists, so the edge is covered — but nothing sails, and it must read as no
-  // boat rather than falling back to the baked 600 s, which would put a Saturday ferry on a Wednesday.
+  // Covered but not sailing, so no boat rather than the baked 600 s from a Saturday ferry.
   graph.ferries = resolveTimetable(
     graph,
     record,
@@ -303,7 +286,6 @@ test("a run that only sails at weekends is unavailable on a weekday, not average
   expect(graph.ferries.covers(0)).toBe(true);
   expect(rawSeconds(graph, 0, 0, 0)).toBe(Number.POSITIVE_INFINITY);
 
-  // Saturday: the same lane sails.
   graph.ferries = resolveTimetable(
     graph,
     record,
@@ -319,7 +301,7 @@ test("an edge whose terminals name no lane keeps the graph's baked figure", () =
   ]);
   const { record } = decodeSchedule(encodeTimetable(built, 20260101, 0));
   const graph = graphOf(600);
-  // A terminal the feed renamed: no lane matches, so the timetable declines to speak for this edge.
+  // A renamed terminal matches no lane, so the timetable declines to speak for this edge.
   graph.ferryEndpointNames.set(0, { a: "Old Pier", b: SOUTH });
   graph.ferries = resolveTimetable(
     graph,
@@ -332,8 +314,7 @@ test("an edge whose terminals name no lane keeps the graph's baked figure", () =
 });
 
 test("staying on the same boat costs nothing at the piers it calls at", () => {
-  // One trip calling at three piers: leaves North at 09:00, reaches Middle at 09:20 and leaves it at
-  // once, reaching South at 09:40. Riding through must charge the wait once, at the pier you board.
+  // One trip through three piers: riding through must charge the wait once, at boarding.
   const feed = feedOf([], [], 20);
   feed.stops.push({ stop_id: "middle", stop_name: "Middle Terminal" });
   feed.trips.push({ trip_id: "through", route_id: "r", service_id: "weekday" });
@@ -363,7 +344,6 @@ test("staying on the same boat costs nothing at the piers it calls at", () => {
   const built = buildTimetable([{ source: { id: "t" } as never, feed }]);
   const { record } = decodeSchedule(encodeTimetable(built, 20260101, 0));
 
-  // Two chained ferry edges: node 0 (North) -> 1 (Middle) -> 2 (South).
   const graph = graphOf(600);
   (graph.edgeNodeA as Uint32Array) = Uint32Array.from([0, 1]);
   (graph.edgeNodeB as Uint32Array) = Uint32Array.from([1, 2]);
@@ -385,8 +365,7 @@ test("staying on the same boat costs nothing at the piers it calls at", () => {
 
   const first = rawSeconds(graph, 0, 0, 0); // 10 min wait + 20 min crossing
   expect(first).toBeCloseTo(10 * 60 + 20 * 60, 6);
-  // Reaching Middle exactly as the boat calls there, the onward leg owes only its crossing: the
-  // walker never got off, so there is no second wait to pay.
+  // The walker never got off, so the onward leg owes only its crossing.
   expect(rawSeconds(graph, 1, 1, first)).toBeCloseTo(20 * 60, 6);
 });
 
@@ -419,8 +398,7 @@ test("the encoded body ignores the day range, so an unchanged feed is unchanged 
   const built = buildTimetable([
     { source: { id: "t" } as never, feed: feedOf(["08:00"], ["08:30"]) },
   ]);
-  // The daily job compares everything past the header to decide whether the schedule moved; two
-  // builds of one feed on different days have to agree there or every run would commit.
+  // The daily job diffs everything past the header, so two builds on different days must match there.
   const first = encodeTimetable(built, 20260101, 0).subarray(40);
   const second = encodeTimetable(built, 20270615, 0).subarray(40);
   expect([...first]).toEqual([...second]);

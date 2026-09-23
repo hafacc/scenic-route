@@ -1,8 +1,7 @@
 import { expect, test } from "bun:test";
 import { repaintOnRestore, repeatable } from "./repaint";
 
-// bun's test environment has neither HTMLCanvasElement nor OffscreenCanvas, and the contract under
-// test is entirely the event pair, so an EventTarget stands in for both.
+// bun has neither HTMLCanvasElement nor OffscreenCanvas, and the contract is only the event pair.
 class FakeCanvas extends EventTarget {}
 
 function lose(canvas: FakeCanvas): Event {
@@ -29,8 +28,7 @@ test("a restored context paints the tile again", () => {
   expect(paints).toBe(2);
 });
 
-// An uncanceled loss is permanent — the restore never comes and the tile stays blank. This is the
-// only reason the loss is listened for at all.
+// An uncanceled loss is permanent: the restore never comes.
 test("the loss is canceled, so the pixels can come back", () => {
   const canvas = new FakeCanvas();
   repaintOnRestore(canvas as never, () => undefined);
@@ -38,8 +36,7 @@ test("the loss is canceled, so the pixels can come back", () => {
   expect(lose(canvas).defaultPrevented).toBe(true);
 });
 
-// The listener holds the canvas and the tile's decoded data, so a watcher that outlived its tile
-// would be a leak that grows with every pan.
+// The listener holds the canvas and decoded data, so a watcher outliving its tile leaks every pan.
 test("detaching stops the watch", () => {
   const canvas = new FakeCanvas();
   let paints = 0;
@@ -55,8 +52,7 @@ test("detaching stops the watch", () => {
   expect(lose(canvas).defaultPrevented).toBe(false);
 });
 
-// A repaint runs against the context the previous draw left behind: the scale would otherwise
-// compound, and every state a renderer set would still be in force.
+// A repaint starts from the previous draw's context, so the scale and other state would carry over.
 test("a repeatable paint starts from the same state every time", () => {
   const calls: string[] = [];
   let scale = 1;

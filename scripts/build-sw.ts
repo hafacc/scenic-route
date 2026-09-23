@@ -1,11 +1,5 @@
-// `bun run export`, last step: bundles src/sw/ into out/sw.js, the service worker the deploy serves.
-// It runs after `next build` because two of the things it bakes in only exist once the export does —
-// the hashed chunk filenames of the app shell, and nothing else in the tree to precache.
-//
-// The committed public/sw.js is a stub that caches nothing, and `next build` copies it into out/;
-// this overwrites it. Keeping the stub committed is what lets a dev server register a worker (which
-// is what makes the browser offer to install the app) without a cache that could serve a stale shell
-// against the hashed chunks a static export names.
+// Runs after `next build`, since the precache needs the export's hashed chunk names.
+// Overwrites the committed no-cache stub public/sw.js, which lets dev register a worker safely.
 
 import { execFileSync } from "node:child_process";
 import { access, readdir, writeFile } from "node:fs/promises";
@@ -17,14 +11,7 @@ import manifest from "../src/tree-cover/manifest.json";
 const ROOT = join(import.meta.dirname, "..");
 const OUT = join(ROOT, "out");
 
-// The app itself, as against the data it reads: what has to be on disk for the map to open at all
-// with no network. Everything else is fetched on use and cached as it arrives.
-//
-// `_next/static/` is taken whole rather than filtered. It is the export's own output, already
-// content-hashed and already minimal, and picking through it by extension is how a precache ends up
-// missing the one chunk that a cold offline start needs.
-//
-// The pages themselves are src/pages.ts, which the worker's own policy reads too.
+// `_next/static/` is taken whole: filtering it risks missing a chunk a cold offline start needs.
 const SHELL_FILES = [...APP_PAGES.map((page) => page.file), ...SHELL_EXTRAS];
 const SHELL_DIRS = ["_next/static", "icons"];
 
@@ -42,9 +29,7 @@ async function filesUnder(dir: string): Promise<string[]> {
     .map((entry) => join(entry.parentPath, entry.name));
 }
 
-// Every named file has to be there, and every named directory has to hold something. A precache
-// listing a file the export did not emit makes `cache.addAll` reject on install, which does not fail
-// loudly — it means the worker never installs at all, and nothing downstream of here would notice.
+// A missing precache file makes `cache.addAll` reject, so the worker silently never installs.
 async function precacheList(): Promise<string[]> {
   const found: string[] = [];
   for (const file of SHELL_FILES) {
@@ -61,14 +46,11 @@ async function precacheList(): Promise<string[]> {
     }
     found.push(...under);
   }
-  // Relative to the worker's scope, which is its own directory — the site root under whatever
-  // basePath the deploy injected. Resolved against `registration.scope` in the worker, so nothing
-  // here has to know what that basePath turned out to be.
+  // Relative to the worker's scope, so the deploy's basePath need not be known here.
   return found.map((file) => relative(OUT, file).split("\\").join("/")).sort();
 }
 
-// The deploy's identity. Any change at all gives the worker new cache names, and the old ones are
-// deleted on activate — which is what makes a deploy a clean slate rather than a merge.
+// Any change gives the worker new cache names, and old caches are deleted on activate.
 function version(): string {
   const fromCi = process.env.GITHUB_SHA;
   if (fromCi) {
@@ -82,9 +64,7 @@ function version(): string {
 
 const precache = await precacheList();
 
-// Bun's bundler API. Declared locally rather than through @types/bun, whose globals disagree with
-// the DOM lib this tsconfig builds against — and the CLI has no `--define`, which is the whole point
-// of using it here.
+// Declared locally: @types/bun's globals clash with the DOM lib, and the CLI has no `--define`.
 declare const Bun: {
   build(options: {
     entrypoints: string[];
@@ -103,19 +83,15 @@ const stamp = version();
 const built = await Bun.build({
   entrypoints: [join(ROOT, "src/sw/worker.ts")],
   target: "browser",
-  // A classic script, not a module: `navigator.serviceWorker.register` is called without
-  // `{ type: "module" }`, and module workers are still not everywhere.
+  // Classic script: registration omits `{ type: "module" }`, and module workers aren't everywhere.
   format: "iife",
   minify: true,
   define: {
     SW_VERSION: JSON.stringify(stamp),
     SW_PRECACHE: JSON.stringify(precache),
-    // The owner's deploy marker, bumped by hand for a deploy worth interrupting a session for. A
-    // page whose own bundled copy is lower is the one that gets offered a reload.
+    // Bumped by hand; a page whose bundled copy is lower is offered a reload.
     SW_RELEASE: JSON.stringify(SW_RELEASE),
-    // The basemap is a whole planet the app only routes across two cities of, so the worker keeps
-    // its tiles only over those. Baked in from the manifest rather than fetched, because the rule
-    // has to hold on the very first tile, before anything has loaded.
+    // Basemap tiles are cached only over these; baked in so the rule holds on the very first tile.
     SW_CITIES: JSON.stringify(
       manifest.cities.map(({ bounds }) => ({
         west: bounds.west,

@@ -1,13 +1,4 @@
-// One request at a time in arrival order, because a search reads fields a context rebuild replaces.
-//
-// A route or drag frame that a newer one has already superseded is answered `stale` without being
-// run. That is what keeps a drag solving only the position the cursor is at now: the page posts a
-// frame per animation frame, and searching the ones already overtaken would just push the live one
-// further behind. A plan is coalesced the same way, against other plans and against the route and
-// drag frames that replace the walk it is planning; it is also one synchronous unit, so a drag frame
-// never interleaves with the searches it is made of. A waypoint plan
-// coalesces against other waypoint plans, which is what keeps card-flipping from queueing one per
-// card.
+// Serial, since a search reads fields a rebuild replaces; superseded requests are answered `stale` unrun.
 
 import { planRoutes } from "./alternatives";
 import { setArtifactBase } from "./artifact-base";
@@ -32,8 +23,6 @@ type Coalescing = Extract<
   { type: "route" | "drag:move" | "plan" | "waypoints" }
 >;
 
-// Which answer a request competes for, or null where it competes for none: two requests of the same
-// kind draw the same thing, so a newer one makes an older one pointless.
 function coalesced(request: RouterRequest): Coalesced | null {
   if (request.type === "route" || request.type === "drag:move") {
     return "route";
@@ -50,13 +39,10 @@ function coalescing(request: RouterRequest): request is Coalescing {
   return coalesced(request) !== null;
 }
 
-// Long enough that a plan pays a handful of them rather than one per search, short enough that a
-// reader who flips a mode does not wait out the plan they have already replaced.
+// Few enough per plan, short enough that a flipped mode doesn't wait out the replaced plan.
 const BREATH_MILLIS = 25;
 
-// Hand the event loop a turn, so the messages that arrived while the last stretch of searching ran
-// are delivered before the next one starts. A task rather than a microtask: a microtask queue is
-// drained before any message event, so awaiting one would let nothing in.
+// A task, not a microtask: microtasks drain before any message event, so nothing would get in.
 function breathe(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 0);
@@ -70,9 +56,7 @@ export function createDispatch(
   const queue: RouterRequest[] = [];
   let running = false;
 
-  // A newer plan retires the one running, and so does a route or a drag frame: the reader has moved
-  // an endpoint, and a plan of the walk they have left is a second or more of searching nobody is
-  // waiting for — while the frame they ARE watching sits behind it.
+  // A moved endpoint makes the running plan pointless while the frame the reader is watching waits.
   function planOvertaken(): boolean {
     return queue.some((queued) => {
       const answer = coalesced(queued);
@@ -83,9 +67,7 @@ export function createDispatch(
   async function handle(request: RouterRequest): Promise<void> {
     switch (request.type) {
       case "load":
-        // The one request whose failure has nowhere else to surface: a decode that runs out of
-        // memory would otherwise leave the page believing this city was loaded, and everything
-        // queued behind it stranded.
+        // Otherwise an out-of-memory decode would leave the page thinking the city loaded.
         try {
           const graph = decodeCityGraph(
             request.cityId,
@@ -215,11 +197,7 @@ export function createDispatch(
     }
   }
 
-  // The oldest request that is not a set of pins, and the pins only when nothing else is waiting.
-  // A waypoint plan is a dynamic program over every intersection of a route and can outlast the
-  // search that produced it, and nothing is drawn while it runs — where a route, a plan or a drag
-  // frame is what the reader is waiting to see. Order inside each of those two groups is untouched,
-  // so a load still precedes everything queued behind it.
+  // Pins go last: their DP can outlast the search and draws nothing the reader is waiting for.
   function takeNext(): RouterRequest | undefined {
     const drawn = queue.findIndex((queued) => queued.type !== "waypoints");
     return queue.splice(drawn === -1 ? 0 : drawn, 1)[0];

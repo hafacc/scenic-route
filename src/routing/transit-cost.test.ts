@@ -1,8 +1,4 @@
-// What the router does with a published timetable: when it rides, what the ride costs, what it
-// reports afterwards, and whether the A* credit that lets it consider rides at all is still a lower
-// bound. The fixture is a straight kilometer of pavement with a two-station line beside it
-// (./transit-graph.fixture.ts), which is the smallest network where riding and walking are both
-// real answers.
+// The fixture is the smallest network where riding and walking are both real answers.
 
 import { beforeEach, expect, test } from "bun:test";
 import {
@@ -58,8 +54,7 @@ import {
   WEST_STATION,
 } from "./transit-graph.fixture";
 
-// What the whole trip takes when the train is caught with no wait: down into the west station, the
-// boarding constant, the ride, back up to the east stop and out to the pavement.
+// Down into the west station, boarding, the ride, back up at the east stop and out; no wait.
 const RIDE_TRIP_SECONDS =
   ACCESS_SECONDS +
   BOARDING_SECONDS +
@@ -67,8 +62,6 @@ const RIDE_TRIP_SECONDS =
   ALIGHT_SECONDS +
   EAST_ACCESS_SECONDS;
 
-// The route the fixture is built around: the west end of the pavement to the east end, which the
-// line runs beside. Every test snaps these two.
 function ends(graph: RoutingGraph): { start: Snap; dest: Snap } {
   return {
     start: snapAtNode(graph, 0, WEST_SIDEWALK),
@@ -76,9 +69,7 @@ function ends(graph: RoutingGraph): { start: Snap; dest: Snap } {
   };
 }
 
-// A graph with the fixture timetable already on it, resolved so a walker leaving now steps onto the
-// west platform exactly as a train goes: no wait, which is what makes the ride's cost a number the
-// tests can name.
+// Resolved so a walker leaving now catches a train with no wait, making the ride's cost nameable.
 function scheduled(lanes?: readonly number[]): RoutingGraph {
   const graph = transitGraph(lanes);
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
@@ -89,9 +80,7 @@ function rides(result: RouteResult | null): boolean {
   return result?.steps.some((step) => step.kind === "ride") ?? false;
 }
 
-// The reference optimum: the same cost model with the heuristic taken away and no early exit, which
-// is what "the credit never over-estimates" means. It carries the elapsed clock exactly as findRoute
-// does, since a board edge's cost is a step function of it.
+// Carries the elapsed clock as findRoute does, since a board edge's cost steps with it.
 function dijkstraCost(
   graph: RoutingGraph,
   start: Snap,
@@ -153,7 +142,6 @@ function dijkstraCost(
   );
 }
 
-// The effective cost of a finished route, summed step by step the way the search paid for it.
 function costOf(
   graph: RoutingGraph,
   result: RouteResult,
@@ -186,7 +174,6 @@ test("the line is a way through at no penalty and a detour at the top of the sli
   const { start, dest } = ends(graph);
   const ridden = findRoute(graph, start, dest, transitWeights({ transit: 0 }));
   expect(rides(ridden)).toBe(true);
-  // 90 s down to the platform, no wait, the boarding constant, the ride, back up and out.
   expect(ridden?.travelSeconds).toBeCloseTo(RIDE_TRIP_SECONDS, 6);
   const walked = findRoute(
     graph,
@@ -200,9 +187,7 @@ test("the line is a way through at no penalty and a detour at the top of the sli
 
 test("the wait is the one the band gives, and it is in the reported time", () => {
   const graph = scheduled();
-  // Reaching the platform this far after a train has gone is a wait for the next one, less that —
-  // the band's own headway, not an average of it. Late enough to be worth waiting through and no
-  // later: past about five minutes the walk wins, which is a different test.
+  // The band's own headway less the lateness; past about five minutes the walk wins instead.
   const late = 400;
   expect(boardSeconds(graph, WEST_BOARD, ACCESS_SECONDS + late)).toBeCloseTo(
     HEADWAY - late + BOARDING_SECONDS,
@@ -211,8 +196,6 @@ test("the wait is the one the band gives, and it is in the reported time", () =>
   expect(stopIndexOf(graph, WEST_BOARD)).toBe(0);
 
   const waiting = transitGraph();
-  // Leaving that much later than the train can be caught, so the platform is reached after it has
-  // gone.
   waiting.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS - late));
   const { start, dest } = ends(waiting);
   const route = findRoute(waiting, start, dest, transitWeights({ transit: 0 }));
@@ -221,7 +204,7 @@ test("the wait is the one the band gives, and it is in the reported time", () =>
     RIDE_TRIP_SECONDS + (HEADWAY - late),
     6,
   );
-  // The wait counts as time on the rail, since it is time the line costs you.
+  // The wait counts as rail time, since the line costs you it.
   expect(route?.transitSeconds).toBeCloseTo(
     HEADWAY - late + BOARDING_SECONDS + RIDE_SECONDS,
     6,
@@ -230,8 +213,7 @@ test("the wait is the one the band gives, and it is in the reported time", () =>
 
 test("past the last train the line is not a way anywhere", () => {
   const graph = transitGraph();
-  // An hour after the band's last departure: there is no next train today, and tomorrow's is not an
-  // answer to "how do I get there now".
+  // Tomorrow's first train is not an answer to "how do I get there now".
   graph.transit = fixtureTimetable(departureAt(LAST_DEPARTURE + 3600));
   expect(boardSeconds(graph, WEST_BOARD, 0)).toBe(Number.POSITIVE_INFINITY);
   const { start, dest } = ends(graph);
@@ -240,8 +222,7 @@ test("past the last train the line is not a way anywhere", () => {
 });
 
 test("a lane the timetable does not name is not a train either", () => {
-  // No baked fallback, deliberately: a board edge bakes no departure, so a schedule that does not
-  // cover this lane leaves nothing to ride.
+  // No baked fallback: a board edge bakes no departure.
   const graph = scheduled([UNSCHEDULED_LANE, UNSCHEDULED_LANE]);
   expect(boardSeconds(graph, WEST_BOARD, 0)).toBe(Number.POSITIVE_INFINITY);
   const { start, dest } = ends(graph);
@@ -285,8 +266,7 @@ test("a train may not be ridden backwards, nor a platform entered by alighting",
   expect(effSeconds(graph, RIDE_EDGE, weights, 0, backwards)).toBe(
     Number.POSITIVE_INFINITY,
   );
-  // The alight edge runs platform -> station; walking it the other way would board a train with no
-  // wait at all, which is the whole reason the direction is checked.
+  // Walked backwards, the alight would board a train with no wait at all.
   const alight = 5;
   expect(effSeconds(graph, alight, weights, 0, graph.edgeNodeB[alight])).toBe(
     Number.POSITIVE_INFINITY,
@@ -311,8 +291,7 @@ test("shelter discounts the wait and the ride, and shade never touches either", 
     effSeconds(graph, WEST_BOARD, dry, ACCESS_SECONDS, station),
   ).toBeLessThan(effSeconds(graph, WEST_BOARD, plain, ACCESS_SECONDS, station));
 
-  // A fully-shaded field at full shade preference makes a walked meter a tenth of its price; the
-  // ride is priced by neither.
+  // Full shade preference makes a shaded meter a tenth of its price; the ride is priced by neither.
   const before = effSeconds(
     graph,
     RIDE_EDGE,
@@ -338,9 +317,7 @@ test("shelter discounts the wait and the ride, and shade never touches either", 
 });
 
 test("the ride is in the trip's length and out of its miles and its shares", () => {
-  // Two hundred meters back along the pavement, so the route walks some of it before it rides and
-  // the means have something to average. The timetable is resolved against that longer approach, so
-  // the train is still caught without a wait.
+  // Resolved against the longer approach, so the train is still caught without a wait.
   const walkBack = 200;
   const graph = transitGraph();
   graph.transit = fixtureTimetable(
@@ -355,17 +332,15 @@ test("the ride is in the trip's length and out of its miles and its shares", () 
   );
   expect(rides(route)).toBe(true);
   expect(route?.walkMeters).toBeCloseTo(walkBack, 3);
-  // The ride's own span is in the distance the map draws, and out of the miles the summary reports.
+  // The ride's span is in the drawn distance but not the summary's miles.
   expect(route?.lengthMeters).toBeGreaterThan(graph.edgeLength[RIDE_EDGE]);
-  // A chip is a share of the whole trip's time, and a kilometer of tunnel is time under no canopy:
-  // half-shaded pavement walked for part of the trip reads that part of a half.
+  // A chip is a share of the whole trip's time, and the ride is time under no canopy.
   const walkSeconds = walkBack / WALK_METERS_PER_SECOND;
   expect(route?.factors.tree).toBeCloseTo(
     (SIDEWALK_COVER * walkSeconds) / (route?.travelSeconds ?? 1),
     2,
   );
   expect(route?.factors.tree).toBeLessThan(SIDEWALK_COVER / 2);
-  // The same pavement walked the whole way is the same canopy, and reads all of it.
   const walked = findRoute(
     graph,
     { ...start, metersFromA: walkBack },
@@ -394,8 +369,7 @@ test("A* with the transit credit matches the Dijkstra oracle", () => {
   }
 });
 
-// The same matrix with the estimate measured along the network — rides and crossings included at
-// their own lengths — instead of through the air. A tighter lower bound is still a lower bound.
+// Rides and crossings count at their own lengths; a tighter lower bound is still a lower bound.
 test("the network estimate leaves the A* optimum where it was", () => {
   const graph = scheduled();
   const { start, dest } = ends(graph);
@@ -425,17 +399,16 @@ test("the maneuvers name the line, where it is bound and both stations", () => {
     (maneuver) => maneuver.kind === "transit" || maneuver.kind === "station",
   );
   expect(transit.map((maneuver) => maneuver.text)).toEqual([
-    // The door names the street it stands on, which here is the fixture's one unsided pavement.
     `Enter ${WEST_STATION} by the stair on Main Street`,
     `Take the ${ROUTE_SHORT_NAME} at 8:00 AM toward ${EAST_STATION} (1 stop)`,
     `Get off at ${EAST_STATION}`,
-    // A curbside stop is left rather than exited: the east end of this line is one.
+    // A curbside stop is left rather than exited.
     `Leave the ${EAST_STATION} stop`,
   ]);
   const ride = transit[1];
   expect(ride.durationSeconds).toBe(RIDE_SECONDS);
   expect(ride.stops).toBe(1);
-  // The ride's span is the maneuver's length, so nav-progress advances along it as it does a ferry.
+  // So nav-progress advances along the ride as it does a ferry.
   expect(ride.lengthMeters).toBeCloseTo(graph.edgeLength[RIDE_EDGE], 3);
 });
 
@@ -451,9 +424,8 @@ test("the leg says which train was caught, and for how long", () => {
   expect(leg.stops).toBe(1);
   expect(leg.waitSeconds).toBe(BOARDING_SECONDS); // caught with nothing to wait through
   expect(leg.rideSeconds).toBe(RIDE_SECONDS);
-  // The departure is a clock time on the routed day, which is what a card prints: 08:00.
+  // A clock time on the routed day, which is what a card prints.
   expect(leg.departureSeconds).toBe(FIRST_DEPARTURE);
-  // What the card calls the minutes on the train: the wait is in it, since the line cost you both.
   expect(route?.transitSeconds).toBeCloseTo(
     leg.waitSeconds + leg.rideSeconds,
     6,
@@ -464,14 +436,12 @@ test("shelter is a mean over the trip's seconds, and a ride is all of them cover
   const graph = scheduled();
   const { start, dest } = ends(graph);
   const route = findRoute(graph, start, dest, transitWeights({ transit: 0 }));
-  // The station walks are out in the weather; the platform and the train are not. The fixture has no
-  // shed feed, so a walked meter shelters nobody, and the two access walks are the whole of the rest.
+  // The station walks are out in the weather; the platform and the train are not.
   const covered = BOARDING_SECONDS + RIDE_SECONDS;
   expect(route?.factors.shelter).toBeCloseTo(
     covered / (route?.travelSeconds ?? 1),
     6,
   );
-  // The same trip walked has nothing overhead at all.
   const walked = findRoute(
     graph,
     start,
@@ -488,16 +458,14 @@ test("the floor stays under a board edge that spans a transfer complex", () => {
   expect(length).toBeCloseTo(PLATFORM_SETBACK_METERS, 0);
   for (const shelter of [0, 0.5, 0.6, 0.9]) {
     const weights = transitWeights({ shelter });
-    // The least a board edge can cost per meter: the boarding constant, since the wait on top of it
-    // is at least zero, priced the way a ride is.
+    // The wait is at least zero, so the boarding constant alone bounds a board edge.
     const cheapest = (BOARDING_SECONDS * transitMultiplier(weights)) / length;
     expect(
       heuristicFloor(graph, weights),
       `shelter=${shelter}`,
     ).toBeLessThanOrEqual(cheapest);
   }
-  // Past half a shelter weight the passage is the cheapest meter in the graph, so the floor is it:
-  // the bound would be broken rather than merely loose if board edges were left out.
+  // Past half a shelter weight the passage is the cheapest meter, so omitting board edges breaks the bound.
   const strong = transitWeights({ shelter: 0.9 });
   expect(heuristicFloor(graph, strong)).toBeCloseTo(
     (BOARDING_SECONDS * transitMultiplier(strong)) / length,
@@ -505,10 +473,7 @@ test("the floor stays under a board edge that spans a transfer complex", () => {
   );
 });
 
-// A ride PAST a station, on the three-stop line: the rider boards at the west end, stays aboard
-// through the middle stop and gets off at the east one. The stay-aboard step between the two rides
-// is the graph's business — it is one boarding, of two stops, and the station it passes is no
-// maneuver, no stop and no second.
+// The stay-aboard step makes it one boarding of two stops; the passed station is no maneuver.
 test("a ride through a station is one leg of two stops", () => {
   const graph = threeStopGraph();
   const route = findRoute(
@@ -537,7 +502,6 @@ test("a ride through a station is one leg of two stops", () => {
   expect(
     maneuvers.every((maneuver) => !maneuver.text.includes(THREE_STOP_MIDDLE)),
   ).toBe(true);
-  // The ride's span is the two rides' own, the step between them covering no ground.
   const [, ride] = maneuvers;
   expect(ride.durationSeconds).toBe(2 * RIDE_SECONDS);
   expect(ride.stops).toBe(2);

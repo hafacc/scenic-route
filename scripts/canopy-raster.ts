@@ -1,23 +1,12 @@
-// The raster half of the canopy pipeline: a lidar canopy raster in, the `CNPY` polygons the tiler
-// blurs into the cover field out. New York and San Francisco are both handed polygons by their
-// publisher; no Bay Area county publishes any — every one of them publishes a 1 m raster instead —
-// so this is the step that stands in for that publisher, and it is written against a raster rather
-// than against one county's: give it a mask and its grid, and it gives back rings.
-//
-// Nothing here fetches anything. scripts/alcc.ts holds the Alameda / Contra Costa source and the
-// height floor a mask is cut at; this file holds the geometry, which is the part the next county
-// reuses unchanged. The transverse Mercator below is the ingest's only one, and is shared beyond
-// the canopy: scripts/lidar.ts projects with it to name the ground tiles it fetches.
+// Bay Area counties publish a 1 m canopy raster rather than polygons, so this traces the polygons.
 
 import type { Coord } from "./socrata";
 
-// GRS80, the ellipsoid every one of these rasters is referenced to.
+// GRS80, the ellipsoid these rasters are referenced to.
 const SEMI_MAJOR_METERS = 6_378_137.0;
 const INVERSE_FLATTENING = 298.257222101;
 
-// A transverse Mercator, named by the same five numbers crates/tiler/src/heights.rs resolves a CRS
-// to. Both directions are wanted: a lon/lat window goes forward to say which of a published grid's
-// tiles cover it, and a traced ring, born in raster cells, has to leave in degrees.
+// The same five numbers crates/tiler/src/heights.rs resolves a CRS to.
 export interface Tmerc {
   centralMeridian: number;
   latOrigin: number;
@@ -26,8 +15,7 @@ export interface Tmerc {
   falseNorthing: number;
 }
 
-/// NAD83(2011) / UTM zone 10N — EPSG:6339, the grid the Alameda and Contra Costa rasters are
-/// published on. The tiler knows it as `utm10n`.
+/// NAD83(2011) / UTM zone 10N (EPSG:6339); the tiler calls it `utm10n`.
 export const UTM_10N: Tmerc = {
   centralMeridian: -123.0,
   latOrigin: 0.0,
@@ -36,8 +24,7 @@ export const UTM_10N: Tmerc = {
   falseNorthing: 0.0,
 };
 
-// The meridional arc from the equator to `phi`, the series the projection is built on — the same
-// one the tiler's forward projection uses, because the inverse below has to undo exactly it.
+// Must match the tiler's forward projection exactly, since the inverse below undoes it.
 function meridianArc(phi: number, eccentricity2: number): number {
   return (
     SEMI_MAJOR_METERS *
@@ -56,9 +43,7 @@ function meridianArc(phi: number, eccentricity2: number): number {
   );
 }
 
-// Snyder's transverse Mercator series, inverse: grid meters to degrees. Millimeter-accurate this
-// close to the central meridian, which is three orders finer than the 1 m cells whose corners are
-// what actually goes through it.
+// Snyder's series; millimeter-accurate this close to the central meridian.
 export function inverseTmerc(grid: Tmerc, x: number, y: number): Coord {
   const flattening = 1 / INVERSE_FLATTENING;
   const eccentricity2 = flattening * (2 - flattening);
@@ -133,10 +118,7 @@ export function inverseTmerc(grid: Tmerc, x: number, y: number): Coord {
   };
 }
 
-// Snyder's transverse Mercator series, forward: degrees to grid meters — the same series
-// crates/tiler/src/heights.rs projects a canopy vertex with. It is what cuts a lon/lat box down to
-// the tiles of a grid that cover it, for the canopy rasters here and the staged DEM squares
-// scripts/lidar.ts fetches.
+// The same series crates/tiler/src/heights.rs projects a canopy vertex with.
 export function forwardTmerc(
   grid: Tmerc,
   lng: number,
@@ -184,8 +166,7 @@ export function forwardTmerc(
   };
 }
 
-// A rectangle of a raster's own grid: the ground coordinate of the upper-left CORNER of cell (0, 0)
-// — not its center — and how many square cells of `cellMeters` follow, east and south.
+// The origin is the upper-left corner of cell (0, 0), not its center.
 export interface Grid {
   originX: number;
   originY: number;
@@ -195,13 +176,10 @@ export interface Grid {
   projection: Tmerc;
 }
 
-// A traced ring, as the cell-corner coordinates it is born in: x east and y SOUTH from the grid's
-// origin corner, interleaved, and not closed — the last vertex is understood to join the first.
+// Interleaved cell-corner x east, y south from the origin; unclosed.
 export type Ring = Float64Array;
 
-// Twice the signed area of a ring in cell units. Positive is a filled region's outer boundary and
-// negative a hole, under the tracing below; the doubling is left in because only the sign and the
-// ratio are ever wanted.
+// Twice the signed area in cells: positive for an outer ring, negative for a hole.
 export function ringDoubleArea(ring: Ring): number {
   let total = 0;
   for (let at = 0, previous = ring.length - 2; at < ring.length; at += 2) {
@@ -211,25 +189,11 @@ export function ringDoubleArea(ring: Ring): number {
   return total;
 }
 
-// The four directions an edge of the cell lattice runs in, east, south, west, north — indexed by
-// the direction code the tracer stores, so a step is a lookup rather than a branch.
+// East, south, west, north.
 const STEP_X = [1, 0, -1, 0];
 const STEP_Y = [0, 1, 0, -1];
 
-// Chains the boundary edges of a binary mask into closed rings, walking the lattice of cell corners
-// rather than the cells: every ring is therefore rectilinear, lands exactly on the cell boundaries,
-// and encloses exactly the cells that were set — the union of what comes out is the mask itself,
-// which is what makes the cover field it feeds the measured canopy rather than an approximation of
-// it.
-//
-// Each set cell contributes one directed edge per empty neighbor, wound so the cell lies to the
-// right of the direction of travel. An outer boundary then comes back with positive double area and
-// a hole with negative, and the two never need telling apart by any other means.
-//
-// Where two set cells meet only at a corner, four edges meet at one lattice point and the walk has
-// a choice. It always takes the turn that keeps hugging the cell it arrived along — the tighter
-// turn — so a diagonal pair traces as two squares rather than as one bowtie: the mask is read
-// 4-connected, and no ring ever pinches to a point that an even-odd fill would have to interpret.
+// Walks cell corners, so the rings' union is exactly the mask; 4-connected, so no ring pinches.
 export function traceRings(
   mask: Uint8Array,
   width: number,
@@ -277,8 +241,7 @@ export function traceRings(
       let corner = start;
       let heading = -1;
       do {
-        // At a corner holding two edges, the one that turns tightest away from the heading — a
-        // right turn in this y-down lattice — is the one still on the cell just walked past.
+        // At a two-edge corner, the tightest (right, y-down) turn stays on the cell just passed.
         let direction = first[corner] - 1;
         if (second[corner] !== 0) {
           const other = second[corner] - 1;
@@ -305,8 +268,7 @@ export function traceRings(
   return rings;
 }
 
-// Drops the vertices in the middle of a straight run. A rectilinear ring is nearly all such runs —
-// a 1 m staircase carries a vertex per meter — and they cost the blob as much as a real corner.
+// Drops the vertices in the middle of a straight run.
 function dropCollinear(ring: Ring): Ring {
   const kept: number[] = [];
   const count = ring.length / 2;
@@ -324,8 +286,7 @@ function dropCollinear(ring: Ring): Ring {
   return Float64Array.from(kept);
 }
 
-// Douglas-Peucker over one chain of a ring, by index, iteratively so a ring of a hundred thousand
-// vertices cannot overflow the stack.
+// Iterative, so a ring of a hundred thousand vertices can't overflow the stack.
 function decimate(
   ring: Ring,
   keep: Uint8Array,
@@ -350,8 +311,7 @@ function decimate(
     for (let index = start + 1; index < last; index++) {
       const offsetX = ring[index * 2] - startX;
       const offsetY = ring[index * 2 + 1] - startY;
-      // The distance to the segment, or to its endpoint where the segment is a point — which it is
-      // whenever a chain closes on itself.
+      // The segment is a point whenever a chain closes on itself.
       const distance =
         span === 0
           ? Math.hypot(offsetX, offsetY)
@@ -368,10 +328,7 @@ function decimate(
   }
 }
 
-// One ring, simplified to `tolerance` cells. A closed ring has no natural pair of endpoints to
-// anchor Douglas-Peucker at, so it is cut at two vertices that no simplification would move: the
-// lowest-then-leftmost corner of the ring, which is always on its convex hull, and the vertex
-// farthest from it.
+// Anchored at the lowest-leftmost corner (on the hull) and the vertex farthest from it.
 export function simplifyRing(ring: Ring, tolerance: number): Ring {
   const straight = dropCollinear(ring);
   const count = straight.length / 2;
@@ -388,7 +345,6 @@ export function simplifyRing(ring: Ring, tolerance: number): Ring {
       anchor = at;
     }
   }
-  // Rotated so the anchor is vertex 0, which turns the cycle into a chain with an end to work from.
   const rotated = new Float64Array(straight.length);
   for (let at = 0; at < count; at++) {
     const source = (anchor + at) % count;
@@ -411,8 +367,7 @@ export function simplifyRing(ring: Ring, tolerance: number): Ring {
   keep[0] = 1;
   keep[far] = 1;
   decimate(rotated, keep, 0, far, tolerance);
-  // The second chain runs from the far vertex back to vertex 0, which is one past the last index;
-  // walking it in place needs the ring's own wrap, so it is decimated against a rotated copy.
+  // The second chain wraps past the last index, so it is decimated against a rotated copy.
   const tail = new Float64Array(rotated.length + 2);
   tail.set(rotated);
   tail[rotated.length] = rotated[0];
@@ -431,7 +386,7 @@ export function simplifyRing(ring: Ring, tolerance: number): Ring {
   return Float64Array.from(kept);
 }
 
-// Whether a point is inside a ring, by the even-odd rule the tiler fills these polygons with.
+// Even-odd, the rule the tiler fills these polygons with.
 function inside(ring: Ring, x: number, y: number): boolean {
   let odd = false;
   for (let at = 0, previous = ring.length - 2; at < ring.length; at += 2) {
@@ -452,21 +407,14 @@ function inside(ring: Ring, x: number, y: number): boolean {
 }
 
 export interface MaskPolygons {
-  // Each polygon's rings in the source's own cell coordinates: the outer ring first, then the holes
-  // that fall inside it.
+  // In cell coordinates, outer ring first.
   polygons: Ring[][];
-  cells: number; // set cells the polygons enclose, before any of them was dropped
-  dropped: number; // components dropped as smaller than the minimum
+  cells: number; // before any drop
+  dropped: number;
   droppedCells: number;
 }
 
-// The polygons of one mask: traced, holes nested into the ring that contains them, each ring
-// simplified, and the specks dropped.
-//
-// A hole is matched to its outer ring by containment rather than by labeling the components: a
-// hole is inside exactly one outer ring of the mask, and there are only ever a few hundred rings in
-// one raster tile, so a box test and a point-in-ring test settle it without a second pass over the
-// cells.
+// Holes nest by containment, cheap at a few hundred rings a tile, rather than component labels.
 export function polygonsOfMask(
   mask: Uint8Array,
   width: number,
@@ -489,8 +437,7 @@ export function polygonsOfMask(
     let best = -1;
     let bestArea = Number.POSITIVE_INFINITY;
     for (let at = 0; at < outers.length; at++) {
-      // The smallest outer ring containing the hole's first corner owns it: a hole inside an island
-      // inside a lake would otherwise be handed to the lake's own outer ring.
+      // Smallest container, or a hole in an island in a lake would go to the lake's outer ring.
       if (
         outers[at].area < bestArea &&
         inside(outers[at].ring, hole[0], hole[1])
@@ -522,7 +469,6 @@ export function polygonsOfMask(
     const simplified = [simplifyRing(outer.ring, toleranceCells)];
     for (const hole of outer.holes) {
       const ring = simplifyRing(hole, toleranceCells);
-      // A hole that simplifies to a line no longer encloses anything and would only cost bytes.
       if (ring.length >= 6) {
         simplified.push(ring);
       }
@@ -537,8 +483,7 @@ export function polygonsOfMask(
   return { polygons, cells, dropped, droppedCells };
 }
 
-// One traced ring as the closed lon/lat ring the polygon encoder takes — closed the way an ArcGIS
-// ring arrives closed, so the two sources encode alike.
+// Closed, as an ArcGIS ring arrives, so the two sources encode alike.
 export function ringToCoords(
   ring: Ring,
   grid: Grid,
@@ -559,12 +504,7 @@ export function ringToCoords(
   return coords;
 }
 
-// A single-strip uncompressed GeoTIFF of float32 samples — the one raster format the tiler's mosaic
-// reader takes, and the reason the heights the East Bay's crowns are measured from need no new
-// reader at all: the tiles written here are read by exactly the code San Francisco's 3DEP tiles are.
-//
-// Only the tags that reader asks for are written: the size, one 32-bit IEEE sample per cell, and
-// the two GeoTIFF tags that tie cell (0, 0)'s upper-left corner to the ground.
+// The one raster format the tiler's mosaic reader takes, with only the tags it reads.
 const TIFF_HEADER_BYTES = 8;
 const TIFF_ENTRY_BYTES = 12;
 const TIFF_TYPE_SHORT = 3;
@@ -585,9 +525,9 @@ export function encodeFloatTiff(
     [258, TIFF_TYPE_SHORT, 1, [32]], // BitsPerSample
     [259, TIFF_TYPE_SHORT, 1, [1]], // Compression: none
     [262, TIFF_TYPE_SHORT, 1, [1]], // PhotometricInterpretation: black is zero
-    [273, TIFF_TYPE_LONG, 1, [0]], // StripOffsets, filled once the layout is known
+    [273, TIFF_TYPE_LONG, 1, [0]], // StripOffsets, filled in below
     [277, TIFF_TYPE_SHORT, 1, [1]], // SamplesPerPixel
-    [278, TIFF_TYPE_LONG, 1, [height]], // RowsPerStrip: the whole image is one strip
+    [278, TIFF_TYPE_LONG, 1, [height]], // RowsPerStrip: one strip
     [279, TIFF_TYPE_LONG, 1, [width * height * 4]], // StripByteCounts
     [284, TIFF_TYPE_SHORT, 1, [1]], // PlanarConfiguration: chunky
     [339, TIFF_TYPE_SHORT, 1, [3]], // SampleFormat: IEEE floating point

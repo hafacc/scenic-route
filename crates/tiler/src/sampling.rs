@@ -1,29 +1,13 @@
-//! Walking a polyline and asking, sample by sample, whether it is inside a set of polygons.
-//!
-//! Its own module rather than a helper in geometry.rs, which is where it would naturally sit: the
-//! shade pass names geometry.rs in its code scope, so a function added there re-renders the whole
-//! twenty-minute pyramid — for a sampler shade does not call. The scope is deliberately coarse
-//! within a module, so a shared helper has to live outside the modules it is not shared WITH.
+//! Polyline-in-polygon sampling, kept out of geometry.rs so changing it doesn't re-render shade.
 
 use crate::binfmt::Coord;
 use crate::geometry::{METERS_PER_DEGREE_LAT, PolygonGrid, PolygonSet};
 use crate::manifest::Bounds;
 
-// One sample per meter of walk, which is what the two callers of `contained_fraction` want of it: a
-// crown is meters across and a district boundary is drawn to the lot line, and even the shortest
-// edge — a crossing runs ~15 m — still lands a dozen samples.
+// One sample per meter: crowns are meters across, and a ~15 m crossing still gets a dozen samples.
 const SAMPLE_STEP_METERS: f64 = 1.0;
 
-/// The share of a polyline's LENGTH that falls inside `set`: the line walked at
-/// `SAMPLE_STEP_METERS` by arc length, each sample tested UNDERFOOT against the raw 0/1 indicator
-/// with no kernel, and the inside share returned. The samples are the midpoints of equal
-/// sub-lengths, so the estimate is the arc-length integral of that indicator and every meter of the
-/// line weighs the same.
-///
-/// The candidates are gathered once for the whole polyline — a graph edge is a block long and the
-/// grid's cells are wider — so the per-sample work is a box test against a few dozen outlines;
-/// `candidates` is the caller's scratch, held across edges so the hot path allocates nothing. A line
-/// of fewer than two points (a ferry edge carries none) reads 0.
+/// The share of a polyline's length inside `set`, sampled at arc-length midpoints.
 pub fn contained_fraction(
     poly: &[Coord],
     set: &PolygonSet,

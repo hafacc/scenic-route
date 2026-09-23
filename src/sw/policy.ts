@@ -1,37 +1,19 @@
-// What the service worker is allowed to cache and where it puts it. Pure functions over URLs, kept
-// apart from the worker itself so they can be tested without a ServiceWorkerGlobalScope.
-//
-// The worker owns storage policy and nothing else. It never decides what to FETCH — the page already
-// does that, and keeps doing it unchanged — so "cache what was asked for, bounded by the rules here"
-// comes out as "the city you are looking at, on the day you picked" without the worker knowing which
-// city or which day that is.
+// Pure URL rules for the service worker; it caches what the page asks for and never fetches itself.
 
 import { APP_PAGES, MODES_PAGE, SHELL_EXTRAS } from "../pages";
 
-// Where a cached response lives. The split is not tidiness: the routing graph is the one artifact a
-// walk in progress cannot do without, and a long scrub through the clock filling the overlay store
-// must never be able to evict it.
+// Routing is its own store so a long clock scrub filling the overlay store can't evict the graph.
 export type Store = "shell" | "routing" | "overlay";
 
-// The artifacts a daily job rewrites in place on the default branch, read straight from raw rather
-// than out of the deploy so a walk today is not costed against last week's timetable.
+// Rewritten daily on the default branch, so read from raw rather than the deploy.
 const FEED_HOST = "raw.githubusercontent.com";
 const FEED_PREFIX = "/hafaio/scenic-route/main/public/";
 const FEED_DIRS = ["sheds/", "ferry-schedule/", "transit-schedule/"];
 
-// The basemap, served from Protomaps' hosted API rather than out of the deploy: a planet is far too
-// large to ship, and the whole point of the switch away from CARTO is that these MAY be kept — their
-// terms treat a map as an asset you download, not a service you rent.
-//
-// Only the cities are kept, though. The API answers for the whole world, and a reader who pans across
-// an ocean should not fill the cache with ground this app cannot route over. The bound is geographic
-// rather than a byte count because that is the honest shape of the rule: this app is New York and San
-// Francisco, and everywhere else is scenery.
+// Protomaps' terms allow keeping tiles; only those over a city are kept, not ocean pans.
 const BASEMAP_HOST = "api.protomaps.com";
 const BASEMAP_TILE = /^\/tiles\/v\d+\/(\d+)\/(\d+)\/(\d+)\.[a-z]+$/;
 
-// A city's extent, in degrees. Passed in rather than imported so the rule stays a pure function of
-// its inputs and the worker decides where the manifest comes from.
 export interface CityBounds {
   west: number;
   south: number;
@@ -39,9 +21,7 @@ export interface CityBounds {
   north: number;
 }
 
-// Whether a basemap tile covers ground the app actually works over. Tiles are compared as boxes, not
-// points: a low-zoom tile is enormous and one covering New York has to be kept even though most of it
-// is not New York, or the city has no map to zoom in from.
+// Compared as boxes, so a low-zoom tile covering a city is kept for zooming in from.
 export function coversACity(
   path: string,
   cities: readonly CityBounds[],
@@ -57,7 +37,7 @@ export function coversACity(
   }
   const west = (x / span) * 360 - 180;
   const east = ((x + 1) / span) * 360 - 180;
-  // Web Mercator: latitude is the inverse Gudermannian of the row, and y counts DOWN from the north.
+  // Web Mercator: latitude is the inverse Gudermannian of the row, and y counts down from the north.
   const latitude = (row: number): number =>
     (Math.atan(Math.sinh(Math.PI * (1 - (2 * row) / span))) * 180) / Math.PI;
   const north = latitude(y);
@@ -71,24 +51,17 @@ export function coversACity(
   );
 }
 
-// What a walk with no signal cannot be without, and so may not be evicted by a pan or a clock scrub:
-// the routing graph with its per-day bins, and the two files the search box answers from — the
-// address index behind a house number, and the name index behind everything else. All of them are
-// fetched once and then read out of memory for the rest of the session, so their read times never
-// move — in the overlay store's least-recently-read order they would be the FIRST things out, which
-// is the exact opposite of what should happen.
+// Read once into memory, so their read times never move and LRU would evict them first.
 const KEPT_DIRS = ["routing/", "addresses/", "search/"];
 
-// The exported app itself, as against the data it reads: every page's own path and the file it is
-// served from, plus what surrounds them (src/pages.ts, which the precache is built from too).
+// Every page's path and file, plus src/pages.ts extras, which the precache is built from too.
 const SHELL_FILES = [
   ...APP_PAGES.flatMap((page) => [page.path, page.file]),
   ...SHELL_EXTRAS,
 ];
 const SHELL_DIRS = ["_next/", "icons/"];
 
-// A path that names a page is served that page's document; everything else is the root one, 404
-// included, since that is the app's own not-found page.
+// Everything unknown, 404 included, gets the root document, which is the app's not-found page.
 export function pageFor(path: string): string {
   const page = APP_PAGES.find(
     (entry) => entry.path === path || entry.file === path,
@@ -96,18 +69,13 @@ export function pageFor(path: string): string {
   return page ? page.file : MODES_PAGE.file;
 }
 
-// One request, as the worker files it: the path relative to the worker's scope, and the store it
-// belongs in. Null for anything the worker does not handle, which it then leaves entirely alone —
-// no `respondWith`, so the request behaves exactly as it would with no worker installed.
+// Null leaves the request alone, with no `respondWith`.
 export interface Filed {
   path: string;
   store: Store;
-  // Network first, falling back to the cache. Only the two daily feeds: a stale timetable is worse
-  // than a slow one, and they are the only things here that change without a deploy.
+  // Network first; only the daily feeds change without a deploy.
   fresh: boolean;
-  // What to store the response under, when that is not the request's own URL. The basemap needs it:
-  // its API key rides in the query string, so keying by the full URL would make a key rotation
-  // orphan every tile ever cached, and a developer's own key a second copy of all of them.
+  // The basemap key rides in the query string, so keying by full URL would orphan tiles on rotation.
   cacheKey?: string;
 }
 
@@ -118,8 +86,6 @@ export function fileRequest(
 ): Filed | null {
   const target = new URL(url);
   if (target.host === BASEMAP_HOST) {
-    // The key rides in the query string, so the path alone is the cache identity — two keys must not
-    // become two copies of the same tile.
     const path = target.pathname.replace(/^\//, "");
     return coversACity(path, cities)
       ? {
@@ -144,13 +110,12 @@ export function fileRequest(
     target.origin !== root.origin ||
     !target.pathname.startsWith(root.pathname)
   ) {
-    return null; // the basemap, Firestore, auth: another origin's business
+    return null;
   }
-  // The pathname alone. A share link's `#at=...` rides along on a navigation's request URL, and
-  // filing by the whole href would make every distinct link its own cache entry for the same page.
+  // Not the href, or every share link's `#at=` would get its own cache entry.
   const path = target.pathname.slice(root.pathname.length);
   if (path === "sw.js") {
-    return null; // the worker must never serve itself, or a deploy could never replace it
+    return null; // or a deploy could never replace the worker
   }
   if (
     SHELL_FILES.includes(path) ||
@@ -158,9 +123,7 @@ export function fileRequest(
   ) {
     return { path, store: "shell", fresh: false };
   }
-  // Everything else under the scope is the deploy's own data. Stated as the default rather than as a
-  // list of directories on purpose: a list is one more place to forget a new layer, and forgetting
-  // one here would silently leave it out of the offline story with nothing to notice it by.
+  // The default rather than a list, so a new layer can't be silently left out of offline.
   return {
     path,
     store: KEPT_DIRS.some((dir) => path.startsWith(dir))
@@ -170,12 +133,7 @@ export function fileRequest(
   };
 }
 
-// The (city, bin) a shade artifact names, or null where the path is not one. Three shapes carry a
-// bin: the two display pyramids and the routing fractions.
-//
-//   tiles/shade/<city>/<bin>/<z>/<x>/<y>.webp
-//   tiles/tree-shade/<city>/<bin>/<z>/<x>/<y>.webp
-//   routing/shade/<city>/<bin>.bin
+// The (city, bin) of a display pyramid tile or routing shade fraction, else null.
 export interface ShadeKey {
   city: string;
   bin: number;
@@ -185,8 +143,7 @@ export function shadeKey(path: string): ShadeKey | null {
   const parts = path.split("/");
   const [head, kind, city, fourth] = parts;
   if (head === "tiles" && (kind === "shade" || kind === "tree-shade")) {
-    // Not `buckets.json`, which sits exactly where a bin directory would and is what the season
-    // lookup itself reads.
+    // Excludes `buckets.json`, which sits where a bin directory would.
     const bin = binNumber(fourth);
     return bin === null || parts.length < 5 ? null : { city, bin };
   }
@@ -199,10 +156,7 @@ export function shadeKey(path: string): ShadeKey | null {
   return null;
 }
 
-// A city's routing graph, which is the one cached thing a walk in progress cannot be without. It is
-// fetched once and then read from memory for the rest of the session, so its last-READ time never
-// moves — under a least-recently-read eviction it is the first thing out of the routing store, which
-// is the exact opposite of what should happen. Nothing evicts it.
+// Read once into memory, so its read time never moves and LRU would evict it first.
 export function isGraph(path: string): boolean {
   return /^routing\/[^/]+\.bin$/.test(path);
 }

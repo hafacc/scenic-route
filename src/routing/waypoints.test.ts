@@ -28,7 +28,6 @@ import { PROXY_WEIGHTS, planWaypoints } from "./waypoints";
 const SCALE = 1e-6;
 const NAME_NONE = 0xffff;
 const METERS_PER_DEGREE = 111_320;
-// The kind bits `edgeKind` reads back out of `edgeKindSide`.
 const KIND_BITS = { sidewalk: 0, crossing: 1, link: 2 } as const;
 
 const weightsWith = (over: Partial<RouteWeights> = {}): RouteWeights => ({
@@ -64,8 +63,7 @@ interface EdgeSpec {
   kind?: keyof typeof KIND_BITS; // sidewalk unless said otherwise
 }
 
-// A synthetic graph over points placed in meters. Only the fields the waypoint planner and findRoute
-// read are filled; the cast covers the rest of the artifact's arrays.
+// Only the fields the planner and findRoute read; the cast covers the rest.
 function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
   clearEdgePathCache();
   const nodeCount = nodes.length;
@@ -177,7 +175,7 @@ const at = (graph: RoutingGraph, node: number) => ({
   lng: graph.originLng + graph.nodeQx[node] * graph.scale,
 });
 
-// One step of a hand-built route, for the shapes findRoute is not supposed to produce.
+// For the shapes findRoute is not supposed to produce.
 function walkStep(
   graph: RoutingGraph,
   edge: number,
@@ -195,8 +193,7 @@ function walkStep(
   };
 }
 
-// A snap halfway along an edge, so the route's first and last steps are partial walks the way a real
-// query's are.
+// Halfway, so the first and last steps are partial walks as in a real query.
 function midEdgeSnap(graph: RoutingGraph, edge: number): Snap {
   const from = at(graph, graph.edgeNodeA[edge]);
   const to = at(graph, graph.edgeNodeB[edge]);
@@ -209,10 +206,7 @@ function midEdgeSnap(graph: RoutingGraph, edge: number): Snap {
   };
 }
 
-// A chain of `covers.length` diamonds: between two junctions runs a bare 300 m street and a leafy
-// one 8% longer over a mid-block corner, so a tree-weighted route takes the long way round every time
-// and a plain walking router takes the short one. Each detour's corner is the only thing that can
-// hold an outside router to it.
+// Each leafy detour is 8% longer over a mid-block corner, the only thing that can hold Google to it.
 interface Diamond {
   corner: number; // the node a pin would land on
   direct: number; // the bare edge the proxy prefers
@@ -264,8 +258,7 @@ function diamondChain(covers: readonly number[]): {
 }
 
 test("proxy weights price an edge at exactly the walk along it", () => {
-  // The planner's inner loop writes this walk out rather than calling the multiplier, so the two have
-  // to agree: every scenic factor is 1 at these weights and a freely-spent crossing adds nothing.
+  // The planner inlines this walk rather than calling the multiplier, so the two must agree.
   const graph = buildGraph(
     [
       { east: 0, north: 0 },
@@ -299,7 +292,6 @@ test("with no waypoints at all the loss is the scenic value of every detour", ()
   const weights = weightsWith({ tree: 0.8 });
   const plan = planWaypoints(graph, route, weights, 0);
   expect(plan.waypoints).toEqual([]);
-  // Every bare street walked in place of the leafy way round it, priced by the reader's own weights.
   const forfeited = diamonds.reduce(
     (total, { direct, around }) =>
       total +
@@ -323,9 +315,7 @@ test("a budget too small for every detour is spent on the leafiest", () => {
 });
 
 test("two corners of one intersection give the planner one candidate", () => {
-  // The curb and the far side of the crossing it meets are one place to Google, which snaps both to
-  // the same road node, so the crossing between them is what joins them — and the earlier of the two
-  // is what a pin lands on.
+  // Google snaps both curbs of a crossing to one road node, so a pin lands on the earlier.
   const graph = buildGraph(
     [
       { east: -100, north: 0 }, // the lead-in's far end
@@ -365,9 +355,7 @@ test("two corners of one intersection give the planner one candidate", () => {
 });
 
 test("a crossing chained through an island is still one intersection", () => {
-  // A divided street is crossed in two 30 m pieces with an island between them, which puts the far
-  // curb 60 m of walking from the near one. Nothing about the distance says these are one place; the
-  // chain of crossings through a node standing in the roadway is what says it.
+  // 60 m apart, so only the crossing chain through the island says these are one place.
   const graph = buildGraph(
     [
       { east: -100, north: 0 }, // the lead-in's far end
@@ -410,10 +398,7 @@ test("a crossing chained through an island is still one intersection", () => {
 });
 
 test("a link to a nearby path junction is a second intersection", () => {
-  // A curb and the mouth of a park path 20 m along the link that joins them: two places a walker can
-  // be told to go, however close together they stand, since a link is not a way across a street. The
-  // bare street the proxy prefers leaves both leafy edges behind, and the shortcut off the curb
-  // leaves the second, so it takes a pin at each to hold it to the route.
+  // A link is not a way across a street, so a curb and a path mouth 20 m apart are two pins.
   const graph = buildGraph(
     [
       { east: -100, north: 0 }, // the lead-in's far end
@@ -453,10 +438,7 @@ test("a link to a nearby path junction is a second intersection", () => {
 });
 
 test("an equal-cost alternative does not cost the route its own value", () => {
-  // Two ways round of identical walking cost, one of them the route's: a leafy detour and a bare
-  // mirror image of it. The leg gives up nothing whichever the proxy walks, since the walker Google
-  // sends could as well have taken ours. The edge order below is what makes its search settle the
-  // bare way first, which is the order that used to settle the question.
+  // Equal-cost ways round lose nothing; the edge order makes the search settle the bare way first.
   const graph = buildGraph(
     [
       { east: -100, north: 0 }, // the lead-in's far end
@@ -492,11 +474,7 @@ test("an equal-cost alternative does not cost the route its own value", () => {
 });
 
 test("a route that doubles back through a node it already used still terminates", () => {
-  // Our graph is not supposed to produce one, which is exactly why this is built by hand: a walk out
-  // to a dead end and back visits its junction twice, and the junction must not become a second
-  // candidate — a leg that ends where an earlier one began makes no progress and the DAG cannot
-  // express it. The junction carries a crossing of its own, so it is a corner and nothing but the
-  // route's own history keeps it out of the candidates.
+  // Hand-built dead end: a leg ending where an earlier one began makes no progress for the DAG.
   const graph = buildGraph(
     [
       { east: -100, north: 0 }, // the lead in's far end
@@ -531,13 +509,10 @@ test("a route that doubles back through a node it already used still terminates"
   expect(plan.waypoints.length).toBeLessThanOrEqual(1);
 });
 
-// A real `City` must exist for this id: preparing the engine reads the shade bins off one. Every
-// weight below leaves the route-time fields off, so no artifact is ever fetched.
+// Preparing the engine reads shade bins off a real City; no weights here fetch an artifact.
 const WORKER_CITY = "nyc";
 const WORKER_CLOCK = { tick: 0, dateMs: Date.UTC(2026, 5, 21, 16, 0, 0) };
 
-// The pins are planned in the routing worker, over its own graph and its own route-time fields, so
-// what the page receives has to be what calling the planner directly would have given.
 function fakeWorker(graph: RoutingGraph): {
   client: RouterClient;
   sent: RouterResponse[];
@@ -600,14 +575,13 @@ test("only the newest of several queued waypoint requests is planned", async () 
     "stale",
     "waypoints",
   ]);
-  // A superseded plan resolves null rather than hanging, which is what lets the page drop it.
+  // Resolving null rather than hanging is what lets the page drop it.
   expect(first).toBeNull();
   expect(second).toBeNull();
   expect(third).not.toBeNull();
 });
 
-// Pins are a dynamic program over every intersection of a route, and nothing is drawn while it
-// runs. A route request queued behind one is what the reader is waiting to see, so it goes first.
+// Pins run a DP with nothing drawn meanwhile, so a queued route request goes first.
 test("a route queued behind a set of pins is searched first", async () => {
   const { graph, route } = diamondChain([0.5, 0.5, 0.5]);
   const worker = fakeWorker(graph);
@@ -624,8 +598,6 @@ test("a route queued behind a set of pins is searched first", async () => {
     worker.client.route(routeRequest),
   ];
   await Promise.all(asked);
-  // The first route is overtaken by the second, as two routes always are; what the pins may not do
-  // is come between them.
   expect(worker.sent.map((response) => response.type)).toEqual([
     "stale",
     "result",
@@ -643,8 +615,6 @@ test("a route that rides is handed over whole, with no pins at all", () => {
     transitWeights({ transit: 0 }),
   );
   expect(route?.steps.some((step) => step.kind === "ride")).toBe(true);
-  // No sequence of pins describes a ride to a walking router, so the plan says so instead of
-  // spending nine of them on the stations either side of it.
   const plan = planWaypoints(
     graph,
     route as RouteResult,

@@ -38,17 +38,12 @@ import RouteCards, {
   GhostCard,
 } from "./route-cards";
 
-// The icon buttons the card's own header rows are made of: the back chevron, the minimize and the
-// handoff to Google all wear this.
 const HEADER_BUTTON =
   "grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-slate-100 disabled:pointer-events-none disabled:opacity-40 dark:hover:bg-slate-700";
 
-// The card's own padding, 12 on all four sides, and 8 between every row it stacks.
 const MODES_CARD = `${PANEL_CARD} relative gap-2 p-3`;
 
-// Half the screen, once a route is being asked about or read: the map is the other half of the
-// answer, and a card that grows to fill a phone hides the very lines its rows are about. The list
-// inside — cards or maneuvers — scrolls within it, as it already does under the desktop cap.
+// Half the screen, since a taller card hides the lines its rows describe.
 const PHONE_HALF =
   "max-md:max-h-[calc(50dvh-max(0.75rem,env(safe-area-inset-bottom)))]!";
 
@@ -60,28 +55,24 @@ interface ModesPanelProps {
   toggles: Toggles;
   available: FactorAvailability;
   onToggles: (toggles: Toggles) => void;
-  // Whether the card is asking where to go or answering it. A destination is what turns one into the
-  // other: this is the Google Maps flow, where finding a place and walking to it are two screens.
   routing: boolean;
-  foundLabel: string | null; // the place the search box has on the map, if any
+  foundLabel: string | null;
   onSearchSelect: (result: GeocodeResult) => void;
   onSearchClear: () => void;
   onSearchDirections: () => void;
-  onClose: () => void; // back to the search, the route dropped
+  onClose: () => void;
   startLabel: string | null;
   destLabel: string | null;
   startSet: boolean;
   destSet: boolean;
-  needsStart: boolean; // no location and no manual start yet, so nothing can be routed
+  needsStart: boolean;
   hasLiveLocation: boolean;
   pickTarget: "start" | "dest" | null;
   destPrefill: DestPrefill | null;
   status: "idle" | "loading" | "ready" | "error";
   errorMessage: string | null;
-  // A sweep is running. Its cards replace these only when it lands, so what this changes is whether
-  // the ones on screen are the current answer.
+  // Cards are replaced only when the sweep lands, so this marks the ones on screen as stale.
   planning: boolean;
-  // The max-scenic route's summary, which the ghost card wears until the plan lands.
   planningLine: string | null;
   cards: readonly CardView[];
   selected: number | null;
@@ -102,8 +93,6 @@ interface ModesPanelProps {
   onToggleMinimize: () => void;
 }
 
-// Hung off the card's top-right corner and moved a little inward, the swap button's treatment on the
-// other edge: the close takes neither a row nor a column, and it is the same thing on both sizes.
 function CloseButton({ onClose }: { onClose: () => void }) {
   return (
     <button
@@ -118,9 +107,7 @@ function CloseButton({ onClose }: { onClose: () => void }) {
   );
 }
 
-// The mode row and the switches head the card on a phone; on a wide screen they float above the map
-// instead (deck.tsx), which is why the bar below is hidden at md — and why nothing else may live in
-// that row: a state whose header held one more thing would start lower than the others do.
+// Nothing else may live in this row, or the header would start lower than the other states.
 export default function ModesPanel({
   city,
   modes,
@@ -193,10 +180,6 @@ export default function ModesPanel({
             ? cardLine(cards[selected].summary)
             : "Walking directions"
         }
-        // The mode stays switchable with the card shrunk away: a mode is not something the peek bar
-        // is a peek at, and reopening the card to change it is the long way round. It is the card's
-        // own first row, as in every other state — on a wide screen the row floats above the map
-        // instead, which leaves the peek row alone in the card.
         header={
           <div className="flex shrink-0 items-center md:hidden">{modeBar}</div>
         }
@@ -215,18 +198,15 @@ export default function ModesPanel({
       : pickTarget === "dest"
         ? "Tap the map to set your destination"
         : null;
-  // The cards on screen answer the last sweep, not the one running; they are held rather than
-  // cleared so a mode, a switch or an endpoint never blanks the list it is about to refill.
+  // Held rather than cleared, so a change never blanks the list it is about to refill.
   const recomputing = planning && cards.length > 0;
-  // The first sweep of all: the loading state and the sweep are one thing to the reader.
   const ghost = (planning || status === "loading") && cards.length === 0;
 
   return (
     <div className={PANEL_WRAPPER}>
       <div className={`${MODES_CARD} ${routing ? PHONE_HALF : ""}`}>
         {routing ? <CloseButton onClose={onClose} /> : null}
-        {/* The chips scroll under a right-hand cluster that does not: the switches are three fixed
-            things, and a row that scrolls them away hides the state the routes were found under. */}
+        {/* The switches don't scroll: hiding them hides the state the routes were found under. */}
         <div className="flex shrink-0 items-center md:hidden">{modeBar}</div>
 
         {chosen ? (
@@ -241,9 +221,7 @@ export default function ModesPanel({
               <FiChevronLeft className="h-[18px] w-[18px]" aria-hidden="true" />
             </button>
             <CardNumber index={selected ?? 0} color={chosen.color} />
-            {/* A boat pill and a line bullet do not fit beside the two numbers at 375 px, and the
-                header ellipsed them away. The numbers stay on the first row and the legs join the
-                chips on the second, which scrolls rather than truncating. */}
+            {/* At 375 px the legs don't fit beside the two numbers, so they join the chips row. */}
             <span className="min-w-0 flex-1">
               <CardLine summary={chosen.summary} legs="row" />
               {chosen.chips.length > 0 || chosenLegs !== null ? (
@@ -293,8 +271,6 @@ export default function ModesPanel({
           </>
         ) : (
           <>
-            {/* The destination field of the other screen, asked before there is a route: the same
-                box, the same suggestions, so finding a place reads as the start of going there. */}
             <div className="shrink-0">
               <LocationField
                 city={city}

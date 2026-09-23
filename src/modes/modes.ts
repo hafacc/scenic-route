@@ -22,8 +22,7 @@ export interface Mode {
   id: ModeId;
   name: string;
   color: string; // chip fill and route color, as a CSS hex
-  // What the mode's own overlays draw their elements in, which is what its alternative routes are
-  // colored from. Day hues, as `color` is.
+  // The colors the mode's overlays draw in, which its alternative routes take; day hues.
   palette: readonly string[];
   overlays: readonly OverlayId[];
   weights: Partial<Record<FactorKey, number>>; // fraction of the factor's max, 0..1
@@ -38,7 +37,7 @@ export interface Toggles {
   ferries: boolean;
 }
 
-// Every switch, so a fourth one is synced and stamped by construction rather than by remembering.
+// Every switch, so a new one is synced and stamped by construction.
 export const TOGGLE_KEYS: readonly (keyof Toggles)[] = [
   "sun",
   "hills",
@@ -74,14 +73,13 @@ const SHADE_WEIGHTS: Readonly<Record<Toggles["sun"], number>> = {
   neutral: 0,
 };
 
-// Every mode asks for `bridge: 1`: a walk over open water is scenery whatever else the reader came
-// out for, and a city with no span over water bakes the byte at 0 everywhere, which gates it off.
+// Every mode asks for `bridge: 1`; a city with no span over water bakes it at 0, gating it off.
 export const MODES: readonly Mode[] = [
   {
     id: "naturalist",
     name: "Naturalist",
     color: "#0d9488", // teal-600, the canopy ramp's own mid stop
-    // The deep half of the canopy ramp: its pale end is a wash over ground, not a line on it.
+    // The deep half of the canopy ramp; its pale end is a wash, not a line.
     palette: CANOPY_HEX.light.slice(3),
     overlays: ["canopy"],
     weights: { tree: 1, bridge: 1, industrial: 1, transit: 1 },
@@ -92,16 +90,14 @@ export const MODES: readonly Mode[] = [
     id: "rain",
     name: "Rain",
     color: "#0284c7", // sky-600, the shelter slider's color
-    // Shelter is overhead cover of both kinds, so the canopy's own green belongs here as much as
-    // the decks' orange, whether or not this city draws either.
+    // Shelter is overhead cover of both kinds, so both canopy green and deck orange belong.
     palette: [
       CANOPY_HEX.light[5], // teal-600, the canopy ramp's mid stop
       SHED_COLOR.light, // orange-600, the scaffolding decks
       "#0284c7", // sky-600, the shelter slider (FACTORS shelter)
     ],
     overlays: ["scaffolding"],
-    // Transit is the one factor Rain is silent about, and deliberately: a train is shelter, waiting
-    // for it included, so the mode that wants a roof has no reason to price the ride.
+    // Transit is unpriced, since a train is shelter, waiting included.
     weights: { shelter: 1, bridge: 1 },
     allowSheds: true,
     needs: ["shelter"],
@@ -122,7 +118,6 @@ export const MODES: readonly Mode[] = [
       landmark: 1,
       art: 0.9,
       bridge: 1,
-      // A harbor crossing is a way of seeing a city that predates every other line on the map.
       ferry: 0.1,
       industrial: 1,
       transit: 1,
@@ -167,8 +162,7 @@ export function isModeId(value: string): value is ModeId {
 
 export type FactorAvailability = Readonly<Record<FactorKey, boolean>>;
 
-// Shelter is ungated because a city with no shed feed still prices the canopy overhead
-// (`computeEdgeSheds` seeds the field before fetching), which is why Rain is offered outside NYC.
+// Shelter is ungated since `computeEdgeSheds` seeds the canopy first, so Rain works outside NYC.
 const UNGATED: ReadonlySet<FactorKey> = new Set<FactorKey>([
   "tree",
   "shade",
@@ -234,8 +228,7 @@ export function effectiveWeights(
   const weights: RouteWeights = {
     ...ZERO_FACTORS,
     allowFerries: toggles.ferries,
-    // No switch: a mode says what a ride costs through its transit weight, and the planner is the
-    // only thing that ever shuts the rail off — for the walking card it offers beside a ride.
+    // The planner alone shuts the rail off, for the walking card it offers beside a ride.
     allowTransit: true,
     allowSheds: mode.allowSheds,
     allowCrossings: false, // never: see DEFAULT_WEIGHTS
@@ -255,8 +248,7 @@ export function effectiveWeights(
   return weights;
 }
 
-// The reader's choice, or the city's first mode where this city does not offer it. Their choice is
-// left alone rather than rewritten, so a city that has it again puts them back in it.
+// The reader's choice isn't rewritten, so a city that offers it again restores it.
 export function modeForCity(city: City, id: ModeId): Mode {
   const offered = modesForCity(city);
   return offered.find((mode) => mode.id === id) ?? offered[0] ?? DEFAULT_MODE;

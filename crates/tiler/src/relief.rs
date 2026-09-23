@@ -1,34 +1,15 @@
-//! How hilly each edge is: the two per-edge relief bytes the hill weight and the walking speed read.
-//!
-//! **Split, not signed.** Height GAINED and height LOST are accumulated separately, both walking the
-//! polyline in its stored a->b direction; reversing an edge swaps them. Neither is the difference
-//! between the two ends, which is the whole point: a block that climbs 10 m and comes back down is
-//! flat end to end and is real work, and it reads 10 m of each.
-//!
-//! Their sum is what the hill penalty steers by — absolute, so a route that avoids a hill avoids it
-//! in both directions — while the walking-speed model needs them apart, because a descent is walked
-//! faster than a climb of the same grade.
-//!
-//! Each is a fraction of the same reference grade, so the two together can reach 70% of grade on an
-//! edge that crests and drops where the old single byte clamped the pair at 35%.
+//! Per-edge ascent and descent bytes, summed along the polyline a->b rather than end to end.
 
 use crate::Fallible;
 use crate::binfmt::Coord;
 use crate::dem::Field;
 
-/// The grade the byte's full range spans. Chosen to clear the steepest street anyone walks — San
-/// Francisco's worst blocks run to about 31.5% — so that NOTHING saturates and a 30% block is still
-/// told apart from a 12% one. It used to stop at 12%, which made every serious hill in the city
-/// identical to the router and to the walking-speed model, both of which care a great deal about the
-/// difference. One step is 0.14% of grade, far finer than a grade means anything to.
+/// The grade the byte spans, clearing San Francisco's ~31.5% steepest blocks so nothing saturates.
 const REFERENCE_GRADE: f64 = 0.35;
 
 const MAX_BYTE: f64 = 254.0;
 
-/// The shortest run a grade is taken over. A curb link a meter long that happens to span three
-/// meters of ground is not a 300% street, it is too short for a grade to mean anything — and left
-/// alone it maxes the byte and makes the reported steepest nonsense. San Francisco's real steepest
-/// blocks run to 31%, which this leaves untouched.
+/// The shortest run a grade is taken over, so a 1 m curb link spanning 3 m isn't 300%.
 const MIN_GRADE_METERS: f64 = 10.0;
 
 pub struct Relief {
@@ -39,10 +20,7 @@ pub struct Relief {
     pub max_grade: f64,
 }
 
-/// The height climbed and the height dropped along one polyline walked a->b, or None where the field
-/// had fewer than two readings for it — off the DEM, or over water. Such an edge keeps the pair of
-/// zeros a flat one has, which is the right conflation for a penalty: both mean "nothing here to
-/// avoid".
+/// Height climbed and dropped along a polyline a->b, or None with under two readings.
 fn climb_of(polyline: &[Coord], field: &Field) -> Option<(f64, f64)> {
     if polyline.len() < 2 {
         return None;
@@ -54,9 +32,7 @@ fn climb_of(polyline: &[Coord], field: &Field) -> Option<(f64, f64)> {
     for point in polyline {
         let height = field.sample(point.lng, point.lat);
         if !height.is_finite() {
-            // A gap in the ground breaks the chain rather than being bridged: the height across it
-            // is unknown, and treating the far side as the near side's neighbor would invent a
-            // cliff at every shoreline.
+            // A gap breaks the chain rather than being bridged, or every shore reads as a cliff.
             previous = None;
             continue;
         }
@@ -78,8 +54,7 @@ fn climb_of(polyline: &[Coord], field: &Field) -> Option<(f64, f64)> {
     }
 }
 
-/// The ascent and descent bytes for every edge, given each edge's polyline in degrees and its length
-/// in meters. `mean_grade` and `max_grade` are over their SUM, the figure the hill penalty reads.
+/// Ascent and descent bytes for every edge; `mean_grade` and `max_grade` are over their sum.
 pub fn relief(polylines: &[Vec<Coord>], lengths: &[f32], field: &Field) -> Fallible<Relief> {
     let mut ascent = vec![0u8; polylines.len()];
     let mut descent = vec![0u8; polylines.len()];
@@ -96,8 +71,7 @@ pub fn relief(polylines: &[Vec<Coord>], lengths: &[f32], field: &Field) -> Falli
         measured += 1;
         grade_sum += grade;
         max_grade = max_grade.max(grade);
-        // Each byte is clamped on its own, so an edge that crests and drops can carry 35% of climb
-        // AND 35% of drop where the single byte the two replace pinned the pair at 35% together.
+        // Each byte clamps on its own, so a crest can carry 35% of climb and 35% of drop.
         ascent[edge] = to_byte(climbed / length);
         descent[edge] = to_byte(dropped / length);
     }
@@ -125,12 +99,10 @@ mod tests {
         Field::from_grid(0.0, 1.0, 1.0, 1.0, 4, 1, heights.to_vec())
     }
 
-    /// An edge far shorter than a cell must climb far less than a cell's height step. Nearest-cell
-    /// sampling handed it the whole step and saturated it — 6,396 San Francisco edges, the shortest
-    /// 0.9 m long — which is the terrain's slope charged as the edge's own.
+    /// An edge far shorter than a cell must climb far less than the cell's height step.
     #[test]
     fn a_short_edge_climbs_in_proportion_to_its_length() {
-        // Two cells ten meters apart in height, and an edge crossing a tenth of the gap between them.
+        // Two cells 10 m apart in height, and an edge crossing a tenth of the gap between them.
         let field = ramp([0.0, 10.0, 20.0, 30.0]);
         let short = vec![Coord { lng: 1.5, lat: 0.5 }, Coord { lng: 1.6, lat: 0.5 }];
         let baked = relief(&[short], &[100.0], &field).unwrap();
@@ -150,9 +122,7 @@ mod tests {
             .collect()
     }
 
-    /// A block that climbs 10 m and comes back down is flat between its ends and is real work, which
-    /// is the whole reason the height is summed along the polyline rather than differenced. Split in
-    /// two, it reads 10% of climb and 10% of drop over its 100 m.
+    /// A block that climbs 10 m and returns reads 10% of climb and 10% of drop over its 100 m.
     #[test]
     fn a_crest_is_not_flat() {
         let field = ramp([0.0, 10.0, 0.0, 0.0]);
@@ -163,8 +133,7 @@ mod tests {
         assert!((baked.max_grade - 0.2).abs() < 1e-6);
     }
 
-    /// Reversing the polyline swaps the two bytes and leaves their sum — what the hill penalty reads
-    /// — alone, because a route that avoids a hill has to avoid it in both directions.
+    /// Reversing the polyline swaps the bytes and leaves their sum, which the hill penalty reads.
     #[test]
     fn reversing_swaps_ascent_and_descent() {
         let field = ramp([0.0, 3.0, 6.0, 9.0]);
@@ -177,8 +146,7 @@ mod tests {
         assert_eq!(baked.ascent[1], baked.descent[0]);
     }
 
-    /// A gap in the ground breaks the chain rather than being bridged, so a shoreline does not read
-    /// as a cliff between the last cell before it and the first cell after.
+    /// A gap breaks the chain rather than being bridged, so a shoreline doesn't read as a cliff.
     #[test]
     fn a_gap_does_not_invent_a_cliff() {
         let field = ramp([0.0, f32::NAN, 0.0, 50.0]);
@@ -187,9 +155,7 @@ mod tests {
         assert_eq!(baked.descent[0], 0);
     }
 
-    /// Each byte saturates on its own at the reference grade, so a crest steeper than it in both
-    /// halves reads 35% of climb AND 35% of drop — 70% of grade in total, which the one byte these
-    /// replace could not express.
+    /// Each byte saturates on its own, so a steep crest reads 35% of climb and 35% of drop.
     #[test]
     fn each_byte_saturates_at_the_reference_grade() {
         let field = ramp([0.0, 6.0, 0.0, 0.0]);

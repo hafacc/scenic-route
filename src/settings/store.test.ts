@@ -10,9 +10,6 @@ import {
   updateSettings,
 } from "./store";
 
-// The registry is what changes under a stored order — a release adds a layer, a release removes one —
-// so these pin what happens to an order the reader arranged when it does.
-
 const registry = ["canopy", "shade", "historic", "genus"] as OverlayId[];
 
 test("an order the reader arranged is kept", () => {
@@ -37,7 +34,6 @@ test("a layer the registry has dropped goes", () => {
 });
 
 test("a new layer lands where the registry puts it, not at the end", () => {
-  // The reader never saw `historic`; the registry lists it after `shade`, so that is where it goes.
   const stored = ["genus", "canopy", "shade"] as OverlayId[];
   expect(mergeOrder(stored, registry)).toEqual([
     "genus",
@@ -70,9 +66,7 @@ test("a city shows its own subset, in the reader's order, minus what they hid", 
   ).toEqual(["genus", "canopy"]);
 });
 
-// The per-factor localStorage keys every slider used to write. They are read once, folded into the
-// document and then left alone, so what matters is that the fold happens exactly when the document
-// has nothing to say and never again.
+// The old keys are folded in exactly when the document has no weights, and never again.
 
 const legacy: Record<string, string> = {
   "scenic-route:tree-weight": "0.6",
@@ -111,11 +105,7 @@ test("a reader with neither gets the defaults, and nothing is written", () => {
   expect(migrated).toBe(false);
 });
 
-// A document written by a NEWER build is the case these two guard: the reader arranges their
-// settings on a release that has one more overlay or one more factor, then opens a tab still running
-// this one. Rejecting a whole field over the one entry this build cannot name would undo everything
-// they set, and folding the pre-document keys back over their weights — then writing that — would
-// replace what they chose with a snapshot of what they chose before any of it existed.
+// Documents from a newer build: unknown ids and factors must not discard what the reader set.
 
 test("an id this build does not know costs its own place, not the whole order", () => {
   const { settings } = settingsFrom(
@@ -137,7 +127,7 @@ test("weights a newer build wrote survive a factor this one cannot name", () => 
     legacy,
   );
   expect(settings.weights).toEqual({ tree: 0.9 });
-  expect(migrated).toBe(false); // nothing folded, so nothing is written back over them
+  expect(migrated).toBe(false); // nothing folded, so nothing is written back
 });
 
 test("the pre-document keys are folded in exactly once", () => {
@@ -152,8 +142,7 @@ test("the pre-document keys are folded in exactly once", () => {
   expect(first.settings.weights).toEqual({ tree: 0.4 });
   expect(first.settings.allowSheds).toBe(false);
 
-  // The old keys are never deleted, so the only thing that stops a second fold is the document now
-  // carrying weights — including a document whose weights are all at their defaults, `{}`.
+  // The old keys are never deleted, so even an empty `{}` weights field must stop a second fold.
   const second = settingsFrom({ weights: {}, allowSheds: true }, legacy);
   expect(second.migrated).toBe(false);
   expect(second.settings.weights).toEqual({});
@@ -173,7 +162,7 @@ test("a document saved before the crossings flag was inverted is turned round, n
   );
   expect(after.settings.allowCrossings).toBe(true);
 
-  // The new spelling wins where a document somehow carries both.
+  // The new spelling wins where a document carries both.
   const both = settingsFrom(
     {
       weights: {},
@@ -187,7 +176,6 @@ test("a document saved before the crossings flag was inverted is turned round, n
 
 test("a gate hidden under its old name stays hidden after the rename", () => {
   const { settings } = settingsFrom(
-    // Written under the old spelling, which the current Settings has no name for.
     {
       weights: {},
       hiddenGates: ["fewerCrossings"],
@@ -196,7 +184,6 @@ test("a gate hidden under its old name stays hidden after the rename", () => {
   );
   expect(settings.hiddenGates).toEqual(["allowCrossings"]);
 
-  // Both spellings in one document is one hidden gate, not two.
   const both = settingsFrom(
     {
       weights: {},
@@ -262,8 +249,6 @@ test("a mode's layer list is stamped on its own, not with the other modes'", () 
   expect(updatedAt.modeLayers).toBeUndefined();
 });
 
-// The row sets one switch at a time. Stamping all three together made a phone that barred ferries
-// and a laptop that asked for shade last-writer-wins over the whole set.
 test("a switch is stamped on its own, not with the other two", () => {
   const before = settings().toggles;
   updateSettings({ toggles: { ...before, ferries: !before.ferries } }, 1234);
@@ -273,8 +258,6 @@ test("a switch is stamped on its own, not with the other two", () => {
   expect(updatedAt.toggles).toBeUndefined();
 });
 
-// A factor added after the document format was settled has no legacy key and needs none: the
-// document is a map keyed by factor, so it carries the new weight the same way it carries the rest.
 test("a weight with no legacy key of its own still survives the document", () => {
   const { settings, migrated } = settingsFrom(
     { weights: { bridge: 0.8 } },

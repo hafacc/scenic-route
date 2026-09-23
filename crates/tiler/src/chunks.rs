@@ -1,6 +1,4 @@
-//! The chunks pass: renders data/{streets,paths}/<id>.bin into the vector chunks the client draws
-//! over the basemap — one z12 tile at public/streets/{x}/{y}.bin, carrying every street and path
-//! that touches it with the per-sidewalk cover bytes densities baked in. See scripts/README.md.
+//! The chunks pass: streets and paths into z12 vector chunks at public/streets/{x}/{y}.bin.
 
 use std::collections::HashMap;
 use std::fs;
@@ -16,7 +14,6 @@ use crate::raster::{
 };
 use crate::sidewalks;
 
-// layouts: scripts/README.md
 const CHUNK_HEADER_BYTES: usize = 40;
 const CHUNK_COORD_SCALE: f64 = 1e-6; // degrees per quantized unit, ~0.1 m
 const CHUNK_ZOOM: u32 = 12;
@@ -28,16 +25,12 @@ pub struct Args {
     pub chunks: PathBuf,
 }
 
-/// The written chunk directory. The commercial pass keys its signals on the segment order INSIDE
-/// these files, so it takes one of these rather than a path: a directory can be named before the
-/// pass that fills it, and this cannot.
+/// The written chunk directory; the commercial pass keys on the segment order inside it.
 pub struct Chunks {
     pub dir: PathBuf,
 }
 
-/// The OSM ways each city's graph stranded when it dropped its islands, sorted as the graph pass
-/// produced them so `contains` is a binary search. Empty on the pass that runs before any graph
-/// exists, and then every segment's bit is clear.
+/// Each city's stranded OSM ways, sorted for binary search; empty before any graph exists.
 #[derive(Default)]
 pub struct Stranded {
     by_city: HashMap<String, Vec<u32>>,
@@ -54,22 +47,14 @@ impl Stranded {
     }
 }
 
-/// A chunk member: which network it came from and its segment index there. Streets and paths
-/// share a z12 chunk, so they are bucketed and encoded together; a path is a single centerline,
-/// so it lands with sidewalk offset 0 and the client draws it as the one line it is.
+/// A chunk member: its network and segment index; a path is one centerline at sidewalk offset 0.
 enum Member {
     Street(u32),
     Path(u32),
 }
 
-// The client has no access to the records, so the sidewalk offset the two lines are drawn either
-// side of travels with the geometry. A path member points into `paths` and always carries offset
-// 0 — it is one centerline, not a curb-to-curb road.
-//
-// The stranded bits ride in a trailing bitmap rather than in each segment's header so that the two
-// passes over a chunk — before the graph and after it — differ in that region alone, leaving the
-// per-segment records byte-identical and the commercial signals keyed on their index still aligned.
-// layout: scripts/README.md
+// The client never sees the records, so the sidewalk offset travels with the geometry.
+// Stranded bits trail in a bitmap so pre- and post-graph chunks differ only there.
 fn encode_chunk(
     streets: &Streets,
     paths: Option<&Streets>,
@@ -138,9 +123,7 @@ fn encode_chunk(
     bytes
 }
 
-/// Buckets one network's segments into every z12 tile their bounding box touches, tagging each
-/// with `tag` so a chunk can carry both streets and paths. Bounding-box membership overshoots
-/// slightly but cannot leave a gap at a tile seam.
+/// Buckets segments into every z12 tile their bounding box touches: overshoots, but no seam gap.
 fn bucket_network(
     network: &Streets,
     tag: fn(u32) -> Member,
@@ -170,8 +153,7 @@ fn bucket_network(
     }
 }
 
-/// Streets, then the OSM paths when present, into per-z12-tile chunks. Both networks land in the
-/// same chunk file so a tile the client fetches carries everything drawn over it.
+/// Streets, then OSM paths when present, into per-z12-tile chunks sharing one file.
 fn write_chunks(
     streets: &Streets,
     paths: Option<&Streets>,
@@ -216,8 +198,7 @@ pub fn run(args: &Args, stranded: &Stranded) -> Fallible<Chunks> {
     let mut chunk_bytes = 0;
     for city in &manifest.cities {
         let streets = binfmt::read_streets(&args.data.join("streets").join(&city.streets.file))?;
-        // Each city's own paths, out of its own manifest entry. One paths file for the whole run
-        // meant only whichever city it named ever got its OSM ways drawn into its chunks.
+        // Each city's own paths, from its own manifest entry.
         let paths = match &city.paths {
             Some(layer) => Some(binfmt::read_paths(
                 &args.data.join("paths").join(&layer.file),

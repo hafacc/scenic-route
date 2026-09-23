@@ -46,8 +46,6 @@ export default function AboutDialog({ onClose }: AboutDialogProps) {
       labeledBy="about-title"
       width="md:max-w-md"
     >
-      {/* Pinned: the title and the way out stay put while the sources scroll under them, which is
-          the one scrolling region this sheet is allowed. */}
       <div className="flex shrink-0 items-start gap-3">
         <span className="scenic-logo-pin grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-lg">
           <FiMapPin className="h-5 w-5" />
@@ -107,8 +105,7 @@ export default function AboutDialog({ onClose }: AboutDialogProps) {
         </div>
 
         <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-200/60 pt-4 dark:border-slate-700/60">
-          {/* Relative, like every other in-app href: the deploy sits under a basePath the app is
-              never told about. */}
+          {/* Relative: the deploy sits under a basePath the app is never told about. */}
           <a
             href={ABOUT_PAGE.href}
             className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"

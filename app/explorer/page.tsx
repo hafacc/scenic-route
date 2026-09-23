@@ -12,8 +12,7 @@ export const metadata: Metadata = pageMetadata({
 export default function ExplorerPage() {
   return (
     <>
-      {/* As on the root: the deck is client-rendered, so the served document would otherwise carry
-          no heading at all. */}
+      {/* The deck is client-rendered, so without this the served document has no heading. */}
       <h1 className="sr-only">
         Scenic Route Explorer: map layers and route sliders
       </h1>

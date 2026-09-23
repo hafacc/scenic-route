@@ -1,22 +1,13 @@
-// The track a ride is drawn on. The routing graph carries no geometry for a ride — a transit edge is
-// a straight chord from one platform to the next — so a route that gets on a train would otherwise be
-// drawn cutting across the blocks the train runs under. The shapes the agency publishes are already
-// in the app, as the subway overlay's artifact (./format), so a ride borrows them: the two stations
-// are projected onto the line's own drawn variants and the stretch between them is sliced out.
-
+// Transit edges are straight chords, so rides borrow the agency shapes from the subway artifact.
 import type { Polyline } from "../tiles/polylines";
 import { decodeSubway, type Subway, type SubwayRoute } from "./format";
 
 const METERS_PER_DEGREE_LAT = 111_320;
 
-// How far a station may sit from the shape its own line is drawn as before the match is refused.
-// The agency's shapes run down the middle of the tracks and a station point stands over them, so the
-// gap is tens of meters where the two describe the same place; a few hundred means the projection
-// landed on the wrong stretch, and a chord is a better drawing than a wrong one.
+// Real offsets are tens of meters; beyond this the projection hit the wrong stretch.
 const MAX_STATION_OFFSET_METERS = 300;
 
-// A station whose projection lands this close to it is already on the track: about a centimeter, so
-// the only thing it absorbs is the arithmetic of projecting a point onto the segment it lies on.
+// About a centimeter: only projection round-off.
 const SAME_POINT_DEGREES = 1e-7;
 
 export interface TrackPoint {
@@ -89,9 +80,7 @@ function project(line: Polyline, lat: number, lng: number): Projection | null {
   return best;
 }
 
-// The stretch of `line` between two projections, in board -> alight order, hung off the two station
-// points themselves: a projection sits on the track, the platform stands beside it, and a slice that
-// began at the projection left the ride floating clear of the walk that reaches it.
+// Hung off the station points, not the projections, or the ride floats clear of the walk to it.
 function sliceBetween(
   line: Polyline,
   board: Projection,
@@ -103,7 +92,7 @@ function sliceBetween(
   const first = forward ? board : alight;
   const last = forward ? alight : board;
   const track: [number, number][] = [];
-  // A projection that lands on a vertex is that vertex, so the interior run would repeat it.
+  // A projection on a vertex is that vertex, so the interior run would repeat it.
   const push = (lng: number, lat: number): void => {
     const end = track[track.length - 1];
     if (end === undefined || end[0] !== lng || end[1] !== lat) {
@@ -135,12 +124,7 @@ function sliceBetween(
   return { lngs: Float64Array.from(lngs), lats: Float64Array.from(lats) };
 }
 
-// The stretch of track a ride covers: the variant of the line both stations sit closest to, cut
-// between them. Null where no variant passes near enough to both — a line the artifact does not
-// draw, or a station the shapes do not reach — and the caller draws the chord instead.
-//
-// The variant matters: a route's shapes include its branches and its express pattern, and a trip
-// down one branch projected onto another would be drawn running down the wrong avenue.
+// The variant both stations sit nearest, since branches differ; null means draw the chord.
 export function sliceTrack(
   lines: readonly Polyline[],
   board: TrackPoint,
@@ -175,8 +159,7 @@ export function sliceTrack(
   return sliceBetween(bestLine, bestBoard, bestAlight, board, alight);
 }
 
-// The shapes drawn for a line the graph names. The display artifact carries no route ids, so the
-// join is on the name a rider says plus the published color — the pair the two files agree on.
+// The artifact has no route ids, so the join is on the rider-facing name plus the published color.
 export function trackShapes(
   subway: Subway,
   route: { shortName: string; color: string },
@@ -200,9 +183,7 @@ export function trackShapes(
 
 const loading = new Map<string, Promise<Subway>>();
 
-// The overlay's own artifact, fetched the first time a plan puts somebody on a train and kept for
-// the life of the page. Same file the subway layer draws, so a reader who has had that overlay on
-// has it in the browser cache already.
+// Kept for the page's life; the subway overlay fetches the same file.
 export function loadSubwayTracks(cityId: string): Promise<Subway> {
   const cached = loading.get(cityId);
   if (cached) {

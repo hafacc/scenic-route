@@ -33,11 +33,10 @@ interface ToolbarProps {
   pinCount: number;
   city: City;
   refreshingClaims: boolean;
-  // The deck's own buttons, left of the clock; Modes has none.
   controls: ReactNode;
-  // Modes routes at now and says so by having no clock; Explorer scrubs one.
+  // Modes routes at now, so it has no clock.
   clock: boolean;
-  // The other deck, as a menu row. Each page links to the other, and neither knows the other's URL.
+  // The other deck, as a menu row; neither page knows the other's URL.
   otherPage: AppPage;
   onSignIn: () => void;
   onSignOut: () => void | Promise<void>;
@@ -45,11 +44,11 @@ interface ToolbarProps {
   onAbout: () => void;
   onSettings: (section?: string) => void;
   onLogHere: () => void;
-  logHereDisabled: boolean; // no live location yet, so there's nothing to log
-  logHereBusy: boolean; // a high-accuracy fix + geocode is in flight
-  logHereHint: string | null; // why the location is unavailable, when it is
+  logHereDisabled: boolean;
+  logHereBusy: boolean;
+  logHereHint: string | null;
   onSelectCity: (city: City) => void;
-  composeShareUrl: () => string; // the route plus the current camera and overlays, as a link
+  composeShareUrl: () => string;
 }
 
 const MENU_ITEM =
@@ -85,8 +84,7 @@ export default function Toolbar({
   composeShareUrl,
 }: ToolbarProps) {
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
-  // The hash the other page is opened with, read when the menu opens: it carries the places, the
-  // mode and the camera, and it moves under a render as the reader routes.
+  // Read when the menu opens, since the hash changes under a render as the reader routes.
   const [menuHash, setMenuHash] = useState<string>("");
   const [cityDialogOpen, setCityDialogOpen] = useState<boolean>(false);
   const [installHelpOpen, setInstallHelpOpen] = useState<boolean>(false);
@@ -123,12 +121,7 @@ export default function Toolbar({
   const isAdmin = auth.kind === "signedIn" && auth.info.admin;
 
   return (
-    // Tighter on a phone, because this row is no longer the only thing on it: the follow toggle and
-    // the search button take the left end, and at 375px eight 40px circles do not fit a 351px strip
-    // at an 8px gap. 4px puts the toolbar's left edge at 103, clear of the search button's 100.
-    // Above every floating layer (all of them z-1000: the desktop mode pill, the layer list, the
-    // banner, the card and the buttons hung off it), because this row's menu and the dialogs it opens
-    // drop over the whole page — and a menu half behind a card is a menu you cannot read.
+    // Gap 4px on a phone, where 8px can't fit eight circles; z-1200 clears every z-1000 layer.
     <div className="absolute top-3 right-3 z-[1200] flex items-center gap-1 sm:gap-2">
       {cityDialogOpen ? (
         <CityDialog
@@ -249,9 +242,6 @@ export default function Toolbar({
                 Check again
               </button>
             ) : null}
-            {/* One row that opens the picker, rather than one row per region: the menu holds the
-                app's own actions, and a list that grows with every region added would crowd them
-                out and eventually scroll. */}
             {CITIES.length > 1 ? (
               <button
                 type="button"
@@ -279,9 +269,7 @@ export default function Toolbar({
               <FiCompass />
               {otherPage.label}
             </a>
-            {/* Chromium hands the page its own install flow and this runs it; every other browser
-                keeps it in a menu of its own, and the dialog says where. Gone once the app is
-                already running from the home screen, where there is nothing left to add. */}
+            {/* Other browsers keep install in a menu, so the dialog says where. */}
             {installable ? (
               <button
                 type="button"

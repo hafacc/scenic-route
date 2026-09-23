@@ -1,16 +1,13 @@
 import type { ReverseHit } from "./reverse";
 import type { DocKind } from "./search-format";
 
-// The messages between the search box and the worker that owns the city's name index. Everything the
-// worker reads arrives here: it has no DOM, no map and no access to the app's stores, so the two
-// files it holds are named as absolute URLs the page resolved against its own base.
+// The worker has no DOM, so file URLs arrive absolute, resolved against the page's base.
 
 export interface InitMessage {
   type: "init";
   city: string;
   searchUrl: string;
-  // The address file, which is where a hit's label comes from: the index carries a street ORDINAL
-  // and a place index, and only ADDR knows what those are called.
+  // Labels need ADDR: the index holds only street and place ordinals.
   addressUrl: string;
 }
 
@@ -18,14 +15,10 @@ export interface QueryMessage {
   type: "query";
   id: number;
   text: string;
-  // Where results are measured from: what the map is centered on.
   center: { lat: number; lng: number };
   limit: number;
 }
 
-// What a point on the map is called: a dropped pin, a dragged route endpoint, "Log here". The worker
-// answers it because it is the side that holds the two files the answer comes out of — the label is
-// all this is for, since a route is computed from the coordinate either way.
 export interface ReverseMessage {
   type: "reverse";
   id: number;
@@ -36,8 +29,6 @@ export type ToSearchWorker = InitMessage | QueryMessage | ReverseMessage;
 
 export type { ReverseHit };
 
-// One answer, ready to be shown: the name and the line under it are both built in here, so nothing
-// on the main thread has to hold the address file to label a result with its street and borough.
 export interface IndexHit {
   kind: DocKind;
   name: string;
@@ -45,10 +36,9 @@ export interface IndexHit {
   lat: number;
   lng: number;
   score: number;
-  // The Overture slug, or the routes a station serves — which is what a station result reads with.
+  // The Overture slug, or the routes a station serves.
   category: string | null;
-  // Whether the house number asked for is the one found. Null for every answer that was not asked a
-  // number: this is the flag that says a row is a door rather than a name.
+  // Whether the house number asked for is the one found; null when no number was asked.
   exact: boolean | null;
 }
 

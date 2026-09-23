@@ -1,7 +1,4 @@
-// The client's view of the routing graph baked by the graph pass. Layout: scripts/README.md
-// (magic GRPH, v12 — the sidewalk graph with inert ferry and transit edges, laid out by column).
-// Every column is viewed in place over the fetched buffer through the header's section directory,
-// so decoding copies nothing and both threads hold one set of bytes each.
+// Layout in scripts/README.md (GRPH v12); columns are viewed in place, so decoding copies nothing.
 
 import { cityById } from "../cities";
 import type { FerryTimetable } from "./ferry-schedule";
@@ -10,8 +7,7 @@ import type { ShedField } from "./sheds";
 import type { TransitTimetable } from "./transit-schedule";
 import { WALK_METERS_PER_SECOND, type WalkSeconds } from "./walk-speed";
 
-// A no-geometry edge (a crossing, a link, or a straight ferry) stores this sentinel in its geometry
-// offset; its polyline is the straight line between its two node coordinates.
+// A no-geometry edge (crossing, link, straight ferry) is the straight line between its nodes.
 export const NO_GEOMETRY = 0xffffffff;
 const NAME_NONE = 0xffff;
 // Edge kind lives in bits 0-2 of the kind+side byte; the side in bits 3-5.
@@ -19,39 +15,26 @@ const KIND_MASK = 0x7;
 const SIDE_SHIFT = 3;
 const SIDE_MASK = 0x7;
 const KIND_CROSSING = 1;
-// The three transit kinds: the walk in and out of a station, the step onto a pattern's platform
-// (whose wait the timetable answers at route time, so it bakes no duration), and one stop to the
-// next. All three are DIRECTED — see `transitForward`.
+// All three transit kinds are directed; see `transitForward`.
 const KIND_ACCESS = 5;
 const KIND_BOARD = 6;
 const KIND_RIDE = 7;
-// flags byte bit 2 marks a sidewalk that lies to the right of its stored geometry direction.
 const GEOMETRY_RIGHT_FLAG = 0x4;
-// flags byte bit 4 marks an edge running through a tunnel. No format bump came with it: the byte was
-// already there, so a graph written before the bit reads it as 0 and behaves as it always did.
+// No format bump: a graph written before this bit reads it as 0.
 export const TUNNEL_FLAG = 0x10;
-// The top three flag bits belong to an ACCESS edge alone, where none of the walking bits apply: the
-// door's own direction and kind. An older graph reads them as 0, which is a two-way stair.
+// The top three flag bits are an access edge's door bits; an older graph reads 0, a two-way stair.
 export const EXIT_ONLY_FLAG = 0x20;
 export const ENTRY_ONLY_FLAG = 0x40;
 export const ELEVATOR_FLAG = 0x80;
-// The one flag bit a RIDE edge carries: this ride is the free step from a stop's arrival node onto
-// its boarding node, which is a rider staying on the train. It borrows the entry-only door's bit,
-// since a ride carries no door bit and no walking one; the kind is what tells the two apart.
+// A ride's only flag, borrowing the entry-only door bit; the edge kind tells the two apart.
 export const STAY_ABOARD_FLAG = 0x40;
 
-// An edge with no durable identity — a crossing, a link or a ferry, none of which comes from a
-// source segment. Its source-id slot carries this sentinel.
 export const NO_SOURCE_ID = 0xffffffff;
-// The durable key packs (source id, side, ordinal) into one number: the ordinal is a u8 and the side
-// fits three bits, so a source id up to a u32 still lands well inside an exact double.
+// The ordinal is a u8 and the side fits three bits, so a u32 source id stays inside an exact double.
 const DURABLE_SIDE_STRIDE = 256;
 const DURABLE_SOURCE_STRIDE = 2048;
 
-// The rebuild-surviving name of one edge, as `sheds.ts` and the SHED artifact spell it. Positional
-// edge ids all shift when the graph is rebuilt; this does not, because the source id is CSCL's own
-// `physicalid` (or an OSM way id for a path), the side is the sidewalk's N/E/S/W label, and the
-// ordinal only separates the several edges one source segment can become.
+// Survives a rebuild: CSCL's physicalid (or an OSM way id) plus the sidewalk's N/E/S/W label.
 export function durableKey(
   sourceId: number,
   side: number,
@@ -62,7 +45,7 @@ export function durableKey(
   );
 }
 
-// One edge's durable key, or -1 when it has no durable identity.
+// -1 when the edge has no durable identity.
 export function edgeDurableKey(graph: RoutingGraph, edge: number): number {
   const sourceId = graph.edgeSourceId[edge];
   if (sourceId === NO_SOURCE_ID) {
@@ -76,11 +59,7 @@ export function edgeDurableKey(graph: RoutingGraph, edge: number): number {
   }
 }
 
-// The nodes standing in a roadway rather than on pavement: those whose every walking edge is a
-// crossing. A marked crossing of a divided street is drawn as several ways chained through the
-// islands between them, so these are the joints inside one crossing. Charging a wait per crossing
-// EDGE would bill a wide avenue two or three times for a single wait. Transit edges do not count:
-// a station whose access edge happens to land on a traffic island does not pave it.
+// Joints inside one divided-street crossing, so a wide avenue isn't billed a wait per carriageway.
 export function markMidRoadwayNodes(
   nodeCount: number,
   csr: Uint32Array,
@@ -117,9 +96,7 @@ export type EdgeKind =
   | "ride";
 export type SideLabel = "north" | "east" | "south" | "west" | null;
 
-// Where a station door stands: the street the pavement it was cut into carries, and which side of
-// that street that pavement lies on. A door on a corner is on the street its own curb belongs to,
-// which the step a route happens to arrive along need not be.
+// A corner door is on the street its own curb belongs to, not the one a route arrives along.
 export interface DoorStreet {
   street: string;
   side: SideLabel;
@@ -148,13 +125,11 @@ const SIDE_LABELS: readonly SideLabel[] = [
   "west",
 ];
 
-// The two figures routing/<city>.version.json names a graph by, both FNV-1a 64 in hex.
+// Both FNV-1a 64 in hex.
 export interface GraphIdentity {
-  // What this graph IS: the hash of the GRPH file's own bytes. It changes on any rebuild at all,
-  // including one that only moved an f32 length, so nothing an artifact is gated on rides on it.
+  // Changes on any rebuild at all, so nothing an artifact is gated on rides on it.
   hash: string;
-  // What a placed artifact resolves THROUGH: the hash of the durable key space — every
-  // `(source id, side, ordinal)` the graph carries, ascending. `sheds.ts` gates on this one.
+  // Hash of the ascending durable key space; `sheds.ts` gates on this one.
   keyHash: string;
 }
 
@@ -179,23 +154,17 @@ export interface RoutingGraph extends GraphIdentity {
   edgeKindSide: Uint8Array; // bits 0-2 kind, bits 3-5 side
   edgeSourceId: Uint32Array; // the CSCL physicalid or OSM way id; NO_SOURCE_ID for a crossing, link or ferry
   edgeOrdinal: Uint8Array; // which edge of the several one source segment becomes; both feed `edgeDurableKey`
-  // 1 where every edge on the node is a crossing, i.e. a traffic island: a walker standing there is
-  // mid-roadway, part way through one crossing rather than at the start of another. Baked by the
-  // tiler, whose rule is `markMidRoadwayNodes` below.
   nodeMidRoadway: Uint8Array;
   maxCover: number; // the greatest per-edge cover in the graph, 0..1; sets the cost clip floor
 
-  edgeLandmark: Uint8Array; // 0..254, this edge's landmark-amenity discount attribute; 0 for a ferry
+  edgeLandmark: Uint8Array;
   edgeArt: Uint8Array; // 0..254, this edge's public-art discount attribute; 0 for a ferry
   edgeHighway: Uint8Array; // 0..254, this edge's highway/rail nuisance penalty attribute; 0 for a ferry
   edgeCommercial: Uint8Array; // 0..254, this edge's nice-commercial-frontage discount attribute; 0 for a ferry
   edgeIndustrial: Uint8Array; // 0..254, this edge's industrial-frontage penalty attribute; 0 for a ferry
-  // 0..254, the share of this edge inside a designated historic district — a discount attribute, so
-  // its max below is a term of the A* lower bound and not only a slider gate. 0 for a ferry.
+  // A discount attribute, so its max is an A* lower-bound term and not only a slider gate.
   edgeHistoric: Uint8Array;
-  // 0..254, the share of this edge that crosses open water on a bridge deck — a discount attribute,
-  // so its max below is a term of the A* lower bound as well as the slider's gate. A tunnel and a
-  // viaduct over a rail yard read 0, and so does everything off a deck. 0 for a ferry.
+  // A tunnel and a viaduct over a rail yard read 0.
   edgeBridge: Uint8Array;
   maxLandmark: number; // the greatest per-edge landmark amenity, 0..1; sets that discount's clip floor
   maxArt: number; // the greatest per-edge art amenity, 0..1; sets that discount's clip floor
@@ -204,101 +173,61 @@ export interface RoutingGraph extends GraphIdentity {
   maxHistoric: number; // the greatest per-edge historic share, 0..1; sets that discount's clip floor
   maxBridge: number; // the greatest per-edge over-water share, 0..1; sets that discount's clip floor
 
-  // The share of the edge that lies DIRECTLY under a crown, unblurred — what edgeCover, the smoothed
-  // field the overlay is colored from, cannot answer.
+  // Unblurred, unlike edgeCover, which is smoothed for the overlay.
   edgeDirectCanopy: Uint8Array; // 0..254; 0 for a ferry
-  // 0..254 each: the height this edge CLIMBS and the height it DROPS walking it a -> b, over its
-  // length, as a fraction of 35%. Reversing the edge swaps them; their sum is the absolute grade the
-  // hill penalty steers by, and the two apart are what makes a descent quicker than the climb back.
-  // 0 for a ferry and for a city with no DEM.
+  // 0..254 as a fraction of 35%; reversing the edge swaps them. 0 for a ferry or a city with no DEM.
   edgeAscent: Uint8Array;
   edgeDescent: Uint8Array;
-  // Every edge's walking seconds both ways round, taken from the two bytes above: the relax loop
-  // reads them rather than running Tobler's exponential four times an edge. Baked by the thread that
-  // searches, so it is null on the page and on a hand-built fixture, which fall back per edge
-  // (./walk-speed).
+  // Null on the page and in hand-built fixtures, which compute per edge instead.
   walkSeconds: WalkSeconds | null;
-  // The largest total grade present, as a fraction of 35% — up to 2, since the two bytes clamp
-  // separately. NOT a heuristic bound — hill is a penalty, whose minimum factor is 1, so it never
-  // loosens the A* lower bound. This is read to tell a city with no elevation source (every edge 0)
-  // from one that has it, which is what grays the slider out.
+  // Up to 2 since the bytes clamp separately; 0 means the city has no elevation source.
   maxRelief: number;
   maxDirectCanopy: number; // the greatest per-edge direct canopy, 0..1; that factor's clip-floor input
 
-  // The route-time signed shade field, filled from the SHDE artifact by computeEdgeShade: the per-edge
-  // sun/shade attribute as a function of elapsed walking time, so a meter is costed against the sun at
-  // the moment it is reached. Null when no artifact is loaded or the sun is below the horizon for the
-  // whole walk (no shade to bias); its maxAbs (0..1) is the shade factor's clip-floor input.
+  // Null when no artifact is loaded or the sun is down for the whole walk.
   shade: ShadeField | null;
 
-  // How long this region's walker will wait on a pier, and how long on a platform, from
-  // src/cities.ts. Not baked into the artifact: both are judgments about a timetable rather than
-  // facts about the geometry, and changing one should not mean rebuilding a 40 MB graph.
+  // From src/cities.ts, not baked, so tuning one doesn't mean rebuilding a 40 MB graph.
   maxFerryWaitSeconds?: number;
   maxTransitWaitSeconds?: number;
 
-  // The picked day's sidewalk sheds, filled from the SHED artifact by computeEdgeSheds: per edge, how
-  // much of it stands under a deck. A deck is opaque and dry, so it feeds the shade composite, the
-  // shelter factor and the avoid penalty. Null until that resolves, and the cost model reads no
-  // scaffolding at all while it is.
+  // Null until the SHED artifact resolves, and the cost model reads no scaffolding while it is.
   sheds: ShedField | null;
 
-  // The departure date's ferry timetable, filled from the FSCH artifact by computeFerrySchedule: per
-  // ferry edge, the sailings out of each of its two terminals. Null until that resolves and on any day
-  // no record covers, and every ferry then costs the baked `edgeDurationSeconds` below instead.
+  // Null until FSCH resolves or on a day no record covers; ferries then cost `edgeDurationSeconds`.
   ferries: FerryTimetable | null;
 
-  // A ferry edge's crossing-plus-average-wait seconds, the whole timetable flattened to one number,
-  // and the walk or ride seconds of a transit edge; 0 for every walking kind. What a ferry costs
-  // when `ferries` is null.
+  // A ferry's crossing-plus-average-wait, or a transit edge's seconds; 0 for walking kinds.
   edgeDurationSeconds: Uint16Array;
   ferryEdges: Uint32Array; // ids of the ferry edges, for the A* ferry-credit heuristic
-  // The transit topology baked into the graph: the ids of every access, board and ride edge, and
-  // the board subset on its own, which is what the A* transit credit and the mode gating read.
   transitEdges: Uint32Array;
   boardEdges: Uint32Array;
-  // Every route the city's transit topology carries, in the order the side table lists them, which
-  // is the order `routeOf` indexes.
+  // In side-table order, which `routeOf` indexes.
   transitRoutes: TransitRoute[];
   minFerrySecPerMeter: number; // min over ferry edges of duration/length, Infinity when there are none
-  // The same figure for the two transit kinds that carry their seconds in the graph, and the floor
-  // the A* heuristic keeps under the transit credit. Infinity when the city has no rail.
+  // Infinity when the city has no rail.
   minRideSecPerMeter: number;
   minAccessSecPerMeter: number;
   // bit0 structure, bit1 steps, bit2 geometry-right (sidewalks), bit3 OSM-sourced, bit4 tunnel
   edgeFlags: Uint8Array;
-  // Whether any edge carries the tunnel bit, which is what lets `maxShelter` raise its bound to meet
-  // a tunnel's shelter of 1 without loosening the heuristic for a city with nothing underground.
+  // Lets `maxShelter` meet a tunnel's shelter without loosening the heuristic where there are none.
   hasTunnels: boolean;
   names: string[];
   geometry: Uint8Array;
-  // Per ferry edge, its two terminal stop names at the node-a and node-b ends (aligned to
-  // edgeNodeA/edgeNodeB). The route name is the edge's own name (`edgeName`).
+  // Aligned to edgeNodeA/edgeNodeB; the route name is the edge's own name.
   ferryEndpointNames: Map<number, { a: string; b: string }>;
-  // Per board edge, the lane (route, direction, stop pattern) the daily timetable is keyed by and
-  // which of that lane's stops this platform is, and per board and ride edge, the route it runs.
-  // `laneOf`, `stopIndexOf` and `routeOf` read these.
   transitLaneOf: Map<number, number>;
   transitStopOf: Map<number, number>;
   transitRouteOf: Map<number, number>;
-  // Per street door, the street it opens onto and which side of that street it stands on, as the
-  // tiler read them off the pavement it cut the door into. `doorStreet` reads it.
   transitDoorStreet: Map<number, DoorStreet>;
-  // 1 for a node of a pattern's own platform — the one its board edge lands on and the one its ride
-  // lands on — rather than a place anyone walks. It is what tells an alight edge from the walk out of
-  // a station: both are access edges, and only one of them may be walked backwards. Derived from the
-  // board and ride edges, not stored.
+  // Tells an alight edge from a station's way out (both access edges); derived, not stored.
   nodePlatform: Uint8Array;
 
-  // The departure date's rail timetable, filled from the TSCH artifact by computeTransitSchedule:
-  // per lane, when the next train leaves each of its stops. Null until that resolves and on any day
-  // no record covers, and every board edge then costs Infinity — no schedule, no train.
+  // Null until TSCH resolves or on a day no record covers, and every board edge then costs Infinity.
   transit: TransitTimetable | null;
 }
 
-// One transit route as the graph carries it: what a rider calls it, the corridor it runs, its feed
-// id (the same id the display artifact uses, so the two join on it) and the published livery as CSS
-// colors.
+// The feed id matches the display artifact's, so the two join on it.
 export interface TransitRoute {
   shortName: string;
   longName: string;
@@ -308,18 +237,14 @@ export interface TransitRoute {
 }
 
 const MAGIC = "GRPH";
-// Exported so a fixture cannot drift from it: a test writing its own header must write this.
+// Exported so a fixture writing its own header can't drift from it.
 export const FORMAT_VERSION = 12;
-// 64 fixed bytes then a 48-entry (u32 offset, u32 byteLength, u32 column tag) section directory, of
-// which v12 fills 35. Checked at decode, which is what binds a fixture's own copy of the figure to
-// this one.
+// 64 fixed bytes then a 48-entry (offset, byteLength, tag) directory, of which v12 fills 35.
 const HEADER_BYTES = 640;
 const DIRECTORY_AT = 64;
 const DIRECTORY_ENTRY_BYTES = 12;
 
-// The column a directory entry holds, as FNV-1a 32 over the name this file calls it by. A section is
-// found by its POSITION in the directory, so two same-sized columns written in the other order would
-// each be read as the other and misprice every route silently; the tag is what makes that a throw.
+// Sections are found by position, so the tag turns two swapped same-size columns into a throw.
 function columnTag(name: string): number {
   let hash = 0x811c9dc5;
   for (let index = 0; index < name.length; index += 1) {
@@ -330,27 +255,18 @@ function columnTag(name: string): number {
 }
 const HAS_TUNNELS_FLAG = 0x1; // header byte 58
 
-// What `column` below needs of a typed-array constructor: build one empty, or view one in place.
 interface ColumnKind<Column> {
   new (length: number): Column;
   new (buffer: ArrayBuffer, byteOffset: number, length: number): Column;
   readonly BYTES_PER_ELEMENT: number;
 }
 
-// relative, so both pick up the deploy basePath
-// Written by the same pass as the graph itself, and named after it: one directory holds
-// every city's, so a shared name would describe whichever built last.
+// Relative, to pick up the deploy basePath; named per city since one directory holds every city's.
 const versionUrl = (cityId: string): string => `routing/${cityId}.version.json`;
-// Above the edge count of one long route, which is the run this cache has to hold: a search reads an
-// edge's geometry and the stitching reads it again, so a limit under a route's length threw the
-// first half away before the second half asked for it. New York's longest bench trip is 13 km of
-// pavement at some 30 m an edge.
+// Must hold one long route's edges, since the search and the stitching both read its geometry.
 const PATH_CACHE_LIMIT = 4096;
 
-// `identity` is what these bytes hash to and what their key space hashes to, neither of which the
-// bytes themselves can carry — a file cannot hold its own FNV, and walking 600k keys to recover the
-// second is work the graph pass already did. The deploy writes both beside the graph and the pipeline
-// recomputes them; either way the caller is the one that knows.
+// A file can't hold its own FNV, so the caller supplies both hashes.
 export function decodeGraph(
   buffer: ArrayBuffer,
   identity: GraphIdentity,
@@ -362,8 +278,6 @@ export function decodeGraph(
   if (magic !== MAGIC || version !== FORMAT_VERSION) {
     throw new Error(`not a v${FORMAT_VERSION} routing graph`);
   }
-  // The one thing the directory cannot say about itself: a writer that put it anywhere else says so
-  // here, rather than handing back columns read off the wrong offsets.
   if (view.getUint16(6, true) !== HEADER_BYTES) {
     throw new Error(
       `a v${FORMAT_VERSION} routing graph's header is ${HEADER_BYTES} bytes`,
@@ -377,9 +291,7 @@ export function decodeGraph(
   const scale = view.getFloat64(32, true);
   const sectionCount = view.getUint32(44, true);
 
-  // Sections are taken in the order the directory lists them, which is the order the writer appends
-  // them in — one cursor rather than 35 index constants that could drift from it. Each entry names
-  // the column it holds, so a writer that wrote them in another order is caught rather than read.
+  // One cursor in directory order; each entry's tag catches a writer that ordered them differently.
   let nextSection = 0;
   const section = (name: string): { offset: number; byteLength: number } => {
     const index = nextSection;
@@ -396,8 +308,7 @@ export function decodeGraph(
       return { offset, byteLength: view.getUint32(at + 4, true) };
     }
   };
-  // One column, viewed in place. A section the file does not carry — a column baked after this
-  // graph was written — reads as the zeros that graph behaved as if it held.
+  // A section the file doesn't carry reads as zeros, which is how the older graph behaved.
   const column = <Column>(
     kind: ColumnKind<Column>,
     count: number,
@@ -412,7 +323,6 @@ export function decodeGraph(
       return new kind(buffer, offset, count);
     }
   };
-  // One of the three edge-id lists, whose length only the directory records.
   const idList = (name: string): Uint32Array => {
     const { offset, byteLength } = section(name);
     if (offset === 0) {
@@ -464,8 +374,7 @@ export function decodeGraph(
   const ferryTable = section("ferryEndpoints");
   const transitTable = section("transitTables");
 
-  // The maxima and the tunnel flag come baked: reading them off the columns is a pass over every
-  // edge, on both threads, for eight bytes the writer already knew.
+  // Baked, since reading them off the columns would be a pass over every edge on both threads.
   const maxCover = bytes[48] / 255;
   const maxLandmark = bytes[49] / 255;
   const maxArt = bytes[50] / 255;
@@ -477,8 +386,7 @@ export function decodeGraph(
   const maxRelief = view.getUint16(56, true) / 255;
   const hasTunnels = (bytes[58] & HAS_TUNNELS_FLAG) !== 0;
 
-  // The three per-meter floors stay derived rather than baked: they are f64 arithmetic over a few
-  // thousand edges, and a figure in the file would go stale the moment a duration moved.
+  // Derived, since a baked figure would go stale the moment a duration moved.
   let minFerrySecPerMeter = Number.POSITIVE_INFINITY;
   for (const edge of ferryEdges) {
     const length = edgeLength[edge];
@@ -613,8 +521,7 @@ export function decodeGraph(
   };
 }
 
-// The name table: a u32 count, (count + 1) u32 byte offsets into the trailing UTF-8 blob, then
-// the blob. The offsets bracket each name, so access is O(1) and the strings are decoded once.
+// A u32 count, (count + 1) u32 offsets into the trailing UTF-8 blob, then the blob.
 function decodeNames(buffer: ArrayBuffer, tableOffset: number): string[] {
   const view = new DataView(buffer);
   const count = view.getUint32(tableOffset, true);
@@ -632,9 +539,7 @@ function decodeNames(buffer: ArrayBuffer, tableOffset: number): string[] {
   return names;
 }
 
-// The ferry endpoint-stop-name side table (byte-60 offset): a u32 count, then per ferry edge a
-// (u32 edge id, u16 a-stop name id, u16 b-stop name id) triple, both ids into the name table. The
-// route name rides on the edge itself, so only the two terminal names live here.
+// At the byte-60 offset: a u32 count, then (u32 edge id, u16 a-stop name id, u16 b-stop name id).
 function decodeFerryEndpointNames(
   buffer: ArrayBuffer,
   tableOffset: number,
@@ -657,13 +562,7 @@ function decodeFerryEndpointNames(
   return map;
 }
 
-// The transit side tables (the byte-64 offset, 4-aligned after the ferry table): a u32 count and a
-// 12-byte record per route (RGB, text RGB, three u16 name ids), then a u32 count and a 12-byte
-// record per board edge (edge id, lane id, route index, stop index), then a u32 count and an 8-byte
-// record per ride edge (edge id, route index, pad), then a u32 count and an 8-byte record per street
-// door (edge id, street name id, side, pad). All are empty for a city with no transit source, and
-// the doors are absent altogether from a graph written before the tiler recorded them — which is
-// why the table's own length, not the buffer's, is where the reading stops.
+// Route, board, ride and door records; older graphs lack doors, so stop at the table's own length.
 function decodeTransitTables(
   buffer: ArrayBuffer,
   tableOffset: number,
@@ -744,22 +643,17 @@ function decodeTransitTables(
   };
 }
 
-// The lane the daily timetable answers this board edge against — a (route, direction, stop pattern),
-// hashed by the ingest so a graph and a timetable written days apart still agree. -1 for every edge
-// that is not a board edge.
+// Hashed by the ingest so a graph and a timetable written days apart still agree; -1 off a board edge.
 export function laneOf(graph: RoutingGraph, edge: number): number {
   return graph.transitLaneOf.get(edge) ?? -1;
 }
 
-// Which of its lane's stops this board edge's platform is, counted as the FEED lists them — the
-// index TSCH's per-stop offsets are in, so a station the snap dropped leaves a hole in the graph's
-// chain and none in this numbering. -1 for every edge that is not a board edge.
+// Counted as the feed lists them, so a stop the snap dropped leaves no hole; -1 off a board edge.
 export function stopIndexOf(graph: RoutingGraph, edge: number): number {
   return graph.transitStopOf.get(edge) ?? -1;
 }
 
-// The route a board or ride edge runs, or null for anything else — an access edge included, since
-// the walk in and out of a station belongs to no one line.
+// Null for an access edge, since the walk into a station belongs to no one line.
 export function routeOf(
   graph: RoutingGraph,
   edge: number,
@@ -768,22 +662,11 @@ export function routeOf(
   return index === undefined ? null : (graph.transitRoutes[index] ?? null);
 }
 
-// Is this edge part of the transit topology rather than the walking network? Read where something
-// walks the graph and only pavement will do — the waypoint proxy, the reversal check.
 export function isTransitEdge(graph: RoutingGraph, edge: number): boolean {
   return TRANSIT_KINDS.has(edgeKind(graph, edge));
 }
 
-// May this edge be entered at `fromNode`? The topology is directed — you board a platform from its
-// station's ENTRY node, ride to the next stop's ARRIVAL node, and alight onto that station's EXIT
-// node — but the graph stores every edge undirected, so each of those has a reverse the search must
-// refuse. Riding backwards is the obvious one; the quiet one is stepping onto a platform through an
-// alight edge, which would put a walker on a train with no wait at all. Every door is one-way too:
-// in to the entry node, out of the exit one, which is what keeps a station from being a walkable
-// underpass — the only edge back from an exit to its entry is the change of train, and it runs that
-// way alone. The stay-aboard edge runs one way for the same reason, arrival onto boarding, so a
-// board and an alight at one stop cannot be strung together either. Every walking edge is
-// traversable.
+// Edges are stored undirected; refusing reverses stops backwards rides and boarding via an alight.
 export function transitForward(
   graph: RoutingGraph,
   edge: number,
@@ -803,10 +686,7 @@ export function transitForward(
   }
 }
 
-// What a station is called, asked of either of a station side's two nodes. The doors carry the name
-// and the change of train between the two carries it as well — an alight edge is unnamed and a board
-// edge is named for its line — so the named access edge leaving this node is the one to read. Null
-// for any other node, a platform and a pavement node included: no named access edge leaves either.
+// Read off the named access edge, since alights are unnamed and boards are named for their line.
 export function stationName(graph: RoutingGraph, node: number): string | null {
   for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
     const edge = graph.adjacency[slot];
@@ -820,18 +700,11 @@ export function stationName(graph: RoutingGraph, node: number): string | null {
   return null;
 }
 
-// The seconds the tiler bakes for the walk between a curbside stop and the pavement, against the
-// longer one it bakes for a station with a way in (crates/tiler/src/graph.rs, SURFACE_ACCESS_SECONDS
-// and UNDERGROUND_ACCESS_SECONDS). The feed's own surface flag is not in the graph, and this is the
-// only trace of it left: what a rider is told to do differs — you go to a tram stop and you enter a
-// station — so the distinction has to survive somehow.
+// Mirrors crates/tiler/src/graph.rs; the only trace of the feed's surface flag left in the graph.
 const SURFACE_ACCESS_SECONDS = 30;
 const UNDERGROUND_ACCESS_SECONDS = 90;
 
-// Is this access edge the walk to a stop standing in the street rather than into a station? The
-// baked seconds are the stair plus the walk out to this particular door, and the edge's length is
-// that walk, so taking it back off leaves the one of the two figures above that the tiler started
-// from — read at the midpoint, which no rounding of either can cross.
+// Baked seconds less the walk leave the tiler's base figure; the midpoint test survives rounding.
 export function isSurfaceStop(graph: RoutingGraph, edge: number): boolean {
   const stair =
     graph.edgeDurationSeconds[edge] -
@@ -839,9 +712,7 @@ export function isSurfaceStop(graph: RoutingGraph, edge: number): boolean {
   return stair < (SURFACE_ACCESS_SECONDS + UNDERGROUND_ACCESS_SECONDS) / 2;
 }
 
-// True when this ride is the free step from a stop's arrival node onto its boarding node — a rider
-// staying on the train rather than getting off. It is internal to one boarding: it costs nothing, it
-// covers no ground, and it is no stop of the ride it sits inside.
+// Internal to one boarding: costs nothing, covers no ground, and is no stop of the ride.
 export function isStayAboard(graph: RoutingGraph, edge: number): boolean {
   return (
     edgeKind(graph, edge) === "ride" &&
@@ -849,8 +720,7 @@ export function isStayAboard(graph: RoutingGraph, edge: number): boolean {
   );
 }
 
-// The arrival node beside a boarding node: the far end of the stay-aboard edge that runs into it.
-// The alight hangs off that one, never off the node a board lands on.
+// The alight hangs off the arrival node, never off the node a board lands on.
 function platformArrival(graph: RoutingGraph, boardingNode: number): number {
   for (
     let slot = graph.csr[boardingNode];
@@ -865,13 +735,7 @@ function platformArrival(graph: RoutingGraph, boardingNode: number): number {
   return boardingNode;
 }
 
-// The last station a pattern calls at, ridden from this platform: the ride chain followed to its
-// end. This is what a rider is told a train is bound FOR, which the graph never writes down — it is
-// simply where the line the walker is standing on runs out. The last platform's alight edge is what
-// names it, that edge climbing to the station's exit node.
-//
-// The chain alternates, a ride onto the next stop's arrival node and a stay-aboard onto its boarding
-// node, so it runs out at a boarding node and the alight is one step back from there.
+// The graph never stores a train's destination; it's where the ride chain runs out.
 export function patternTerminus(
   graph: RoutingGraph,
   platformNode: number,
@@ -895,7 +759,6 @@ export function patternTerminus(
   const arrival = platformArrival(graph, node);
   for (let slot = graph.csr[arrival]; slot < graph.csr[arrival + 1]; slot++) {
     const edge = graph.adjacency[slot];
-    // The platform's alight edge, whose node b is the station it climbs back up to.
     if (
       edgeKind(graph, edge) === "access" &&
       graph.edgeNodeA[edge] === arrival
@@ -919,19 +782,15 @@ export function edgeName(graph: RoutingGraph, edge: number): string | null {
   return nameId === NAME_NONE ? null : graph.names[nameId];
 }
 
-// True when this sidewalk lies to the right of its stored geometry direction (flags bit 2).
 export function edgeGeometryRight(graph: RoutingGraph, edge: number): boolean {
   return (graph.edgeFlags[edge] & GEOMETRY_RIGHT_FLAG) !== 0;
 }
 
-// True when this edge runs through a tunnel (flags bit 4): roofed, and out of the sun.
 export function isTunnel(graph: RoutingGraph, edge: number): boolean {
   return (graph.edgeFlags[edge] & TUNNEL_FLAG) !== 0;
 }
 
-// The three door bits, each asked of an access edge: the station's own way in and out. A walking
-// edge carries other things in these bits, so every one of them is a question about a door first.
-// A door out of the station only — the gate at the top of a stair a rider cannot come back down.
+// Only meaningful on an access edge; a walking edge uses these bits for other things.
 export function isExitOnlyDoor(graph: RoutingGraph, edge: number): boolean {
   return (
     edgeKind(graph, edge) === "access" &&
@@ -939,7 +798,6 @@ export function isExitOnlyDoor(graph: RoutingGraph, edge: number): boolean {
   );
 }
 
-// A door into the station only, which is the same fixture the other way round.
 export function isEntryOnlyDoor(graph: RoutingGraph, edge: number): boolean {
   return (
     edgeKind(graph, edge) === "access" &&
@@ -947,8 +805,6 @@ export function isEntryOnlyDoor(graph: RoutingGraph, edge: number): boolean {
   );
 }
 
-// A lift rather than a stair: the one door kind whose baked seconds differ, and the one the
-// directions and their icon name differently.
 export function isElevatorDoor(graph: RoutingGraph, edge: number): boolean {
   return (
     edgeKind(graph, edge) === "access" &&
@@ -956,10 +812,7 @@ export function isElevatorDoor(graph: RoutingGraph, edge: number): boolean {
   );
 }
 
-// The street this door opens onto, or null where the tiler recorded none — the pavement it was cut
-// into has no name, or the edge is not a door at all. The alternative, naming the door by whichever
-// step the route reaches it along, calls a door on a corner by the cross street and a door reached
-// across a crossing by nothing.
+// Naming a door by the arriving step would call a corner door by the cross street.
 export function doorStreet(
   graph: RoutingGraph,
   edge: number,
@@ -967,23 +820,16 @@ export function doorStreet(
   return graph.transitDoorStreet.get(edge) ?? null;
 }
 
-// Keyed by city: switching city loads a different graph, and coming back must not refetch the first.
+// Coming back to a city must not refetch its graph.
 const graphPromises = new Map<string, Promise<RoutingGraph>>();
-// Kept so the routing worker can be handed a copy without a second download; the decoded graph
-// views most of these bytes in place.
+// Kept so the routing worker can be handed a copy without a second download.
 const graphBuffers = new Map<string, ArrayBuffer>();
 
 export function graphBuffer(cityId: string): ArrayBuffer | undefined {
   return graphBuffers.get(cityId);
 }
 
-// How the graph beside it names itself, read out of the deploy's own record rather than recomputed
-// here: FNV-1a over 30 MB of graph is ~0.5 s of blocked main thread on a laptop and several times
-// that on a phone, and the key space would want a 600k-element sort on top, to arrive at two numbers
-// the graph pass already wrote down. The two files are written by one pass, so they cannot skew. An
-// unreadable version file leaves both unknown, which no artifact then matches — the graph itself
-// still loads, so only what is placed against it goes quiet. A version file from before `keyHash`
-// existed is the same case.
+// Read, not recomputed: hashing 30 MB blocks the main thread; a missing file matches no artifact.
 async function fetchGraphIdentity(cityId: string): Promise<GraphIdentity> {
   const url = versionUrl(cityId);
   try {
@@ -999,8 +845,7 @@ async function fetchGraphIdentity(cityId: string): Promise<GraphIdentity> {
   }
 }
 
-// The pier and platform waits are not in the artifact, and both decoders go through here — the
-// page's fetch and the worker's copy of the same bytes — so neither can be the one that forgets them.
+// Both decoders go through here so neither forgets the city's pier and platform waits.
 export function decodeCityGraph(
   cityId: string,
   buffer: ArrayBuffer,
@@ -1054,9 +899,7 @@ export interface EdgePath {
   lats: Float64Array;
 }
 
-// Bounded most-recently-used cache: a route decodes an edge's geometry once for the search and
-// again while stitching, and adjacent queries revisit the same corridor. Edge ids repeat between
-// cities, so each graph gets its own cache and drops it when the graph itself is dropped.
+// Per graph, since edge ids repeat between cities; search and stitching both read an edge's geometry.
 let pathCaches = new WeakMap<RoutingGraph, Map<number, EdgePath>>();
 
 export function clearEdgePathCache(): void {
@@ -1085,8 +928,6 @@ export function edgePath(graph: RoutingGraph, edge: number): EdgePath {
 
   let path: EdgePath;
   if (graph.edgeGeomOffset[edge] === NO_GEOMETRY) {
-    // Crossings and links carry no geometry: the polyline is the straight line between the two
-    // node coordinates, in a -> b order.
     const nodeA = graph.edgeNodeA[edge];
     const nodeB = graph.edgeNodeB[edge];
     path = {
@@ -1104,8 +945,7 @@ export function edgePath(graph: RoutingGraph, edge: number): EdgePath {
     const lngs = new Float64Array(count);
     const lats = new Float64Array(count);
     const cursor = { offset: graph.edgeGeomOffset[edge] };
-    // Geometry entries are origin-anchored: the first pair is the absolute quantized position (a
-    // delta from the graph origin) and the rest are previous-vertex deltas.
+    // The first pair is absolute (from the graph origin); the rest are previous-vertex deltas.
     let quantizedX = 0;
     let quantizedY = 0;
     for (let vertex = 0; vertex < count; vertex++) {
@@ -1127,10 +967,7 @@ export function edgePath(graph: RoutingGraph, edge: number): EdgePath {
   return path;
 }
 
-// The edge's polyline between two along-distances, in a -> b order, with the two boundaries
-// interpolated. Along-distance is measured in the same scaled metric as Snap.metersFromA — the
-// polyline's own planar arc length rescaled to the edge's geodesic length — so a fraction of the
-// edge's length is the same fraction of its polyline.
+// Along-distance uses Snap.metersFromA's scaled metric, so a length fraction is a polyline fraction.
 export function subEdgePath(
   graph: RoutingGraph,
   edge: number,

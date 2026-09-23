@@ -1,10 +1,5 @@
-// Deciding whether a DOB permit's street is the street a graph edge carries. DOB writes the name out
-// in full and pads its numbers ("WEST   057 STREET"); CSCL, which the routing graph ships, writes it
-// abbreviated ("W 57 ST"). Both sides are normalized to the same token string and then compared on
-// their distinctive tokens, with the street type required to agree — "182 ST" must not claim the
-// "182 PL" stub one block over, and it would, since every other token matches.
+// DOB writes names in full with padded numbers ("WEST   057 STREET"); CSCL abbreviates ("W 57 ST").
 
-// CSCL writes the abbreviation; DOB writes the expansion.
 const SUFFIXES: Readonly<Record<string, string>> = {
   STREET: "ST",
   STR: "ST",
@@ -45,8 +40,6 @@ const PREFIXES: Readonly<Record<string, string>> = {
   FORT: "FT",
 };
 
-// A permit that spells its ordinal out ("FIFTH AVENUE") describes a street the graph numbers
-// ("5 AVE"), and nothing else in the comparison can bridge that.
 const SPELLED_ORDINALS: Readonly<Record<string, string>> = {
   FIRST: "1",
   SECOND: "2",
@@ -62,7 +55,6 @@ const SPELLED_ORDINALS: Readonly<Record<string, string>> = {
   TWELFTH: "12",
 };
 
-// The distinctive tokens are what the comparison runs on, so the generic type words are dropped.
 const GENERIC: ReadonlySet<string> = new Set([
   "ST",
   "AVE",
@@ -91,15 +83,10 @@ const GENERIC: ReadonlySet<string> = new Set([
   "SLIP",
 ]);
 
-// A particle the city writes both joined and split, and which side does it depends on the feed
-// ("MC DOUGAL ST" in the graph against "MACDOUGAL ST" on the permit). Joining is safe in a way an
-// alias is not: both names get the same treatment, so a merge that is wrong is at least consistent.
+// Written joined or split depending on the feed ("MC DOUGAL ST" vs "MACDOUGAL ST").
 const JOINING_PARTICLES: ReadonlySet<string> = new Set(["MC", "MAC", "DE"]);
 
-// Streets the city renamed but the permits still call by their number, and vice versa. A name scores
-// against every one of its aliases, rather than being rewritten into one: `6 AVENUE` is Avenue of the
-// Americas in Manhattan and a plain 6th Avenue in Brooklyn, and only the candidate edges near the lot
-// decide which. Keyed and valued in normalized form.
+// Scored against, not rewritten: `6 AVE` is Avenue of the Americas only in Manhattan.
 const ALIASES: Readonly<Record<string, readonly string[]>> = {
   "6 AVE": ["AVE OF THE AMERICAS"],
   "AVE OF THE AMERICAS": ["6 AVE"],
@@ -116,14 +103,11 @@ const ALIASES: Readonly<Record<string, readonly string[]>> = {
 const ORDINAL = /^(\d+)(ST|ND|RD|TH)$/;
 const PUNCTUATION = /[.,'`]/g;
 
-// The graph carries 8,495 distinct names and the feed a comparable number of streets, so both
-// normalization and the pair score are worth memoizing: the placement asks for a score once per
-// candidate sidewalk per shed, which is millions of calls over 61,302 permits.
+// Memoized: placement scores every candidate sidewalk per shed, millions of calls in all.
 const normalized = new Map<string, string>();
 const cores = new Map<string, ReadonlySet<string>>();
 const scores = new Map<string, number>();
 
-// Canonical token string, e.g. "WEST   057 STREET" -> "W 57 ST".
 export function normalizeStreet(name: string): string {
   const hit = normalized.get(name);
   if (hit !== undefined) {
@@ -143,7 +127,7 @@ export function normalizeStreet(name: string): string {
       token = ordinal[1];
     }
     if (/^\d+$/.test(token)) {
-      token = String(Number.parseInt(token, 10)); // drop DOB's zero and space padding
+      token = String(Number.parseInt(token, 10)); // drop DOB's zero padding
     }
     token =
       SPELLED_ORDINALS[token] ?? PREFIXES[token] ?? SUFFIXES[token] ?? token;
@@ -196,8 +180,7 @@ function scoreCanonical(shed: string, graph: string): number {
       shared += 1;
     }
   }
-  // A numbered street and the numbered place one block over share every distinctive token, so the
-  // type has to agree or the mapping happily walks onto the wrong pavement.
+  // "182 ST" and the "182 PL" one block over share every distinctive token; the type must agree.
   const sameSuffix = suffixOf(shed) === suffixOf(graph);
   if (shared === shedCore.size && shared === graphCore.size) {
     return sameSuffix ? 0.75 : 0.3;
@@ -207,8 +190,6 @@ function scoreCanonical(shed: string, graph: string): number {
   }
 }
 
-// How well a permit's street agrees with a graph edge's: 1 exact, 0.75 same distinctive tokens and
-// the same type, otherwise the Jaccard of those tokens, halved when the type disagrees.
 export function streetScore(
   shedName: string,
   graphName: string | null,
@@ -216,8 +197,7 @@ export function streetScore(
   if (graphName === null) {
     return 0;
   }
-  // NUL joins the two names because a street name can contain anything else, and a separator
-  // that appears in a name would let one pair collide with another.
+  // NUL: any separator a street name can contain would let two pairs collide.
   const key = `${shedName}\u0000${graphName}`;
   const hit = scores.get(key);
   if (hit !== undefined) {

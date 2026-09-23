@@ -1,6 +1,4 @@
-//! Where the sidewalks are, and which way the street runs there. Nobody walks down the middle
-//! of the road, so the field is sampled twice per vertex, once either side of the centerline —
-//! and no usable sidewalk dataset exists to sample it on. See scripts/README.md.
+//! Sidewalk positions and street bearings: the field is sampled once either side of the centerline.
 
 use crate::geometry::Bearing;
 
@@ -10,20 +8,13 @@ const STREET: u8 = 1;
 const BRIDGE: u8 = 3;
 const TUNNEL: u8 = 4;
 const ALLEY: u8 = 10;
-// The chunk carries the offset in a byte of decimeters, so a wider roadway than this could not
-// be drawn where it was sampled. Four CSCL segments in the city claim one.
+// The chunk carries the offset as a byte of decimeters, which caps the drawable roadway width.
 const MAX_OFFSET_METERS: f64 = 25.5;
 
-// STRT record byte 23, bit 1: a dedicated pedestrian/bike deck, sampled on its own line rather
-// than offset to a sidewalk. The vehicular-only (bit 0) and structure (bit 2) bits the ingest
-// also writes are for the router (Phase 2) and are read there, not here.
+// STRT record byte 23, bit 1: a pedestrian/bike deck, sampled on its own line rather than offset.
 pub const FLAG_NON_VEHICULAR: u8 = 1 << 1;
 
-/// Half the roadway plus the curb-to-sidewalk inset: where the two sidewalk lines sit, in meters
-/// either side of the centerline. Zero for the road types that *are* the walking surface — a
-/// boardwalk, a path, a step street — and for any non-vehicular deck (the Brooklyn Bridge
-/// promenade is itself the walking surface), which carry no width and are sampled once, on the
-/// line. A vehicular bridge or tunnel has sidewalks like a street does, so it is offset by width.
+/// Meters from the centerline to each sidewalk; zero for walking surfaces and non-vehicular decks.
 pub fn half_offset_meters(road_type: u8, flags: u8, width_feet: u8, inset_meters: f64) -> f64 {
     let width_based =
         road_type == STREET || road_type == ALLEY || road_type == BRIDGE || road_type == TUNNEL;
@@ -39,12 +30,7 @@ pub fn half_offset_meters(road_type: u8, flags: u8, width_feet: u8, inset_meters
     }
 }
 
-/// The unit tangent at every vertex of one segment, in meter space: the central difference of
-/// its neighbors, one-sided at the ends. The geometry is densified to 25 m, so a plain
-/// difference is a good local tangent — but CSCL's own vertices can sit closer together than the
-/// 0.1 m the coordinates are quantized to, and a neighbor that collapses onto this vertex would
-/// leave the kernel with no direction at all. So the difference is taken over the nearest
-/// *distinct* vertices on either side.
+/// The unit tangent at each vertex, over the nearest distinct neighbors: CSCL vertices can coincide.
 pub fn bearings(xs: &[f64], ys: &[f64]) -> Vec<Bearing> {
     let same = |left: usize, right: usize| xs[left] == xs[right] && ys[left] == ys[right];
     (0..xs.len())
@@ -60,9 +46,7 @@ pub fn bearings(xs: &[f64], ys: &[f64]) -> Vec<Bearing> {
             let delta_x = xs[ahead] - xs[back];
             let delta_y = ys[ahead] - ys[back];
             let length = delta_x.hypot(delta_y);
-            // No distinct neighbor to point at: the whole segment has collapsed onto one
-            // quantized point. The ingest drops anything shorter than a meter, so this is
-            // unreachable; it is here so a degenerate file cannot put a NaN in the field.
+            // Unreachable, since the ingest drops sub-meter segments; keeps a NaN out of the field.
             if length > 0.0 {
                 Bearing {
                     along_x: delta_x / length,
@@ -78,9 +62,7 @@ pub fn bearings(xs: &[f64], ys: &[f64]) -> Vec<Bearing> {
         .collect()
 }
 
-/// The unit normal pointing at the *left* sidewalk: 90 degrees counter-clockwise of the
-/// direction of travel, in a meter space whose y runs north. Left and right follow the
-/// digitization direction, which is CSCL's own `l_`/`r_` convention.
+/// The unit normal toward the left sidewalk; left follows CSCL's `l_`/`r_` drawing direction.
 pub fn left_normal(bearing: Bearing) -> (f64, f64) {
     (-bearing.along_y, bearing.along_x)
 }

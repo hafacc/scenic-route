@@ -22,7 +22,7 @@ function modeOrThrow(id: string): Mode {
 
 const MODE = modeOrThrow("naturalist");
 
-// Nothing here reads a field of any of the three: the reducer only ever moves them around.
+// The reducer never reads these, only moves them.
 const GRAPH = {} as RoutingGraph;
 const NOON = new Date(2026, 8, 2, 12, 0).getTime();
 const ROUTE = { travelSeconds: 600 } as RouteResult;

@@ -1,29 +1,18 @@
-// Where every layer on the map comes from. A plain module rather than part of the about dialog,
-// because two surfaces render it now: the dialog, which shows the active region's, and the static
-// about page, which shows both and is the only copy a crawler ever sees.
-
-// One row in the data-provenance list: what a layer is, and where it comes from. `license` is the
-// text of a license this app has to hand over rather than merely name, shipped under public/licenses
-// and linked from the row so it is reachable rather than merely present.
+// `license` is a license text the app must ship, not just name; it lives under public/licenses.
 export interface DataSource {
   label: string;
   detail: string;
   license?: string;
 }
 
-// The credits are per region, because the sources are: no two cities publish their canopy, their
-// landmarks or their industrial land the same way, and a single list would credit New York for a map
-// of the Bay Area. The dialog shows only the active region's, which is also what keeps a license
-// that names one city's terms — SFMTA's below — attached to the map it actually governs; the about
-// page, which has no active region, shows both under their own headings for the same reason.
+// Per region so a license naming one city's terms (SFMTA's) stays attached to the map it governs.
 export const CITY_SOURCES: Record<string, readonly DataSource[]> = {
   nyc: [
     {
       label: "Tree canopy",
       detail: "2017 LiDAR tree canopy · NYC OTI / NYC Parks",
     },
-    // CC BY 4.0 makes crediting this a condition of the license, not a courtesy, and this list is
-    // the app's only credits surface — the map draws no attribution control of its own.
+    // CC BY 4.0 makes this credit a license condition, and the map has no attribution control.
     {
       label: "Tree heights",
       detail:
@@ -84,40 +73,29 @@ export const CITY_SOURCES: Record<string, readonly DataSource[]> = {
       detail:
         "SF Public Works street trees · DataSF, the Oakland Public Tree Inventory, and Berkeley's Arborwell street-tree survey",
     },
-    // The East Bay half of the region is read from the county's own centerline, and this list is
-    // the app's only credits surface, so both publishers are named rather than just the one whose
-    // name was here when the region was San Francisco alone.
     {
       label: "Streets",
       detail:
         "SF Basemap Street Centerlines · DataSF, and Street Centerlines · Alameda County GIS",
     },
-    // The boats are the only way a pedestrian crosses the bay, so the feed is routing input here
-    // rather than scenery. Its ODC-BY is written down only on the operator's developer page, which
-    // makes naming WETA the whole of what the license asks for.
+    // WETA's ODC-BY is only stated on its developer page; naming WETA is all it asks.
     {
       label: "Ferries",
       detail: "San Francisco Bay Ferry GTFS · WETA (ODC-BY)",
     },
-    // The land mask is a source in its own right here, and an unusual one: it is three publishers
-    // subtracted and unioned rather than a layer anyone hands over. It reaches past the seven city
-    // limits to the ridge parkland above Oakland, which no municipality contains — CPAD's own credit
-    // wording is carried verbatim, as its terms ask.
+    // CPAD's terms ask for its credit wording verbatim.
     {
       label: "Land & parks",
       detail:
         "Analysis Neighborhoods · DataSF, city limits · Alameda County GIS, protected areas from the California Protected Areas Database (CPAD - www.calands.org). June 2024, and shoreline from US Census TIGER hydrography",
     },
-    // SFMTA's feed license requires this wording verbatim on anything derived from it, so the detail
-    // line carries it rather than paraphrasing.
+    // SFMTA's feed license requires this wording verbatim on anything derived from it.
     {
       label: "Transit lines",
       detail:
         "BART GTFS; Muni GTFS — reproduced with permission granted by the City and County of San Francisco, under a nonexclusive, limited and revocable license",
     },
-    // The East Bay's landmarks are not a local register like San Francisco's: neither Oakland's nor
-    // Berkeley's is published as data, so they come from the state's inventory and are federal and
-    // state designations. The line says whose list it is, because the two are different claims.
+    // Oakland's and Berkeley's registers aren't published as data, so these are state designations.
     {
       label: "Landmarks",
       detail:
@@ -143,9 +121,7 @@ export const CITY_SOURCES: Record<string, readonly DataSource[]> = {
       detail:
         "Land use and PDR zoning · SF Planning via DataSF, assessor parcel use codes · Alameda County GIS, and Existing Land Use 2020 · San Francisco Estuary Institute via MTC",
     },
-    // Only San Francisco's own footprints arrive with a height on them. The East Bay's are
-    // Overture's, and their heights were measured here off the county's raw point cloud, so both the
-    // footprints' license and the flight that supplied the heights are named.
+    // East Bay footprints are Overture's with heights measured here, so both sources are named.
     {
       label: "Building shade",
       detail:
@@ -158,18 +134,9 @@ export const CITY_SOURCES: Record<string, readonly DataSource[]> = {
   ],
 };
 
-// Read by every city's map, so they sit under the city's own rather than being repeated in each.
 export const SHARED_SOURCES: readonly DataSource[] = [
-  // None of the Overture places theme is OpenStreetMap — it is Meta, Microsoft, Foursquare and
-  // AllThePlaces — and CDLA-Permissive-2.0 asks that its text travel with the data rather than be
-  // cited, so it does.
-  //
-  // The search index it goes into is NOT Overture alone, and both entries below say so. Alongside
-  // the places it carries the names and points of the alleys, footbridges and park paths ADDR has no
-  // addresses on, and those come out of the routing graph, which is an OSM extract. That makes
-  // public/search a derivative database under ODbL, credited here as one. The permissive license is
-  // untroubled by the company — it carries no share-alike of its own — but OSM is owed the credit
-  // either way, and a file that quietly contains it while claiming not to is the worse outcome.
+  // CDLA-Permissive-2.0 asks that its text travel with the data; the search index also holds OSM
+  // path names, which makes it an ODbL derivative credited below.
   {
     label: "Places",
     detail: "Overture Maps Foundation (CDLA-Permissive-2.0)",

@@ -1,25 +1,3 @@
-// San Francisco's half of the ingest: the DataSF datasets that stand in for the NYC ones, and the
-// places where the shapes genuinely differ rather than just the column names.
-//
-// DataSF is a Socrata deployment like NYC Open Data, so the reading is shared (scripts/socrata.ts)
-// and most of what is here is a field remap. The ones that are not:
-//
-//   - **The walkability filter.** CSCL has `rw_type`, one code per kind of way. SF's centerline has
-//     `classcode`, which is only a road hierarchy (freeway down to local street) and says nothing
-//     about whether a person may walk it. The field that does is `layer`, and it is the more
-//     expressive of the two — it separates the Presidio's network, pedestrian streets and
-//     unimproved right of way from ordinary streets, and it names the PAPER layers, which are
-//     streets that exist on the map and not on the ground.
-//
-//   - **The sidewalk offset.** NYC publishes a curb-to-curb `streetwidth` and the pavement is
-//     offset half of it. SF publishes the opposite — the width of the *sidewalk* — so the roadway
-//     is derived from the right-of-way polygons instead. See `roadwayFeet`.
-//
-//   - **Industrial land.** NYC reads one land-use code off a tax lot. SF records no such code, so
-//     `fetchSfIndustrial` reconstructs it: parcels whose recorded floor area is mostly production,
-//     distribution and repair, plus unbuilt parcels inside industrial zoning, which is the only way
-//     a truck yard with no building on it registers at all.
-
 import { densify } from "./geometry";
 import { buildLandTest } from "./land-filter";
 import type { Polygon } from "./overpass";
@@ -33,11 +11,9 @@ import {
   toInt,
 } from "./streets";
 
-// Row-count floors the paged reads are checked against. A little below the live count, so a city
-// that keeps mapping does not trip them and a page the server quietly cut short does.
+// Row-count floors a little below the live count, to catch a page the server quietly cut short.
 const NEIGHBORHOOD_COUNT = 40;
 const STREET_COUNT = 16_000;
-// Also read by scripts/sidewalks.ts, which takes the per-side column off the same rows.
 export const SIDEWALK_WIDTH_DATASET = "4g86-grxu";
 export const SIDEWALK_WIDTH_COUNT = 16_000;
 const ROW_POLYGON_COUNT = 22_000;
@@ -47,11 +23,7 @@ export const SF_STREET_ATTRIBUTION = "SF Basemap Street Centerlines via DataSF";
 export const SF_CANOPY_ATTRIBUTION =
   "Urban tree canopy © SF Planning (2013 Urban Forest Plan)";
 
-// The land the city actually occupies. NOT the county polygon: San Francisco County's legal
-// boundary runs out into the bay, out into the ocean, and 45 km offshore to the Farallon Islands,
-// which would widen the city's bounding box by half a degree of empty water — and that box is what
-// every Overpass query and the whole tile plan are cut from. The analysis neighborhoods are
-// already clipped to the shoreline and are the structural twin of NYC's borough boundaries.
+// Neighborhoods, not the county, whose boundary runs 45 km offshore to the Farallons.
 export async function fetchSfLand(): Promise<Polygon[]> {
   const rows = await DATA_SF.dataset<{
     the_geom?: { type: string; coordinates: [number, number][][][] };
@@ -79,39 +51,29 @@ interface StreetRow {
 
 interface SidewalkWidthRow {
   cnn?: string;
-  sidewalk_f?: string; // the ACTUAL sidewalk width in feet; 0 unknown, negative "varies"
+  sidewalk_f?: string; // sidewalk (not roadway) width in feet; 0 unknown, negative "varies"
 }
 
 interface RowPolygonRow {
   cnn?: string;
-  shape_area?: string; // square feet — the dataset is in the state plane foot
+  shape_area?: string; // square feet (state plane)
 }
 
-// The layers whose segments a person can walk, and what each is in the tiler's terms. `PAPER`,
-// `PAPER_FWYS` and `PAPER_WATER` are platted streets that were never built — `PAPER_WATER` would
-// put walking edges out in the bay — and `PSEUDO` is a bookkeeping line. Freeways are dropped here
-// and come back as the HWAY nuisance source, which is a penalty to walk near and never routed.
+// `PAPER*` layers are platted streets never built; freeways return as the HWAY nuisance source.
 const WALKABLE_LAYERS: Record<string, RoadType> = {
   STREETS: ROAD_STREET,
   STREETS_TI: ROAD_STREET, // Treasure Island
   STREETS_YBI: ROAD_STREET, // Yerba Buena Island
   STREETS_HUNTERSP: ROAD_STREET,
-  PRIVATE: ROAD_STREET, // named private streets, walked like any other
-  STREETS_PEDESTRI: ROAD_PATH, // the walking surface itself, so no sidewalk is offset off it
+  PRIVATE: ROAD_STREET,
+  STREETS_PEDESTRI: ROAD_PATH,
   PARKS: ROAD_PATH,
   PARKS_NPS_PRESIDIO: ROAD_PATH,
   PARKS_NPS_FTMASON: ROAD_PATH,
-  UPROW: ROAD_PATH, // unimproved right of way: a way on the ground, without a built roadway
+  UPROW: ROAD_PATH, // unimproved right of way
 };
 
-// `st_type` refines the layer where it names something the tiler treats specially — here, step
-// streets, which carry the steps flag through to the route panel.
-//
-// `ALY` is deliberately NOT mapped to the tiler's alley type. That type carries New York's meaning:
-// a service way with no pavement at all, which the existence gate demotes to its centerline (97% of
-// New York's alley km). San Francisco's alleys are narrow STREETS — Clara, Minna, Natoma — and OSM
-// maps sidewalks along them, so only 6.6% of their km demote. Calling them alleys asserted something
-// about them that is not true and failed the build for it.
+// No `ALY`: the alley type means New York's pavementless service way; SF's alleys have sidewalks.
 const TYPE_OVERRIDES: Record<string, RoadType> = {
   STPS: ROAD_STEPS,
   STWY: ROAD_STEPS,
@@ -127,25 +89,11 @@ function roadTypeOf(row: StreetRow): RoadType | null {
     return null;
   }
   const override = TYPE_OVERRIDES[(row.st_type ?? "").toUpperCase()];
-  // An override only ever refines a street; it never promotes a park path back to a roadway.
+  // An override only refines a street; it never promotes a park path to a roadway.
   return override !== undefined && layer === ROAD_STREET ? override : layer;
 }
 
-// The pavement's distance from the centerline, in the feet a STRT record stores, derived rather
-// than published. NYC offsets by half its curb-to-curb `streetwidth`; SF publishes no roadway width
-// at all. What it does publish is the right-of-way polygon for each segment and, separately, the
-// width of the sidewalk — and a right of way is the roadway plus its two pavements, so
-//
-//     roadway = rightOfWay - 2 * sidewalk
-//
-// with the right of way measured as the polygon's area over the length of the centerline it belongs
-// to. Storing the roadway as a "street width" keeps one meaning downstream: the tiler halves it.
-//
-// Measured over the 10,028 segments carrying both inputs, that lands at a median of 26 ft (p25 18,
-// p75 32, p90 39), against New York's median of 30 — the right shape for a city whose residential
-// streets are a little narrower. 2.2% come out negative, where the survey's sidewalk figure cannot
-// be squared with the polygon; those fall back to the median with everything else that is missing
-// an input.
+// SF publishes no roadway width, so roadway = right-of-way - 2 * sidewalk; this is the median.
 const SF_MEDIAN_ROADWAY_FEET = 26;
 
 function roadwayFeet(
@@ -166,9 +114,7 @@ function roadwayFeet(
     : SF_MEDIAN_ROADWAY_FEET;
 }
 
-// Right-of-way area per segment, summed because a divided street is several polygons under one id.
-// The width itself is not taken here: it is the area over the *centerline's* own length, and that
-// is known only once the geometry has been read.
+// Summed: a divided street is several polygons under one id.
 function rightOfWayAreas(rows: RowPolygonRow[]): Map<string, number> {
   const areas = new Map<string, number>();
   for (const row of rows) {
@@ -213,8 +159,7 @@ export async function fetchSfStreets(): Promise<Segment[]> {
     ),
   ]);
 
-  // Keyed through `toInt`, the same normalization a segment's own `physicalId` goes through, so the
-  // two sides of the join cannot drift on a leading zero or a ".0" the column comes back with.
+  // Keyed through `toInt`, like `physicalId`, so a leading zero or ".0" can't break the join.
   const sidewalkFeet = new Map<string, number>();
   const measured: number[] = [];
   for (const row of widthRows) {
@@ -254,8 +199,7 @@ export async function fetchSfStreets(): Promise<Segment[]> {
       degenerate += 1;
       continue;
     }
-    // A path is its own walking surface, so it carries no offset — the same rule CSCL's boardwalks
-    // and step streets follow.
+    // A path is its own walking surface, so it carries no offset.
     const area = areas.get(String(toInt(row.cnn)));
     const lengthFeet = dense.lengthMeters / METERS_PER_FOOT;
     const width =
@@ -275,10 +219,8 @@ export async function fetchSfStreets(): Promise<Segment[]> {
       physicalId: toInt(row.cnn),
       roadType,
       streetWidth: width,
-      postedSpeed: 0, // SF publishes speed limits as their own dataset, not on the centerline
-      // No vehicular-only flag: `classcode = 1` occurs on the FREEWAYS layer and nowhere else, and
-      // that layer is already dropped above, so the branch that set it could never fire. If SF ever
-      // publishes a field that really marks a roadway closed to walking, it goes here.
+      postedSpeed: 0, // not on SF's centerline
+      // `classcode = 1` occurs only on the dropped FREEWAYS layer, so nothing is vehicular-only.
       flags: 0,
       name: (row.streetname ?? "").trim(),
       nameId: UNNAMED_ID,
@@ -300,23 +242,10 @@ interface TreeRow {
   planttype?: string;
 }
 
-// The DPW street-tree register. It feeds the genus overlay and the crown radii, not the cover field
-// — that comes from the canopy polygons — so its thinness against New York's forestry census
-// (198k rows to 899k) costs the map far less than it looks.
-//
-// `dbh` is present on 152k of the 198k rows, 76%, where New York's ForMS carries it on all but 734.
-// The ingest's existing imputation handles the rest; it is simply doing much more of the work here,
-// and the manifest records how many it stood in for.
+// DPW street-tree register; `dbh` is on only 76% of rows, so imputation does much of the work.
 const SF_TREE_COUNT = 190_000;
 
-// "Fraxinus uhdei :: Shamel Ash: Evergreen Ash" — the scientific name is the part before " :: ",
-// and the genus its first token. NYC's ForMS spells the same thing "Acer nigrum - black maple",
-// which is why this cannot share the parser.
-//
-// "Tree(s) ::" is the register's own way of recording a tree whose species nobody identified, and it
-// is the second most common value in the file — 11,818 rows. Left alone it becomes a genus called
-// "Tree(s)" sitting fourth in the legend, which is exactly the kind of thing an overlay should not
-// invite anyone to read a pattern into.
+// Species read "Fraxinus uhdei :: Shamel Ash"; "Tree(s) ::" (11,818 rows) marks an unidentified one.
 const UNIDENTIFIED = new Set(["", "unknown", "tree(s)", "tree", "trees"]);
 
 function sfGenusOf(species: string | undefined): string {
@@ -349,10 +278,7 @@ export async function fetchSfTrees(): Promise<Tree[]> {
   return trees;
 }
 
-// The canopy footprint the cover field is blurred from. SF's is the 2013 Urban Forest Plan analysis
-// — aerial imagery, not LiDAR, and a decade older than New York's 2017 survey — which is the single
-// biggest quality gap between the two cities and is recorded in the manifest's attribution so the
-// map says where its cover came from.
+// The 2013 Urban Forest Plan canopy: aerial imagery, not LiDAR.
 const SF_CANOPY_COUNT = 285_000;
 
 export async function fetchSfCanopyPolygons(): Promise<{
@@ -385,8 +311,7 @@ export async function fetchSfCanopyPolygons(): Promise<{
   return { polygons, fetched: rows.length, dropped };
 }
 
-// A polygon dataset read at its centroid, which is how both SF landmark sets and the historic
-// districts are published — NYC's LPC set carries a point already, SF's carries the parcel.
+// SF publishes landmarks as parcels, not points.
 function centroidOf(
   geometry: { coordinates: number[][][][] } | undefined,
 ): Coord | null {
@@ -407,8 +332,7 @@ export interface NamedPoint extends Coord {
   name: string;
 }
 
-// Article 10 landmarks, the city's own designated historic sites — 362 of them against New York's
-// ~1,500, over a sixth of the land, so denser per square kilometer rather than thinner.
+// Article 10 landmarks, the city's designated historic sites.
 export async function fetchSfLandmarks(
   onLand: (coord: Coord) => boolean,
 ): Promise<NamedPoint[]> {
@@ -426,9 +350,7 @@ export async function fetchSfLandmarks(
   return points;
 }
 
-// The Civic Art Collection, the 1% Art Program's own inventory, and the StreetSmArts murals. Three
-// sources because no one of them is the whole picture, which is the same reason NYC's art reads the
-// PDC inventory and OSM together; the ingest dedups them by proximity afterwards.
+// Civic Art Collection, 1% Art Program and StreetSmArts murals; the ingest dedups by proximity.
 export async function fetchSfArt(
   onLand: (coord: Coord) => boolean,
 ): Promise<NamedPoint[]> {
@@ -478,9 +400,7 @@ export interface RawBuilding {
   baseElevationMeters: number;
 }
 
-// The building footprints the shade model raises into walls. SF's carry their own LiDAR-measured
-// height on the row (`hgt_median_m`, the median height above ground over the footprint) and their
-// ground elevation with it (`gnd_min_m`), so unlike NYC's there is no height join at all.
+// SF's footprints carry LiDAR height (`hgt_median_m`) and ground (`gnd_min_m`), so no height join.
 const SF_BUILDING_COUNT = 170_000;
 
 export async function fetchSfBuildings(
@@ -519,53 +439,22 @@ export async function fetchSfBuildings(
   return buildings;
 }
 
-// The industrial land the INDL overlay draws and the graph's frontage byte is baked from. There is
-// no San Francisco column matching New York's PLUTO `LandUse = '06'`; what stands in for it is two
-// datasets, because neither alone is the city's industry:
-//
-//   - **Land use (`c5ge-t6pj`)**, one row per parcel, carries floor area per category rather than a
-//     class code. PDR — Production, Distribution & Repair — is the city's own name for industry, so
-//     a parcel whose PDR floor area beats every other category is industrial by use, which is as
-//     close as this city comes to New York's signal. But floor area only sees BUILDINGS: a truck
-//     yard, a container lot or a vacant industrial block has none and is invisible here.
-//
-//   - **Zoning (`3i4a-hu95`)**, `gen = 'Industrial'` (PDR-1-G, PDR-2, M-1, SALI …), which does see
-//     those. It is the fallback and not the filter: only about half the PDR-dominant parcels sit
-//     inside industrial zoning, so requiring it would discard the other half, and taking zoning
-//     alone would draw the housing and offices that fill an up-zoned PDR district.
-//
-// So: PDR-dominant, OR no recorded use of any kind and inside industrial zoning.
-//
-// Three rollups in the parcel table defeat that rule and are thrown out by name below.
+// SF has no land-use code: industrial is PDR-dominant floor area, or unbuilt in industrial zoning.
 const SF_PARCEL_COUNT = 8_500;
 const SF_INDUSTRIAL_ZONE_COUNT = 370;
-// The 62 `analytical` rows are not parcels: they are named analysis districts — the whole Presidio,
-// all of Treasure Island, the blocks of Mission Bay South — carrying modeled round-number floor
-// areas over polygons up to 2.1 km², six of which read PDR-dominant. The industrial land under them
-// is in the table as ordinary parcels anyway (208 inside Hunters Point Shipyard alone). A
-// `multiple_parcels` row, by contrast, is real adjacent parcels recorded together, and lists its own
-// block-lots, none of which is separately a row, so it neither invents geometry nor double-counts.
+// `analytical` rows are whole analysis districts with modeled floor areas, not parcels.
 const SF_PARCEL_GEOGRAPHIES = "('parcel', 'multiple_parcels')";
-// 36.4M sq ft of PDR, 43% of the citywide total, on a 25 m x 19 m rectangle in the Financial
-// District. Dominance happens to exclude it — its own biggest category is offices — but a rule that
-// only accidentally rejects a number that wrong is not a rule.
+// A 25 m x 19 m Financial District rollup recording 43% of the city's PDR floor area.
 const PDR_ROLLUP_PARCEL = "0253021";
-// Fort Mason: 66 hectares of federal parkland — the Marina Green, the yacht harbor and the lawns
-// above them — recorded as one parcel whose only floor area is the 30k sq ft of pier sheds at Fort
-// Mason Center. Those really are warehouses, so the rule reads it correctly and still gets the place
-// wrong. Excluded by hand rather than by a threshold: every measure that separates it from a genuine
-// yard (barely built, very large, outside the zoning map) is a measure a genuine yard also trips, and
-// the yards along Islais Creek and in Hunters Point are the land this feature most wants to keep.
+// 66 ha of parkland whose only floor area is Fort Mason Center's pier sheds.
 const FORT_MASON_PARCEL = "0900003";
-// Six parcels record exactly one square foot of PDR and nothing else, a placeholder rather than a
-// use, which wins dominance outright for being the only category on the row. Four are big: Ocean
-// Beach and the western end of Golden Gate Park. The next parcel up records 500 sq ft.
+// Parcels with exactly 1 sq ft of PDR (Ocean Beach, Golden Gate Park) record a placeholder.
 const PDR_PLACEHOLDER_SQUARE_FEET = 1;
 
 interface LandUseRow {
   the_geom?: { type: string; coordinates: number[][][][] };
   mapblklot?: string;
-  centroid_l?: string; // latitude; `centroid_1` is the longitude, truncated column names
+  centroid_l?: string; // latitude; `centroid_1` is longitude (truncated column names)
   centroid_1?: string;
   pdr?: string;
   retail?: string;
@@ -573,7 +462,7 @@ interface LandUseRow {
   cie?: string;
   med?: string;
   visitor?: string;
-  total_comm?: string; // the published sum of the six categories above
+  total_comm?: string; // sum of the six categories above
   resunits?: string;
 }
 
@@ -587,16 +476,15 @@ function squareFeet(value: string | undefined): number {
 export interface SfIndustrial {
   polygons: Polygon[];
   parcels: number;
-  dominant: number; // kept because PDR is the parcel's own biggest use
-  zoned: number; // kept because nothing is built on it and it is zoned industrial
+  dominant: number;
+  zoned: number;
   offLand: number;
 }
 
 export async function fetchSfIndustrial(
   onLand: (coord: Coord) => boolean,
 ): Promise<SfIndustrial> {
-  // `resunits` counts homes; there is no residential floor area to weigh PDR against, and the
-  // `residentia` column names a housing SUBTYPE ("sro", "senior living") rather than an area.
+  // `residentia` names a housing subtype, not an area, so `resunits` is the only residential signal.
   const unused =
     "(total_comm IS NULL OR total_comm = 0) AND (resunits IS NULL OR resunits = 0)";
   const [rows, zones] = await Promise.all([
@@ -615,8 +503,6 @@ export async function fetchSfIndustrial(
     ),
   ]);
 
-  // The zoning polygons as a point-in-set test — `buildLandTest` is the even-odd bands, indifferent
-  // to what the polygons mean.
   const zonePolygons: Polygon[] = [];
   for (const zone of zones) {
     for (const parts of zone.the_geom?.coordinates ?? []) {
@@ -660,9 +546,7 @@ export async function fetchSfIndustrial(
     if (branch === null) {
       continue;
     }
-    // Any vertex on land, not the centroid: this is the waterfront, and a pier or a bulkhead lot
-    // reaching past the shoreline the neighborhood polygons draw tests as land only where it meets
-    // it — the same rule the New York lots are clipped by.
+    // Any vertex on land, not the centroid, so a pier reaching past the shoreline is kept.
     const parts = (row.the_geom?.coordinates ?? [])
       .map((part) =>
         part

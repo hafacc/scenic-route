@@ -1,28 +1,5 @@
-//! The crown height of every measured-canopy polygon, sampled from a 1 m LiDAR raster. The first
-//! half of `tiler ingest`, run once scripts/tree-data-fetch.ts has written the canopy `.bin` — the
-//! file arrives with its height region zeroed and leaves with it filled, in place, exactly as the
-//! street density blob does in the pass after it.
-//!
-//! A polygon's height is the 75th percentile of the raster cells whose centers fall inside it, in
-//! decimeters. A polygon that catches no cell keeps 0, meaning unknown, which no real height can
-//! collide with.
-//!
-//! The rasters are different products and the difference matters. New York's is a thresholded
-//! crown-core CHM: canopy only, 95% of its cells nodata, lowest real reading 2.1 m. San Francisco's
-//! is band 2 of the 3DEP topographic tiles, which is simply the surface model less the terrain
-//! model — height above ground for EVERYTHING, so downtown reads 208 m and the Salesforce Tower
-//! reads 324 m. What makes it a canopy measurement is this pass and only this pass: the polygons are
-//! measured canopy, so a cell is only ever read where a tree was already mapped. Never sample it
-//! unmasked. The East Bay's is New York's kind rather than San Francisco's — its publisher zeroes
-//! building footprints and water before shipping it — so the masking here is a second guard on it
-//! rather than the only one.
-//!
-//! A region may name several: its polygons are offered to each in turn, and every polygon keeps the
-//! reading of whichever raster READ the most of it — cells that carried a value, not cells the grid
-//! merely spanned. A raster whose grid covers a polygon and holds nothing for it would otherwise win
-//! on coverage and overwrite a real reading with the zero that means unknown. The Bay Area's two
-//! halves lie under different surveys on different grids, and neither raster reaches the other's
-//! ground.
+//! The crown height of each canopy polygon: the 75th percentile of the 1 m LiDAR cells inside it.
+//! San Francisco's raster is height above ground for everything, roofs too, so never sample it unmasked.
 
 use std::fs;
 use std::fs::File;
@@ -42,9 +19,7 @@ use crate::dem::{TileGrid, read_tile_grid};
 
 pub struct Args {
     pub canopy: PathBuf,
-    /// One per survey the region's crowns are measured from. New York and San Francisco each name a
-    /// single one; the Bay Area names two, because its two halves were flown by different programs
-    /// onto different grids and no one raster reaches both.
+    /// One per survey; the Bay Area needs two, since no one raster reaches both halves.
     pub rasters: Vec<Raster>,
 }
 
@@ -54,66 +29,43 @@ pub struct Raster {
     pub projection: Tmerc,
 }
 
-/// Where the heights are read from. Both forms are 1 m rasters on a transverse Mercator, and the
-/// sampler treats them identically once a band of rows has been filled; they differ only in how a
-/// band is gathered.
+/// Where the heights are read from; both are 1 m rasters on a transverse Mercator.
 pub enum Source {
     /// One tiled BigTIFF of 16-bit decimeters — New York's canopy height model.
     Single(PathBuf),
-    /// Several hundred separate rasters covering one grid between them, of which a named band
-    /// carries height above ground — San Francisco's 3DEP topographic tiles.
+    /// Separate rasters tiling one grid, `band` being height above ground (San Francisco's 3DEP).
     Mosaic { paths: Vec<PathBuf>, band: usize },
 }
 
 const HEIGHT_PERCENTILE: f64 = 0.75;
-const NODATA: u16 = 65535; // New York's CHM carries it explicitly, and 95% of its cells are it
+const NODATA: u16 = 65535; // explicit in New York's CHM, 95% of its cells
 const TALL_METERS: f64 = 20.0; // the cut the reported share of canopy area is taken above
-/// Taller than any tree in either city — New York's tallest measures about 40 m and San Francisco's
-/// blue gums about 60 — so a reading above it is a source defect, not a crown. Reported in the
-/// summary for both cities, and for a mosaic also dropped at the cell: that band measures buildings
-/// as readily as trees, so a canopy polygon straying onto a roof reads as a tower. Dropped rather
-/// than clamped, because a clamp keeps the cell and calls a 200 m tower a 65 m tree, which is still
-/// not a tree; a polygon left with only its real crown cells takes their percentile, and one left
-/// with none keeps the 0 that means unknown. Measured: it rejects 0.05% of San Francisco's canopy
-/// area, all of it downtown and along roof edges.
+/// Taller than any tree here, so a reading above it is a roof or defect; dropped, not clamped.
 const IMPLAUSIBLE_CROWN_METERS: f64 = 65.0;
 const PROGRESS_BANDS: usize = 40;
 
-/// Anything at or below this reads as no measurement rather than as ground. A mosaic tile pads its
-/// edges with large negatives, and a height-above-ground band puts small negatives wherever the two
-/// surfaces it differences disagree by noise; neither is a crown.
+/// At or below this is no measurement: mosaic edge padding and height-above-ground noise.
 const ABOVE_GROUND_FLOOR_METERS: f64 = 0.05;
 
-/// The same floor under a canopy polygon, where a cell this low is street or roof the ring
-/// simplification swept inside the crown rather than a low tree: the polygons are mapped to a
-/// 4.57 m minimum canopy height, so nothing real is dropped and a small crown's percentile stops
-/// being dragged down by meters of ground.
+/// The floor under a crown: canopy is mapped to a 4.57 m minimum, so lower cells are street or roof.
 const CROWN_FLOOR_METERS: f64 = 0.5;
 
-/// No dry land is under this — the Dead Sea shore, the lowest there is, sits at about -430 m — so a
-/// ground elevation below it is a mosaic's nodata pad and not terrain. It is the datum an elevation
-/// is stored against as well, which is what keeps ground at and under sea level a reading: the tide
-/// line around Alameda and Bay Farm Island is exactly where the East Bay's buildings are measured.
+/// Below the lowest dry land (about -430 m) is nodata; also the datum, so sub-sea ground reads.
 const ELEVATION_FLOOR_METERS: f64 = -1_000.0;
 
-/// What a mosaic's cells are read as. A crown and a roof are heights above ground: never negative,
-/// and nothing at all at ground level. A building's base is an elevation above sea level, which is
-/// both. So the band a cell has to fall in, and the datum its decimeters are counted from, belong to
-/// the quantity rather than to the sampler — one floor over both reads low-lying ground as missing.
+/// How a mosaic cell is read: the band it must fall in and the datum its decimeters count from.
 #[derive(Clone, Copy)]
 pub struct Quantity {
     /// A cell at or below this carries no measurement.
     floor_meters: f64,
-    /// And one above it is a source defect rather than a reading.
+    /// A cell above this is a source defect.
     ceiling_meters: f64,
-    /// What a stored decimeter is counted from, never above the floor. Floor to ceiling has to fit
-    /// the sampler's unsigned decimeters, which reach 6553.4 m.
+    /// What a stored decimeter counts from; floor to ceiling must fit u16 decimeters (6553.4 m).
     datum_meters: f64,
 }
 
 impl Quantity {
-    /// A height above ground, dropped above `ceiling_meters` — 65 m is a defect for a crown, while a
-    /// roof's ceiling is set taller than any building on earth and drops only noise.
+    /// A height above ground, dropped above `ceiling_meters`.
     pub const fn above_ground(ceiling_meters: f64) -> Quantity {
         Quantity {
             floor_meters: ABOVE_GROUND_FLOOR_METERS,
@@ -140,35 +92,29 @@ impl Quantity {
         }
     }
 
-    /// One raster value as the sampler stores it, or nothing where it falls outside the band — which
-    /// a NaN does too, every comparison against one being false.
+    /// A raster value in stored decimeters, or `None` outside the band (NaN included).
     fn decimeters(self, value: f32) -> Option<u16> {
         let meters = f64::from(value);
         (meters > self.floor_meters && meters <= self.ceiling_meters)
-            // Nearest rather than truncated: a cell of 21.3 m arrives as the float32 21.299999 and
-            // would otherwise store a decimeter short of what the publisher wrote.
+            // Rounded: 21.3 m arrives as float32 21.299999 and truncation loses a decimeter.
             .then_some(((meters - self.datum_meters) * 10.0).round() as u16)
     }
 
-    /// And back: what one sampled reading measures.
+    /// Stored decimeters back to meters.
     pub fn meters(self, decimeters: u16) -> f64 {
         f64::from(decimeters) / 10.0 + self.datum_meters
     }
 }
 
-// GRS80, which both height rasters are referenced to. A raster's tags carry its tie point and cell
-// size but not its CRS, so the projection is named per city below.
+// GRS80. A raster's tags carry no CRS, so each city names its projection.
 const SEMI_MAJOR_METERS: f64 = 6_378_137.0;
 const INVERSE_FLATTENING: f64 = 298.257222101;
 
-/// A transverse Mercator on GRS80. Both cities' height rasters are one — New York's canopy height
-/// model on UTM zone 18N, San Francisco's 3DEP tiles on the city's own low-distortion grid — so the
-/// difference between them is five numbers rather than a second projection.
+/// A transverse Mercator on GRS80.
 #[derive(Clone, Copy)]
 pub struct Tmerc {
     central_meridian: f64,
-    /// The parallel the northing is measured from. Zero for a UTM zone, which is why the original
-    /// series could leave the meridional arc at the origin out.
+    /// The parallel the northing is measured from; zero for a UTM zone.
     lat_origin: f64,
     scale_factor: f64,
     false_easting: f64,
@@ -184,9 +130,7 @@ pub const UTM_18N: Tmerc = Tmerc {
     false_northing: 0.0,
 };
 
-/// NAD83 / UTM zone 10N — EPSG:26910, the staged 1 m bare-earth DEM over the East Bay and the grid
-/// the surface model binned from its point cloud is written on. Plain NAD83 rather than the 2011
-/// realization, which is the same five numbers.
+/// NAD83 / UTM zone 10N, EPSG:26910, the East Bay's staged 1 m DEM; same numbers as NAD83(2011).
 pub const UTM_10N: Tmerc = Tmerc {
     central_meridian: -123.0,
     lat_origin: 0.0,
@@ -204,9 +148,7 @@ pub const SF_CS13: Tmerc = Tmerc {
     false_northing: 24_000.0,
 };
 
-/// The five numbers a CRS name stands for. ONE table, because two of them disagreeing means a city
-/// whose graph bakes correct relief and whose terrain overlay is silently absent — so every caller
-/// that is handed a name (the ingest params' `chm.crs`, a build plan's `crs`) resolves it here.
+/// The one table resolving a CRS name, so the graph's relief and the terrain overlay can't disagree.
 pub fn projection(name: &str) -> crate::Fallible<Tmerc> {
     match name {
         "sf-cs13" => Ok(SF_CS13),
@@ -249,8 +191,7 @@ fn meridian_arc(phi: f64, eccentricity2: f64) -> f64 {
 }
 
 impl Tmerc {
-    /// Snyder's transverse Mercator series, forward: degrees to grid meters. Good to millimeters
-    /// this close to the central meridian — a round trip over New York measures 0.06 mm.
+    /// Snyder's series, forward: degrees to grid meters, good to millimeters near the central meridian.
     pub fn forward(&self, lng: f64, lat: f64) -> (f64, f64) {
         let flattening = 1.0 / INVERSE_FLATTENING;
         let eccentricity2 = flattening * (2.0 - flattening);
@@ -263,8 +204,6 @@ impl Tmerc {
         let eta2 = second2 * cos_phi * cos_phi;
         let east = (lng - self.central_meridian).to_radians() * cos_phi;
         let east2 = east * east;
-        // Measured from the grid's own origin parallel, which is the equator for a UTM zone and
-        // 37.75 N for San Francisco's.
         let meridian = meridian_arc(phi, eccentricity2)
             - meridian_arc(self.lat_origin.to_radians(), eccentricity2);
         let easting = self.scale_factor
@@ -293,9 +232,7 @@ impl Tmerc {
     }
 }
 
-/// The raster's shape and georeferencing, read from its own tags: the image and tile sizes, the
-/// ground coordinate of the upper-left *corner* of pixel (0, 0) (RasterPixelIsArea), and the
-/// meters a cell spans.
+/// The raster's shape and georeferencing; the origin is pixel (0, 0)'s upper-left corner.
 struct Grid {
     width: usize,
     height: usize,
@@ -319,14 +256,10 @@ impl Grid {
     }
 }
 
-/// The band height a mosaic is walked in. Its tiles are 500 rows and its chunks 512, so neither
-/// divides the other; this is one tile row, which is what keeps most tiles landing in a single band
-/// and so decoded once.
+/// One mosaic tile row, so most tiles land in a single band and are decoded once.
 const MOSAIC_BAND_ROWS: usize = 500;
 
-/// One grid spanning every tile of a mosaic, so the sampler sees the same thing it sees for a
-/// single raster. Sound only because the tiles share a projection and a cell size and are tied at
-/// whole meters, which is checked here rather than assumed.
+/// One grid spanning a mosaic's tiles, checked to share a cell size and whole-cell alignment.
 fn mosaic_grid(tiles: &[TileGrid], projection: Tmerc) -> Fallible<Grid> {
     let first = tiles.first().ok_or("a canopy mosaic with no tiles")?;
     let cell = first.cell;
@@ -346,8 +279,7 @@ fn mosaic_grid(tiles: &[TileGrid], projection: Tmerc) -> Fallible<Grid> {
         min_y = min_y.min(tile.min_y());
         max_y = max_y.max(tile.max_y());
     }
-    // Every tile has to land on the shared grid's own cell boundaries, or a copy would shift a
-    // tile's readings by a fraction of a cell and silently smear the crowns.
+    // A tile off the shared grid would smear its readings by a fraction of a cell.
     for tile in tiles {
         let column = (tile.min_x() - min_x) / cell;
         let row = (max_y - tile.max_y()) / cell;
@@ -379,8 +311,7 @@ fn read_grid(decoder: &mut Chm, projection: Tmerc) -> Fallible<Grid> {
     let (tile_width, tile_height) = decoder.chunk_dimensions();
     let scale = decoder.get_tag_f64_vec(Tag::ModelPixelScaleTag)?;
     let tie = decoder.get_tag_f64_vec(Tag::ModelTiepointTag)?;
-    // The tie point ties a raster point to a ground point; only a tie at the raster's own origin
-    // and square cells make the pixel map below a division rather than a full affine transform.
+    // Only a tie at the origin and square cells make the pixel map a division, not an affine transform.
     if scale.len() < 2 || tie.len() < 6 || tie[..3] != [0.0, 0.0, 0.0] || scale[0] != scale[1] {
         return Err(format!(
             "the CHM is not an axis-aligned raster tied at its origin (scale {scale:?}, tie point {tie:?})"
@@ -406,15 +337,13 @@ fn read_grid(decoder: &mut Chm, projection: Tmerc) -> Fallible<Grid> {
     })
 }
 
-/// The polygons flattened into the raster's pixel space: `ring_starts` indexes the coordinate
-/// arrays and `polygon_starts` indexes `ring_starts`, so a polygon's rings are filled together
-/// (its inner rings cut holes) and one polygon at a time (two overlapping crowns do not cancel).
+/// Polygons in pixel space: `polygon_starts` indexes `ring_starts`, which indexes the coordinates.
 struct Shapes {
     xs: Vec<f64>,
     ys: Vec<f64>,
     ring_starts: Vec<u32>,
     polygon_starts: Vec<u32>,
-    first_rows: Vec<u32>, // per polygon, clamped to the raster: the rows its box can reach
+    first_rows: Vec<u32>, // per polygon, clamped to the raster
     last_rows: Vec<u32>,
 }
 
@@ -445,9 +374,7 @@ fn project(polygons: &[Polygon], grid: &Grid) -> Shapes {
                 shapes.ys.push(y);
             }
         }
-        // A polygon beside the raster rather than above or below it would still be scanned row by
-        // row, finding nothing on every one — which is most of a region's polygons when a second
-        // survey covers the other half of it. An empty row range takes it out of the bands entirely.
+        // A polygon beside the raster gets an empty row range, so no band scans it.
         let (first, last) = if rightmost < 0.0 || leftmost > grid.width as f64 {
             (0.0, 0.0)
         } else {
@@ -462,8 +389,7 @@ fn project(polygons: &[Polygon], grid: &Grid) -> Shapes {
     shapes
 }
 
-/// Which polygons each band of the raster has to fill, CSR-style, so a band is decoded once and
-/// only the polygons reaching it are walked. A polygon spanning two bands is listed in both.
+/// Which polygons reach each band, CSR-style; a polygon spanning two bands is listed in both.
 struct Bands {
     starts: Vec<u32>,
     polygons: Vec<u32>,
@@ -500,11 +426,9 @@ fn bucket_bands(shapes: &Shapes, grid: &Grid) -> Bands {
     }
 }
 
-/// What one worker holds to read a band. The single raster keeps a decoder open because reopening
-/// it would reparse a BigTIFF directory per band; the mosaic opens each of its tiles as it reaches
-/// them, so it holds only the headers.
+/// A worker's band source; the single raster keeps its decoder, sparing a BigTIFF reparse.
 enum BandReader<'a> {
-    /// Boxed: a BigTIFF decoder carries its whole directory, and the mosaic arm is three words.
+    /// Boxed: a BigTIFF decoder is far larger than the mosaic arm.
     Single(Box<Chm>),
     Mosaic {
         tiles: &'a [TileGrid],
@@ -513,8 +437,7 @@ enum BandReader<'a> {
     },
 }
 
-/// One band's readings for one polygon: how many of its cells the band covered, and the heights
-/// the raster carried for them. A polygon crossing a band edge contributes one of these per band.
+/// One band's readings for one polygon: cells covered, and the heights read there.
 struct Reading {
     polygon: u32,
     cells: u32,
@@ -524,7 +447,7 @@ struct Reading {
 struct BandResult {
     readings: Vec<Reading>,
     skipped_tiles: usize,
-    skipped_cells: u64, // polygon cells that fell inside one
+    skipped_cells: u64, // polygon cells in skipped tiles
 }
 
 /// One band of a single tiled raster, read chunk by chunk from its own tile grid.
@@ -557,9 +480,7 @@ fn fill_single(
     Ok(skipped)
 }
 
-/// One band of a mosaic, gathered from whichever separate rasters reach its rows. Their float
-/// meters become the decimeters the sampler works in here, at the one point where the two sources
-/// differ in units.
+/// One band of a mosaic, gathered from the tiles reaching its rows and converted to decimeters.
 fn fill_mosaic(
     tiles: &[TileGrid],
     source_band: usize,
@@ -612,9 +533,7 @@ fn fill_mosaic(
     Ok(skipped)
 }
 
-// One band: its cells decoded, then every polygon that reaches it filled even-odd at cell centers —
-// a row's crossings are taken at y = row + 0.5 and each span covers the columns whose center
-// x = col + 0.5 lies between two of them.
+// Fills each polygon even-odd at cell centers: crossings at y = row + 0.5, spans over x = col + 0.5.
 fn sample_band(
     source: &mut BandReader<'_>,
     cells: &mut [u16],
@@ -786,9 +705,7 @@ fn describe(heights_m: &[f64], areas: &[u32]) -> usize {
             quartiles[2] - quartiles[0],
             100.0 * tall as f64 / area as f64
         );
-        // The upper tail, printed because it is the one place a bad source shows. A height-above-
-        // ground band measures buildings too, so a canopy polygon that strays onto a roof comes back
-        // as a crown no tree could grow; anything here past the tallest trees in the city is that.
+        // The upper tail, where a canopy polygon straying onto a roof shows.
         let implausible: u64 = measured
             .iter()
             .filter(|(height, _)| *height > IMPLAUSIBLE_CROWN_METERS)
@@ -805,24 +722,20 @@ fn describe(heights_m: &[f64], areas: &[u32]) -> usize {
     measured.len()
 }
 
-/// What a raster held under a set of polygons: each polygon's readings in decimeters, sorted, and
-/// how many cells it covered whether or not they carried one.
+/// A raster's readings per polygon in sorted decimeters, and the cells each covered.
 pub struct Measured {
     pub values: Vec<Vec<u16>>,
     pub cells: Vec<u32>,
     pub skipped_tiles: usize,
 }
 
-/// The lowest reading `quantile` of a polygon's cells are at or below — nearest rank — and 0, which
-/// means unknown and which no real height can collide with, for a polygon that caught no cell.
+/// Nearest-rank percentile, or 0 (unknown) for a polygon that caught no cell.
 pub fn percentile_dm(sorted: &[u16], quantile: f64) -> u16 {
     let rank = (sorted.len() as f64 * quantile).ceil() as usize;
     sorted.get(rank.max(1) - 1).copied().unwrap_or(0)
 }
 
-/// Every polygon's readings from one raster. The canopy pass takes the 75th percentile of these and
-/// so does the building pass; what separates them is `quantity`, which decides what a mosaic cell
-/// has to hold to be a reading at all and what its decimeters then mean.
+/// Every polygon's readings from one raster; `quantity` decides what a mosaic cell reads as.
 pub fn measure(
     polygons: &[Polygon],
     raster: &Source,
@@ -895,15 +808,9 @@ pub fn run(args: &Args) -> Fallible<Report> {
     let started = Instant::now();
     let mut canopy = binfmt::read_canopy(&args.canopy)?;
     let mut heights = vec![0u16; canopy.polygons.len()];
-    // Per polygon, the most cells any raster laid over it — its area, which is what `describe`
-    // weights the reported distribution by. A cell counts here whether or not it carried a reading,
-    // exactly as it did when a city named one raster.
+    // Per polygon, the most cells any raster laid over it: its area, for weighting the summary.
     let mut covered = vec![0u32; canopy.polygons.len()];
-    // And, separately, how many of those cells actually READ. This is what decides whose height a
-    // polygon keeps where a region names several rasters, and it has to be the readings rather than
-    // the cells: a raster whose grid merely spans a polygon — beyond its tiles, or over a gap in
-    // them — counts every cell of it as covered and carries a value for none, so on cells it would
-    // win and overwrite a real crown with the 0 that means unknown.
+    // The most cells any raster read decides the height, as a raster over a gap covers but reads none.
     let mut read = vec![0usize; canopy.polygons.len()];
     let mut skipped_tiles = 0;
     for raster in &args.rasters {
@@ -942,8 +849,7 @@ pub fn run(args: &Args) -> Fallible<Report> {
 mod tests {
     use super::{HEIGHT_PERCENTILE, Quantity, SF_CS13, Tmerc, UTM_10N, UTM_18N, percentile_dm};
 
-    /// Decimeters are what the publisher wrote, not what float32 can hold: this is the 5% of cells
-    /// whose meters land a hair under a tenth and truncation loses.
+    /// Decimeters are what the publisher wrote, not float32 truncation.
     #[test]
     fn a_cell_on_a_decimeter_reads_that_decimeter() {
         let crown = Quantity::crown();
@@ -965,9 +871,7 @@ mod tests {
         assert_eq!(percentile_dm(&sample, HEIGHT_PERCENTILE), 62);
     }
 
-    /// The floor that means "no crown here" is a floor over ground elevation only in the sense that
-    /// it rejects the shoreline the East Bay's low-lying buildings stand on, so the two quantities
-    /// carry their own — and an elevation, unlike a height above ground, survives being negative.
+    /// An elevation survives being negative or near zero; a height above ground does not.
     #[test]
     fn ground_at_the_tide_line_is_a_reading_and_a_crown_there_is_not() {
         let crown = Quantity::above_ground(65.0);
@@ -984,9 +888,7 @@ mod tests {
         assert_eq!(ground.decimeters(f32::NAN), None);
     }
 
-    /// Every transverse Mercator maps its own origin onto its false easting and northing exactly, so
-    /// this catches the meridional arc at the origin parallel being dropped — the one term a UTM
-    /// zone's zero-latitude origin lets a projection get away with ignoring.
+    /// A grid origin maps to its false origin, which catches a dropped meridional arc term.
     #[test]
     fn a_grid_origin_lands_on_its_false_origin() {
         for (grid, lng, lat, east, north) in [
@@ -1000,9 +902,7 @@ mod tests {
         }
     }
 
-    /// Checked against a publisher's own georeferencing rather than against this code: the 3DEP tile
-    /// USGS_LPC_CA_SanFrancisco_B23_05200290 ties its upper-left pixel corner to CS13 (52000, 29500),
-    /// and its STAC entry gives that corner's longitude and latitude.
+    /// 3DEP tile B23_05200290's upper-left corner is CS13 (52000, 29500), per its STAC entry.
     #[test]
     fn sf_cs13_agrees_with_a_published_tile() {
         let (x, y) = SF_CS13.forward(-122.404_585_177_429_87, 37.799_543_921_926_79);
@@ -1010,9 +910,7 @@ mod tests {
         assert!((y - 29_500.0).abs() < 0.5, "northing {y} not 29500");
     }
 
-    /// Checked against PROJ's own EPSG:26910 rather than against this code: the corner the staged
-    /// DEM tile USGS_1M_10_x56y419 ties its upper-left pixel to, (559994, 4190006), placed by PROJ
-    /// at this longitude and latitude.
+    /// DEM tile USGS_1M_10_x56y419's corner (559994, 4190006), placed by PROJ's EPSG:26910.
     #[test]
     fn utm_10n_agrees_with_a_published_tile() {
         let (x, y) = UTM_10N.forward(-122.318_015_920_842_7, 37.855_538_216_934_55);
@@ -1020,8 +918,7 @@ mod tests {
         assert!((y - 4_190_006.0).abs() < 0.5, "northing {y} not 4190006");
     }
 
-    /// A degenerate grid — unit scale, no offsets, origin on the equator — is the identity on
-    /// easting at the central meridian, so a sign slip in the false-origin arithmetic shows up.
+    /// Unit scale, no offsets: zero easting on the central meridian, so a false-origin sign slip shows.
     #[test]
     fn the_central_meridian_carries_no_easting_offset() {
         let plain = Tmerc {

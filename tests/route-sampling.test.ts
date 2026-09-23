@@ -1,16 +1,4 @@
-// What the router does over the whole city, measured on real trips rather than a fixture: the
-// route-level companion to crates/tiler/src/invariants.rs, which holds every EDGE of the finished
-// network to what an edge can be held to. It routes 400 trips in each of the five boroughs (2,000 in
-// all) between the real tax lots of data/landuse/nyc.bin, by borough, so a borough-specific
-// regression is visible instead of being averaged into the city. DESIGN.md, "What the whole city is
-// held to", is why, and carries the calibration campaign every bound below was read off.
-//
-// WHERE THIS RUNS. Not in `bun test src`, and not in ordinary CI. It reads public/routing/nyc.bin,
-// which is gitignored, ~37 MB and only exists after a `tiler build`, and two LFS files under
-// data/ that standard CI deliberately checks out as pointers (see .github/workflows/build.yml — the
-// LFS payload burned the account's whole bandwidth budget). So it runs on the manual deploy path,
-// after `bun export` has built the graph, beside `bun run check-sheds`. `bun run test-routes` runs it
-// locally against whatever graph is in public/routing.
+// Needs the built graph and LFS files ordinary CI has only as pointers, so it runs on deploy only.
 
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
@@ -39,76 +27,32 @@ const GRAPH_PATH = join(ROOT, "public/routing/nyc.bin");
 const LAND_PATH = join(ROOT, "data/land/nyc.bin");
 const LOTS_PATH = join(ROOT, "data/landuse/nyc.bin");
 
-// Trips per borough. 400 puts the sampling error on a ~19% share at about 2 points, so a bound five
-// or more points clear of the measurement is not chasing noise; 2,000 routes in all cost ~13 s.
+// Puts the sampling error on a ~19% share at about 2 points.
 const TRIPS_PER_BOROUGH = 400;
-// The trip lengths a person actually walks: far enough that the route has to make choices, near
-// enough that nobody would take the train instead. Straight-line, before any routing.
+// Straight-line distances long enough to force choices, short enough that nobody takes the train.
 const MIN_TRIP_METERS = 400;
 const MAX_TRIP_METERS = 2500;
 
-// A walk must never be this much longer than the straight line between its ends. The structural
-// floor is the grid itself: over uniformly-drawn directions a perfect rectangular grid walks 4/pi ~
-// 1.273 times the straight line, and a shortest path over this network measures 1.22-1.34 by
-// borough — essentially that. The app's default weights add scenic detours on top (1.31-1.42) and
-// the strongest setting one slider can ask for reaches 1.48 on Staten Island. 1.50 clears the
-// defaults by 0.08 on the worst borough and that strongest setting by 0.02; a build that crosses it
-// is one where routes are systematically going round something.
+// Defaults measure 1.31-1.42 by borough and the strongest slider 1.48.
 const MAX_DETOUR_MEDIAN = 1.5;
-// The same guard on the tail, where a route round a park, a rail cut or a highway lives. The 90th
-// percentile rather than the 95th because the 95th is not stable at this sample size: over four
-// seeds it moved by 0.3 on one borough, which would make a tight bound flap, where the 90th moved by
-// 0.09. It measures 1.45-1.87 over the five boroughs at the app's defaults, so 2.00 is 0.13 clear of
-// the worst — and the strongest setting one slider can ask for puts Staten Island at 2.19, well
-// over, which is the gap this bound sits in.
+// p90, not p95: p95 moved by 0.3 between seeds. Defaults measure 1.45-1.87, the strongest slider 2.19.
 const MAX_DETOUR_P90 = 2.0;
 
-// The share of routes containing at least one AVOIDABLE reversal — one the network joined by some
-// path of no more distance than the reversal itself spent, so the cost model BOUGHT it rather than
-// being forced into it. This is the sharp bound, and it is calibrated from both sides:
-//
-//   every scenic weight at 0 (a plain shortest path)   0.0% in all five boroughs
-//   the app's defaults                                 0.0-0.3%  (worst Brooklyn)
-//   every scenic weight at 1 (the sliders' extreme)    0.0-15.8% (worst Manhattan)
-//
-// The zero-weight row has to be 0 — an avoidable reversal is strictly extra distance, so a shortest
-// path can never take one — which is what says this measures the cost model and not the network. 3%
-// is ten times the worst the defaults produce and below what the extreme produces in two boroughs,
-// so the bound sits in a real gap rather than on top of today's number.
+// Reversals the cost model bought: 0% at zero weights, at most 0.3% at defaults, 15.8% at extremes.
 const MAX_AVOIDABLE_SHARE = 0.03;
 
-// The share containing a reversal of ANY kind, forced ones included. Measured 26.0% in Brooklyn and
-// 3.3% on Staten Island, 12.2% city-wide — the ~10% the browser agent reported. MOST OF IT IS NOT
-// THE COST MODEL: with every scenic weight at zero, where a reversal is strictly extra distance and
-// a shortest path would never buy one, Brooklyn still measures 12.5%, because the graph's own
-// corners force it. (Drilled: Jerome Ave at E 21 St, where the two pavement ends of one corner are
-// nodes 3.5 m apart with nothing joining them, so crossing out and back is the only way round.) So
-// this bound is loose by necessity — a per-borough share that swings 7 points between seeds cannot
-// carry a tight one — and the avoidable share above is what actually watches the cost model. 35% is
-// 9 points clear of the worst borough measured.
+// Loose on purpose: the graph's own corners force most reversals, and it swings 7 points by seed.
 const MAX_REVERSAL_SHARE = 0.35;
-// City-wide the sampling error is ~0.7 points and the measurement 12.2%, so 15% is four standard
-// errors clear.
+// Measured 12.2% city-wide, with a sampling error of ~0.7 points.
 const MAX_CITY_REVERSAL_SHARE = 0.15;
 
-// The most crossing edges one route may traverse back to back. One is a plain street; two is a
-// divided street, whose crossing is drawn as two ways chained through the traffic island — which is
-// precisely why "a crossing goes curb to curb" cannot be checked edge by edge, since half of a
-// median crossing looks exactly like a whole small one until a walk goes through it. A junction of
-// several streets chains more: the worst measured over 2,000 city routes is 6, and the junctions
-// drilled at that length — Broadway/W 70 St/Amsterdam Ave, Kings Hwy/Ave P/E 22 St — really do take
-// that many legs. 8 leaves two legs of headroom over the most complicated junction in New York.
+// A divided street is two chained crossings and a big junction more; the worst measured is 6.
 const MAX_CROSSING_RUN = 8;
 
-// The smallest borough (Manhattan) holds ~37,000 of the 788,591 tax lots; anything near this floor
-// means a borough was labeled onto the wrong polygon or a PLUTO refresh dropped one, which would
-// otherwise show up as a suspiciously clean pass rather than as a failure.
+// The smallest borough (Manhattan) has ~37,000 lots; far fewer means a mislabeled or dropped borough.
 const MIN_LOTS_PER_BOROUGH = 20_000;
 
-// The five boroughs, each named by a point everyone would agree is in it: the polygon of
-// data/land/nyc.bin containing it is that borough's mainland. The blob flattens the five boundary
-// rows into 117 shoreline-clipped polygons and keeps no identity, so the labels have to come from
-// somewhere; a landmark coordinate is checkable by eye in a way a polygon index is not.
+// The land blob keeps no borough identity, so each is labeled by the polygon holding a landmark.
 const BOROUGH_LANDMARKS: readonly (readonly [string, Coord])[] = [
   ["Manhattan", { lat: 40.758, lng: -73.9855 }], // Times Square
   ["Bronx", { lat: 40.8448, lng: -73.8648 }], // Bronx Zoo
@@ -135,8 +79,7 @@ function readVarint(bytes: Uint8Array, cursor: { offset: number }): number {
   return (value >>> 1) ^ -(value & 1);
 }
 
-// The header every `scripts/geometry.ts` blob starts with; the body that follows it is quantized
-// against the origin and scale it carries.
+// The header every `scripts/geometry.ts` blob starts with.
 function readHeader(bytes: Uint8Array, magic: string) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const found = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]);
@@ -153,8 +96,7 @@ function readHeader(bytes: Uint8Array, magic: string) {
   };
 }
 
-// LAND: encodePolygons — per polygon a u16 ring count, then per ring a u32 vertex count and the
-// zigzag-varint (x, y) deltas, restarting from the origin at each ring.
+// Mirrors encodePolygons; deltas restart from the origin at each ring.
 function decodeLandPolygons(bytes: Uint8Array): Coord[][][] {
   const head = readHeader(bytes, "LAND");
   const cursor = { offset: head.bodyOffset };
@@ -184,9 +126,7 @@ function decodeLandPolygons(bytes: Uint8Array): Coord[][][] {
   return polygons;
 }
 
-// PLUT: encodeClassifiedPoints — the zigzag-varint (x, y) deltas of every tax lot. The trailing
-// land-use class byte per lot is not read here; a residence and a shop are both places people walk
-// between, which is all this wants of them.
+// Mirrors encodeClassifiedPoints but skips the trailing land-use class bytes.
 function decodeTaxLots(bytes: Uint8Array): Coord[] {
   const head = readHeader(bytes, "PLUT");
   const cursor = { offset: head.bodyOffset };
@@ -204,8 +144,7 @@ function decodeTaxLots(bytes: Uint8Array): Coord[] {
   return lots;
 }
 
-// mulberry32, seeded per borough: the sample has to be the same on every run, or a bound near the
-// measurement would pass and fail at random.
+// mulberry32: seeded so a bound near the measurement doesn't flap between runs.
 function seededRandom(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
@@ -245,7 +184,6 @@ interface BoroughResult {
   farthestSnapMeters: number;
 }
 
-// Route `count` trips between tax lots of one borough and reduce each to the three route metrics.
 function measureBorough(
   borough: string,
   lots: readonly Coord[],
@@ -274,8 +212,7 @@ function measureBorough(
   while (result.routed < count && attempts < count * 40) {
     attempts += 1;
     const origin = pick();
-    // A destination in the same borough at a walkable distance, by rejection — cheaper and less
-    // biased than any index, since the band holds a large share of any borough's lots.
+    // Rejection sampling is cheap and unbiased here, since the band holds most of a borough's lots.
     let dest: Coord | null = null;
     for (let tries = 0; tries < 60 && dest === null; tries++) {
       const candidate = pick();
@@ -364,7 +301,6 @@ const [landBytes, lotBytes, graphBytes] = await Promise.all([
   readBlob(GRAPH_PATH, "routing graph"),
 ]);
 
-// Each borough's mainland: the land polygon its landmark falls in, as a point-in-polygon test.
 const landPolygons = decodeLandPolygons(landBytes);
 const polygonTests = landPolygons.map((polygon) => buildLandTest([polygon]));
 const boroughTests = BOROUGH_LANDMARKS.map(([borough, landmark]) => {
@@ -396,10 +332,7 @@ const graph = decodeGraph(
 );
 const snapIndex = buildSnapIndex(graph);
 
-// The app's own defaults, imported rather than restated so a retuned slider moves this sample with
-// it — except that ferries and trains are barred: neither is walked, so a leg of one would put a
-// span in a walk-versus-straight-line ratio that has no meaning, and both ends of every sampled trip
-// are in one borough anyway.
+// No ferries or trains: a ride leg would make the walk-versus-straight-line ratio meaningless.
 const WEIGHTS: RouteWeights = {
   ...DEFAULT_WEIGHTS,
   allowFerries: false,
@@ -421,8 +354,6 @@ const measured = [...lotsByBorough].map(([borough, lots], index) =>
 const percent = (share: number): string => `${(100 * share).toFixed(1)}%`;
 
 test("every borough offers enough real addresses to sample from", () => {
-  // A borough labeled onto the wrong polygon, or a PLUTO refresh that dropped a borough, would
-  // otherwise show up as a suspiciously clean pass rather than as a failure.
   const thin = [...lotsByBorough]
     .filter(([, lots]) => lots.length < MIN_LOTS_PER_BOROUGH)
     .map(([borough, lots]) => `${borough}: ${lots.length} lots`);
@@ -436,9 +367,7 @@ test("every borough offers enough real addresses to sample from", () => {
 });
 
 test("a trip between two real addresses always routes", () => {
-  // The graph's component check catches gross disconnection; this catches the rest — a lot whose
-  // nearest pavement is out of snap range, or two lots the network cannot join. Every sampled point
-  // is a real addressed parcel on land, so one failure is one address the app cannot serve.
+  // Every sampled point is a real parcel, so each failure is an address the app cannot serve.
   const failures = measured.flatMap((result) =>
     result.failures.map(
       (failure) =>
@@ -448,8 +377,7 @@ test("a trip between two real addresses always routes", () => {
 
   expect(failures).toEqual([]);
 
-  // How much room the snap radius has left: the farthest a sampled address sat from the pavement it
-  // snapped to, against the radius itself. Measured 80 m against 300, i.e. 3.8x.
+  // Headroom in the snap radius: the farthest snap measured 80 m against 300.
   const farthest = Math.max(
     ...measured.map((result) => result.farthestSnapMeters),
   );
@@ -473,11 +401,6 @@ test("the walk is not far longer than the straight line, in any borough", () => 
 });
 
 test("a route never buys a crossing reversal the network offered a way round", () => {
-  // The sharp half of the property. A reversal the network joins by some path of no more distance
-  // than the reversal itself spent was BOUGHT — the cost model paid two crossings for greener
-  // pavement — and that is the cost-model artifact the browser agent was pointing at. Measured 1 of
-  // 2,000 trips at the app's defaults; at the strongest setting the tree slider offers it is 0.3% of
-  // trips in two boroughs, which is the gap this bound sits in.
   const over = measured
     .filter(
       (result) => result.avoidableRoutes / result.routed > MAX_AVOIDABLE_SHARE,
@@ -496,9 +419,6 @@ test("a route never buys a crossing reversal the network offered a way round", (
 });
 
 test("a route rarely crosses a street and crosses straight back at all", () => {
-  // The blunt half: every reversal, forced ones included. Loose on purpose — most of this number is
-  // the network's own corners rather than the cost model (see MAX_REVERSAL_SHARE), so it is a guard
-  // against a gross change in either, not a tuning signal.
   const over = measured
     .filter(
       (result) => result.reversalRoutes / result.routed > MAX_REVERSAL_SHARE,
@@ -528,9 +448,6 @@ test("a route rarely crosses a street and crosses straight back at all", () => {
 });
 
 test("a crossing is traversed in one move", () => {
-  // A divided street's crossing is two chained edges and a big junction is more, so this bounds the
-  // run rather than forbidding it: what it rules out is a route threading roadway to roadway,
-  // which is the shape a walk takes when it has stepped off the curb and cannot get back on.
   const over = measured
     .filter((result) => result.longestRun > MAX_CROSSING_RUN)
     .map(

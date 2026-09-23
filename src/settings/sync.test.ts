@@ -4,8 +4,7 @@ import { GATE_KEYS } from "../routing/cost";
 import { DEFAULT_SETTINGS, type Settings } from "./store";
 import { mergeSettings } from "./sync";
 
-// Two devices, one reader. What each of these pins is that signing in MERGES rather than picking a
-// winner: the point of syncing settings is not to have one device's copy, it is to stop retuning.
+// Signing in merges per field rather than picking a winning device.
 
 const settings = (patch: Partial<Settings>): Settings => ({
   ...DEFAULT_SETTINGS,
@@ -71,9 +70,7 @@ test("the merged stamps carry whichever side won, so the next merge agrees", () 
   expect(mergeSettings(merged, remote)).toEqual(merged);
 });
 
-// The gates are spread from GATE_KEYS, so this walks that list rather than naming gates: a gate
-// added later is synced by construction, and a test that named them would pass while the code it
-// guards forgot one.
+// Walks GATE_KEYS rather than naming gates, so a gate added later is covered too.
 test("every gate reaches the other device, not just the two the list was born with", () => {
   for (const gate of GATE_KEYS) {
     const local = {
@@ -123,8 +120,7 @@ test("two devices hiding a layer in two modes both keep theirs", () => {
   });
 });
 
-// The row sets one switch at a time, so stamping all three together made two devices moving two
-// different switches last-writer-wins over the whole set.
+// Stamping all three switches together made two devices' different switches last-writer-wins.
 test("two devices moving two different switches both keep theirs", () => {
   const local = settings({
     toggles: { sun: "shade", hills: "any", ferries: true },

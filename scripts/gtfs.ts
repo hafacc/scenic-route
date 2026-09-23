@@ -1,34 +1,22 @@
-// A minimal GTFS reader for the ferry and subway ingests: it downloads a feed zip (through the disk
-// cache), unzips it in memory and parses the handful of CSV tables they read. It leans on
-// node:zlib for the one deflate step and parses the central directory by hand, so it pulls in no
-// zip dependency; the CSV reader it parses the tables with is scripts/csv.ts. See scripts/README.md.
-
 import { readFile } from "node:fs/promises";
 import { inflateRawSync } from "node:zlib";
 import pRetry from "p-retry";
 import { cached, cachedFile } from "./cache";
 import { type CsvRow, parseCsv } from "./csv";
 
-// A browser-ish User-Agent: NYC DOT's Akamai edge answers the plain download with a 403 unless the
-// request looks like a browser. The NYC Ferry endpoint does not care, but the header is harmless
-// there, so both feeds send it.
+// NYC DOT's Akamai edge 403s a download that doesn't look like a browser.
 const BROWSER_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const MAX_ATTEMPTS = 3;
-// The feeds are the one cached source that goes stale on its own: an agency posts a new zip every
-// few weeks and the calendar in the old one runs out, so a timetable built off a month-old copy is
-// built off an expired calendar. `--offline` (or OFFLINE=1) takes the cached copy whatever its age.
+// Feeds expire: an agency posts a new zip every few weeks and the old calendar runs out.
 const FEED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const RETRY_BASE_MS = 2_000;
 const RETRY_CAP_MS = 30_000;
 
-// One parsed GTFS table: the header row keys each record, so a column is read by its name and a
-// column a feed omits simply comes back undefined rather than shifting every field.
 export type GtfsRow = CsvRow;
 
-// The tables the ferry consolidation reads. calendar_dates and frequencies are often empty (a
-// header only) or absent; either way they parse to an empty array.
+// A table the feed omits parses to an empty array.
 export interface GtfsFeed {
   routes: GtfsRow[];
   trips: GtfsRow[];
@@ -38,8 +26,7 @@ export interface GtfsFeed {
   calendarDates: GtfsRow[];
   shapes: GtfsRow[];
   frequencies: GtfsRow[];
-  // The agency's own transfer table: which stops it says a rider can walk between. Absent from
-  // Muni's feed, which is why the station merge keeps a geometric fallback (../src/subway/format).
+  // Absent from Muni's feed, so the station merge keeps a geometric fallback.
   transfers: GtfsRow[];
 }
 
@@ -72,9 +59,7 @@ async function download(url: string): Promise<Uint8Array> {
   }
 }
 
-// Downloads a feed zip and keeps it in .cache/ as base64 (the cache stores JSON, so the raw bytes
-// ride as a string), for a week. The ingest also freezes the returned bytes under data/ferries/, so a
-// later time-of-day pass can re-derive from the exact feeds this build read.
+// Cached as base64 since the cache stores JSON; for a feed also frozen under data/.
 export async function fetchGtfsZip(
   name: string,
   url: string,
@@ -91,9 +76,7 @@ export async function fetchGtfsZip(
   return new Uint8Array(Buffer.from(base64, "base64"));
 }
 
-// The same download for a feed that is only read, never frozen under data/: the raw-bytes cache
-// entry rather than fetchGtfsZip's base64-inside-JSON one, which costs a third more disk and a
-// parse of the whole string on every hit. The subway feed is 5.3 MiB of zip.
+// Raw-bytes cache entry for a feed that is only read, skipping base64's size and parse cost.
 export async function fetchGtfsZipFile(
   name: string,
   url: string,
@@ -116,8 +99,7 @@ const LOCAL_HEADER_BYTES = 30;
 const METHOD_STORED = 0;
 const METHOD_DEFLATE = 8;
 
-// The offset of the End Of Central Directory record: it is at the tail, before an optional
-// comment, so the last 64 KiB are scanned back for its signature.
+// The EOCD record precedes an optional comment of up to 64 KiB, so scan back for its signature.
 function findEndOfCentralDirectory(bytes: Uint8Array, view: DataView): number {
   const earliest = Math.max(0, bytes.length - 0x10000 - 22);
   for (let offset = bytes.length - 22; offset >= earliest; offset--) {
@@ -128,9 +110,7 @@ function findEndOfCentralDirectory(bytes: Uint8Array, view: DataView): number {
   throw new Error("not a zip: no end-of-central-directory record");
 }
 
-// The entries a zip's central directory names, each mapped to the bytes of its file. Only the
-// central directory is trusted for sizes and the compression method — a local header may defer
-// them to a trailing data descriptor — so every entry is read through its central record.
+// Sizes come from the central directory: a local header may defer them to a data descriptor.
 function unzip(bytes: Uint8Array): Map<string, Uint8Array> {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const eocd = findEndOfCentralDirectory(bytes, view);
@@ -172,8 +152,7 @@ function unzip(bytes: Uint8Array): Map<string, Uint8Array> {
   return files;
 }
 
-// The name of a table within the zip, matched by basename so a feed that nests its files under a
-// folder (the SI Ferry zip is a `siferry-gtfs_2026.1/` directory) is read the same as a flat one.
+// Matched by basename: the SI Ferry zip nests its tables under a folder.
 function readTable(files: Map<string, Uint8Array>, table: string): GtfsRow[] {
   const decoder = new TextDecoder();
   for (const [name, contents] of files) {
@@ -184,8 +163,6 @@ function readTable(files: Map<string, Uint8Array>, table: string): GtfsRow[] {
   return [];
 }
 
-// Unzips a feed and parses the tables the ferry consolidation reads. A table the feed omits comes
-// back as an empty array, which is what the consolidation expects for calendar_dates/frequencies.
 export function parseGtfs(zip: Uint8Array): GtfsFeed {
   const files = unzip(zip);
   return {

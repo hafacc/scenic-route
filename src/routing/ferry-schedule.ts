@@ -1,16 +1,4 @@
-// The ferry timetable the router departs against (magic FSCH, written by scripts/ferry-schedule.ts).
-//
-// The graph bakes one crossing-plus-average-wait figure into each ferry edge, which is all a
-// time-independent cost can use. This reads the real timetable instead: for the day being routed, the
-// sailings out of each terminal IN EACH DIRECTION, so the wait is the wait for the next boat rather
-// than half a headway, and the last boat of the night is the last boat.
-//
-// The timetable is a DIFFERENT artifact for a different day: the daily job records the day range each
-// one was in effect for, so routing on a past day resolves to the timetable that actually ran. Days
-// before the first recorded one — and any day at all when the fetch fails — fall back to the graph's
-// baked figure, so a ferry is never unroutable for want of this file.
-//
-// Layout: scripts/README.md.
+// Per-direction sailings for the routed day; days without a record fall back to the graph's baked figure.
 
 import { type Cursor, readUnsignedVarint } from "../tiles/varint";
 import type { RoutingGraph } from "./graph";
@@ -36,11 +24,7 @@ const HEADER_BYTES = 40;
 const LANE_BYTES = 16;
 const NO_ROUTE_NAME = 0xffff;
 
-// Where the timetable comes from: `public/ferry-schedule/` on `main`, which the daily job commits to,
-// read over raw.githubusercontent.com rather than out of the deploy — the same reasoning as the shed
-// artifact (DESIGN.md, "Sidewalk sheds"), since a schedule change must reach the client without one.
-// In development it stays on the local `public/ferry-schedule/`, which is also the only way to see a
-// pipeline change before it is pushed.
+// Read from `main` over raw.githubusercontent.com so schedule changes skip a deploy; local in development.
 const SCHEDULE_MAIN_URL =
   "https://raw.githubusercontent.com/hafaio/scenic-route/main/public/ferry-schedule";
 const SCHEDULE_BASE =
@@ -49,9 +33,7 @@ const SCHEDULE_BASE =
     ? "ferry-schedule"
     : SCHEDULE_MAIN_URL);
 
-// One sailing out of a terminal: when it leaves (seconds from midnight of the day being routed, so a
-// boat on the next day reads past 86400), how long the crossing takes, and how long the walker who
-// asked stands on the pier first. `route` names the boat, for the directions to quote.
+// Departure is seconds from midnight of the routed day, so a next-day boat reads past 86400.
 export interface Sailing {
   departure: number;
   wait: number;
@@ -59,18 +41,13 @@ export interface Sailing {
   route: string | null;
 }
 
-// What the cost model asks of a timetable. Both take the node the walker boards at, because a
-// timetable is directional — the 8:15 out of St. George is not the 8:15 out of Whitehall.
+// Directional: the 8:15 out of St. George is not the 8:15 out of Whitehall.
 export interface FerryTimetable {
-  // Whether this edge is in the timetable at all. An edge whose terminal names match no lane — a
-  // stop the feed renamed, say — is not scheduled but is not canceled either, so it keeps the
-  // graph's baked figure rather than reading as a missed boat.
+  // An edge matching no lane (a renamed stop, say) keeps the baked figure rather than reading as missed.
   covers(edge: number): boolean;
-  // The next sailing at or after `elapsedSeconds` into the walk, or null once the day's last boat has
-  // gone. Null is what makes a missed ferry cost Infinity and drop out of the search.
+  // Null once the day's last boat has gone, which makes a missed ferry cost Infinity.
   board(edge: number, fromNode: number, elapsedSeconds: number): Sailing | null;
-  // The least this edge can cost anyone: its quickest crossing with no wait at all. The A* ferry
-  // credit is built from this, so it has to be a true lower bound over every departure time.
+  // The quickest crossing with no wait, since the A* ferry credit needs a true lower bound.
   minRideSeconds(edge: number): number;
 }
 
@@ -95,7 +72,6 @@ interface Lane {
   sailings: { at: number; crossing: number }[];
 }
 
-// One decoded FSCH record: the timetable plus the day range it was in effect for.
 export interface ScheduleRecord {
   firstDay: number;
   lastDay: number; // 0 while this is the timetable in effect
@@ -188,10 +164,7 @@ class ResolvedTimetable implements FerryTimetable {
     private readonly minRide: Map<number, number>,
   ) {}
 
-  // Coverage is over the WHOLE record, not the day being routed. A weekend-only run has lanes but no
-  // sailings on a Wednesday, and it has to read as "no boat" rather than fall through to the graph's
-  // baked figure — that figure is an average over the whole timetable, so falling back would put a
-  // Saturday ferry on a Wednesday route.
+  // Over the whole record, so a weekend-only run reads "no boat" rather than the whole-timetable average.
   covers(edge: number): boolean {
     return this.covered.has(edge);
   }
@@ -205,9 +178,7 @@ class ResolvedTimetable implements FerryTimetable {
     if (!lanes) {
       return null;
     }
-    // The graph's endpoint names are aligned to node a / node b, so which of them the walker arrives
-    // at is the whole of the direction. A node that is neither is a caller that did not say where it
-    // boarded; answer nothing rather than quietly hand back the other direction's timetable.
+    // A node that is neither end gets nothing, rather than the other direction's timetable.
     const side =
       fromNode === lanes.nodeA
         ? lanes.forward
@@ -246,10 +217,7 @@ class ResolvedTimetable implements FerryTimetable {
   }
 }
 
-// Every sailing of one directed stop pair over the three service days around the routed one, as
-// seconds from midnight of the routed day. Three days rather than one because a walk can begin near
-// midnight and because GTFS writes an after-midnight sailing as the previous day's 25:10 — both put
-// the boat you catch on a different service day from the one you set out on.
+// Three service days, since walks start near midnight and GTFS writes after-midnight sailings as 25:10.
 function sailingsFor(
   record: ScheduleRecord,
   days: { day: number; offset: number; services: Set<number> }[],
@@ -282,8 +250,7 @@ function sailingsFor(
   if (merged.length === 0) {
     return null;
   }
-  // Routes sharing a stop pair are separate lanes, so the merge is what puts them in one queue: you
-  // board whichever boat leaves next, whatever route it belongs to.
+  // Routes sharing a stop pair are separate lanes; merged, you board whichever boat leaves next.
   merged.sort((left, right) => left.departure - right.departure);
   return {
     departures: Float64Array.from(merged, (sailing) => sailing.departure),
@@ -302,8 +269,6 @@ function leastCrossing(...sides: (Sailings | null)[]): number {
   return least;
 }
 
-// Resolve a decoded timetable against a graph and a departure instant: which services run on the
-// three days around it, and per ferry edge the sailings out of each of its two terminals.
 export function resolveTimetable(
   graph: RoutingGraph,
   record: ScheduleRecord,
@@ -312,7 +277,6 @@ export function resolveTimetable(
 ): FerryTimetable {
   const days = serviceDays(record.services, record.exceptions, date, timeZone);
 
-  // Every directed stop pair the record names, whatever service it runs on.
   const scheduled = new Set(
     record.lanes.map((lane) => `${lane.fromName}\u0000${lane.toName}`),
   );
@@ -355,9 +319,7 @@ export function resolveTimetable(
   );
 }
 
-// Fetch the timetable that was in effect on the departure date and hang it on the graph. Leaves
-// `graph.ferries` null — the graph's baked crossing-plus-average-wait figure — when there is no
-// record for that day, which is every day before the first the daily job ever wrote.
+// Leaves `graph.ferries` null, the baked figure, for any day before the first record.
 export async function computeFerrySchedule(
   graph: RoutingGraph,
   cityId: string,
@@ -373,6 +335,4 @@ export async function computeFerrySchedule(
     : null;
 }
 
-// The two published files, read through the shared reader: which record was in effect on a day is
-// the same question of both artifacts, asked of this one's own directory and decoder.
 export const loadScheduleRecord = scheduleReader(SCHEDULE_BASE, decodeSchedule);

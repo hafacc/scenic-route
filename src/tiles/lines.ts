@@ -15,63 +15,36 @@ import type { TileRenderer } from "./renderer";
 import { themeName } from "./theme";
 import type { Cursor } from "./varint";
 
-// A line overlay: the committed highway/rail nuisance lines (magic HWAY) or the ferry route segments
-// (magic FERR), drawn as colored canvas polylines at every zoom. The ferries additionally take
-// their route's color, a lane of their own over the water they share with another route, and a
-// spline through their vertices — see ./ferry-routes, ./polylines and ./spline.
-
 const TILE_SIZE = 256;
-const CELL_DEG = 0.01; // ~1.1 km buckets; a line is filed under every cell its bounding box spans
+const CELL_DEG = 0.01; // ~1.1 km; a line is filed under every cell its bounding box spans
 const LINE_WIDTH_PX = 2;
 
-// The grid a crossing's local company is counted over. Ferry routes that share water share it
-// almost exactly, because the feeds hand the same track to every route over it: of the 93 km of
-// New York route that runs within 300 m of another route, 68% of it runs within 60 m. A cell that
-// size takes those and leaves the rest — the Staten Island Ferry and the St. George route cross the
-// Upper Bay 100 to 300 m apart for 7 km, two visibly separate lines with no business being stacked.
+// Routes sharing water share its track (68% within 60 m); the SI Ferry and St. George are 100+ m apart.
 const LANE_CELL_M = 60;
-// How far a crossing takes to slide from one lane to the next where its company changes. Long
-// enough that a route joining a bundle crosses to its lane over open water, rather than at
-// whichever of the shape's few vertices happens to fall past the junction.
+// Long enough that a route joining a bundle changes lane over open water, not at a far-off vertex.
 const LANE_BLEND_M = 400;
-// The gap between one lane and the next, in CSS pixels, and the zoom it is held at — below which it
-// becomes a fixed ground distance, see laneSpacingPx. Two 2 px strokes a lane apart just touch,
-// which is as tight as they can be drawn and still read as two.
-//
-// Pinned at z14 a lane is 18 m of water at every zoom below, which is what the tightest genuine
-// bundle affords: the four routes down Buttermilk Channel pass 93 m off the Governors Island shore,
-// and the outermost of them is three lanes — 54 m — off its own published path. Of the 204 vertices
-// New York's crossings have in open water, that draws none of them onto land between z11 and z14;
-// the same lanes assigned once per route instead of per stretch drew 17 of them there.
+// Two 2 px strokes this far apart just touch; pinned at z14 it is 18 m, what Buttermilk Channel affords.
 const LANE_SPACING_PX = 2.5;
 const LANE_FULL_ZOOM = 14;
 
-// A ferry crossing's drawing: the route's color, the lane it takes at each of its vertices, and
-// the perpendicular that lane is measured along so the ribbons read as parallel rather than
-// repainting each other.
 interface Ribbon {
-  color: string | null; // null where the route is unknown, so the layer's own color stands in
-  // Per vertex, in lane widths, multiplied by the zoom's lane width at draw time rather than baked
-  // in here. Zero where the crossing has the water to itself, which is 60% of New York's vertices.
+  color: string | null; // null falls back to the layer's color
+  // Per vertex, in lane widths; zero where the crossing has the water to itself.
   lanes: Float64Array;
-  // Unit normals per vertex, in projected space, so the offset is applied in screen pixels at draw
-  // time rather than in a ground distance that would spread as the map zooms in.
+  // Unit normals per vertex in projected space, so the offset stays in screen pixels as the map zooms.
   normalX: Float64Array;
   normalY: Float64Array;
 }
 
 interface Lines {
   polylines: Polyline[];
-  // Polyline indices filed by `${cellX},${cellY}`, so a tile draw gathers only the lines whose
-  // bounding box reaches it rather than the whole city.
+  // Polyline indices by `${cellX},${cellY}` over each line's bounding box.
   buckets: Map<string, number[]>;
-  // Per polyline and index-aligned with it, or null for a source with no route identity (HWAY).
+  // Index-aligned with polylines; null for a source with no route identity (HWAY).
   ribbons: Ribbon[] | null;
 }
 
-// HWAY is the shared polygon layout (crates/tiler/src/binfmt.rs read_polygons): a 40-byte header,
-// then `count` polygons, each a u16 ring count then per ring a u32 vertex count and varint (lng, lat)
-// deltas. Each nuisance line is one open ring of a single-ring polygon, so every ring is a polyline.
+// HWAY is binfmt.rs read_polygons' layout; each nuisance line is one open ring of its own polygon.
 function decodeHway(buffer: ArrayBuffer): Polyline[] {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
@@ -96,10 +69,7 @@ function decodeHway(buffer: ArrayBuffer): Polyline[] {
   return polylines;
 }
 
-// FERR (crates/tiler/src/binfmt.rs read_ferries): a 56-byte header, a stop table (i32 qx, i32 qy,
-// u32 nameId — 12 B), a segment table (u32 stopA, u32 stopB, f32 rawTime, u32 geomOffset, u16
-// geomCount, u16 routeNameId — 20 B), then a varint geometry blob and the name blob. A segment draws
-// its shape when it has one, else a straight line between its two stops.
+// FERR is binfmt.rs read_ferries' layout; a segment with no shape draws straight between its stops.
 function decodeFerr(buffer: ArrayBuffer): {
   polylines: Polyline[];
   routes: (string | null)[];
@@ -154,7 +124,7 @@ function decodeFerr(buffer: ArrayBuffer): {
   return { polylines, routes };
 }
 
-// The latitude the lane grid is measured at — see LaneOptions.
+// The latitude the lane grid is measured at.
 function midLatitude(polylines: readonly Polyline[]): number {
   let sum = 0;
   for (const { lats } of polylines) {
@@ -257,9 +227,7 @@ function draw(
         drawn.add(index);
         const { lngs, lats } = lines.polylines[index];
         const ribbon = lines.ribbons?.[index];
-        // The whole polyline is projected, not the part inside the tile: both the lane offset and
-        // the spline's control points read the vertices either side of a seam, so a tile that
-        // clipped first would step and kink along its own edges. The canvas clips instead.
+        // Project the whole polyline: lane offsets and curves read vertices outside the tile.
         const pixelX: number[] = [];
         const pixelY: number[] = [];
         for (let vertex = 0; vertex < lngs.length; vertex++) {

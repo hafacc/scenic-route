@@ -12,10 +12,7 @@ import { NO_GEOMETRY, otherEnd, type RoutingGraph } from "./graph";
 import { findRoute, type RouteResult } from "./search";
 import { haversineMeters, type Snap } from "./snap";
 
-// Phase-3 oracle for the three new scenic factors (landmark and art discounts, the highway penalty),
-// grown since with the commercial, industrial and historic-district factors.
-// The reference optimum is a self-contained Dijkstra over effective seconds rather than findRoute — a
-// stronger, independent check than comparing one A* against another.
+// The oracle is its own Dijkstra, not findRoute, an independent check rather than A* against A*.
 
 const SCALE = 1e-6;
 const NAME_NONE = 0xffff;
@@ -37,8 +34,7 @@ const noScenic = (over: Partial<RouteWeights> = {}): RouteWeights => ({
   transit: 0,
   allowFerries: false,
   allowSheds: true,
-  // The fixture draws no rail, so nothing can board it, and no crossing edges, which leaves the
-  // crossing gate free either way — stated because omitting it would read as "avoid crossings".
+  // Stated because omitting it would read as "avoid crossings".
   allowTransit: false,
   allowCrossings: true,
   ...over,
@@ -49,7 +45,7 @@ interface NodeSpec {
   lng: number;
 }
 
-// A walking edge's scenic attribute fractions (0..1); the ingest bytes are these × 255.
+// The ingest bytes are these × 255.
 interface EdgeAttrs {
   cover?: number;
   landmark?: number;
@@ -203,8 +199,7 @@ function snapAtNode(graph: RoutingGraph, node: number, walkEdge: number): Snap {
   };
 }
 
-// The reference optimum: a plain Dijkstra over effective seconds with findRoute's virtual-source and
-// virtual-goal partial-edge semantics.
+// Mirrors findRoute's virtual-source and virtual-goal partial-edge semantics.
 function dijkstraCost(
   graph: RoutingGraph,
   start: Snap,
@@ -278,10 +273,7 @@ function effectiveCostOf(
   return cost;
 }
 
-// A diamond: from 0 to 3 by an upper path (node 1) or a lower path (node 2), plus the snap stubs at
-// each end. The two interior routes carry different scenic attributes so the weights steer the choice;
-// `upperLat`/`lowerLat` set how far each bows out, so one path can be made a genuine detour of the
-// other. 0->1->3 is the "upper", 0->2->3 the "lower".
+// 0->1->3 is the "upper", 0->2->3 the "lower"; `upperLat`/`lowerLat` make one a genuine detour.
 function diamond(
   upper: EdgeAttrs,
   lower: EdgeAttrs,
@@ -317,7 +309,6 @@ function diamond(
 }
 
 function upperTaken(result: RouteResult | null): boolean {
-  // The upper path uses edges 1 and 2 (node 1); the lower uses edges 3 and 4 (node 2).
   return (result?.steps ?? []).some(
     (step) => step.edge === 1 || step.edge === 2,
   );
@@ -326,9 +317,8 @@ function upperTaken(result: RouteResult | null): boolean {
 test("edgeMultiplier and minMultiplier reduce to the tree-only model when the new weights are zero", () => {
   const { graph } = diamond({ cover: 0.6, landmark: 0.4 }, { highway: 0.5 });
   for (let edge = 0; edge < graph.edgeCount; edge++) {
-    // No weights at all: every meter costs 1.
     expect(edgeMultiplier(graph, edge, noScenic())).toBeCloseTo(1, 12);
-    // Only the tree weight: exactly 1 - w*cover, unchanged from before the product model.
+    // Exactly 1 - w*cover.
     const treeOnly = noScenic({ tree: 0.8 });
     expect(edgeMultiplier(graph, edge, treeOnly)).toBeCloseTo(
       1 - 0.8 * (graph.edgeCover[edge] / 255),
@@ -361,13 +351,11 @@ test("edgeMultiplier is the product of the three discounts and the highway penal
     (1 - 0.3 * (graph.edgeArt[edge] / 255)) *
     (1 + 0.7 * (graph.edgeHighway[edge] / 255));
   expect(edgeMultiplier(graph, edge, weights)).toBeCloseTo(expected, 12);
-  // The penalty makes this edge dearer than raw, the discounts alone would make it cheaper.
   expect(edgeMultiplier(graph, edge, weights)).toBeGreaterThan(0);
 });
 
 test("findRoute matches the Dijkstra optimum across scenic-weight combinations", () => {
-  // The lower path is shorter-feeling under a highway penalty (it has none); the upper is richer in
-  // landmarks and art. Sweeping the weights makes each route optimal in some regime.
+  // Sweeping the weights makes each route optimal in some regime.
   const { graph, start, dest } = diamond(
     { landmark: 0.8, art: 0.6 },
     { highway: 0.7 },
@@ -394,42 +382,35 @@ test("findRoute matches the Dijkstra optimum across scenic-weight combinations",
 });
 
 test("a strong landmark weight steers the route onto a longer landmarked path", () => {
-  // The upper path bows out far (a genuine detour, ~35% longer) but is rich in landmarks; the lower
-  // is the short plain way. The discount has to overcome real extra distance to be chosen.
+  // A ~35% detour, so the discount has to overcome real extra distance.
   const { graph, start, dest } = diamond(
     { landmark: 0.9 },
     {},
     0.0028, // upper bows far out — the longer path
     0.0002, // lower stays near the straight line — the shorter path
   );
-  // No preference: the shorter lower path wins on distance alone.
   expect(upperTaken(findRoute(graph, start, dest, noScenic()))).toBe(false);
-  // A full landmark weight makes the landmarked detour worth it.
   expect(
     upperTaken(findRoute(graph, start, dest, noScenic({ landmark: 1 }))),
   ).toBe(true);
 });
 
 test("a strong commercial weight steers the route onto a nicer commercial street", () => {
-  // The upper path bows out (a real detour, ~35% longer) but fronts a nice commercial block; the
-  // lower is the short plain way. Like the landmark case, the discount must beat the extra distance.
+  // A ~35% detour, so the discount has to overcome real extra distance.
   const { graph, start, dest } = diamond(
     { commercial: 0.9 },
     {},
     0.0028, // upper bows far out — the longer path
     0.0002, // lower stays near the straight line — the shorter path
   );
-  // No preference: the shorter lower path wins on distance alone.
   expect(upperTaken(findRoute(graph, start, dest, noScenic()))).toBe(false);
-  // A full commercial weight makes the nicer commercial detour worth it.
   expect(
     upperTaken(findRoute(graph, start, dest, noScenic({ commercial: 1 }))),
   ).toBe(true);
 });
 
 test("edgeMultiplier prices a historic district as a discount beside the landmark one", () => {
-  // A block that is both inside a district and rich in landmarks: the two factors are independent,
-  // so they multiply rather than one standing in for the other.
+  // Independent factors, so they multiply.
   const { graph } = diamond({ landmark: 0.4, historic: 0.9 }, {});
   const weights = noScenic({ landmark: 0.5, historic: 0.3 });
   const edge = 1; // the upper 0->1 edge, which carries both
@@ -438,7 +419,7 @@ test("edgeMultiplier prices a historic district as a discount beside the landmar
     (1 - 0.3 * (graph.edgeHistoric[edge] / 255));
 
   expect(edgeMultiplier(graph, edge, weights)).toBeCloseTo(expected, 12);
-  // A discount DOES enter the heuristic's lower bound, unlike the industrial penalty below.
+  // A discount enters the heuristic's lower bound, unlike the industrial penalty below.
   expect(minMultiplier(graph, weights)).toBeCloseTo(
     (1 - 0.3 * graph.maxHistoric) * (1 - 0.5 * graph.maxLandmark),
     12,
@@ -446,8 +427,7 @@ test("edgeMultiplier prices a historic district as a discount beside the landmar
 });
 
 test("a strong historic weight steers the route through a district it would otherwise skirt", () => {
-  // The upper path bows out (a real detour, ~35% longer) but runs inside a designated district; the
-  // lower is the short plain way. Like the landmark case, the discount must beat the extra distance.
+  // A ~35% detour, so the discount has to overcome real extra distance.
   const { graph, start, dest } = diamond(
     { historic: 0.9 },
     {},
@@ -462,10 +442,7 @@ test("a strong historic weight steers the route through a district it would othe
 });
 
 test("the historic discount keeps a positive floor at the top of its slider", () => {
-  // The whole reason the bake caps the byte at 254 rather than 255. The attribute is close to binary
-  // — an interior sidewalk saturates — so this is the graph the factor actually meets, and at w = 1
-  // its floor is what the A* heuristic scales straight-line distance by. A floor of 0 would make an
-  // in-district meter free and let the search wander; a negative one is not a metric at all.
+  // Why the bake caps at 254: at w = 1 a saturated floor of 0 would make in-district meters free.
   const { graph, start, dest } = diamond({ historic: 1 }, { historic: 1 });
   const full = noScenic({ historic: MAX_HISTORIC_WEIGHT });
 
@@ -478,7 +455,6 @@ test("the historic discount keeps a positive floor at the top of its slider", ()
       minMultiplier(graph, full) - 1e-12,
     );
   }
-  // And the search still agrees with the reference optimum down there.
   const result = findRoute(graph, start, dest, full);
   expect(result).not.toBeNull();
   expect(
@@ -498,8 +474,7 @@ test("edgeMultiplier prices industrial frontage as a penalty beside the highway 
     (1 + 0.5 * (graph.edgeIndustrial[edge] / 255));
 
   expect(edgeMultiplier(graph, edge, weights)).toBeCloseTo(expected, 12);
-  // A penalty's minimum factor is 1, so it must not enter the heuristic's lower bound — an
-  // industrial weight cannot loosen it, however much industry the graph carries.
+  // A penalty's minimum factor is 1, so it must not enter the heuristic's lower bound.
   expect(minMultiplier(graph, weights)).toBeCloseTo(
     minMultiplier(graph, noScenic()),
     12,
@@ -507,8 +482,7 @@ test("edgeMultiplier prices industrial frontage as a penalty beside the highway 
 });
 
 test("an industrial weight steers the route away from a shorter walk past the yards", () => {
-  // The upper path is the short way but runs between industrial lots; the lower is a longer plain
-  // detour. Both sides industrial, so the byte is near its ceiling — the warehouse-canyon case.
+  // Both sides industrial, so the byte is near its ceiling.
   const { graph, start, dest } = diamond(
     { industrial: 0.9 },
     {},
@@ -523,24 +497,20 @@ test("an industrial weight steers the route away from a shorter walk past the ya
 });
 
 test("a highway weight steers the route away from a shorter nuisance path", () => {
-  // The upper path is the short way but runs by a highway; the lower is a longer plain detour.
   const { graph, start, dest } = diamond(
     { highway: 0.9 },
     {},
     0.0002, // upper is the shorter path...
     0.001, // ...the lower a modestly longer detour the penalty can tip
   );
-  // No penalty: the shorter upper path wins on distance.
   expect(upperTaken(findRoute(graph, start, dest, noScenic()))).toBe(true);
-  // A full highway weight makes the nuisance path dear enough that the longer plain detour wins.
   expect(
     upperTaken(findRoute(graph, start, dest, noScenic({ highway: 1 }))),
   ).toBe(false);
 });
 
 test("edgeMultiplier prices a bridge over water as a discount of its own", () => {
-  // A span that is both over water and rich in landmarks — the two are independent facts about the
-  // same meter, so they multiply.
+  // Independent facts about the same meter, so they multiply.
   const { graph } = diamond({ landmark: 0.4, bridge: 0.8 }, {});
   const weights = noScenic({ landmark: 0.5, bridge: 0.3 });
   const edge = 1; // the upper 0->1 edge, which carries both
@@ -550,7 +520,6 @@ test("edgeMultiplier prices a bridge over water as a discount of its own", () =>
       (1 - 0.3 * (graph.edgeBridge[edge] / 255)),
     12,
   );
-  // A discount enters the heuristic's lower bound; the penalties do not.
   expect(minMultiplier(graph, weights)).toBeCloseTo(
     (1 - 0.3 * graph.maxBridge) * (1 - 0.5 * graph.maxLandmark),
     12,
@@ -572,8 +541,7 @@ test("a strong bridge weight takes the span rather than the shorter way round", 
 });
 
 test("the bridge discount keeps a positive floor at the top of its slider", () => {
-  // As the historic case: a mid-span edge saturates the byte, so at w = 1 the graph's own floor is
-  // what the A* heuristic scales straight-line distance by, and it has to stay positive.
+  // A mid-span edge saturates the byte, so at w = 1 the graph's floor must stay positive.
   const { graph } = diamond({ bridge: 1 }, { bridge: 1 });
   const full = noScenic({ bridge: MAX_BRIDGE_WEIGHT });
 

@@ -1,5 +1,4 @@
-// The client driven over a fake port wired straight to the dispatcher: the same code the app runs,
-// minus the Worker, so the streaming and the superseded-request contract are what is under test.
+// A fake port wired straight to the dispatcher: the app's code minus the Worker.
 
 import { expect, test } from "bun:test";
 import { planRoutes } from "./alternatives";
@@ -15,7 +14,6 @@ import { findRoute, type RouteResult } from "./search";
 const CITY = "nyc";
 const CLOCK = { tick: 0, dateMs: Date.UTC(2026, 5, 21, 16, 0, 0) };
 
-// The engine test's grid: a bare middle street and a leafy detour that a full tree weight prefers.
 const graph = buildGraph(
   [
     { lat: 40.75, lng: -73.99 },
@@ -80,7 +78,6 @@ test("a plan resolves with the planned set, having previewed its first route", a
   const previewed: RouteResult[] = [];
   const plan = await client().plan(request, (result) => previewed.push(result));
   expect(plan).toEqual(expected);
-  // One route reaches the page before `done`, which is what lets the map draw without waiting.
   expect(previewed).toHaveLength(1);
   expect(previewed[0].steps.map((step) => step.edge)).toEqual(
     findRoute(graph, start, dest, PLAN_WEIGHTS)?.steps.map(
@@ -121,9 +118,7 @@ test("a route request posts the protocol's fields and nothing a caller hung on i
   ]);
 });
 
-// A worker whose chunk 404s after a deploy never runs a line of the code above: the only thing that
-// happens is `onerror`. Before it was listened for, every promise here stayed pending forever and
-// the panel spun with no error.
+// A worker whose chunk 404s only ever fires `onerror`.
 test("a failed worker rejects what is waiting and what is asked afterwards", async () => {
   const port: RouterPort = {
     onmessage: null,
@@ -142,7 +137,6 @@ test("a failed worker rejects what is waiting and what is asked afterwards", asy
   await expect(router.plan(request, () => {})).rejects.toThrow(
     /routing worker/,
   );
-  // A reply that cannot be cloned is the same dead end, and lands on its own handler.
   const otherPort: RouterPort = {
     onmessage: null,
     onerror: null,

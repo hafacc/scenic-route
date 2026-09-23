@@ -1,16 +1,11 @@
-// A point-in-land test over the borough polygons, the same banded even-odd scheme the Rust
-// Monte-Carlo sampler uses (crates/tiler/src/geometry.rs). The path ingest asks it up to three
-// times per OSM way, so a query has to look only at the edges its own latitude can cross — every
-// edge is bucketed into the horizontal bands it spans, and a point tests just its own band's.
+// The same banded even-odd scheme as crates/tiler/src/geometry.rs.
 
 import type { Polygon } from "./overpass";
 import type { Coord } from "./socrata";
 
 const LAT_BANDS = 512; // horizontal strips, matching the Rust index
 
-// Even-odd is counted per polygon and only the polygons a query touched are cleared, so two
-// overlapping borough parts do not cancel each other out and a query does not pay to reset a
-// parity array the size of the whole set.
+// Parity is per polygon, so two overlapping borough parts don't cancel each other out.
 export function buildLandTest(
   polygons: readonly Polygon[],
 ): (coord: Coord) => boolean {

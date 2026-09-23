@@ -9,14 +9,10 @@ import { KEEP_BUFFER } from "../src/tiles/raster";
 import manifest from "../src/tree-cover/manifest.json";
 import { useCity } from "./city-context";
 
-// The "commercial" overlay: charming low-rise retail strips, highlighted a whole block at a time.
-// The signals, the client-side gate and the drawing live in the tile worker
-// (src/tiles/commercial.ts). It rides in a pane of its own, above the washes and below the dots.
-
 const PANE_NAME = "commercial-blocks";
-const PANE_Z_INDEX = 280; // above the canopy fill, below the POI dots (300) and scenic lines (290)
+const PANE_Z_INDEX = 280; // over canopy, under lines (290), POIs (300)
 
-// The raster overview keeps the layer legible from z10; below that the whole city is a speck.
+// The raster overview stays legible from z10; below that the city is a speck.
 const MIN_ZOOM = 10;
 const MAX_ZOOM = 20;
 
@@ -25,8 +21,7 @@ export default function DiningLayer() {
   const active = useCity();
 
   useEffect(() => {
-    // A pane of its own: the tile pane carries one z-index for everything in it, so a layer that
-    // has to sit above the washes and below the dots needs its own.
+    // The tile pane has one z-index, so sitting between washes and dots needs a pane.
     if (!map.getPane(PANE_NAME)) {
       const pane = map.createPane(PANE_NAME);
       pane.style.zIndex = String(PANE_Z_INDEX);

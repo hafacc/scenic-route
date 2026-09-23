@@ -7,18 +7,11 @@ import {
 import type { IndexHit, ReverseHit } from "./search/protocol";
 import { sharedQueries } from "./share-target";
 
-// What the app calls a place, in both directions: what was typed into the search box, and what a
-// point picked off the map is called. Neither needs a network — both are answered from the city's
-// own index and address file, which ship with the map.
-
-// How many searches are remembered. Only the box's answers are cached; naming a point is arithmetic
-// against tables already in memory and is cheaper to redo than to keep.
+// Only searches are cached; naming a point is cheaper to redo than to keep.
 const MAX_CACHE_ENTRIES = 200;
 
-// The `type` a station result carries, which the search box renders with a train glyph rather than
-// leaving it to read as an address.
 export const SUBWAY_RESULT_TYPE = "subway-station";
-// How many of a station's routes are listed before the rest become an ellipsis. Times Sq serves ten.
+// Routes listed before an ellipsis; Times Sq serves ten.
 const MAX_ROUTE_BULLETS = 4;
 
 export interface GeocodeResult {
@@ -27,8 +20,7 @@ export interface GeocodeResult {
   lng: number;
   displayName: string;
   type: string;
-  // Whether this is the thing that was asked for rather than the nearest the city could offer: the
-  // house number typed, not the door two along from it. What `exactAddressMatch` below reads.
+  // The house number typed, not the nearest door the city could offer.
   exact: boolean;
 }
 
@@ -44,20 +36,13 @@ function setBounded<K, V>(map: Map<K, V>, key: K, value: V): void {
   map.set(key, value);
 }
 
-// A street, which is the coarsest answer there is: one point stands for the whole of it. The search
-// box draws it with its own glyph, so that reads at a glance.
+// One point stands for the whole street.
 export const STREET_RESULT_TYPE = "scenic:street";
 
-// A place out of the city's own name index (src/search/search-format.ts) — a business, a park, a
-// campus. Its own type, so the box draws it as a place rather than as an address.
 export const INDEX_RESULT_TYPE = "scenic:index";
 
-// A house number found in the city's own address file. Its own glyph in the search box, and its own
-// type here, because it is the most precise answer the box can give.
 export const ADDRESS_RESULT_TYPE = "scenic:address";
 
-// The `type` a point named off the map carries, mapped from what the index says the thing is, so a
-// dropped pin reads with the same glyph the same place would carry in the search box.
 function reverseResultType(kind: ReverseHit["kind"]): string {
   if (kind === "address") {
     return ADDRESS_RESULT_TYPE;
@@ -70,20 +55,7 @@ function reverseResultType(kind: ReverseHit["kind"]): string {
   }
 }
 
-// What a point picked off the map is called: a dropped pin, a dragged route endpoint, "Log here".
-// The label is all this is for — a route is computed from the coordinate, and nothing about finding
-// or drawing one depends on what the endpoint is called.
-//
-// Answered from the city's own address file and name index (src/search/reverse.ts), which is to say
-// with no network at all: the nearest house number, or the name of whatever the point is standing
-// on, or — where the number is too far off to be this point's — the street, the neighborhood, or
-// nothing. A point the city has nothing near enough to name is answered with null, and the caller
-// keeps whatever it already put on the pin. Nothing is ever invented: every answer is a row of a
-// file, at the coordinates the city published for it.
-//
-// Not cached. The lookup that used to sit here was a round trip to a public service with a usage
-// policy that required caching its answers; this is a few milliseconds of arithmetic against tables
-// already in memory, and a cache of two hundred pins would cost more to hold than to recompute.
+// Label only (routes use the coordinate); null when nothing is near enough, and never invented.
 export async function reverseGeocode(
   lat: number,
   lng: number,
@@ -93,7 +65,6 @@ export async function reverseGeocode(
   if (hit === null) {
     return null;
   }
-  // "near" is the honest half of the answer: the point is not AT this, it is beside it.
   const name = hit.at ? hit.name : `near ${hit.name}`;
   return {
     placeId: `local:${cityId}:${hit.kind}:${hit.lat.toFixed(5)},${hit.lng.toFixed(5)}`,
@@ -105,13 +76,9 @@ export async function reverseGeocode(
   };
 }
 
-// How many answers the index is asked for. It ranks a door, a station, a park and a street against
-// each other, so what leads is whatever the one ranking put first.
 const MAX_LOCAL_RESULTS = 8;
 
-// What the row reads as. A station says so and lists the routes it serves, since "Bedford Av" is a
-// street and a station and the difference is the whole reason a rider typed it; everything else is
-// its name and the line under it, with the name left off where the line already opens with it.
+// A station lists its routes, since "Bedford Av" is both a street and a station.
 function localDisplayName(hit: IndexHit): string {
   if (hit.kind === "station") {
     const routes = hit.category === null ? [] : hit.category.split("/");
@@ -127,7 +94,6 @@ function localDisplayName(hit: IndexHit): string {
   }
 }
 
-// Which glyph the box draws beside it: a door, a train, a signpost, or a pin.
 function localResultType(hit: IndexHit): string {
   if (hit.exact !== null) {
     return ADDRESS_RESULT_TYPE;
@@ -140,10 +106,7 @@ function localResultType(hit: IndexHit): string {
   }
 }
 
-// The one answer confident enough to route to without asking: the door that was asked for, sitting
-// at the top of the list. Everything else is a guess — a near-miss house number, a street standing
-// for the whole of itself, a park that happens to share a word — and a guess quietly set as the
-// destination is worse than a list to pick from. What a link's textual destination is decided by.
+// Only the exact typed door at the top is routed to without asking; anything else gets a list.
 export function exactAddressMatch(
   results: readonly GeocodeResult[],
 ): GeocodeResult | null {
@@ -155,13 +118,7 @@ export function exactAddressMatch(
   }
 }
 
-// `cityId` defaults to whichever city is live, which is what the search box wants — it has no city of
-// its own and asks about the one on screen. A caller that captured a city and must keep answering
-// about THAT one, however long the index takes to arrive, names it instead.
-//
-// Null is the answer the index has not arrived yet, which is not the same thing as "no such place":
-// a bar that says a park does not exist because the worker is still fetching has told the reader
-// something false. Both boxes have a row that says which of the two it is, so both call this.
+// Null means the index hasn't arrived yet, not "no such place".
 export async function searchPlaces(
   query: string,
   cityId: string = activeCity().id,
@@ -170,9 +127,7 @@ export async function searchPlaces(
   if (!trimmed) {
     return [];
   }
-  // The map center is part of the answer, not just of its order: the name index ranks by distance
-  // from it, so the same query at two ends of the city is two different lists. Rounded to ~1 km, the
-  // scale the distance term works at, so panning a block does not throw the cache away.
+  // Ranking depends on the center, so it's in the key, rounded to ~1 km so panning keeps the cache.
   const center =
     searchCenter(cityId) ?? (cityById(cityId) ?? activeCity()).center;
   const near = `${center.lat.toFixed(2)},${center.lng.toFixed(2)}`;
@@ -181,7 +136,6 @@ export async function searchPlaces(
   if (cached) {
     return cached;
   }
-  // Ranked from the map center: it is what the reader is looking at, and it needs no permission.
   const indexHits = await searchNameIndex({
     cityId,
     text: trimmed,
@@ -189,11 +143,7 @@ export async function searchPlaces(
     limit: MAX_LOCAL_RESULTS,
   });
   const results: GeocodeResult[] = [];
-  // The city holds one place several times over — six rows called "Empire State Building", three
-  // called "Prospect Park" — so rows that read identically are cut to the best-ranked one. A bare
-  // street name is cut the same way and for a stronger reason: five Court Streets, one per borough,
-  // is the honest answer to "312 Court St" and noise as an answer to "Court St", where the number
-  // that would tell them apart has not been typed.
+  // Identical rows collapse to the best-ranked, and a bare street name to one of its namesakes.
   const listed = new Set<string>();
   const streets = new Set<string>();
   for (const hit of indexHits ?? []) {
@@ -218,16 +168,13 @@ export async function searchPlaces(
   if (indexHits === null) {
     return null;
   } else {
-    // Only a real answer is remembered: an index this device has not managed to fetch yet answers
-    // nothing, and caching that would keep answering nothing once it arrived.
+    // Caching a not-yet-fetched index's empty answer would outlive its arrival.
     setBounded(searchCache, cacheKey, results);
     return results;
   }
 }
 
-// The same search for a caller with nowhere to say "not yet": resolving the words a shared link
-// carried, which happens with no list on screen and only after `awaitNameIndex` has already waited
-// the index out, so by the time this is asked null would mean the fetch failed outright.
+// For shared links, resolved after `awaitNameIndex` has already waited, so null means a failed fetch.
 export async function searchAddress(
   query: string,
   cityId: string = activeCity().id,
@@ -235,27 +182,14 @@ export async function searchAddress(
   return (await searchPlaces(query, cityId)) ?? [];
 }
 
-// What a shared query resolved to, against the city it was resolved in: the door to route straight
-// to when one was named, and always the words that found something and the answers they found, so
-// the box can offer them.
 export interface SharedDestination {
   query: string;
   results: GeocodeResult[];
   exact: GeocodeResult | null;
 }
 
-// What a destination carried as words — a `#q=` link, or the text Android's share sheet hands over —
-// actually points at in `cityId`.
-//
-// Every reading of the share is searched, not just readings until one of them answers. "Katz's
-// Delicatessen, 205 E Houston St" is a name and a door in one string: the name matches the index and
-// the door matches the address file, and only the door is precise enough to route to without asking.
-// Stopping at the first part that found anything would stop at whichever came first and never try
-// the other, so a door wins wherever among the parts it sits, and the first part to find anything at
-// all is what is offered when no part names one.
-//
-// `canceled` is asked between searches because each one warms the worker for its city: a lookup
-// left running after the reader has moved to another city would drag the index back to this one.
+// Searches every reading so a door wins wherever it sits ("Katz's Delicatessen, 205 E Houston St").
+// `canceled` is checked between searches, since each one warms the worker for its city.
 export async function resolveSharedQuery(
   text: string,
   cityId: string,

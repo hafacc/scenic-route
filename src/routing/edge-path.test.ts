@@ -1,5 +1,4 @@
-// The polyline cache belongs to one graph: the worker holds every city the reader has visited, and
-// edge ids repeat between them.
+// The worker holds every visited city, and edge ids repeat between them.
 
 import { expect, test } from "bun:test";
 import { buildGraph } from "./ferry.fixture";
@@ -24,8 +23,7 @@ const sanFrancisco = buildGraph(
 );
 
 test("edge 0 of each city keeps its own polyline", () => {
-  // Read alternately, so each read is the second one for the other graph — which is where a cache
-  // keyed on the edge id alone answers with the wrong city's street.
+  // Alternating reads catch a cache keyed on edge id alone.
   expect(edgePath(newYork, 0).lngs[0]).toBeCloseTo(NEW_YORK_LNG, 9);
   expect(edgePath(sanFrancisco, 0).lngs[0]).toBeCloseTo(SAN_FRANCISCO_LNG, 9);
   expect(edgePath(newYork, 0).lngs[0]).toBeCloseTo(NEW_YORK_LNG, 9);

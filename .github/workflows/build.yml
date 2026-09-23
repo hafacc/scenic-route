@@ -1,10 +1,6 @@
 name: build
 
-# The push filter keeps every commit of a Sapling stack from building: only main is pushed as a
-# branch. The daily sheds job and the monthly search-data job push to main too, so the paths they
-# write are ignored — nothing here reads any of those artifacts, and a push carrying only those bytes
-# has nothing to lint or test. `paths-ignore` is on the push trigger alone: a PR that touches them is
-# a person changing the pipeline, and builds.
+# Only main pushes build, sparing a Sapling stack's commits; the scheduled jobs' outputs are ignored.
 on:
   push:
     branches: [main]
@@ -25,38 +21,23 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # Pointers on every path, the deploy included: the objects under data/ are the sole draw on the
-      # account's monthly LFS bandwidth, and the deploy gets them from the cache below instead. lint
-      # and tests read nothing under data/ at all.
+      # Pointers even on deploy: data/ is the sole draw on LFS bandwidth, so the deploy uses a cache.
       - uses: actions/checkout@v7
         with:
           lfs: false
       - uses: oven-sh/setup-bun@v2
-      # Pinned to match rust-toolchain.toml — see the comment there. Move both together.
+      # Pinned to match rust-toolchain.toml; move both together.
       - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
       - run: bun lint
-      # scripts too: the build-time invariants live there, and a city that breaks one should
-      # fail here rather than halfway through an ingest. components carries the handful of panel
-      # tests that need no DOM.
+      # scripts holds the build-time invariants, so a broken city fails here rather than mid-ingest.
       - run: bun test src scripts components
-      # The committed shed artifact records what the durable key space of its graph was built from,
-      # and this compares that against the same in this checkout — so a change that lands without a
-      # `bun run build-sheds` fails here rather than one deploy later. It reads data/** only as the
-      # LFS POINTER text, whose oid is the object's own sha256, so it needs no LFS objects and this
-      # job's `lfs: false` stays as it is. Both halves are the tiler's — `tiler graph-inputs` over
-      # the plan's sources decision, and `tiler key-probe` over a 268 KB committed fixture — so this
-      # is a debug build of the crate (the clippy run above is check-only, so this is the job's one
-      # codegen build; rust-cache keeps it) and under a second to run.
-      # scripts/graph-inputs.ts reads their reports, scripts/README.md has why the set is that set.
+      # Fails a graph-input change without `build-sheds`; it reads only LFS pointer text.
       - run: bun run check-shed-inputs
-      # The DEM the elevation pass and the relief bake sample: 651 tiles, 1.6 GB, fetched inside
-      # `bun export` (write-plan resolves the mosaic, so this is not an ingest-time cost) and kept
-      # under .cache/ by name. Upstream publishes a collection once and leaves it, so the key only has
-      # to move when the collection does — which is the URL in scripts/elevation.ts.
+      # The 1.6 GB DEM; upstream never changes a published collection, so the key tracks its URL.
       - if: inputs.upload-pages
         uses: actions/cache@v6
         with:
@@ -64,26 +45,19 @@ jobs:
           key: dem-${{ hashFiles('scripts/elevation.ts', 'src/tree-cover/manifest.json') }}
           restore-keys: |
             dem-
-      # The LFS objects for data/**, 168 MB, restored rather than downloaded. An LFS pointer's text
-      # carries the object's own sha256, and the checkout above leaves the pointers in place, so
-      # hashing them here keys this on the content itself. `git lfs pull` then smudges the working
-      # tree, fetching only what the cache missed. It runs after check-shed-inputs, which reads the
-      # pointer text and needs it left alone.
+      # Pointers carry their object's sha256, so hashing them keys on content; after check-shed-inputs.
       - if: inputs.upload-pages
         uses: actions/cache@v6
         with:
           path: .git/lfs
           key: lfs-${{ hashFiles('data/**') }}
-          # A partial hit is worth having: adding one dataset changes the key, but the objects
-          # already in .git/lfs still count, and `git lfs pull` then fetches only the new one.
+          # A partial hit is worth having: `git lfs pull` then fetches only the new objects.
           restore-keys: |
             lfs-
       - if: inputs.upload-pages
         run: git lfs pull
 
-      # The tile render + static export is expensive (the shade pyramid alone is ~20 min) and its
-      # output is only consumed by the Pages deploy, so it runs only on that path. A push or PR stops
-      # at lint + tests.
+      # The render is expensive and only the Pages deploy consumes it, so it runs only on that path.
       - if: inputs.upload-pages
         uses: actions/configure-pages@v6
         with:
@@ -96,13 +70,7 @@ jobs:
           key: ${{ runner.os }}-nextjs-${{ hashFiles('bun.lock') }}-${{ hashFiles('**.[jt]s', '**.[jt]sx') }}
           restore-keys: |
             ${{ runner.os }}-nextjs-${{ hashFiles('bun.lock') }}-
-      # The derived tiles/graph (public/**). The key is deliberately unique per run with a bare prefix
-      # to fall back on, so a deploy always restores the NEWEST previous set rather than only an
-      # exactly-matching one — the old exact-hash key could only hit when every tiler input was
-      # byte-identical, which is precisely when there was nothing to build, so it never helped a real
-      # deploy. Correctness does not live in the key at all: each pass's stamp inside the restored
-      # tree decides what is still current and what re-renders, so a stale restore costs a rebuild of
-      # the passes that moved and nothing else.
+      # Keyed per run so the newest set restores; each pass's own stamp decides what re-renders.
       - if: inputs.upload-pages
         uses: actions/cache/restore@v6
         id: tiles
@@ -128,25 +96,16 @@ jobs:
             tiles-
       - if: inputs.upload-pages
         run: bun export
-      # Saved right after the render rather than at the end of the job, and on failure too: the
-      # pyramid is the expensive thing here, and a deploy that dies in `next build` or in one of the
-      # checks below should still bank the passes that finished.
+      # Saved right after the render, even on failure, so a later failure still banks finished passes.
       - if: inputs.upload-pages && always()
         uses: actions/cache/save@v6
         with:
           path: *tiles
           key: tiles-${{ github.run_id }}
-      # The committed shed artifact names the graph it was placed against and the client resolves
-      # nothing against any other one, so a deploy whose graph inputs moved without a `build-sheds`
-      # re-place in the same push makes every shed on the map vanish rather than misplacing one —
-      # correct, and invisible until someone looks. This is the last step that holds both halves, the
-      # graph having only just been built, so the pairing is blocked here instead of being remembered.
+      # Sheds placed against another graph silently vanish from the map, so block the mismatch here.
       - if: inputs.upload-pages
         run: bun run check-sheds
-      # The route-level checks (tests/route-sampling.test.ts) cannot run with lint and tests above:
-      # they read the graph this build just made, which is gitignored, and two LFS files under data/
-      # that the non-deploy checkout deliberately takes as pointers. This is the one path with both,
-      # and the graph is as fresh as it gets here. ~13 s.
+      # Needs the freshly built graph and real LFS files, which only this path has.
       - if: inputs.upload-pages
         run: bun run test-routes
       - if: inputs.upload-pages

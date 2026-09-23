@@ -57,10 +57,6 @@ export default function LayersControl({
     };
   }, [menuOpen]);
 
-  // The button wears the single active layer's own glyph when exactly one is on, so the toolbar hints
-  // at what's showing; with none or several on it falls back to the generic layers icon.
-  // The city's own layers, in the reader's order and without the ones they have hidden
-  // (src/settings/store.ts).
   const offered = orderedOverlays(city.overlays, settings)
     .map((id) => OVERLAYS.find((overlay) => overlay.id === id))
     .filter((overlay) => overlay !== undefined);
@@ -91,18 +87,13 @@ export default function LayersControl({
       {menuOpen ? (
         <div
           role="menu"
-          // The cap is on the menu; the ROWS scroll and the footer stays put, because that footer is
-          // how a layer gets hidden and it is wanted most when the list has grown long enough to
-          // need scrolling. `overflow-hidden` keeps the rounded corners over the scrolling child.
+          // Capped with scrolling rows, so the footer (where layers are hidden) stays put.
           className="toolbar-menu-shell absolute right-0 mt-2 flex w-44 origin-top-right flex-col overflow-hidden rounded-2xl bg-white/95 shadow-2xl ring-1 ring-black/5 backdrop-blur-md dark:bg-slate-800/95 dark:ring-white/10"
         >
           <div className="toolbar-menu-scroll py-1">
             {offered.map((overlay) => {
               const on = active.has(overlay.id);
-              // A layer whose data did not arrive draws nothing, which on a map is indistinguishable
-              // from a layer with nothing to draw. The glyph is what tells the two apart, and it
-              // replaces the tick rather than crowding it — a layer that is on but showing you
-              // nothing is not in the state the tick claims.
+              // A layer whose data didn't arrive looks empty, so its glyph replaces the tick.
               const lost = on && unreachable.has(overlay.id);
               return (
                 <button

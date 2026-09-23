@@ -1,9 +1,4 @@
-// The shareable state, carried as query parameters inside the URL hash. The route — endpoints, scenic
-// weights, the scrubbed time and pinned day — is always there and rewritten live; the view — camera and
-// overlays — is added only to a link the user shares. Query parameters rather than a packed blob
-// because this app keeps gaining scenic factors: a key sitting at its default is omitted, an unknown key
-// is left alone, and a missing key falls back to its default, so a link made today still opens once the
-// ninth factor lands.
+// Query parameters so old links survive new factors: defaults omitted, unknown keys left alone.
 
 import {
   DEFAULT_MODE,
@@ -50,24 +45,19 @@ export interface LatLng {
   lng: number;
 }
 
-// What both shells say the same way, in the same keys.
 export interface PlaceUrlState {
   start: LatLng | null; // a manually set start; null means the live location
   dest: LatLng | null;
-  // A place the reader looked up and left on the map. Not an endpoint: it carries no route and no
-  // name, because the point is the index's own and the same local lookup that names `from`/`to`
-  // names this back.
+  // A looked-up place left on the map; no name, since the local lookup names it back.
   pin: LatLng | null;
   customHour: number | null; // null tracks the wall clock
   customDay: string | null; // "YYYY-MM-DD"; null is today
 }
 
-// Explorer's: a weight per factor, set by hand.
 export interface RouteUrlState extends PlaceUrlState {
   weights: RouteWeights;
 }
 
-// Modes': one chosen mode instead of Explorer's eleven weight keys.
 export interface ModeUrlState extends PlaceUrlState {
   mode: ModeId; // an unknown one reads as the default
   alt: number | null; // the chosen route card, by index; null while none is
@@ -83,8 +73,7 @@ export interface Camera {
 export interface ViewUrlState {
   camera: Camera | null;
   overlays: readonly string[] | null; // overlay ids; the caller validates them against the registry
-  // The city id, carried explicitly rather than inferred from the camera: a link's `layers` may name
-  // an overlay only some cities offer, and inferring would silently drop it. The caller validates it.
+  // Explicit, since inferring from the camera would drop `layers` only some cities offer.
   city: string | null;
 }
 
@@ -103,11 +92,10 @@ export const DEFAULT_WEIGHTS: RouteWeights = {
   shelter: DEFAULT_SHELTER_WEIGHT,
   transit: DEFAULT_TRANSIT_WEIGHT,
   allowFerries: true,
-  // No key: nothing a reader sets, so nothing a link carries. See INTERNAL_FLAGS in routing/cost.ts.
+  // No key: not reader-settable. See INTERNAL_FLAGS in routing/cost.ts.
   allowTransit: true,
   allowSheds: true,
-  // Off: a route that spends crossings freely zigzags across a street to chase the shady side, which
-  // is the cost model buying something nobody asked for rather than a taste anyone holds.
+  // Off, or routes zigzag across streets to chase the shady side.
   allowCrossings: false,
 };
 
@@ -131,14 +119,8 @@ export const DEFAULT_MODE_STATE: ModeUrlState = {
   toggles: DEFAULT_TOGGLES,
 };
 
-// A destination named in words — "205 East Houston" — instead of as a point. It sits in the hash
-// beside `from` and `to` because it says the same thing they do, in the one scheme this app writes
-// links in, and the reader can read it. Unlike them it is an instruction rather than state: nothing
-// in the app ever writes it, and on arrival it is resolved against the city's own index and taken
-// out of the URL (`withoutDestQuery`), so a link that has been acted on cannot fire again on reload
-// or travel on to the next person carrying a stale query. Taking it out is its own step rather than
-// the hash writer's business: that writer has nothing to say until a route exists, which is exactly
-// the state a bare `#q=` link arrives in.
+// An instruction, not state: stripped on arrival (`withoutDestQuery`) so it can't refire;
+// the hash writer can't strip it because it writes nothing until a route exists.
 const DEST_QUERY_KEY = "q";
 
 const COORD_DIGITS = 6; // ~0.1 m
@@ -185,9 +167,7 @@ const WEIGHT_PARAMS: readonly WeightParam[] = [
   { key: "transit", field: "transit", min: 0, max: MAX_TRANSIT_WEIGHT },
 ];
 
-// Every key this module owns, so a rewrite can clear its own and leave the rest (the About flag today,
-// a future version's keys) untouched. Both shells' keys are cleared together, or a stale `mode=`
-// rides along on the next link shared from Explorer.
+// Both shells' keys are cleared together, or a stale `mode=` rides along on an Explorer link.
 const PLACE_KEYS: readonly string[] = [
   "from",
   "to",
@@ -319,8 +299,7 @@ function parseIndex(
   }
 }
 
-// `defaults` is what a missing key falls back to — the persisted preferences at load, so a link that
-// names only a destination leaves the visitor's own slider settings in place.
+// `defaults` are the persisted preferences, so a link naming only a destination keeps the sliders.
 export function decodeRoute(
   params: URLSearchParams,
   defaults: RouteUrlState = DEFAULT_ROUTE_STATE,
@@ -340,11 +319,8 @@ export function decodeRoute(
   weights.allowSheds = params.has("sheds")
     ? params.get("sheds") !== "0"
     : defaults.weights.allowSheds;
-  // Both spellings of this key mean the same thing, because in both schemes it was only ever written
-  // when crossings are FREE: `crossings=0` before the flag was inverted (when it was named for the
-  // opposite state) and `crossings=1` since. So presence is the signal, and the value is read only
-  // to reject a string neither encoder ever wrote. Without this a link shared before the rename
-  // would decode to the opposite of the route it described.
+  // Presence is the signal: `crossings=0` (before the flag was inverted) and `crossings=1` both
+  // mean free; the value only rejects strings neither encoder wrote.
   const crossings = params.get("crossings");
   weights.allowCrossings =
     crossings === "0" || crossings === "1"
@@ -382,9 +358,7 @@ export function decodeModes(
   const mode = params.get("mode");
   return {
     ...decodePlace(params, defaults),
-    // Modes always routes at now, so a pinned clock is not one of its keys — a link carrying
-    // Explorer's leaves the wall clock alone here rather than freezing this page at someone
-    // else's hour.
+    // Modes always routes at now, so a link carrying Explorer's clock is ignored.
     customHour: null,
     customDay: null,
     mode: mode !== null && isModeId(mode) ? mode : defaults.mode,
@@ -406,9 +380,7 @@ export function decodeModes(
 export function encodeModes(state: ModeUrlState): URLSearchParams {
   const params = new URLSearchParams();
   encodePoints(params, state);
-  // A card index names one card of one plan, and the reader this link opens for fills in every key
-  // it leaves out from THEIR settings — another mode, another sun, another answer to hills. So a
-  // link that pins a card pins the whole question it was an answer to, defaults and all.
+  // The recipient fills missing keys from their own settings, so a pinned card pins the whole plan.
   const pinned = state.alt !== null;
   if (pinned || state.mode !== DEFAULT_MODE.id) {
     params.set("mode", state.mode);
@@ -462,8 +434,6 @@ export function decodeDestQuery(params: URLSearchParams): string | null {
   return text === "" ? null : text;
 }
 
-// `hash` with the destination query taken out and everything else — the route, the view, the About
-// flag — left exactly as it was.
 export function withoutDestQuery(hash: string): string {
   const params = hashParams(hash);
   params.delete(DEST_QUERY_KEY);
@@ -474,9 +444,7 @@ export function hashParams(hash: string): URLSearchParams {
   return new URLSearchParams(hash.replace(/^#/, ""));
 }
 
-// URLSearchParams percent-encodes the commas in a point and a layer list, and spells a valueless key
-// `k=`; a fragment allows commas literally, and both forms read back identically, so undo them —
-// readability is the whole reason these are query parameters rather than a packed blob.
+// Unescape commas and drop `=` on valueless keys; both read back identically and stay readable.
 export function formatHash(params: URLSearchParams): string {
   const text = params
     .toString()
@@ -485,8 +453,7 @@ export function formatHash(params: URLSearchParams): string {
   return text ? `#${text}` : "";
 }
 
-// `hash` with this module's keys replaced by `next` and every other key kept, so a rewrite never drops
-// the About flag or a key a future version added.
+// Keeps foreign keys like the About flag or a future version's.
 export function replaceOwnKeys(hash: string, next: URLSearchParams): string {
   const params = hashParams(hash);
   for (const key of [...ROUTE_KEYS, ...MODE_KEYS, ...VIEW_KEYS]) {
@@ -498,7 +465,7 @@ export function replaceOwnKeys(hash: string, next: URLSearchParams): string {
   return formatHash(params);
 }
 
-// The path is the page's own, so the basePath the Pages deploy injects is kept.
+// The page's own path keeps the basePath the Pages deploy injects.
 export function shareUrl(
   page: { origin: string; pathname: string; search: string },
   params: URLSearchParams,

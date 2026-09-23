@@ -1,37 +1,13 @@
-// A Catmull-Rom spline through a polyline's own vertices, emitted as cubic beziers.
-//
-// Ferry geometry is coarse — a GTFS crossing is 4 to 12 vertices for a kilometer of water — so
-// stroked as chords it reads as a polygon rather than a boat's path. A spline that interpolates
-// the vertices (rather than approximating them, as a B-spline would) keeps the drawn line on the
-// piers and the shape points the feed actually published.
-//
-// The parameterization is centripetal (alpha = 1/2, Yuksel et al. 2011): ferry vertices are spaced
-// wildly unevenly — a stop, then a shape point a kilometer on — and the uniform variant loops and
-// cusps exactly there, while centripetal is proven not to self-intersect within a span.
-//
-// Centripetal keeps the curve from looping but not from *bulging*: it interpolates the vertices and
-// is free to leave the box they bound in between, which on a route hugging a shoreline is a bulge
-// onto land. Over New York's ferry geometry the unlimited fit left its span's own box by up to 72 m,
-// with 2.5% of the curve more than 20 m outside — enough to beach the East River route on the
-// Brooklyn bank between two shape points. So each span's tangents are limited (see `monotone`) until
-// the curve cannot leave that box at all.
+// Centripetal Catmull-Rom (Yuksel et al. 2011), which unlike uniform can't loop on uneven spacing.
 
 const ALPHA = 0.5;
-// A knot spacing floor, so a repeated vertex cannot divide by zero. Well under a pixel at any zoom
-// the layer draws, so it never moves a curve that is not already degenerate.
+// Keeps a repeated vertex from dividing by zero.
 const MIN_KNOT = 1e-6;
-// Vertices this close to their predecessor are dropped before fitting. A GTFS crossing repeats its
-// terminal as both the stop and the shape's first point, meters apart or less, and a pair that
-// close carries no shape but does swing the tangent that runs through it.
+// GTFS repeats a terminal as stop and first shape point; such a pair only swings the tangent.
 const MIN_GAP_PX = 0.25;
-// Past this much course change a vertex is drawn as a corner, not smoothed through. Ferry shapes
-// are not all gentle: 28 of the 127 turns in New York's ferry geometry exceed 90°, six of them
-// within 20° of a full reversal, because the shape follows the boat backing out of its slip. Fitted
-// through, a reversal like that becomes a wide loop over the pier it is supposed to end at.
+// Sharper turns are corners: shapes follow boats backing out of slips, which would fit as loops.
 const MIN_SMOOTH_COSINE = Math.cos((90 * Math.PI) / 180);
 
-// The subset of the canvas path API the fit issues, so a test can record the curve rather than
-// rasterize it.
 export interface PathSink {
   moveTo(x: number, y: number): void;
   bezierCurveTo(
@@ -48,19 +24,7 @@ function knot(fromX: number, fromY: number, toX: number, toY: number): number {
   return Math.max(Math.hypot(toX - fromX, toY - fromY) ** ALPHA, MIN_KNOT);
 }
 
-// The Fritsch–Carlson limit (1980) on one axis of one span: the largest pair of end tangents that
-// still leaves the cubic Hermite monotone across it. Applied to both axes, the curve is monotone in
-// x and in y, so it stays inside the rectangle its two endpoints bound — it can bow, but only within
-// the span it belongs to, and it still passes through both published vertices.
-//
-// A tangent pointing back across the secant is zeroed (it would leave the interval immediately);
-// past the circle of radius 3 in secants both are scaled down together. Only where a span reverses
-// in one axis does that shorten the tangent enough to turn it, which is exactly the local extremum
-// the bulge sat on; elsewhere nothing binds and the fit is the plain centripetal one.
-//
-// This is the limiter rather than densifying with extra control points because the bulge is not a
-// missing-detail problem: more points would each need the same guarantee, and every one of them
-// would be a position the feed never published sitting on a map that is otherwise only measurements.
+// Fritsch–Carlson (1980): monotone per axis keeps each span inside its endpoints' box, off the shore.
 function monotone(
   secant: number,
   startTangent: number,
@@ -77,9 +41,7 @@ function monotone(
   }
 }
 
-// One smooth run, vertices `from` through `to` of (xs, ys). The run's own ends are reflected
-// through, which starts and finishes it straight along its first and last chord — so a corner
-// between two runs stays a corner.
+// Ends are reflected through, so a corner between two runs stays a corner.
 function runPath(
   sink: PathSink,
   xs: readonly number[],
@@ -101,8 +63,7 @@ function runPath(
     const spanKnot = knot(startX, startY, endX, endY);
     const afterKnot = knot(endX, endY, afterX, afterY);
 
-    // Barry-Goldman's non-uniform Catmull-Rom tangents, scaled into the span's own parameter range
-    // and thirded, which is a cubic Hermite segment's bezier hull.
+    // Barry-Goldman tangents, scaled to the span and thirded into Bezier control points.
     const startTangentX =
       ((startX - beforeX) / beforeKnot -
         (endX - beforeX) / (beforeKnot + spanKnot) +
@@ -145,9 +106,7 @@ function runPath(
   }
 }
 
-// Appends the smoothed path through (xs, ys) to `sink`, without beginning or stroking it. The
-// caller passes the whole polyline: every control point is a function of four consecutive
-// vertices, so a tile that fitted only its own clipped piece would kink at the seam.
+// Pass the whole polyline, not a tile's clipped piece, or the curve kinks at the seam.
 export function splinePath(
   sink: PathSink,
   xs: readonly number[],

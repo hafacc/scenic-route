@@ -7,31 +7,20 @@ import type { TileRenderer } from "./renderer";
 import { themeName } from "./theme";
 import type { Cursor } from "./varint";
 
-// A city's designated historic districts (magic HDST), drawn as filled polygons — an inspection
-// layer for seeing which neighborhoods the city has landmarked whole, as against the individual
-// buildings the landmarks overlay dots. The decoding and the drawing both live here in the tile
-// worker.
-
 const TILE_SIZE = 256;
-const CELL_DEG = 0.005; // ~550 m buckets; a district is filed under every cell its bounding box spans
+const CELL_DEG = 0.005; // ~550 m; a district is filed under every cell its bounding box spans
 // At the industrial wash's alpha, so the streets and the buildings under a district read through.
 const FILL_ALPHA = 0.45;
-// A district smaller than this on screen is drawn as a square of it instead. Five of them are a
-// single building — St. Mark's Extension is 278 m² — and at the citywide zooms antialiasing fades a
-// fraction of a pixel to nothing, which would drop them from the view the layer's extent is read at.
+// Smaller districts are drawn as a square, since antialiasing fades sub-pixel ones to nothing.
 const MIN_DISTRICT_PX = 1.5;
 
 interface Districts {
-  districts: Polyline[][]; // per district its rings, filled even-odd so an inner ring punches a hole
-  // District indices filed by `${cellX},${cellY}`, so a tile draw gathers only the districts whose
-  // bounding box reaches it rather than all of them.
+  districts: Polyline[][]; // filled even-odd so an inner ring punches a hole
+  // District indices by `${cellX},${cellY}` over each bounding box.
   buckets: Map<string, number[]>;
 }
 
-// HDST is the shared polygon layout (scripts/geometry.ts encodePolygons): a 40-byte header, then
-// `count` polygons, each a u16 ring count then per ring a u32 vertex count and varint (lng, lat)
-// deltas. The tiler reads the same file for the graph's historic discount
-// (crates/tiler/src/historic.rs), so a district drawn here is one the router prices.
+// encodePolygons' layout (scripts/geometry.ts); the router prices the same file (historic.rs).
 export function decodeHistoric(buffer: ArrayBuffer): Districts {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
@@ -56,9 +45,7 @@ export function decodeHistoric(buffer: ArrayBuffer): Districts {
     districts.push(rings);
   }
 
-  // One two-point line per district — its bounding box's corners — so the shared bucketing files each
-  // district under the cells its box spans, exactly as it files a polyline under the cells its box
-  // spans.
+  // Its box's two corners, so the shared bucketing files it under every cell the box spans.
   const boxes = districts.map((rings) => {
     let minLng = Number.POSITIVE_INFINITY;
     let maxLng = Number.NEGATIVE_INFINITY;

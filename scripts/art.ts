@@ -1,9 +1,4 @@
-// `bun run scripts/art.ts`: fetches NYC public art and writes it as data/art/nyc.bin (magic ARTW) —
-// the artistic-scenery POIs (murals, sculpture, installations) a later phase fans out over the
-// walking graph into a per-edge "passes public art" routing discount. Two sources merged: the NYC
-// PDC Outdoor Public Art Inventory (authoritative, but skews monuments/sculpture) and OSM
-// tourism=artwork (which carries the murals the PDC set is thin on). Points only; no overlay this
-// batch. Layout: scripts/README.md.
+// Public art POIs: the PDC inventory skews to sculpture, so OSM tourism=artwork adds the murals.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -22,7 +17,7 @@ const ART_MAGIC = "ARTW";
 const ART_FORMAT = 1;
 const ART_DATASET = "2pg3-gcaa"; // PDC Outdoor Public Art Inventory
 const ART_COUNT = 700; // a floor; ~780 works at the last refresh
-// An OSM artwork this close to a PDC work is the same piece; the PDC record wins (it is curated).
+// An OSM artwork this close to a PDC work is the same piece; the curated PDC record wins.
 const OSM_ART_DEDUP_METERS = 30;
 
 interface ArtRow {
@@ -50,8 +45,7 @@ function toPoints(
   return points;
 }
 
-// Keeps the OSM works that are not already a PDC work. Both sets are small (hundreds), so a direct
-// radius scan is cheaper than indexing — no grid is worth its bookkeeping here.
+// Both sets are hundreds of points, so a direct scan beats a spatial index.
 function dedupOsm(osm: OsmArtwork[], pdc: NamedPoint[]): NamedPoint[] {
   return osm
     .filter(
@@ -64,7 +58,7 @@ function dedupOsm(osm: OsmArtwork[], pdc: NamedPoint[]): NamedPoint[] {
 }
 
 async function nycArt(land: LandContext): Promise<NamedPoint[]> {
-  // `*` so a newly-read column is free after one refetch (the disk cache keys on the query).
+  // `*` keeps the query, and so the disk cache key, stable when a new column is read.
   const rows = await NYC_OPEN_DATA.dataset<ArtRow>(
     ART_DATASET,
     { $select: "*" },
@@ -73,8 +67,6 @@ async function nycArt(land: LandContext): Promise<NamedPoint[]> {
   return toPoints(rows, land.onLand);
 }
 
-// The city's own inventories, which OSM's murals are then deduped against and added to. OSM is the
-// half that works anywhere; this is the half that does not, so a city states it or states null.
 export type ArtSource = (land: LandContext) => Promise<NamedPoint[]>;
 
 export const NYC_ART: ArtSource = nycArt;

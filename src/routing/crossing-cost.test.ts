@@ -1,6 +1,4 @@
-// The crossing wait is charged per crossing, not per crossing EDGE. A divided street is drawn as
-// several crossing ways chained through the islands between them, so these fixtures are shaped around
-// that: a plain crossing is one edge, a median crossing is three, and both must cost one wait.
+// A median crossing is three chained edges and must cost one wait, like a plain one.
 
 import { expect, test } from "bun:test";
 import { DEFAULT_WEIGHTS } from "../url-state";
@@ -24,7 +22,6 @@ interface EdgeSpec {
   meters: number;
 }
 
-// Only the fields the wait reads; the cost model touches nothing else here.
 function graphOf(nodeCount: number, edges: EdgeSpec[]): RoutingGraph {
   const edgeCount = edges.length;
   const edgeNodeA = new Uint32Array(edgeCount);
@@ -122,9 +119,7 @@ test("the wait rides on the ETA unit, on top of the walked time", () => {
   expect(rawSeconds(DIVIDED, 2, 4)).toBeCloseTo(DIVIDED.edgeLength[2] / 1.3, 6);
 });
 
-// The price the router pays for crossing, which is a different thing from the wait above: the wait is
-// how long a crossing takes and is always in the ETA, the price is what stops the route buying one
-// and is only charged when the reader has asked for fewer.
+// The router's price, unlike the ETA's wait, applies only when the reader asked for fewer crossings.
 
 const CROSSING_FREE: RouteWeights = {
   ...DEFAULT_WEIGHTS,
@@ -161,9 +156,6 @@ test("a divided street is priced once, not once per carriageway", () => {
   expect(total).toBe(CROSSING_SECONDS * CROSSING_AVOID_MULTIPLE);
 });
 
-// The whole mechanism: a path cost has no memory, so "and straight back" cannot be recognized — but
-// an undone crossing pays the price twice for no progress, which is what makes it stop being worth
-// buying. This is the arithmetic that has to hold for that to work.
 test("crossing and crossing back costs twice, so a zigzag has to earn twice", () => {
   const there = crossingPrice(PLAIN, 1, 0, CROSSING_PRICED);
   const back = crossingPrice(PLAIN, 1, 1, CROSSING_PRICED);

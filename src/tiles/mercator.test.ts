@@ -1,9 +1,7 @@
 import { expect, test } from "bun:test";
 import { projectX, projectY, unproject } from "./mercator";
 
-// The worker draws tiles with its own transcription of leaflet's projection, because leaflet cannot
-// load in a worker. A drift of even a fraction of a pixel would show up as seams between overlays,
-// so these pin the transcription to leaflet's CRS itself, bit for bit.
+// Sub-pixel drift would seam overlays, so pin the transcription to leaflet's CRS bit for bit.
 
 // leaflet sniffs the browser at import, so it needs just enough of one to get through that.
 Object.assign(globalThis, {
@@ -20,8 +18,7 @@ Object.assign(globalThis, {
 });
 const L = (await import("leaflet")).default;
 
-// Every zoom the overlays use, over a full grid of latitudes against longitudes — independent axes,
-// so an error in one that a matching error in the other would mask still shows.
+// Independent axes, so matching errors in lat and lng can't mask each other.
 function* samples(): Generator<{ lat: number; lng: number; zoom: number }> {
   for (let zoom = 0; zoom <= 22; zoom++) {
     for (let latStep = 0; latStep < 16; latStep++) {
@@ -36,8 +33,7 @@ function* samples(): Generator<{ lat: number; lng: number; zoom: number }> {
   }
 }
 
-// The corners the draws actually unproject: a tile's origin and its opposite corner, as the whole
-// pixel numbers `coords.{x,y} * TILE_SIZE` yields rather than anything round-tripped through project.
+// Whole-pixel tile corners, as `coords.{x,y} * TILE_SIZE` yields, not round-tripped values.
 function* tileCorners(): Generator<{ x: number; y: number; zoom: number }> {
   for (let zoom = 0; zoom <= 22; zoom++) {
     const tiles = 2 ** zoom;

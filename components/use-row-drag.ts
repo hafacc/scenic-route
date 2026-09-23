@@ -2,29 +2,20 @@
 
 import { type PointerEvent as ReactPointerEvent, useRef, useState } from "react";
 
-// Dragging a row of a short list into a new place, on a touch screen as well as with a mouse.
-//
-// The arithmetic is in ROWS: how far the finger has traveled, divided by the height of one row, is
-// how many places the row has moved. The height is measured from the row being dragged rather than
-// declared, because the two lists this serves have different row heights — a layer is one line, a
-// route preference is a line and a slider — and a number written down here would be wrong for one of
-// them the next time either is restyled.
+// Offsets are in rows, with the row height measured since the two lists differ.
 
 interface Drag {
-  from: number; // where the row started
-  to: number; // where it would land if the finger lifted now
-  offset: number; // pixels the finger has traveled
-  height: number; // one row, as measured when the drag began
+  from: number; // row index at the start
+  to: number; // row index if dropped now
+  offset: number; // px
+  height: number; // px, measured when the drag began
 }
 
 export interface RowDrag {
-  // How far this row is displaced right now: the dragged one follows the finger, and the rows it has
-  // passed step out of its way by exactly one place.
   shiftOf: (index: number) => number;
   isDragging: (index: number) => boolean;
   active: boolean;
-  // For the handle: `onPointerDown`. The handle needs `touch-action: none` so a finger on IT drags
-  // rather than scrolling, while a finger anywhere else on the row still scrolls the sheet.
+  // The handle needs `touch-action: none`, or a finger on it scrolls the sheet instead of dragging.
   start: (event: ReactPointerEvent<HTMLElement>, index: number) => void;
 }
 
@@ -33,8 +24,7 @@ export function useRowDrag(
   move: (from: number, to: number) => void,
 ): RowDrag {
   const [drag, setDrag] = useState<Drag | null>(null);
-  // Read inside the pointer handlers, which are registered once per drag and must not close over a
-  // count from before it.
+  // Read inside pointer handlers registered once per drag.
   const rows = useRef(count);
   rows.current = count;
 

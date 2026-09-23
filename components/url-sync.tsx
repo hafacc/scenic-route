@@ -8,20 +8,15 @@ interface UrlSyncProps {
   start: LatLng | null;
   dest: LatLng | null;
   pin: LatLng | null;
-  // The deck's own keys, given the pinned clock this writer follows.
   encode: (clock: {
     hour: number | null;
     day: string | null;
   }) => URLSearchParams;
-  // Held off until the hash at load has been applied, so the first render can't overwrite the link
-  // being opened with the app's defaults.
+  // Held off until the load hash is applied, so the first render can't overwrite the opened link.
   enabled: boolean;
 }
 
-// Mirrors the route into the URL hash, live. Its own component so the once-a-minute clock tick it
-// subscribes to re-renders nothing but this. Always replaceState — a slider drag or an endpoint drag
-// would otherwise bury the back button under a hundred entries. The pushStates in the app are the
-// dialogs — About and the settings page — which Back should close.
+// Its own component so the minute tick re-renders only this. replaceState, or drags flood history.
 export default function UrlSync({
   start,
   dest,
@@ -33,17 +28,12 @@ export default function UrlSync({
   useEffect(() => subscribeRouteTime(() => bump((value) => value + 1)), []);
 
   const { hour, day } = getPinnedTime();
-  // No dep list: the write is a string compare against the live hash, so running it on every render is
-  // cheaper than tracking a dozen dependencies, two of which live outside React.
+  // No dep list: the write is a string compare against the live hash, cheaper than a dozen deps.
   useEffect(() => {
     if (!enabled) {
       return;
     }
-    // Nothing to share until a route or a searched place exists. The weights alone are a local
-    // preference, already persisted, so writing them would put a line of sliders in the address bar
-    // of a session that has not asked for anything — and would strip the keys of a settings-only
-    // link on arrival. Once `from`/`to`/`pin` have been written, keep going, so clearing them clears
-    // the keys too.
+    // Weights alone are local: write once a route or place exists, then keep going to clear it.
     const asked = start !== null || dest !== null || pin !== null;
     const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
     if (

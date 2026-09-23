@@ -20,8 +20,7 @@ import {
 } from "./search";
 import { haversineMeters, type Snap } from "./snap";
 
-// The oracle here is a self-contained Dijkstra over effective seconds, not findRoute — a stronger,
-// independent reference than another A*, the same approach ferry-cost.test.ts and scenic-cost.test.ts take.
+// The oracle is its own Dijkstra, not findRoute, as in ferry-cost.test.ts and scenic-cost.test.ts.
 
 const SCALE = 1e-6;
 const NAME_NONE = 0xffff;
@@ -48,8 +47,7 @@ const weights = (
   transit: 0,
   allowFerries,
   allowSheds: true,
-  // The fixture draws no rail, so nothing can board it, and no crossing edges, which leaves the
-  // crossing gate free either way — stated because omitting it would read as "avoid crossings".
+  // Stated because omitting it would read as "avoid crossings".
   allowTransit: false,
   allowCrossings: true,
 });
@@ -67,8 +65,7 @@ interface EdgeSpec {
   durationSeconds: number; // ferry edges only
 }
 
-// Build a synthetic routing graph from nodes and edges, straight-line edges only — the same fixture
-// shape the other routing tests use, so the A* heuristic reads exactly the coordinates it snaps to.
+// Straight edges, so the A* heuristic reads exactly the coordinates it snaps to.
 function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
   const nodeCount = nodes.length;
   const edgeCount = edges.length;
@@ -172,8 +169,6 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
   } as unknown as RoutingGraph;
 }
 
-// A snap sitting exactly on a node, entered through an incident walking edge, coinciding with the
-// node (metersFromA 0 or the full edge length).
 function snapAtNode(graph: RoutingGraph, node: number, walkEdge: number): Snap {
   const atA = graph.edgeNodeA[walkEdge] === node;
   return {
@@ -188,8 +183,7 @@ function snapAtNode(graph: RoutingGraph, node: number, walkEdge: number): Snap {
   };
 }
 
-// The reference optimum: a plain Dijkstra over effective seconds with findRoute's virtual-source and
-// virtual-goal partial-edge semantics. Copied from ferry-cost.test.ts's oracle.
+// Copied from ferry-cost.test.ts's oracle.
 function dijkstraCost(
   graph: RoutingGraph,
   start: Snap,
@@ -253,7 +247,6 @@ function dijkstraCost(
   return best;
 }
 
-// The effective-seconds cost of a returned route, reconstructed from its steps.
 function effectiveCostOf(
   graph: RoutingGraph,
   result: RouteResult,
@@ -279,7 +272,6 @@ function effectiveCostOf(
   return cost;
 }
 
-// True when every step's exit node is the next step's entry node — a physically connected chain.
 function isConnected(graph: RoutingGraph, result: RouteResult): boolean {
   for (let index = 0; index + 1 < result.steps.length; index++) {
     const step = result.steps[index];
@@ -297,8 +289,6 @@ function isConnected(graph: RoutingGraph, result: RouteResult): boolean {
   return true;
 }
 
-// The summed step length must equal the reported total, and ferry spans must be excluded from the
-// walked mileage — a self-consistency check on the reconstructed route.
 function assertTotalsConsistent(result: RouteResult, label: string): void {
   let length = 0;
   let walk = 0;
@@ -312,9 +302,7 @@ function assertTotalsConsistent(result: RouteResult, label: string): void {
   expect(result.walkMeters, label).toBeCloseTo(walk, 3);
 }
 
-// A 4x4 core grid with varied covers, plus a dead-end stub edge per core node used for snapping.
-// Snapping through a stub makes the reachable core node settle before its unreachable leaf, so the
-// solver's approximate goal test lands on the true optimum — exact against the Dijkstra oracle.
+// Snapping via stubs settles the core node before its leaf, so the approximate goal test is exact.
 function buildGrid(withFerry: boolean): {
   graph: RoutingGraph;
   stubOf: number[];
@@ -351,7 +339,6 @@ function buildGrid(withFerry: boolean): {
     }
   }
   if (withFerry) {
-    // A diagonal ferry shortcut between opposite corners.
     edges.push({ a: 0, b: 15, ferry: true, cover: 0, durationSeconds: 200 });
   }
   const stubOf: number[] = [];
@@ -380,9 +367,7 @@ const gridSnap = (core: number): Snap =>
 const ferrySnap = (core: number): Snap =>
   snapAtNode(ferryGrid.graph, core, ferryGrid.stubOf[core]);
 
-// A star of independent spurs: a 3x3 hub grid, and per dest a private junction+leaf spur off a hub
-// node. No two dests share a junction, so a reused solver never needs a previously-settled dest
-// node's outgoing edges — persistent state stays sound across a run of queries.
+// No two dests share a junction, so persistent state stays sound across queries.
 function buildStar(): { graph: RoutingGraph; source: Snap; dests: Snap[] } {
   const nodes: NodeSpec[] = [];
   for (let row = 0; row < 3; row++) {
@@ -474,8 +459,7 @@ beforeEach(clearEdgePathCache);
 const TREE_WEIGHTS = [0, 0.3, 0.6, 1];
 
 test("solveApprox is optimal with ferries off (matches the Dijkstra oracle)", () => {
-  // Ferries off, the heuristic is consistent and the stub-snapped dest settles its reachable
-  // endpoint first, so the approximate goal test coincides with the true optimum.
+  // Ferries off keeps the heuristic consistent, so the approximate goal test hits the true optimum.
   const ods: [number, number][] = [
     [0, 5],
     [0, 10],
@@ -523,7 +507,6 @@ test("solveApprox is optimal with ferries off (matches the Dijkstra oracle)", ()
 });
 
 test("one reused solver stays optimal across a sequence of dests", () => {
-  // Proves the persistent distance/parent/closed state is not corrupted between drags.
   for (const treeWeight of TREE_WEIGHTS) {
     clearEdgePathCache();
     const solver = new RouteSolver(
@@ -557,8 +540,7 @@ test("one reused solver stays optimal across a sequence of dests", () => {
 });
 
 test("a reused solver stays optimal dragging through already-settled dests", () => {
-  // The dests share grid corridors and wander near and far, so later queries must route through a core
-  // node an earlier query already settled — the case the expand-before-goal-stop fix covers.
+  // Later dests route through core nodes an earlier query already settled.
   const sequence = [5, 6, 10, 9, 15, 11, 2, 8, 13, 0];
   for (const treeWeight of TREE_WEIGHTS) {
     clearEdgePathCache();
@@ -607,8 +589,7 @@ test("reverseResult flips orientation and preserves the scalar totals", () => {
   expect(reversed.lengthMeters).toBe((forward as RouteResult).lengthMeters);
   expect(reversed.walkMeters).toBe((forward as RouteResult).walkMeters);
   expect(reversed.factors).toBe((forward as RouteResult).factors);
-  // The ETA is re-run over the flipped steps rather than copied, because walking a hill the other
-  // way climbs what it dropped. This grid is flat, so it comes back to the same number.
+  // This grid is flat, so the re-run ETA matches.
   expect(reversed.travelSeconds).toBeCloseTo(
     (forward as RouteResult).travelSeconds,
     9,
@@ -623,7 +604,6 @@ test("reverseResult flips orientation and preserves the scalar totals", () => {
   expect(reversed.path.lngs[0]).toBe(fwdLngs[last]);
   expect(reversed.path.lats[last]).toBe(fwdLats[0]);
   expect(reversed.path.lngs[last]).toBe(fwdLngs[0]);
-  // Every step flips its travel direction; the stored side is untouched.
   const fwdSteps = (forward as RouteResult).steps;
   expect(reversed.steps).toHaveLength(fwdSteps.length);
   for (let index = 0; index < fwdSteps.length; index++) {
@@ -637,8 +617,7 @@ test("reverseResult flips orientation and preserves the scalar totals", () => {
 test("reverseResult re-times the walk, so the climb back is slower than the descent", () => {
   clearEdgePathCache();
   const hilly = buildGrid(false);
-  // Every edge climbs 8% of its length walked a -> b, which in this grid's numbering is the
-  // direction a 0 -> 15 route travels throughout.
+  // In this grid's numbering a 0 -> 15 route walks every edge a -> b.
   hilly.graph.edgeAscent.fill(Math.round((0.08 / 0.35) * 254));
   const start = snapAtNode(hilly.graph, 0, hilly.stubOf[0]);
   const dest = snapAtNode(hilly.graph, 15, hilly.stubOf[15]);
@@ -655,8 +634,7 @@ test("reverseResult re-times the walk, so the climb back is slower than the desc
 });
 
 test("with ferries on solveApprox is connected and near-optimal", () => {
-  // With the inconsistent ferry-credit heuristic the solver may settle a slightly costlier path than
-  // the exact optimum, but it stays connected and within a small factor.
+  // The ferry credit makes the heuristic inconsistent, so the solver may land slightly above optimal.
   const ods: [number, number][] = [
     [0, 15],
     [0, 12],
@@ -691,16 +669,11 @@ test("with ferries on solveApprox is connected and near-optimal", () => {
       boarded += 1;
     }
   }
-  // At least one route actually rides the ferry, so the ferry path is exercised.
   expect(boarded).toBeGreaterThan(0);
 });
 
 test("a start-drag anchors the sun at arrival and counts it backward", () => {
-  // A long stem into a symmetric fork: the fork is reached ~900 s in, so the two branches are walked
-  // near the END of the trip. The sun flips which branch is sunlit at 500 s, so the branches — walked
-  // well after the flip — belong to the "after" regime. A start-drag solves BACKWARD from the dest, so
-  // it must anchor the sun at the arrival time and count it back to price those near-dest branches
-  // correctly, rather than treating elapsed-from-dest as time since departure.
+  // The sun flips the branches at 500 s but the fork is ~900 s in, so a start drag must count the sun back.
   const walk = (a: number, b: number): EdgeSpec => ({
     a,
     b,
@@ -766,15 +739,11 @@ test("a start-drag anchors the sun at arrival and counts it backward", () => {
     allowCrossings: true,
   };
 
-  // Ground truth: a fresh forward A* from the true start reaches the fork ~900 s in and walks the
-  // branches after the flip, so it takes the lower (by-then sunlit) branch.
   const truth = findRoute(graph, start, dest, preferSun);
   expect(usesLower(truth)).toBe(true);
   expect(usesUpper(truth)).toBe(false);
   const arrival = (truth as RouteResult).travelSeconds;
 
-  // The start-drag solver: rooted at the dest, sun anchored at the arrival time and counted backward.
-  // It prices the near-dest branches in the after-flip regime and agrees with the ground truth.
   const backward = new RouteSolver(
     graph,
     dest,
@@ -785,9 +754,7 @@ test("a start-drag anchors the sun at arrival and counts it backward", () => {
   expect(usesLower(backward)).toBe(true);
   expect(usesUpper(backward)).toBe(false);
 
-  // Without the anchor (elapsed-from-dest read as time since departure) the near-dest branches are
-  // priced in the wrong, pre-flip regime, so the same search wrongly takes the upper branch — proving
-  // the anchor and backward direction change the outcome.
+  // Without the anchor the branches are priced pre-flip and the upper one wrongly wins.
   const naive = new RouteSolver(graph, dest, preferSun, 0, 1).solveApprox(
     start,
   );

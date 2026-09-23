@@ -1,18 +1,9 @@
 import { projectX, projectY } from "./mercator";
 import { type Cursor, readVarint } from "./varint";
 
-// What every polyline overlay needs and none of them owns: reading a varint-delta line and a name
-// blob out of a source file, filing lines in spatial buckets so a tile draw touches only what
-// reaches it, and the two halves of a lane offset — the perpendicular it is applied along and how
-// wide a lane is at a given zoom. Shared by the ferry/highway lines (./lines) and the subway
-// (./subway), which draw different files with the same machinery.
-
-// The zoom the offset normals are computed at. Web mercator scales uniformly with zoom, so a
-// direction taken at any one of them is the direction at all of them.
+// Mercator scales uniformly with zoom, so a direction taken at any zoom holds at all of them.
 const NORMAL_ZOOM = 0;
-// How far a mitred normal may stretch to hold the offset distance through a corner, past which the
-// corner is cut instead. Ferry corners are gentle enough that this never binds; it is here so a
-// doubled-back vertex cannot fling a control point across the map.
+// Max stretch of a mitred normal before the corner is cut, so a doubled-back vertex can't fling it.
 const MITER_LIMIT = 2;
 
 export interface Polyline {
@@ -20,8 +11,7 @@ export interface Polyline {
   lats: Float64Array;
 }
 
-// One line's `vertices` (longitude, latitude) varint deltas, the first of them from the file's
-// origin and the rest from the previous vertex — the FERR/GRPH/SBWY geometry convention.
+// Varint (lng, lat) deltas, the first from the file origin, the rest from the previous vertex.
 export function readPolyline(
   bytes: Uint8Array,
   cursor: Cursor,
@@ -43,8 +33,7 @@ export function readPolyline(
   return { lngs, lats };
 }
 
-// The name blob a stop, a route or a station name indexes into: a u32 count, then each name as a u16
-// byte length and that many UTF-8 bytes.
+// A u32 count, then each name as a u16 byte length and that many UTF-8 bytes.
 export function decodeNames(
   view: DataView,
   bytes: Uint8Array,
@@ -62,8 +51,7 @@ export function decodeNames(
   return names;
 }
 
-// Polyline indices filed by `${cellX},${cellY}` over a `cellDeg` grid, each line under every cell its
-// bounding box spans, so a tile draw gathers only the lines that reach it rather than the whole city.
+// Polyline indices keyed `${cellX},${cellY}`, each under every cell its bounding box spans.
 export function bucketize(
   polylines: readonly Polyline[],
   cellDeg: number,
@@ -104,28 +92,22 @@ export function bucketize(
   return buckets;
 }
 
-// A polyline that shares its corridor with others: `route` is which of them this one belongs to,
-// as an index into whatever order the caller wants the lanes stacked in.
+// `route` indexes the order the caller wants the lanes stacked in.
 export interface RoutedPolyline extends Polyline {
   route: number;
 }
 
 export interface LaneOptions {
-  // The grid the local route set is counted over. Two routes closer than this share a lane stack;
-  // two further apart are drawn where they are, each on lane 0.
+  // Routes closer than this share a lane stack.
   cellMeters: number;
-  // How far a route takes to slide from one lane to the next where the set around it changes, so a
-  // route joining a bundle crosses to its lane diagonally instead of stepping sideways at a vertex.
+  // Distance over which a route slides between lanes, so it doesn't step sideways at a vertex.
   blendMeters: number;
-  // The latitude the two grid distances above are measured at, which only has to be right to the
-  // degree: over the half a degree a city spans, the longitude scale it sets moves under a percent.
+  // Where the distances above are measured; within a degree is enough across a city.
   latitude: number;
 }
 
 export const METERS_PER_DEGREE_LAT = 111_320;
 
-// A degree of longitude in meters at `lat` — the other half of measuring a ground distance off
-// coordinates, and the only part of it that is not a constant.
 export function metersPerLng(lat: number): number {
   return METERS_PER_DEGREE_LAT * Math.cos((lat * Math.PI) / 180);
 }
@@ -133,16 +115,12 @@ export function metersPerLng(lat: number): number {
 interface Walked {
   sampleLngs: Float64Array;
   sampleLats: Float64Array;
-  // Per sample, the unit direction of the span it was taken from, in projected space — the same
-  // frame the normals are built in, so a dot product here is the angle the offset will see.
+  // Unit direction of the sample's span, in the projected space the normals are built in.
   sampleDirX: Float64Array;
   sampleDirY: Float64Array;
 }
 
-// One polyline resampled at half a cell. Resampled rather than read at its vertices because the
-// shapes are coarse where the corridor is open — a ferry crossing is 4 to 12 vertices for a
-// kilometer of water — so a span that only claimed the cells its endpoints fall in would leave the
-// corridor between them unclaimed.
+// Resampled at half a cell because shapes are coarse in open water, leaving cells between vertices.
 function walk(
   { lngs, lats }: Polyline,
   cellLng: number,
@@ -193,8 +171,6 @@ function walk(
   };
 }
 
-// The eight cells a cell touches, the four sharing a side first, for the walk that spreads a route's
-// presence out to the cells around the ones it actually runs through.
 const NEIGHBORS: readonly (readonly [number, number])[] = [
   [1, 0],
   [-1, 0],
@@ -207,10 +183,7 @@ const NEIGHBORS: readonly (readonly [number, number])[] = [
 ];
 const NO_CELL = -1;
 
-// Every cell any line runs through, in one table: the routes in it, which cells adjoin it, and which
-// cell each line's samples fell in. All of it resolved once here, because everything below is a
-// per-cell or per-route pass over it — on a file the size of the subway's, 29 routes over 10,763
-// cells and 295,000 samples, that is the difference between a decode of 50 ms and one of 150.
+// Every occupied cell, resolved once because every pass below reads it (3x faster on the subway).
 interface Occupancy {
   idOf: Map<string, number>;
   routes: Set<number>[];
@@ -256,10 +229,7 @@ function occupancyOf(
   return { idOf, routes, adjoining, sampled };
 }
 
-// Per cell, how present a route is there: 1 in the cells it runs through, tapering to 0 over
-// `blendMeters` of the cells around them, measured by the walk out through cells some line runs
-// through rather than as the crow flies — so a route's presence reaches along the water it is on and
-// not across to a corridor it never touches.
+// Per cell, 1 where the route runs, tapering to 0 over `blendMeters` walked through occupied cells.
 function presenceOf(
   { routes, adjoining }: Occupancy,
   route: number,
@@ -297,36 +267,16 @@ function presenceOf(
   );
 }
 
-// Meters of ground per unit of the projected space the normals and sample directions live in.
-// Mercator is conformal, so one factor covers both axes; over the half a degree a city spans it
-// moves under a percent, which is the same approximation `cellLng` already makes.
+// Meters per projected unit; mercator is conformal, so one factor covers both axes.
 function metersPerPixel(latitude: number): number {
   return (metersPerLng(latitude) * 360) / (256 * 2 ** NORMAL_ZOOM);
 }
 
-// How far off the corridor a parting is worth counting, in cells. A parting says which SIDE the
-// leaver left on, not how fast it got there, and once it is a cell off the two are no longer
-// sharing anything — further meters only mean it left at a steeper angle, which is the case where
-// the order matters least, since a route cutting across a bundle crosses it whatever lane it holds.
-// Uncapped, those steep departures outvote the gentle ones: 1,031 introduced crossings across the
-// New York subway against 935 capped at a cell, and 360 against 318 in San Francisco.
+// Cap on a parting's vote in cells; uncapped, steep departures outvote gentle ones and add crossings.
 const VOTE_CAP_CELLS = 1;
 
-// Which way round a pair of routes wants to be stacked, and by how much: per pair of routes, in
-// meters, positive where the higher-numbered of the two wants the higher lane.
-//
-// A parting is a place one of them carries on and the other does not — the end of a stretch they
-// share, or the start of one. There the route that is leaving swings off to one side of the
-// corridor, and if its lane is on the other side it has to cross every ribbon in between to get
-// there. So each parting votes for the side it left on: the route is followed `blendMeters` further
-// (the distance its lane takes to slide, so the vote covers the stretch the sliding happens over)
-// and the vote is how far that took it across the corridor, measured along the perpendicular its
-// own lane offset is applied along, so the sign means what the drawing means.
-//
-// A route merely crossing a bundle votes for nothing: it arrives from one side and leaves by the
-// other, and the two votes cancel, which is right — it crosses the bundle whichever lane it is in.
-// A route that only clips the corner of a cell gains no separation and so votes for nothing much,
-// which is what keeps a cell boundary crossed mid-bundle from reading as a parting.
+// Per route pair, meters, positive where the higher-numbered wants the higher lane.
+// Each parting votes for the side the leaver swung off to, so it needn't cross the bundle.
 function partingVotes(
   lines: readonly RoutedPolyline[],
   walked: readonly Walked[],
@@ -347,14 +297,11 @@ function partingVotes(
     votes.set(key, (votes.get(key) ?? 0) + (route < other ? -capped : capped));
   };
 
-  // Every sample in projected space, which is the frame the corridor direction and the lane normal
-  // are both read in.
   const projected = walked.map(({ sampleLngs, sampleLats }) => [
     Float64Array.from(sampleLngs, (lng) => projectX(lng, NORMAL_ZOOM)),
     Float64Array.from(sampleLats, (lat) => projectY(lat, NORMAL_ZOOM)),
   ]);
 
-  // The sample `blendMeters` of line away from `sample`, walking `step`.
   const reach = (index: number, sample: number, step: number): number => {
     const { sampleLngs, sampleLats } = walked[index];
     let at = sample;
@@ -373,15 +320,7 @@ function partingVotes(
     return at;
   };
 
-  // How far off the corridor the line at `sample` gets over the next `blendMeters` of itself,
-  // walking `step` (+1 off the end of a stretch it shared, -1 back off the start of one).
-  //
-  // The corridor is the chord of the `blendMeters` the line covered on the side it still had
-  // company — its own path, but read from far enough back that a route already into its turn is
-  // measured against the way it was going, not the way it has ended up going. Taken from the
-  // instantaneous direction instead, a route that turns off the moment the two stop sharing a cell
-  // measures nothing at all: it is running straight along its new heading by the time the parting
-  // is seen.
+  // Corridor is the chord behind, not the local direction: a route already turning would measure 0.
   const lateralOf = (index: number, sample: number, step: number): number => {
     const { sampleDirX, sampleDirY } = walked[index];
     const [pixelX, pixelY] = projected[index];
@@ -402,10 +341,7 @@ function partingVotes(
 
   for (const [index, { route }] of lines.entries()) {
     const cells = sampled[index];
-    // Only where a sample crosses into another cell can the company have changed, which is what
-    // keeps this off the per-sample path: the subway file's 295,000 samples run through 10,763
-    // cells. Each of the two laterals is then read at most once per cell crossed and not once per
-    // route parting there, which is a quarter of what this pass costs on that file.
+    // Company can only change at a cell crossing; each lateral is read at most once per crossing.
     for (let sample = 0; sample + 1 < cells.length; sample++) {
       if (cells[sample] !== cells[sample + 1]) {
         const here = routes[cells[sample]];
@@ -434,33 +370,12 @@ function partingVotes(
   return votes;
 }
 
-// The order the lanes are stacked in, as a rank per route.
-//
-// Any one order over the routes keeps the no-weaving guarantee below, so which order it is comes
-// free — and an arbitrary one (the ferries' route names sorted, the subway feed's own order) leaves
-// a route that peels off to the left of a bundle sitting on its right, crossing everything between
-// to get there. This takes the order that leaves the least of `partingVotes` unsatisfied, which is
-// the linear ordering problem: NP-hard in general, tiny here — New York has 8 ferry routes and 29
-// subway ones, San Francisco 14 — so routes are sorted by how much the rest of the file wants to be
-// after them and then moved one at a time while that pays.
-//
-// Measured on the committed artifacts, counting a crossing as one drawn ribbon properly crossing
-// another of a different route at z15, and counting as INTRODUCED one with no crossing of the same
-// two routes' published centerlines within 130 m of it: New York's ferries fall from 26 introduced
-// (63 crossings in all) to 14 (47), and its subway from 1,530 (6,143) to 935 (5,515). San
-// Francisco's subway goes the other way, 306 (506) to 318 (581), which is the honest cost of one
-// order for the whole file: its Muni and BART tracks are digitized as near-coincident lines that
-// cross each other constantly wherever two of them run down the same street, and the order its
-// partings ask for is not the order that noise happens to like. What is actually being minimised
-// falls in all three — the vote weight left unsatisfied goes from 1.7 km over 8 pairs to nothing
-// for the ferries, 40.8 km over 132 pairs to 6.5 km over 67 for the New York subway, and 15.5 km
-// over 44 pairs to 0.4 km over 7 for San Francisco's.
+// Rank per route minimizing unsatisfied `partingVotes`: linear ordering, NP-hard but tiny, so greedy.
 function laneOrder(
   routes: readonly number[],
   votes: Map<string, number>,
 ): Map<number, number> {
-  // The votes as a dense matrix over the routes, `wants[first * routes.length + second]` being what
-  // placing that first buys. Dense because the search below reads it a few hundred thousand times.
+  // `wants[first * n + second]` is what placing first before second buys.
   const wants = new Float64Array(routes.length * routes.length);
   for (let first = 0; first < routes.length; first++) {
     for (let second = 0; second < routes.length; second++) {
@@ -482,9 +397,7 @@ function laneOrder(
   const order = routes.map((_, route) => route);
   order.sort((left, right) => pull[right] - pull[left] || left - right);
 
-  // Moving one route through the ones between it and its new place flips its order with each of
-  // them and with nobody else, so what the move is worth is that sum and not a rescore of the whole
-  // order.
+  // A move flips order only with the routes it passes, so its gain is their sum, not a full rescore.
   for (let pass = 0; pass < routes.length; pass++) {
     let improved = false;
     for (let from = 0; from < order.length; from++) {
@@ -514,26 +427,7 @@ function laneOrder(
   return new Map(order.map((route, rank) => [routes[route], rank]));
 }
 
-// Per line and per vertex, in lane widths, which lane of its corridor that line holds *there* —
-// which is what makes the offset local: a route displaces sideways only where it would otherwise
-// draw over another, and goes back onto its own published shape as soon as it is alone again.
-//
-// Per vertex and not per line because a line's company changes along it: a ferry leaves the East
-// River bundle for open water, and the 5 runs with the 2 in the Bronx and the 4 and 6 down
-// Lexington Av.
-//
-// A lane is how much of the route order (`laneOrder`) ranks before this one *at that place*: the sum,
-// over the routes that rank earlier, of how present each of them is in the cell the vertex falls in.
-// Which is the whole of the no-weaving guarantee, because the sum is over a term per route that is
-// never negative and the place is the same for both — so wherever two routes are in one cell, the
-// one that ranks later holds the higher lane, and it holds it by a full lane, since a route is fully
-// present in a cell it runs through. Their lanes cannot come level, let alone swap.
-//
-// It is a field over the cells rather than a mean taken along each line's own path for exactly that
-// reason: a mean along the line reads the company either side of the vertex, which is a different
-// stretch of route for each of them, and over New York's ferry file that swapped three pairs of
-// routes' lanes by as much as 1.5 lane widths where one of them was leaving a bundle the other was
-// joining.
+// Lane widths per vertex: presence of earlier-ranked routes in its cell, so lanes can't swap.
 function laneTracks(
   lines: readonly RoutedPolyline[],
   occupancy: Occupancy,
@@ -568,17 +462,7 @@ function laneTracks(
   });
 }
 
-// How wide one lane is, in CSS pixels, at `zoom`. At and above `fullZoom` it is the full `spacingPx`
-// — a screen distance, so a bundle neither merges as the map zooms out nor spreads as it zooms in.
-// Below it the lane is a *ground* distance instead, halving with every level out.
-//
-// Per-stretch lanes (laneTracks) settle how many lanes a bundle has; the taper is what keeps that
-// bundle inside the water or the street it belongs to, because a lane held at a screen width is a
-// ground distance that doubles with every zoom out. New York's tightest genuine ferry bundle
-// measures it: four routes down Buttermilk Channel between Governors Island and Red Hook, where the
-// channel is 414 m across — 28.6 px at z13, 14.3 px at z12, 7.1 px at z11. Held at 2.5 px their
-// three lane widths would be 109 m at z13 and 435 m at z11, wider than the channel itself. Tapered
-// below z14 they are a fixed 54 m band, an eighth of the channel at every zoom out.
+// CSS px; a screen width from `fullZoom` up, a ground width below so a bundle stays in its channel.
 export function laneSpacingPx(
   zoom: number,
   spacingPx: number,
@@ -587,14 +471,7 @@ export function laneSpacingPx(
   return spacingPx * Math.min(1, 2 ** (zoom - fullZoom));
 }
 
-// The perpendicular the lane offset is applied along, per vertex, taken from the whole polyline:
-// a tile that took it from its own clipped piece would step the ribbon sideways at every seam.
-//
-// Interior vertices get the mitre of the two adjoining perpendiculars — the offset line stays the
-// full lane width from the original through a corner rather than pinching in on the inside of it.
-//
-// `sense` is which of the two perpendiculars that is, +1 or -1, and it is not this line's own to
-// pick: see `orientations`.
+// From the whole polyline, not a tile's clipped piece, which would step the ribbon at every seam.
 function offsetNormals(
   lngs: Float64Array,
   lats: Float64Array,
@@ -610,12 +487,7 @@ function offsetNormals(
   const pixelX = Float64Array.from(lngs, (lng) => projectX(lng, NORMAL_ZOOM));
   const pixelY = Float64Array.from(lats, (lat) => projectY(lat, NORMAL_ZOOM));
 
-  // Per span, the unit perpendicular of its own direction on the side `sense` puts it. Strictly its
-  // own direction, with nothing carried over from the span before: a side carried through a corner
-  // is a side that depends on how much the line turned before it got here, and a ferry shape turns
-  // more than 90° wherever it follows the boat into its slip — over New York's ferry file that left
-  // 24 of the 36 crossings with most of their spans offset on the carried side rather than the side
-  // their own direction gives, which no other line running the same water can agree with.
+  // Each span's own perpendicular; a side carried through a >90° turn disagrees with other lines.
   const spanX = new Float64Array(count - 1);
   const spanY = new Float64Array(count - 1);
   let lastX = 0;
@@ -653,29 +525,10 @@ function offsetNormals(
   return { normalX, normalY };
 }
 
-// Below this the two lines are crossing rather than sharing, and a crossing says nothing about which
-// way round either of them should be read.
+// Below this the two lines are crossing rather than sharing, which says nothing about orientation.
 const MIN_PARALLEL_COSINE = Math.cos((30 * Math.PI) / 180);
 
-// Which way round each line's direction is read when its perpendicular is taken, +1 or -1.
-//
-// This is not a line's own choice to make. A perpendicular taken from a line's own direction points
-// the opposite way on a line stored back to front, so the same lane index lands on opposite sides of
-// the water they share and the two ribbons weave across each other. The artifacts have no common
-// orientation to lean on: of the co-located near-parallel samples in New York's ferry file 39% run
-// opposite ways, and 7% of the subway file's. Taking the side from each line's own chord — its
-// average direction, which in a corridor it only crosses says nothing about the corridor — left 53%
-// of those ferry pairs and 7% of the subway ones with mirrored normals.
-//
-// So the choice is per *bundle*, not per line. Lines vote pairwise: every cell two of them share
-// contributes the dot product of their mean directions there, positive where they are stored the
-// same way round and negative where they are stored opposite. The votes are then settled
-// strongest-first over a spanning forest, so a bundle's orientation is set by the longest and
-// straightest agreement in it and the rest follows; a pair still disagreeing once both are in the
-// tree is outvoted rather than honored. Which way the whole bundle faces is free — it mirrors which
-// side of the corridor the stack builds out on, the same for every line in it — and is taken
-// eastward off the bundle's combined chord, so a line sharing water with nobody keeps the chord rule
-// it had.
+// Per line, +1 or -1, agreed per bundle: source lines run either way, so lanes would mirror.
 function orientations(
   lines: readonly Polyline[],
   walked: readonly Walked[],
@@ -702,10 +555,7 @@ function orientations(
     }
   }
 
-  // A line's heading in a cell is its samples' mean direction, so a line that turns through the cell
-  // or doubles back inside it is short of a unit vector and counts for less than one running
-  // straight through. The vote is the dot product of the two headings, which carries both how
-  // parallel they are and how sure the cell is of either.
+  // Mean headings, so a line turning within a cell votes with less than unit weight.
   const votes = new Map<string, number>();
   for (const cell of headings) {
     const present = [...cell].map(([index, { x, y, samples }]) => ({
@@ -730,8 +580,7 @@ function orientations(
     }
   }
 
-  // Union-find over the lines, carrying each one's sense relative to its component's root, so an
-  // edge joins two bundles by the sense that satisfies it.
+  // Union-find carrying each line's sense relative to its root.
   const parent = Int32Array.from(lines, (_, index) => index);
   const flipped = new Uint8Array(lines.length);
   const find = (node: number): { root: number; flip: number } => {
@@ -774,12 +623,7 @@ function orientations(
     find(index).flip ? -1 : 1,
   );
 
-  // Not every set of votes can be satisfied at once: three lines whose shared water asks A to agree
-  // with B, B with C and C to disagree with A have no answer, and the tree above resolves the cycle
-  // by ignoring whichever vote it reached last rather than the weakest. So each line is then offered
-  // its own flip, in weight order and repeatedly, and takes it whenever that leaves less vote weight
-  // unsatisfied than before — which over New York's ferry file settles 14.3% of the weight
-  // unsatisfied down to 3.8%, and the subway file's 0.26% to 0.20%.
+  // The tree drops a cycle's last vote, not its weakest, so let single flips repair it.
   const neighbors = lines.map((): { line: number; weight: number }[] => []);
   for (const { first, second, weight } of edges) {
     neighbors[first].push({ line: second, weight });
@@ -802,7 +646,7 @@ function orientations(
     }
   }
 
-  // Each bundle faces the way its lines' chords, read with the senses just settled, mostly face.
+  // Each bundle faces east off its combined chord.
   const chordX = new Map<number, number>();
   const chordY = new Map<number, number>();
   for (const [index, { lngs, lats }] of lines.entries()) {
@@ -828,10 +672,6 @@ function orientations(
   return senses;
 }
 
-// What a lane overlay draws each of its lines with: the lane it holds at each vertex and the
-// perpendicular that lane is measured along. The two are one call because they are one decision —
-// a lane is a signed distance, and the sign is only meaningful once every line through the corridor
-// measures it the same way (see `orientations`).
 export function laneRibbons(
   lines: readonly RoutedPolyline[],
   { cellMeters, blendMeters, latitude }: LaneOptions,
@@ -840,8 +680,7 @@ export function laneRibbons(
   const cellLng = cellMeters / metersPerLng(latitude);
   const walked = lines.map((line) => walk(line, cellLng, cellLat));
   const occupancy = occupancyOf(lines, walked, cellLng, cellLat);
-  // The senses come first because the lane order is read off the same axis the lanes are drawn
-  // along, and that axis is only meaningful once the bundle agrees which way round it faces.
+  // Senses first: lane order is read along the axis they fix.
   const senses = orientations(lines, walked, occupancy);
   const routeIds = [...new Set(lines.map((line) => line.route))].sort(
     (left, right) => left - right,

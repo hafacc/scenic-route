@@ -14,8 +14,7 @@ import type { StreetScoreParams, TileCoords } from "./protocol";
 import type { TileRenderer } from "./renderer";
 import { themeName } from "./theme";
 
-// One chunk per z12 tile, fetched lazily. layout: scripts/README.md
-// Relative, so it picks up the basePath the deploy injects; the app is a single-route SPA.
+// One chunk per z12 tile (layout: scripts/README.md); relative, so it picks up the deploy's basePath.
 const CHUNK_URL = "streets/{x}/{y}.bin";
 const CHUNK_ZOOM = 12;
 const SIDES = 2;
@@ -23,20 +22,16 @@ const SIDES = 2;
 const TILE_SIZE = 256;
 const EQUATOR_METERS_PER_PIXEL = 156_543.033_92; // web mercator, at the equator, at z0
 
-// Lines read as street width, so they grow with zoom: about 1.5 px at z13, 5 px at z17. Anchored at
-// the layer's own minZoom (components/street-score-layer.tsx).
+// Lines read as street width: ~1.5 px at z13 (the layer's minZoom), 5 px at z17.
 const WIDTH_ANCHOR_ZOOM = 13;
 const BASE_WIDTH = 1.5;
 const WIDTH_PER_ZOOM = 1.32;
 
-// Density is quantized into levels so the pieces of a road that share one can be stroked as
-// a single path. 32 levels is finer than the alpha curve resolves on a 2 px line, so the
-// gradient along a road still reads as continuous.
+// Quantized so same-level pieces share a stroke; 32 levels is finer than a 2 px line's alpha resolves.
 const LEVEL_BITS = 3;
 const LEVELS = 256 >> LEVEL_BITS;
 
-// Both themes' levels, built once each: a theme flip redraws every tile, and rebuilding 32 CSS
-// strings per tile to answer a question that has two answers is not worth doing.
+// Built once per theme, since a theme flip redraws every tile.
 const COLORS: Record<ThemeName, readonly string[]> = {
   light: levels("light"),
   dark: levels("dark"),
@@ -54,12 +49,8 @@ function levels(theme: ThemeName): readonly string[] {
 
 const chunks = new Map<string, Promise<Segment[]>>();
 
-// The unit normal at each projected vertex, pointing at the *left* sidewalk. Left is 90 degrees
-// counter-clockwise of the direction of travel — CSCL's own l_/r_ convention, and the side the
-// first of a vertex's two density bytes carries — and canvas y runs south, so on screen that is
-// (ty, -tx): the left of an eastbound street points up. The tangent is the central difference of
-// the nearest *distinct* neighbors, one-sided at the ends, since two vertices of the source
-// geometry can sit closer together than the 0.1 m the coordinates are quantized to.
+// Left is CSCL's l_ side (the first density byte); canvas y runs south, so its normal is (ty, -tx).
+// Tangents skip coincident neighbors, since vertices can sit closer than the 0.1 m quantum.
 function leftNormals(
   xs: Float64Array,
   ys: Float64Array,
@@ -80,17 +71,14 @@ function leftNormals(
     }
     const tangentX = xs[ahead] - xs[back];
     const tangentY = ys[ahead] - ys[back];
-    // A vertex every neighbor has collapsed onto has no side to take: its two lines meet on the
-    // centerline, rather than carrying a NaN into the path.
+    // A fully collapsed vertex gets no side rather than a NaN.
     const length = Math.hypot(tangentX, tangentY) || 1;
     normalXs[vertex] = tangentY / length;
     normalYs[vertex] = -tangentX / length;
   }
 }
 
-// One in-flight fetch per chunk, shared by every tile that needs it. A 404 is an answer —
-// the tile is all water, and caches as empty — but any other failure drops the entry, so
-// the next tile over this chunk goes back for it.
+// A 404 is an all-water tile and caches as empty; any other failure is evicted so it can be retried.
 function loadChunk(tileX: number, tileY: number): Promise<Segment[]> {
   const key = `${tileX}/${tileY}`;
   const pending = chunks.get(key);
@@ -127,11 +115,7 @@ function load(
   return loadChunk(coords.x >> shift, coords.y >> shift);
 }
 
-// Projected at the tile's own zoom, so the lines stay crisp however far in the map goes.
-// A street is two lines, one per sidewalk, each quantized into its own level; each piece
-// takes the level its two ends average to, and the pieces are gathered into one path per
-// level, so a tile costs a stroke per level rather than per piece. Runs meet butt to butt:
-// two translucent strokes overlapping would bead.
+// One path per density level; runs meet butt to butt, since overlapping translucent strokes bead.
 function draw(
   context: OffscreenCanvasRenderingContext2D,
   segments: Segment[],
@@ -164,16 +148,11 @@ function draw(
   const normalYs = new Float64Array(longest);
 
   for (const { lngs, lats, densities, offsetMeters, stranded } of segments) {
-    // A green line here is an offer to walk somewhere pleasant, so a path the routing graph dropped
-    // has no business being one: the router would answer with a way round it, or nothing at all.
+    // Skip paths the routing graph dropped: a green line is an offer to walk there.
     if (stranded) {
       continue;
     }
-    // The two sidewalks of a street are ~14 m apart, which at z13 is one pixel: drawn true to
-    // the ground they would merge into the single line this layer exists to take apart. So the
-    // separation is a screen-space decision, never baked into the data — floored at a stroke
-    // width, which the true offset overtakes around z16, from where the exaggeration dissolves
-    // on its own as the map zooms in.
+    // Sidewalks ~14 m apart are one pixel at z13, so the offset is floored at a stroke width.
     const offsetPx =
       offsetMeters > 0 ? Math.max(offsetMeters / metersPerPixel, width) : 0;
     const margin = width + offsetPx;
@@ -189,9 +168,7 @@ function draw(
       low = Math.min(low, ys[vertex]);
       high = Math.max(high, ys[vertex]);
     }
-    // The chunk covers a whole z12 tile, so most of its segments miss this one. A segment
-    // can cross the tile between two vertices that are both outside it, so the test is on
-    // its box rather than on its vertices.
+    // A segment can cross the tile between two outside vertices, so test its box.
     const overlaps =
       right >= -margin &&
       left <= TILE_SIZE + margin &&
@@ -202,8 +179,7 @@ function draw(
     }
     leftNormals(xs, ys, lngs.length, normalXs, normalYs);
 
-    // A path or a boardwalk has no offset: it is drawn as the one line it is, and its two
-    // densities are the same sample anyway.
+    // A path or boardwalk has no offset, and its two densities are the same sample.
     const sides = offsetMeters > 0 ? SIDES : 1;
     for (let side = 0; side < sides; side++) {
       const away = side === 0 ? offsetPx : -offsetPx;

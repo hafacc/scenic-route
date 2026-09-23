@@ -65,7 +65,7 @@ export default function SignInDialog({ onClose }: SignInDialogProps) {
     setIsResetting(true);
     try {
       await sendPasswordReset(email);
-      // firebase hides whether the email exists (anti-enumeration); show the same message either way
+      // Firebase hides whether the email exists, so show the same message either way.
       setInfo(`If an account exists for ${email}, a reset link is on its way.`);
     } catch (err) {
       setError(describeError(err));
@@ -106,9 +106,7 @@ export default function SignInDialog({ onClose }: SignInDialogProps) {
           <FiX />
         </button>
       </div>
-      {/* The form is the one thing that scrolls, so the header above it and the reset link below it
-          stay put when the keyboard shortens the card. Its rows do not shrink: a squashed input is
-          worse than a scroll. */}
+      {/* Rows don't shrink and the form scrolls, since a squashed input is worse than a scroll. */}
       <form
         onSubmit={submit}
         className="mt-6 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain"
@@ -117,8 +115,7 @@ export default function SignInDialog({ onClose }: SignInDialogProps) {
           <span className="font-medium text-slate-600 dark:text-slate-300">
             Email
           </span>
-          {/* 16px on a phone: iOS Safari zooms the whole page in on a focused control whose text
-              is any smaller, which crops the sheet it was typed into. */}
+          {/* 16px on a phone: iOS Safari zooms the page on a focused control with smaller text. */}
           <input
             type="email"
             required

@@ -38,8 +38,7 @@ interface PanelsProps {
   onGate: (key: GateKey, on: boolean) => void;
 }
 
-// The layer set is pruned here rather than where it is held, because the city that prunes it is
-// the shell's.
+// Pruned here rather than where it is held, because the city that prunes it is the shell's.
 export function ExplorerControls({
   shell,
   weights,
@@ -50,7 +49,6 @@ export function ExplorerControls({
   const settings = useSettings();
   const { city } = shell;
 
-  // Switching city swaps the whole layer set: anything the new city does not offer goes off.
   useEffect(() => {
     setActiveOverlays((current) => {
       const kept = new Set(
@@ -60,11 +58,7 @@ export function ExplorerControls({
     });
   }, [city, setActiveOverlays]);
 
-  // Taking a layer out of the menu turns it off, the same way switching city does: a layer drawn on
-  // the map with no row to turn it off by is a state the reader cannot get out of. Putting it back in
-  // the menu leaves it off rather than lighting it again — hiding is a decision about the menu, and
-  // guessing that it was also a decision to look at the layer again would be putting something on the
-  // map nobody asked for.
+  // Hiding a layer turns it off, since a drawn layer with no row can't be turned off.
   useEffect(() => {
     const hidden = new Set(settings.hiddenLayers);
     setActiveOverlays((current) => {
@@ -73,8 +67,7 @@ export function ExplorerControls({
     });
   }, [settings.hiddenLayers, setActiveOverlays]);
 
-  // The link the share button copies: the route the hash already carries, plus the camera and overlay
-  // set, which live in a URL only here.
+  // The camera and overlay set live in a URL only here.
   const composeShareUrl = useCallback((): string => {
     const { hour, day } = getPinnedTime();
     const params = encodeRoute({

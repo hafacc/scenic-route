@@ -29,10 +29,7 @@ const weights = (
   allowCrossings: false,
 });
 
-// The cache is a memoization layer over findRoute, so the search is stubbed with a deterministic
-// rule: the chosen path is piecewise-constant in each weight (thresholds at 0.5) and depends on the
-// gate — exactly the shape of a real route's dependence on the sliders. The stub counts its calls so
-// bracketing (a reused interval skips the search) is observable.
+// The stub is piecewise-constant in each weight (thresholds at 0.5) and counts calls, so bracketing shows.
 let calls = 0;
 function chosenPath(tree: number, ferry: number, allow: boolean): number {
   if (!allow) {
@@ -82,9 +79,6 @@ function signature(
 
 test("the cache never returns a route that differs from a fresh search", () => {
   const cache = new RouteCache(stubSearch);
-  // Drag tree up, switch to the ferry slider and up, switch back to tree and down, toggle the gate
-  // off then repeat it, back on with a repeat, then two-axis jumps — every transition the cache must
-  // survive without a stale range.
   const sequence: [number, number, boolean][] = [
     [0, 0.1, true],
     [0.2, 0.1, true],
@@ -116,8 +110,7 @@ test("the cache never returns a route that differs from a fresh search", () => {
 test("bracketing the active slider skips the search on a settled interval", () => {
   calls = 0;
   const cache = new RouteCache(stubSearch);
-  // Three tree weights on the same side of the threshold: the same path is optimal across the whole
-  // range, so the middle value, bracketed by the two ends, must not run the search.
+  // The middle value is bracketed by two samples on one path, so it must not run the search.
   cache.route(GRAPH, START, DEST, weights(0.6, 0.1, true));
   cache.route(GRAPH, START, DEST, weights(1, 0.1, true));
   cache.route(GRAPH, START, DEST, weights(0.8, 0.1, true));
@@ -132,14 +125,12 @@ test("switching sliders drops the old range and rebrackets the new one", () => {
   cache.route(GRAPH, START, DEST, weights(1, 0.8, true)); // switch to ferry: seed + compute
   cache.route(GRAPH, START, DEST, weights(1, 0.8, true)); // exact repeat: no search
   expect(calls).toBe(3);
-  // Back to a tree weight already sampled on the dropped tree range — the range is gone, so it runs.
+  // The tree range was dropped, so an already-sampled tree weight runs again.
   cache.route(GRAPH, START, DEST, weights(0.6, 0.8, true));
   expect(calls).toBe(4);
 });
 
-// Every slider the UI shows has to appear in the cache's axis list. A weight left out of it reads as
-// no change at all, so the cache answers the move with the previous route and the slider looks
-// inert — which is what the hill weight did when it shipped: quantized, costed, and invisible here.
+// A weight missing from the axis list makes its slider look inert.
 test("every weight a slider moves invalidates the cache", () => {
   const cache = new RouteCache(stubSearch);
   const base = weights(0.2, 0.1, true);
@@ -164,10 +155,7 @@ test("every weight a slider moves invalidates the cache", () => {
   }
 });
 
-// A gate the cache does not compare is a control that does nothing: the search never runs and the
-// reader is handed back the route they already had. Not hypothetical — the crossing gate shipped
-// that way, because the comparison listed the two gates that existed when it was written. So this
-// walks GATE_KEYS rather than naming them, and fails on the next one added the same way.
+// Walks GATE_KEYS rather than naming them, so the next gate added is covered too.
 test("flipping any gate reaches the search, not just the two it was born with", () => {
   for (const gate of GATE_KEYS) {
     const cache = new RouteCache(stubSearch);

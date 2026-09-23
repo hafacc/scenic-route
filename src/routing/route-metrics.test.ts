@@ -13,10 +13,7 @@ import {
 import type { RouteFactors, RouteResult, RouteStep } from "./search";
 import { haversineMeters, type Snap } from "./snap";
 
-// The three route metrics on a hand-built junction, so the whole-city run in
-// tests/route-sampling.test.ts is measuring what these names say and not something adjacent. Every
-// edge here is geometry-less, so its polyline is the straight line between its two nodes — which is
-// what a real crossing is too.
+// Geometry-less edges draw straight between their nodes, which is what a real crossing is too.
 
 const SCALE = 1e-6;
 const NAME_NONE = 0xffff;
@@ -132,7 +129,6 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
     edgeDurationSeconds: new Uint16Array(edgeCount),
     ferryEdges: new Uint32Array(0),
     minFerrySecPerMeter: Number.POSITIVE_INFINITY,
-    // The fixture is pavement and crossings only: no rail at all.
     transitEdges: new Uint32Array(0),
     boardEdges: new Uint32Array(0),
     transitRoutes: [],
@@ -152,8 +148,7 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
   };
 }
 
-// A route over the given edges, each traveled a -> b unless `false` is given, with the two snaps
-// pinned to the first edge's start node and the last edge's end node.
+// Each traveled a -> b unless `false` is given; snaps pinned to the route's end nodes.
 function routeOver(
   graph: RoutingGraph,
   legs: readonly (readonly [number, boolean])[],
@@ -183,7 +178,6 @@ function routeOver(
     distanceMeters: 0,
     component: 0,
   });
-  // These metrics read the steps and the geometry only, so the trip is reported as costing nothing.
   const noFactors = (): RouteFactors => ({
     tree: 0,
     shade: 0,
@@ -222,10 +216,7 @@ function routeOver(
   };
 }
 
-// A corner of a narrow street: the south pavement (nodes 0-1-2) faces the north one (3-4-5) across
-// 12 m of roadway, with a crossing at each end of the block. Node 2 is also the near curb of a
-// north-south cross street, whose crossing runs east to node 6 — at a right angle to the other
-// three, so a corner and a reversal are told apart by direction here and not only by distance.
+// South (0-1-2) and north (3-4-5) pavements 12 m apart; 2 -> 6 crosses a perpendicular street.
 const JUNCTION_NODES: NodeSpec[] = [
   { lat: 0, lng: 0 }, // 0 south pavement, west end
   { lat: 0, lng: 0.0005 }, // 1 south pavement, mid block (~42 m east)
@@ -236,8 +227,7 @@ const JUNCTION_NODES: NodeSpec[] = [
   { lat: 0, lng: 0.00118 }, // 6 across the cross street from 2 (~20 m east)
 ];
 
-// The same junction with its mid-block pair pulled to ~11 m from the west end, so the pavement
-// between two successive crossings is short enough to still read as one reversal.
+// Mid-block pair pulled to ~11 m from the west end, within the reversal gap.
 const NEAR_NODES: NodeSpec[] = JUNCTION_NODES.map((node, index) =>
   index === 1 || index === 4 ? { ...node, lng: 0.0001 } : node,
 );
@@ -255,7 +245,6 @@ const JUNCTION_EDGES: EdgeSpec[] = [
 
 test("crossing out and straight back at one corner is a reversal", () => {
   const graph = buildGraph(JUNCTION_NODES, JUNCTION_EDGES);
-  // Walk the south pavement to node 1, cross to the north side and immediately cross back.
   const route = routeOver(graph, [
     [0, true],
     [5, true],
@@ -272,9 +261,7 @@ test("crossing out and straight back at one corner is a reversal", () => {
 
 test("crossing out, walking a few meters, and crossing back is still a reversal", () => {
   const graph = buildGraph(JUNCTION_NODES, JUNCTION_EDGES);
-  // The corner wrap: cross at the west end, walk the north pavement, cross back at the next
-  // crossing. A full block of pavement between the two is beyond the gap, so this junction has its
-  // mid-block pair pulled in to ~11 m from the west end.
+  // A full block between the crossings exceeds the gap, hence the near junction.
   const near = buildGraph(NEAR_NODES, JUNCTION_EDGES);
   const route = routeOver(near, [
     [4, true],
@@ -286,8 +273,6 @@ test("crossing out, walking a few meters, and crossing back is still a reversal"
 
   expect(reversals).toHaveLength(1);
   expect(reversals[0].walkBetweenMeters).toBeCloseTo(11.1, 0);
-  // The same walk with a full block of north pavement between the two crossings is a route that
-  // used the other side, not a reversal.
   const far = routeOver(graph, [
     [4, true],
     [2, true],
@@ -298,9 +283,7 @@ test("crossing out, walking a few meters, and crossing back is still a reversal"
 
 test("turning the corner across two different streets is not a reversal", () => {
   const graph = buildGraph(JUNCTION_NODES, JUNCTION_EDGES);
-  // Cross the narrow street southbound at the east end, then cross the cross street eastbound off
-  // the same curb: two crossings back to back with no pavement between them, at right angles to
-  // each other, which is an ordinary corner. Only the direction test rules it out.
+  // Back to back with no pavement between but at right angles: only the direction test rules it out.
   const route = routeOver(graph, [
     [6, false],
     [7, true],
@@ -308,7 +291,6 @@ test("turning the corner across two different streets is not a reversal", () => 
 
   expect(crossingReversals(graph, route)).toHaveLength(0);
 
-  // And the pair that IS a reversal at the same corner: north over the street, straight back.
   const back = routeOver(graph, [
     [1, true],
     [6, true],
@@ -319,9 +301,7 @@ test("turning the corner across two different streets is not a reversal", () => 
 
 test("a reversal is avoidable when the near side joins its two ends, and forced when it does not", () => {
   const near = buildGraph(NEAR_NODES, JUNCTION_EDGES);
-  // Cross at the west end, walk the north pavement, cross back at the next crossing. The south
-  // pavement joins the same two ends in 11 m, well inside the 35 m the reversal spent, so it was
-  // bought rather than forced.
+  // The south pavement joins the ends in 11 m, inside the 35 m the reversal spent.
   const bought = crossingReversals(
     near,
     routeOver(near, [
@@ -333,8 +313,6 @@ test("a reversal is avoidable when the near side joins its two ends, and forced 
 
   expect(bought.map((reversal) => reversal.avoidable)).toEqual([true]);
 
-  // The same walk on a network whose south pavement is broken between those two ends: nothing joins
-  // them any more, so going into the road is the only way round and the reversal was forced.
   const broken = buildGraph(
     NEAR_NODES,
     JUNCTION_EDGES.filter((_, edge) => edge !== 0),
@@ -352,8 +330,7 @@ test("a reversal is avoidable when the near side joins its two ends, and forced 
 
 test("the longest crossing run counts consecutive crossings, not all of them", () => {
   const graph = buildGraph(JUNCTION_NODES, JUNCTION_EDGES);
-  // Two crossings back to back (a median crossing's two halves look exactly like this), then
-  // pavement, then one more.
+  // A median crossing's two halves look exactly like this.
   const route = routeOver(graph, [
     [4, true],
     [2, true],
@@ -379,7 +356,6 @@ test("the longest crossing run counts consecutive crossings, not all of them", (
 
 test("the detour ratio is walked meters over the straight line between the snaps", () => {
   const graph = buildGraph(JUNCTION_NODES, JUNCTION_EDGES);
-  // Straight down the south pavement: the walk and the straight line are the same, so the ratio is 1.
   const straight = routeOver(graph, [
     [0, true],
     [1, true],
@@ -387,8 +363,6 @@ test("the detour ratio is walked meters over the straight line between the snaps
 
   expect(detourRatio(straight)).toBeCloseTo(1, 3);
 
-  // The same two ends reached by crossing to the north pavement and back: the two 12 m crossings are
-  // the whole of the extra.
   const around = routeOver(graph, [
     [4, true],
     [2, true],

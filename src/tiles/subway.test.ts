@@ -3,10 +3,7 @@ import { projectX, projectY, unproject } from "./mercator";
 import type { SubwayParams } from "./protocol";
 import { decodeSubwayTiles, subwayRenderer } from "./subway";
 
-// The subway's lanes are assigned per stretch of track, not once per route, so what these pin is
-// that a route running alone draws on its own track and the same route inside a trunk does not —
-// and, as for the ferries, that a line comes out at the same world position from either side of a
-// tile seam.
+// Pins per-stretch lanes (on its track alone, offset in a trunk) and agreement across tile seams.
 
 const TILE_SIZE = 256;
 const ORIGIN_LNG = -74.1;
@@ -16,8 +13,7 @@ const TILE_X = 9650;
 const TILE_Y = 12317;
 
 type PathOp = { op: string; args: number[]; stroke: string; fill: string };
-// One string the layer drew, and whether it was outlined first. Only ./labels outlines, so that
-// flag is what tells a station's name from the legend inside a route bullet.
+// Only ./labels outlines, which tells a station name from a bullet's legend.
 type TextOp = { text: string; fill: string; outlined: boolean };
 
 function recordingContext(
@@ -99,8 +95,7 @@ interface Station {
   complex?: number; // 0, the feed publishing no transfers, unless a test is about the complexes
 }
 
-// The SBWY layout of scripts/README.md: a 60-byte header, the route/line/station tables, then the
-// varint geometry and the shared name blob.
+// The SBWY layout of scripts/README.md.
 function encodeSbwy(
   routes: readonly Route[],
   stations: readonly Station[],
@@ -221,8 +216,7 @@ function encodeSbwy(
   return buffer;
 }
 
-// A line running east along a fixed row of tiles, sampled every 40 pixels — close enough that
-// consecutive vertices land in different trunk cells, as a real shape's 46.6 m spacing does.
+// Every 40 px, so consecutive vertices land in different trunk cells, as real 46.6 m spacing does.
 function eastward(
   zoom: number,
   fromStep: number,
@@ -306,8 +300,7 @@ test("routes take the color the feed publishes for them", () => {
   expect(strokes).toEqual(new Set(["#009952", "#d82233"]));
 });
 
-// The whole point of assigning lanes per stretch: a route sharing a trunk moves off the track to
-// make room, and the same route past the junction goes back onto it.
+// A route sharing a trunk moves off the track, and goes back onto it past the junction.
 test("a route takes a lane in a trunk and its own track alone", () => {
   const zoom = 16;
   const shared = 6; // the trunk both routes run, in eastward()'s steps
@@ -361,8 +354,7 @@ test("stations are drawn as markers only once the map can separate them", () => 
   expect(markers(12)).toBe(0);
 });
 
-// The point of the bullets: a marker says which routes call, in each route's own color, with the
-// name the rider reads on the train inside it.
+// A marker's bullets say which routes call, in their own colors, with the name riders read.
 test("a station's marker becomes its routes' bullets once they fit", () => {
   const zoom = 16;
   const [stop] = eastward(zoom, 3, 3);
@@ -392,8 +384,7 @@ test("a station's marker becomes its routes' bullets once they fit", () => {
   expect(dots.map(({ fill }) => fill)).toEqual(["#ffffff"]);
 });
 
-// A route named for another plus an X is that route's express, which the MTA signs as a diamond
-// around the plain letter — never as the two characters the feed spells it with.
+// A route named for another plus an X is its express, which the MTA signs as a diamond.
 test("an express variant draws as a diamond around the local's name", () => {
   const zoom = 16;
   const [stop] = eastward(zoom, 3, 3);
@@ -408,21 +399,17 @@ test("an express variant draws as a diamond around the local's name", () => {
   );
   const texts: TextOp[] = [];
   const drawn = drawTile(data, TILE_X, TILE_Y, zoom, texts);
-  // One bullet, not two: an express stop is always a local stop as well, so the diamond alone says
-  // both call here and the circle beside it would only repeat the name.
+  // One bullet: an express stop is always a local stop too, so the diamond says both.
   expect(bulletLegends(texts)).toEqual(["6"]);
   expect(drawn.filter(({ op }) => op === "arc").length).toBe(0);
   expect(drawn.filter(({ op }) => op === "lineTo").length).toBe(3);
 });
 
-// One marker per place: the two records Muni files for the two directions of a stop, and the
-// several New York files for one complex, are the same station and carry the union of the routes.
+// Muni's per-direction and NYC's per-complex records merge into one marker with the union of routes.
 test("records naming one place merge into a single marker", () => {
   const zoom = 16;
   const track = eastward(zoom, 0, 14);
-  // A step of eastward() is 40 px, about 30 m on the ground at this tile's latitude. Three of them
-  // is past SAME_PLACE_METERS, so the shared name is the only thing that joins the first two — and
-  // it is what keeps the third, the same distance again, a station of its own.
+  // A step is ~30 m; three is past SAME_PLACE_METERS, so only the shared name joins the first two.
   const [west, middle, east] = [track[0], track[3], track[6]];
   const data = decodeSubwayTiles(
     encodeSbwy(
@@ -447,14 +434,11 @@ test("records naming one place merge into a single marker", () => {
   expect(bulletLegends(texts)).toEqual(["6", "7", "6"]);
 });
 
-// A shared complex is a passage between two stations, not a claim that they are one station. Times
-// Sq and 42 St-Port Authority are one complex 386 m apart and signed as two, so the transfer data
-// only ever VETOES a merge the distance and the name already proposed.
+// A shared complex is a passage, not one station, so transfer data only vetoes a merge.
 test("a passage between two stations does not make them one marker", () => {
   const zoom = 16;
   const track = eastward(zoom, 0, 14);
-  // Six steps is about 180 m, past every distance the fallback would merge on, and the two records
-  // are not even named the same — Cortlandt St and Chambers St, 435 m apart and one complex.
+  // Six steps is ~180 m, past any fallback merge distance, and the names differ.
   const [west, east] = [track[0], track[6]];
   const data = decodeSubwayTiles(
     encodeSbwy(
@@ -483,8 +467,7 @@ test("a passage between two stations does not make them one marker", () => {
   expect(data.names).toEqual(["Cortlandt St", "Chambers St"]);
 });
 
-// The other direction, which is what the transfer data is for: one name, close enough for the
-// fallback to have merged them, and no passage between the two — Rector St.
+// One name, close enough to merge, but no passage between them: Rector St.
 test("one name over two stations the agency does not connect stays two markers", () => {
   const zoom = 16;
   const track = eastward(zoom, 0, 14);
@@ -516,8 +499,7 @@ test("one name over two stations the agency does not connect stays two markers",
   expect(data.names).toEqual(["Rector St", "Rector St"]);
 });
 
-// Rector St: the 1 and the N/R/W stand 49.5 m apart under one name with no passage between them,
-// and the agency's transfers are the only thing in the file that says so.
+// Rector St: the 1 and N/R/W stand 49.5 m apart under one name; only the transfers keep them apart.
 test("records in different complexes stay apart however close", () => {
   const zoom = 16;
   const track = eastward(zoom, 0, 14);

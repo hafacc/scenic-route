@@ -28,7 +28,6 @@ import {
 import type { NavProgress } from "../src/routing/nav-progress";
 import { LinePill } from "./modes/route-cards";
 
-// A ride's bubble is not an icon in a disc: it is the line's own bullet, at the size the disc was.
 const RIDE_BUBBLE =
   "flex h-7 min-w-7 shrink-0 items-center justify-center rounded-full px-1.5 text-[11px] font-bold leading-none";
 
@@ -50,8 +49,6 @@ export function maneuverIcon(maneuver: Maneuver) {
     return <MdDirectionsBoat {...props} />;
   }
   if (maneuver.kind === "station") {
-    // Off a train, from one train to the next, or through the doors of the station itself — three
-    // different acts, and the only thing a reader has to tell them apart at a glance.
     if (maneuver.station === "alight") {
       return <MdLogout {...props} />;
     }
@@ -85,9 +82,7 @@ export function maneuverIcon(maneuver: Maneuver) {
   return <MdOutlineDirectionsWalk {...props} />;
 }
 
-// The dimmed rows stop exactly where the highlight begins. Asking nextManeuver rather than
-// currentManeuver is what keeps the arrive row, where the two are clamped together, from being
-// dimmed and highlighted at once.
+// nextManeuver, not currentManeuver, so the arrive row is never dimmed and highlighted at once.
 export function maneuverState(
   progress: NavProgress | null,
   index: number,
@@ -109,10 +104,9 @@ export function ManeuverList({
   className,
 }: {
   directions: Maneuver[];
-  progress: NavProgress | null; // live position along the route, or null when off-route/unlocated
+  progress: NavProgress | null;
   className: string;
 }) {
-  // The highlighted maneuver row is scrolled into view whenever the next maneuver advances.
   const highlightRef = useRef<HTMLLIElement | null>(null);
   const nextIndex = progress ? progress.nextManeuver : null;
   useEffect(() => {
@@ -127,8 +121,6 @@ export function ManeuverList({
         const state = maneuverState(progress, index);
         const isNext = state === "next";
         const isPassed = state === "passed";
-        // Passed landmarks and artwork wear their overlay color, so the turn-by-turn reads
-        // as the same palette as the map.
         const bubbleClass =
           maneuver.kind === "landmark"
             ? "bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300"
@@ -177,18 +169,14 @@ export function ManeuverList({
   );
 }
 
-// The slim bar the panel collapses to while navigating: the next maneuver, or the route summary
-// where there is no live position to place the walker on.
 export interface PeekNext {
-  maneuver: Maneuver; // what to do next
-  distanceMeters: number; // how far off it is, on foot
-  // What the walker is doing now. Only a ride changes what the bar says, and it changes it entirely:
-  // there is no walking left between here and getting off, and underground there is no fix either.
+  maneuver: Maneuver;
+  distanceMeters: number;
+  // Only a ride changes the bar: there is no walking left and no fix underground.
   current: Maneuver | null;
 }
 
-// The bar's own chrome, for a deck that floats it alone; a deck that keeps it as a row of its own
-// card hands it `bare` and the card carries the chrome instead.
+// `bare` when the containing card carries the chrome instead.
 const PEEK_CHROME =
   "rounded-2xl bg-white/85 px-4 py-3 shadow-lg ring-1 ring-black/5 backdrop-blur-md dark:bg-slate-800/80 dark:ring-white/10";
 

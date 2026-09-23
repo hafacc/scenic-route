@@ -6,48 +6,27 @@ import { KEEP_BUFFER, tileRatio } from "../tiles/raster";
 import type { Flavor } from "./flavor";
 import { basemapLabelRules, basemapPaintRules } from "./rules";
 
-// The basemap: Protomaps vector tiles, drawn in the browser from the style in this directory.
-//
-// It replaced CARTO's Voyager raster tiles, which looked right but could not come offline — CARTO's
-// terms forbid caching them, and an offline map whose background is missing is not much of a map.
-// Protomaps' terms invert that: the whole point of the project is that a map is an asset you may
-// keep. So the service worker caches these, bounded to the cities (src/sw/policy.ts).
-//
-// Drawing the vectors here rather than fetching pictures of them is also what makes the night map a
-// real style: it is a second color dictionary in ./flavor.ts and nothing else, where the raster
-// layer this replaced could only be inverted in CSS.
+// CARTO's terms forbid caching its tiles; Protomaps' allow it, so the service worker caches these.
 
-// Free for non-commercial use up to a soft cap, and restricted by the CORS allow-list set on the key
-// itself rather than by keeping the key secret — so it is committed deliberately, not leaked. It is
-// scoped to the deploy's own origin, which is why local development needs its own key:
-// `http://localhost:3000` is not unique to any one machine, so a key that admits it admits everyone's.
-// Put that one in `.env.local`, which is gitignored.
+// Committed on purpose: its CORS allow-list gates it, so localhost needs its own key in .env.local.
 const PUBLISHED_KEY = "265db316db1cddf4";
 const KEY = process.env.NEXT_PUBLIC_PROTOMAPS_KEY ?? PUBLISHED_KEY;
 
 export const BASEMAP_URL = `https://api.protomaps.com/tiles/v4/{z}/{x}/{y}.mvt?key=${KEY}`;
 
-// The basemap's data stops here; above it the renderer redraws the same vectors larger rather than
-// enlarging a picture of them, which is why deep zooms stay sharp.
+// Above this the renderer redraws the vectors larger rather than enlarging a picture of them.
 export const BASEMAP_MAX_DATA_ZOOM = 15;
 
 export const BASEMAP_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &middot; <a href="https://protomaps.com">Protomaps</a>';
 
-// Every basemap tile request, and nothing else: what the templated URL above starts with, before the
-// first `{z}`.
+// Everything before the first `{z}`, matching every basemap tile request and nothing else.
 const BASEMAP_PREFIX = BASEMAP_URL.slice(0, BASEMAP_URL.indexOf("{"));
 
 let statusChecked = false;
 
-// Fail a refused tile request as itself.
-//
-// protomaps-leaflet never looks at the response status: it pipes whatever comes back straight into
-// the protobuf decoder, so a 403 or a 504 arrives as `Unimplemented type: 7` thrown over an HTML
-// error page, which names nothing that happened. The library takes no custom source and does not
-// export the decoder, so `fetch` is the only seam; requests that are not basemap tiles are handed to
-// the original untouched, and an abort still rejects as an abort, which is what tells the watcher in
-// components/basemap.tsx that the app changed its mind rather than lost the map.
+// protomaps-leaflet ignores the status and decodes the error page, so a 403 surfaces as
+// `Unimplemented type: 7`; wrapping fetch is the only seam, and aborts must still reject as aborts.
 function checkTileStatus(): void {
   // Next.js evaluates this module on the server too, where there is no map and no fetch to wrap.
   if (statusChecked || typeof window === "undefined") {
@@ -80,12 +59,9 @@ export function basemapLayer(flavor: Flavor): L.Layer {
   return leafletLayer({
     url: BASEMAP_URL,
     maxDataZoom: BASEMAP_MAX_DATA_ZOOM,
-    // `maxZoom` is carried over from the raster layer this replaced: it is what the MAP's zoom range
-    // is derived from, so dropping it would quietly cap the whole app below the zooms the swept
-    // shade and the route detail live at.
+    // The map's zoom range derives from this; dropping it caps the app below the shade and route zooms.
     maxZoom: 20,
-    // The renderer would otherwise size its tile canvases by the raw pixel ratio, which is the one
-    // choice on the map that costs a phone hundreds of megabytes (../tiles/raster).
+    // The raw pixel ratio would cost a phone hundreds of megabytes of tile canvases (../tiles/raster).
     devicePixelRatio: tileRatio(),
     keepBuffer: KEEP_BUFFER,
     paintRules: basemapPaintRules(flavor),

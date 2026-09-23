@@ -6,10 +6,7 @@ import { GiSuspensionBridge, GiTorch } from "react-icons/gi";
 import { CITIES, type City } from "../src/cities";
 import { SHEET_SCROLL, Sheet } from "./sheet-shell";
 
-// Something of the place rather than the same pin twice: the torch stands in for the Statue of
-// Liberty, which react-icons has no icon of, and the suspension bridge for the bridges the Bay Area
-// is known by. A region with none named falls back to a map pin, which is honest — better an
-// obviously generic mark than one that gestures at the wrong landmark.
+// The torch stands in for the Statue of Liberty, which react-icons has no icon for.
 const CITY_ICONS: Record<
   string,
   ComponentType<{ className?: string; "aria-hidden"?: boolean }>
@@ -24,9 +21,6 @@ interface CityDialogProps {
   onClose: () => void;
 }
 
-// What each region offers, named the way the toolbar's overlay switcher names it, so the list says
-// what changes by switching rather than only where. Each carries a handful of these; the ones a
-// reader would look for (trees, hills, ferries) are what distinguishes one entry from another.
 const OVERLAY_LABELS: Record<string, string> = {
   canopy: "Tree cover",
   genus: "Species",
@@ -40,8 +34,7 @@ const OVERLAY_LABELS: Record<string, string> = {
   scaffolding: "Scaffolding",
 };
 
-// The search filter is a plain case-folded substring over the name. Not a fuzzy match: the list is
-// short enough to scan, and a fuzzy match on a short list mostly surprises.
+// A plain substring, not fuzzy: on a list this short, fuzzy matches mostly surprise.
 function matches(city: City, query: string): boolean {
   return city.name.toLowerCase().includes(query.trim().toLowerCase());
 }
@@ -58,7 +51,6 @@ export default function CityDialog({
     [query],
   );
 
-  // The search box earns its place only once the list is long enough that scanning it is work.
   const searchable = CITIES.length > 8;
 
   return (
@@ -94,8 +86,7 @@ export default function CityDialog({
       {searchable ? (
         <label className="mt-4 flex shrink-0 items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-sm dark:bg-slate-700/60">
           <FiSearch className="shrink-0 text-slate-400" aria-hidden />
-          {/* 16px on a phone: iOS Safari zooms the whole page in on a focused control whose text is
-              any smaller, which crops the sheet it was typed into. */}
+          {/* 16px on a phone: iOS Safari zooms the page on a focused control with smaller text. */}
           <input
             type="search"
             value={query}

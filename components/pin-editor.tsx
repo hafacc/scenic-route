@@ -108,10 +108,7 @@ export default function PinEditor({
           <FiX />
         </button>
       </div>
-      {/* The note is the one thing that gives way: the address above it and the buttons below it
-          stay put, and the box shrinks to its floor before the sheet does. 16px on a phone, because
-          iOS Safari zooms the whole page in on a focused control whose text is any smaller — which
-          crops the sheet it was typed into. */}
+      {/* 16px on a phone, or iOS Safari zooms the page on a focused control. */}
       <label className="mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
         <span className="sr-only">Note</span>
         <textarea

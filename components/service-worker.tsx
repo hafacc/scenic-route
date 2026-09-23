@@ -11,15 +11,7 @@ import {
   SW_RELEASE,
 } from "../src/sw/update";
 
-// Registers ./sw.js, relative to the document so it picks up the basePath the Pages deploy injects.
-// Its scope is its own directory, which is the site root, matching the manifest's.
-//
-// Also the page's half of the two settings the worker owns: it is TOLD its cap rather than asked for
-// it, because it is stopped between requests and waking it to answer would put a round trip in front
-// of every cache write. See the message handler in src/sw/worker.ts.
-//
-// And the page's half of the update offer: a worker parked in `waiting` is asked for its marker, and
-// a raised one gets a banner offering the reload that lets it take over. See src/sw/update.ts.
+// Registered relative to pick up basePath; the worker is told its cap, since asking would wake it.
 
 async function tellWorker(message: unknown): Promise<void> {
   const registration = await navigator.serviceWorker?.ready;
@@ -37,9 +29,7 @@ export function clearOfflineMaps(): void {
   void tellWorker({ type: "clear-overlays" }).catch(() => {});
 }
 
-// How long to wait for a parked worker to name its marker. Waking one is quick when it answers at
-// all, and a worker from a deploy older than this message never will, so the ask gives up rather
-// than leaving an offer that can no longer arrive pending for the life of the page.
+// A worker from an older deploy never answers, so the ask times out.
 const REPLY_MS = 2000;
 
 function askRelease(parked: ServiceWorker): Promise<number | null> {
@@ -55,8 +45,7 @@ function askRelease(parked: ServiceWorker): Promise<number | null> {
   });
 }
 
-// The tap. The worker skips its wait only in answer to this; the reload is left to the
-// controllerchange listener every open page carries, since the hand-over reaches all of them.
+// The worker skips waiting only in answer to this; each page's controllerchange reloads it.
 function takeUpdate(parked: ServiceWorker): void {
   parked.postMessage({ type: "skip-waiting" });
 }
@@ -66,17 +55,12 @@ export default function ServiceWorker() {
 
   useEffect(() => {
     if ("serviceWorker" in navigator) {
-      // Fails on an insecure origin and whenever the user has workers switched off; neither is worth
-      // reporting, since the only thing lost is the browser's offer to install.
+      // Fails on insecure origins or with workers disabled; only the install offer is lost.
       navigator.serviceWorker.register("sw.js").catch(() => {});
-      // Sent on every load, not only on a change: a worker that has just replaced an older one, or
-      // that was installed before this setting existed, has never been told.
+      // Sent on every load, since a newly activated worker was never told.
       sendCoverage(settings().coverage);
     }
-    // Asks the browser not to evict this origin under storage pressure. Only the page can ask — the
-    // worker's StorageManager has no `persist` — and only once the site looks like something the
-    // reader means to keep, which is what installing it or granting a permission signals. A refusal
-    // is the normal answer and costs nothing: the caches still work, they are just evictable.
+    // Only the page can ask; a refusal is normal and leaves the caches evictable.
     void navigator.storage?.persist?.().catch(() => false);
 
     return subscribeSettings(() => {
@@ -90,18 +74,14 @@ export default function ServiceWorker() {
     }
     let live = true;
     let registration: ServiceWorkerRegistration | null = null;
-    // Whether anything is in charge of this page. Taken at load, because by the time a
-    // controllerchange arrives `controller` is set either way: a page that opened before there was
-    // any worker is claimed by the first install, and that claim costs it nothing, since the shell
-    // it is running out of is the one the deploy just precached.
+    // Taken at load, since `controller` is set either way by the time a controllerchange arrives.
     let controlled = navigator.serviceWorker.controller !== null;
     let reloading = false;
-    // Registration has just run, so the browser holds a fresh copy of sw.js and the first re-check
-    // belongs a whole interval away rather than at the first glance back at the app.
+    // Registration just fetched sw.js, so the first re-check waits a full interval.
     let lastCheck = Date.now();
 
     const offer = async (waiting: ServiceWorker | null): Promise<void> => {
-      // Nothing to take over FROM is a first install, not an update, and it needs no reload at all.
+      // Nothing to take over from is a first install, not an update, and needs no reload.
       if (!waiting || !navigator.serviceWorker.controller) {
         return;
       }
@@ -126,11 +106,7 @@ export default function ServiceWorker() {
       }
     };
 
-    // The reload, once per page rather than once per tap: skipWaiting hands the whole origin over,
-    // and the activation behind that hand-over deletes the shell every open page is still lazily
-    // importing chunks out of, so a page that did not ask for the update has to go too. The event
-    // is known to fire more than once, and the second reload would land on a page already on its
-    // way out.
+    // Reload once: activation deletes the shell pages lazily import from, and it can fire twice.
     const onControllerChange = (): void => {
       if (!controlled) {
         controlled = true;
@@ -164,8 +140,7 @@ export default function ServiceWorker() {
         ready.addEventListener("updatefound", onUpdateFound);
         // A worker that parked before this page opened fires no updatefound of its own.
         void offer(ready.waiting);
-        // And one the browser's own check on this navigation started fired it before there was a
-        // listener, so it is picked up where it stands rather than waited on for the session.
+        // This navigation's own check may have started one before there was a listener.
         if (ready.installing) {
           offerOnceInstalled(ready.installing);
         }

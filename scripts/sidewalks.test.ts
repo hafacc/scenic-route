@@ -29,9 +29,7 @@ test("the generic key states both curbs, and a named side bares the other", () =
   });
 });
 
-// The three states the gate turns on, and the reason they are three: `no` is a mapper saying the
-// curb is bare, where a road nobody tagged has said nothing, and only the second may be answered by
-// a weaker source.
+// Only an untagged side, never a stated `no`, may be answered by a weaker source.
 test("no and none are stated bare, an untagged road is unstated", () => {
   expect(taggedSides(road({ sidewalk: "no" }))).toEqual({
     left: "bare",
@@ -47,9 +45,7 @@ test("no and none are stated bare, an untagged road is unstated", () => {
   });
 });
 
-// `separate` says the pavement is drawn as its own way, which is what the mapped bits answer.
-// Reading it as presence would claim one side twice from one fact, and claim it even where the way
-// it points at was never drawn.
+// `separate` means the pavement is its own way, which the mapped sidewalks answer for.
 test("separate states nothing", () => {
   expect(taggedSides(road({ sidewalk: "separate" }))).toEqual({
     left: "unstated",
@@ -76,7 +72,7 @@ test("a side-specific key overrides the generic one", () => {
   });
 });
 
-// Around 84 m of street at the projection's reference latitude, so `stations` places five of them.
+// About 84 m at the reference latitude, so `stations` places five.
 const WEST = -74.0;
 const EAST = -73.999;
 const LAT = 40.7;
@@ -111,9 +107,7 @@ const TAGGED_EASTBOUND: SidewalkTaggedRoad = {
   ],
 };
 
-// The tag's left and right are the OSM way's own, and the two datasets do not agree on which end of
-// a street is its start. Read without the turn, every street the county digitized the other way
-// round would take its pavement to the wrong curb — a silent error, since both answers are plausible.
+// Tag sides are the OSM way's own, and the datasets disagree on which end a street starts at.
 test("a street digitized against the tagged road reads its sides reversed", () => {
   const survey = tagSurvey([TAGGED_EASTBOUND]);
   expect(survey(EASTBOUND)).toEqual({ left: "paved", right: "bare" });
@@ -134,7 +128,6 @@ test("a tag on a fifth of the block is not a statement about the block", () => {
   });
 });
 
-// A block away is another street, and its tags are not this street's.
 test("a parallel road out of reach states nothing", () => {
   const parallel: SidewalkTaggedRoad = {
     ...TAGGED_EASTBOUND,

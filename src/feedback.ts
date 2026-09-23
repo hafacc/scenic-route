@@ -18,7 +18,7 @@ export interface FeedbackDoc {
 
 export const feedbackConverter: FirestoreDataConverter<Feedback, FeedbackDoc> =
   {
-    // notes are written raw with a serverTimestamp() sentinel, never through this converter
+    // Notes are written raw with a serverTimestamp() sentinel.
     toFirestore(): FeedbackDoc {
       throw new Error("feedbackConverter is read-only");
     },
@@ -27,7 +27,7 @@ export const feedbackConverter: FirestoreDataConverter<Feedback, FeedbackDoc> =
       options?: SnapshotOptions,
     ): Feedback {
       const data = snapshot.data(options);
-      // without the "estimate" option an unresolved server timestamp reads as null; fall back to now
+      // Without the "estimate" option an unresolved server timestamp reads as null.
       return {
         id: snapshot.id,
         text: data.text ?? "",

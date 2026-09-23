@@ -1,10 +1,5 @@
-// The middle of the git pipeline every shed script runs behind: it reads the commit index
-// `git cat-file --batch-check` wrote and prints the blobs the walk needs, one id a line, for the
-// `git cat-file --batch` that streams them back.
-//
-// `--from <day>` drops the commits before that day, which is how `bun run update-sheds` streams a
-// month of history rather than nine years of it. The script at the far end of the pipe is given the
-// same day, because it reads the same index to know which blob answers which commit.
+// Prints the blob ids the shed walk needs, one a line, for `git cat-file --batch` to stream back.
+// The consumer at the far end of the pipe must get the same `--from` day to map blobs to commits.
 
 import { distinctBlobs, loadSnapshotIndex } from "./shed-permits";
 
@@ -18,8 +13,7 @@ if (
   );
 }
 const sources = await loadSnapshotIndex(index, from);
-// An empty request is left empty rather than written as a blank line, which git answers by dying on
-// a query that is not an object name.
+// No blank line for an empty request: git dies on a query that is not an object name.
 process.stdout.write(
   distinctBlobs(sources)
     .map((blob) => `${blob}\n`)

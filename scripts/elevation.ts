@@ -1,16 +1,3 @@
-// Where the ground surface comes from: a mosaic of DEM tiles, fetched once and handed to the tiler.
-//
-// Nothing in the model read ground height before this. New York is flat enough that ignoring terrain
-// costs almost nothing; San Francisco is not. Two things read the mosaic — the terrain overlay's
-// pyramid, and the graph's per-edge ascent and descent bytes, which is what the hill weight steers by.
-//
-// It also sets how long a walk takes: `walkSpeedOn` scales the flat 1.3 m/s by Tobler's hiking
-// function off those two, so a route over a hill is reported as the longer walk it is and the same
-// route downhill as the quicker one.
-//
-// The tiles are a build input and never shipped — cached, sampled, and then not needed again, the
-// same contract `scripts/chm.ts` has with the canopy height model.
-
 import { readFile } from "node:fs/promises";
 import { fetchEastBayLand } from "./alameda";
 import { cachedFile } from "./cache";
@@ -34,31 +21,20 @@ const PROGRESS_TILES = 50;
 const FETCH_WORKERS = 8;
 
 export interface ElevationRaster {
-  // Every tile of the mosaic, as paths on disk. The tiler opens them itself; nothing here reads a
-  // pixel.
   paths: string[];
   attribution: string;
   sourceUrl: string;
-  // Which band of a multi-band tile carries the ground surface.
   band: number;
-  // What the tiler calls the projection these tiles are published on. A GeoTIFF names its CRS by
-  // EPSG code and not by parameters, so something has to know that 7131 is San Francisco's grid.
+  // The tiler's projection name: a GeoTIFF names its CRS only by EPSG code.
   crs: string;
 }
 
-// The 3DEP topographic products for San Francisco, flown 2023-04-20 and published as five-band
-// float32 COGs: DTM, DSM, CHM, slope, aspect. Public domain (CC0), no key, and enumerable from a
-// STAC collection — 651 tiles, 1.77 GB cached once.
-//
-// The tiles are NAD83(2011) / San Francisco CS13 (EPSG:7131), a transverse Mercator like the UTM
-// zone New York's canopy raster uses, which is why the tiler reads both with one projection.
+// Five-band float32 COGs (DTM, DSM, CHM, slope, aspect) on EPSG:7131, a transverse Mercator.
 const WERK_COLLECTION =
   "https://nationaldataplatform.org/stac/collections/nasa-werk-dem-ca-sanfrancisco-1-b23";
 const WERK_ATTRIBUTION = "Elevation © USGS 3DEP / NASA WERK (CC0)";
 const DTM_BAND = 0;
-// Band 2 is the surface model less the terrain model: how far above the ground each cell's return
-// stood. It is not a canopy product — the Salesforce Tower measures 324 m in it — so it is only
-// ever read through the measured-canopy polygons, in the height pass (crates/tiler/src/heights.rs).
+// DSM minus DTM, not canopy (buildings read too), so only read within measured-canopy polygons.
 export const SF_CANOPY_BAND = 2;
 
 interface StacItem {
@@ -71,8 +47,7 @@ interface StacPage {
   links?: { rel?: string; href?: string }[];
 }
 
-// The collection paginates, and the last page's `next` link is what ends the walk — a page with no
-// features would otherwise loop on the same href for ever.
+// Also stops on an empty page, which would otherwise loop on the same `next` href forever.
 async function tileHrefs(): Promise<string[]> {
   const hrefs: string[] = [];
   let url: string | null = `${WERK_COLLECTION}/items?limit=500`;
@@ -93,8 +68,7 @@ async function tileHrefs(): Promise<string[]> {
   return hrefs;
 }
 
-// One cache entry per tile rather than one for the mosaic: a run interrupted halfway keeps what it
-// already has, and a tile the server 500s on costs one tile.
+// One cache entry per tile, so an interrupted run keeps what it already fetched.
 async function fetchTiles(prefix: string, hrefs: string[]): Promise<string[]> {
   const paths: string[] = new Array(hrefs.length);
   let next = 0;
@@ -134,25 +108,12 @@ export const SF_ELEVATION: () => Promise<ElevationRaster> = async () => {
   };
 };
 
-// The East Bay's ground, which is a different survey on a different grid. San Francisco's is a NASA
-// WERK product enumerable from a STAC collection; the East Bay's is the plain USGS staging of the
-// `CA_AlamedaCounty_2021_B21` campaign — a single-band bare-earth DTM, 10 km tiles on UTM 10N,
-// public domain and keyless.
-//
-// Fetched through scripts/lidar.ts, which already stages exactly these tiles for the roof-height
-// pass and names its cache entries after the campaign and the square. Sharing that fetch is not
-// merely tidy: it is 1.57 GB, and two functions asking for the same nine files under two names would
-// download the county twice and keep both copies. What lidar.ts contributes is the project's own
-// `0_file_download_links.txt` — a plain list, no API in front of it — and the UTM square grid a
-// window is turned into, which is where the tile names come from.
-//
-// Off the S3 bucket USGS stages to rather than its `rockyweb.usgs.gov` mirror of the same files,
-// which serves them an order of magnitude slower.
+// Fetched via scripts/lidar.ts, which caches the same 1.57 GB of tiles for roof heights.
+// S3 rather than the `rockyweb.usgs.gov` mirror, which is an order of magnitude slower.
 const ALAMEDA_ATTRIBUTION = "Elevation © USGS 3DEP (public domain)";
 const ALAMEDA_SOURCE_URL =
   "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1m/Projects/CA_AlamedaCounty_2021_B21/";
 
-// The 10 km square of the staged grid a point falls in.
 function demSquareOf(lng: number, lat: number): string {
   const { x, y } = forwardTmerc(PROJECTIONS[ALAMEDA_LIDAR.crs], lng, lat);
   return demSquareName(
@@ -161,15 +122,7 @@ function demSquareOf(lng: number, lat: number): string {
   );
 }
 
-// Every square the region's LAND falls in. A 3DEP project stages whole squares and this one stages
-// nothing for the bay-dominated blocks off Bay Farm Island, quite correctly — so what has to be
-// checked is not that the grid is complete but that no square holding a street is missing from it.
-// A square with no tile reads downstream as flat ground, not as absent ground, which is the whole
-// reason this is checked rather than assumed.
-//
-// The vertices name every square the coastline runs through; the centers name the ones a polygon
-// swallows whole, which have no vertex of their own and would otherwise be dropped from a check
-// that exists to catch exactly that.
+// A missing tile reads downstream as flat ground. Centers catch squares with no polygon vertex.
 function landSquares(land: readonly Polygon[], box: LidarWindow): Set<string> {
   const squares = new Set<string>();
   for (const polygon of land) {
@@ -198,8 +151,6 @@ function landSquares(land: readonly Polygon[], box: LidarWindow): Set<string> {
 }
 
 export const EAST_BAY_ELEVATION: () => Promise<ElevationRaster> = async () => {
-  // The land is resolved here rather than stated as four numbers, because both things this needs of
-  // it move together: the window the campaign is asked for, and the ground the answer has to cover.
   const land = await fetchEastBayLand();
   const box = boxOf(land);
   const { paths, missing } = await fetchDemTiles(ALAMEDA_LIDAR, box);
@@ -222,12 +173,7 @@ export const EAST_BAY_ELEVATION: () => Promise<ElevationRaster> = async () => {
   };
 };
 
-// Every mosaic a city's ground is read from, in the order the tiler resolves them: where two surveys
-// overlap, the FIRST one wins. San Francisco leads because the bay is flown from both sides and its
-// own five-band product is the one this city was measured against.
-//
-// A city with no mosaic keeps a flat model: every edge's relief reads 0, and the hill weight grays
-// out rather than moving nothing silently.
+// Where surveys overlap, the first wins. No mosaic means flat ground and a grayed-out hill weight.
 export async function fetchElevationMosaics(
   cityId: string,
 ): Promise<ElevationRaster[]> {

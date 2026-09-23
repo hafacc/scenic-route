@@ -1,13 +1,4 @@
-// The city's own address file (ADDR, ./address-format.ts), read: the street table, and one street's
-// run of house numbers decoded on demand.
-//
-// "123 Broadway" answered from data that already shipped, with no network at all. WHICH street a
-// query names is the search index's job (./search-query.ts): a street is a document there, so a
-// house number is a name match followed by the one run decode below.
-//
-// Only the streets a query names are ever decoded. New York is ~6 MB of address runs; turning all of
-// them into objects or typed arrays up front would cost several times the file itself, for streets
-// nobody will type.
+// Reads ADDR (./address-format.ts), decoding a street's run only on demand: NYC is ~6 MB of runs.
 
 import { prettifyStreetName } from "../routing/street-names";
 import {
@@ -32,9 +23,7 @@ export interface Address {
   lng: number;
 }
 
-// The corners of what a street covers, in the same hundred-thousandths of a degree the addresses are
-// delta-encoded in. A street with no addresses at all reports the origin, which is an ocean away from
-// either city and so never a candidate for anything.
+// In 1e-5 degree units; a street with no addresses reports the origin, an ocean from either city.
 export interface StreetBounds {
   minLat: number;
   maxLat: number;
@@ -42,13 +31,7 @@ export interface StreetBounds {
   maxLng: number;
 }
 
-// The file as it is held for the session: the decompressed bytes, the two string blobs, and per
-// street its name, its place and where its run of addresses begins. The last entry of `starts` is
-// the end of the last run.
-//
-// A street is a name AND a place, so several entries share one name — New York has five Court
-// Streets. Matching is on the name alone and the place only labels the answer, which is what makes
-// "312 Court St" five streets to look in rather than one to guess between.
+// The last entry of `starts` is the end of the last run; streets sharing a name differ by place.
 export interface AddressIndex {
   names: string[]; // prettified, which is what the search box shows
   sourceNames: string[]; // as the city publishes them, which is also how "5 Av" gets typed
@@ -56,10 +39,7 @@ export interface AddressIndex {
   streetName: Uint32Array;
   streetPlace: Uint32Array;
   starts: Uint32Array;
-  // Per street, the box its addresses fall in. Free to record — the load pass already steps over
-  // every address to find where the next street starts — and it is what lets a point be turned back
-  // into an address without decoding the whole file: a street whose box is 300 m away has no address
-  // nearer than that, so its run is never read. Four bytes a street: 150 KB in New York.
+  // Per-street address box, so reverse lookup skips streets farther than the best address found.
   minLatUnits: Int32Array;
   maxLatUnits: Int32Array;
   minLngUnits: Int32Array;
@@ -67,8 +47,6 @@ export interface AddressIndex {
   bytes: Uint8Array;
 }
 
-// Walk one street's run. The addresses are collected when the caller wants them and only stepped
-// over when it does not, which is what the load pass does for every street in the file.
 function readRun(
   bytes: Uint8Array,
   cursor: Cursor,
@@ -106,8 +84,7 @@ function readRun(
   return bounds;
 }
 
-// One "\n"-joined blob. Empty is no entries at all rather than one empty string, which is what a
-// city that is a single place writes for its places.
+// Empty is no entries, not one empty string.
 function readBlob(bytes: Uint8Array, cursor: Cursor): string[] {
   const length = readUnsignedVarint(bytes, cursor);
   const text = new TextDecoder().decode(
@@ -174,9 +151,7 @@ export interface AddressQuery {
   street: string;
 }
 
-// A query is an address when it opens with a house number and names a street after it. The number
-// has to be one unbroken token — "123", "12-34", "269B" — because a space before the letter is how
-// "269 B Street" is written, and reading that as house 269B on "Street" is a different place.
+// The number must be one token: "269 B Street" is house 269 on B Street, not 269B on "Street".
 const ADDRESS_QUERY = /^([0-9]{1,7}(?:-[0-9]{1,4})?[A-Za-z]?)\s+(.+)$/;
 
 export function parseAddressQuery(query: string): AddressQuery | null {
@@ -188,7 +163,6 @@ export function parseAddressQuery(query: string): AddressQuery | null {
   return number === null ? null : { number, street: match[2].trim() };
 }
 
-// How far apart two house numbers are, for choosing between the pair a missing number sits between.
 // Queens' block number dominates: 12-34 and 12-36 are neighbors, 12-34 and 13-02 are not.
 const BLOCK_SPAN = 10000;
 
@@ -200,9 +174,7 @@ function numberDistance(left: HouseNumber, right: HouseNumber): number {
   return Math.abs(numberKey(left) - numberKey(right));
 }
 
-// The address answering a number: the one written down, or the nearer of the two it falls between.
-// A number past either end of the street is not answered at all — 9999 Broadway is not at the top of
-// Broadway, and a pin there is a confident wrong answer where none is simply a missing one.
+// The exact number or the nearer neighbor; past either end is null: 9999 Broadway isn't at its top.
 export function findNumber(
   addresses: readonly Address[],
   wanted: HouseNumber,
@@ -216,7 +188,6 @@ export function findNumber(
     } else if (order < 0) {
       below = address;
     } else {
-      // The run ascends, so the first address past the number is the one above it.
       above = address;
       break;
     }
@@ -233,16 +204,13 @@ export function findNumber(
   }
 }
 
-// The file, fetched and decoded. Named absolutely because the only thing that fetches it is the
-// search worker, and a relative URL inside a worker resolves against the worker's own chunk rather
-// than against the document.
+// Takes an absolute URL, since in the worker a relative one resolves against the worker's chunk.
 export async function fetchAddresses(url: string): Promise<AddressIndex> {
   const response = await fetch(url);
   if (!response.ok || response.body === null) {
     throw new Error(`${url}: ${response.status} ${response.statusText}`);
   }
-  // Shipped gzipped and unpacked here: Pages does not compress .bin, so the alternative is twice the
-  // bytes over the wire, twice the cache and twice the repo.
+  // Gzipped because Pages serves .bin uncompressed.
   const unpacked = response.body.pipeThrough(new DecompressionStream("gzip"));
   const bytes = await new Response(unpacked).arrayBuffer();
   return decodeAddresses(new Uint8Array(bytes));

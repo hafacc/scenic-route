@@ -8,21 +8,10 @@ import { KEEP_BUFFER } from "../src/tiles/raster";
 import manifest from "../src/tree-cover/manifest.json";
 import { useCity } from "./city-context";
 
-// The subway overlay: the agency's route geometry in its published colors, with a marker at every
-// station. Like the ferry lines and the POI dots it rides in a pane of its own, above every areal
-// wash. The decoding and the drawing live in the tile worker (src/tiles/subway.ts).
-//
-// The one overlay with no `bounds`, where every other one is cut to the active city's rectangle.
-// Rail is drawn and never walked, so its artifact is the whole of each agency's network rather than
-// the part of it standing on the region's ground (scripts/subway-sf.ts): BART crosses the bay and
-// runs out to Antioch and Berryessa, and the region rectangle stops at Berkeley and South San
-// Francisco. Bounding this layer by it cut the Transbay Tube in the middle of the water and ended
-// four lines on an invisible straight edge. Nothing in the manifest describes the rail extent, so
-// the layer states none and lets the network's own reach be it — the worker's spatial index holds
-// only the lines and stations in the file, so a tile beyond them draws nothing.
+// No `bounds`: clipping to the city would cut lines like BART's Transbay Tube mid-bay.
 
 const PANE_NAME = "scenic-subway";
-const PANE_Z_INDEX = 295; // above the ferry/highway lines (290), below the POI dots (300)
+const PANE_Z_INDEX = 295; // above lines (290), below POIs (300)
 const MIN_ZOOM = 10;
 const MAX_ZOOM = 20;
 

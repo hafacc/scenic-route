@@ -1,7 +1,4 @@
-//! The coordinate math the tile pyramids and the density sampler share: a local meter space for
-//! one city, the bounds its blurred field can reach, a street's bearing — plus polygon
-//! rasterization, the Gaussian feather over a mask, and the point-in-polygon index the
-//! cover-distribution sampler queries a million times.
+//! Coordinate math shared by the tile pyramids and the density sampler.
 
 use std::sync::LazyLock;
 
@@ -11,11 +8,7 @@ use crate::manifest::Bounds;
 pub const BLUR_RADII: f64 = 3.0; // kernel half-width, in sigmas
 pub const METERS_PER_DEGREE_LAT: f64 = 111_320.0;
 
-/// A local meter space with the city bbox center as its origin. One reference latitude for the
-/// whole city: over NYC's 0.42 degrees of span that costs about 0.7% in the east-west scale,
-/// which is well inside the noise of the blur. Only cos(lat0) actually reaches the field — the
-/// origin cancels out of every distance — so two callers agree as long as they agree on the
-/// bounds.
+/// A local meter space around the bbox center; one reference latitude costs NYC ~0.7% east-west.
 #[derive(Clone, Copy)]
 pub struct Projection {
     lng0: f64,
@@ -42,8 +35,7 @@ impl Projection {
         (lat - self.lat0) * METERS_PER_DEGREE_LAT
     }
 
-    /// The inverses of `x` and `y`: a meter-space offset from the origin back to a coordinate, so
-    /// a sidewalk placed in meter space can be handed to the lng/lat blurred-cover sampler.
+    /// The inverses of `x` and `y`: a meter-space offset back to a coordinate.
     pub fn lng(&self, x: f64) -> f64 {
         self.lng0 + x / self.meters_per_degree_lng
     }
@@ -52,25 +44,20 @@ impl Projection {
         self.lat0 + y / METERS_PER_DEGREE_LAT
     }
 
-    /// Meters per degree of longitude at the reference latitude, the east-west scale the blurred
-    /// field converts its kernel offsets through.
+    /// Meters per degree of longitude at the reference latitude.
     pub fn meters_per_degree_lng(&self) -> f64 {
         self.meters_per_degree_lng
     }
 }
 
-/// The direction a street runs at one of its vertices: the unit tangent in the local meter
-/// space, which is the cos and sin of its bearing. The oriented sampler rotates a sidewalk's
-/// offset into this frame.
+/// The street's unit tangent at a vertex in the local meter space: the cos and sin of its bearing.
 #[derive(Clone, Copy)]
 pub struct Bearing {
     pub along_x: f64,
     pub along_y: f64,
 }
 
-/// Where the field can be non-zero: the sources, grown by the blur's reach. This is what the tile
-/// pyramid is planned over, and the only thing outside the sampler the truncation radius reaches —
-/// so the ingest asks for it rather than redeclaring the radius.
+/// Where the field can be non-zero: the sources grown by the blur's reach.
 pub fn reach_bounds(source: &Bounds, sigma_meters: f64) -> Bounds {
     let reach = BLUR_RADII * sigma_meters;
     let meters_per_degree_lng = METERS_PER_DEGREE_LAT
@@ -83,10 +70,7 @@ pub fn reach_bounds(source: &Bounds, sigma_meters: f64) -> Bounds {
     }
 }
 
-// The quadrature the blurred canopy field is evaluated on: nodes every sigma/4 out to 2.5 sigma
-// on each axis, so 21 per axis and 441 in the oriented kernel. The 1D weights are exp(-t^2/2) at
-// t = node/4, normalized to sum to one; because the exponent's argument is offset/sigma squared,
-// the weights are the same whatever sigma the caller scales the node positions by.
+// Quadrature nodes every sigma/4 out to 2.5 sigma, 21 per axis; weights are sigma-free.
 const QUAD_STEPS: i32 = 10; // +/- this many nodes of sigma/4, so the last node sits at 2.5 sigma
 const QUAD_NODES: usize = (2 * QUAD_STEPS + 1) as usize;
 static QUAD: LazyLock<([f64; QUAD_NODES], [f64; QUAD_NODES])> = LazyLock::new(|| {
@@ -107,9 +91,7 @@ static QUAD: LazyLock<([f64; QUAD_NODES], [f64; QUAD_NODES])> = LazyLock::new(||
 
 const LAT_BANDS: usize = 512; // horizontal strips the point-in-polygon edges are bucketed into
 
-/// Half away from zero on a tie, as `Math.round` is and `f64::round` is not: the street
-/// coordinates a chunk quantizes are signed, since a segment reaches into the tiles its
-/// bounding box touches.
+/// Half away from zero on a tie, as `Math.round` is and `f64::round` is not.
 pub fn round_half_up(value: f64) -> f64 {
     let floored = value.floor();
     if value - floored >= 0.5 {
@@ -119,8 +101,7 @@ pub fn round_half_up(value: f64) -> f64 {
     }
 }
 
-/// Rings flattened into flat arrays, with each polygon's bounding box, so a tile can reject
-/// the polygons it does not touch without walking their vertices.
+/// Rings in flat arrays with each polygon's bounding box, so a tile can reject polygons cheaply.
 pub struct PolygonSet {
     rings: Vec<Vec<RingXy>>,
     boxes: Vec<Bounds>,
@@ -172,11 +153,7 @@ pub fn flatten(polygons: &[Polygon]) -> PolygonSet {
 }
 
 impl PolygonSet {
-    /// Whether a point lands on any of `candidates` — the raw 0/1 indicator, no kernel. A polygon
-    /// is tested even-odd over all of its rings together, so an inner ring punches a hole, and the
-    /// candidates are tested one at a time, so two overlapping woods do not cancel out: the same
-    /// semantics `fill_indices` rasterizes with. The candidates come from a `PolygonGrid`, so this
-    /// walks a few dozen outlines rather than a million.
+    /// Whether a point lands on any of `candidates`: even-odd per polygon, overlaps don't cancel.
     pub fn contains_point(&self, candidates: &[u32], lng: f64, lat: f64) -> bool {
         candidates.iter().any(|candidate| {
             let index = *candidate as usize;
@@ -208,10 +185,7 @@ impl PolygonSet {
         })
     }
 
-    /// Whether a point lands on any of `candidates` OR within `meters` of one's outline. The
-    /// containment half is `contains_point` exactly, so a hole stays a hole — a point well inside
-    /// one is outside the polygon, and only reads near where the hole is narrower than the
-    /// tolerance. `meters_per_degree_lng` is the local east-west scale the distance is measured in.
+    /// Whether a point lands on or within `meters` of any of `candidates`; a hole stays a hole.
     pub fn contains_or_near(
         &self,
         candidates: &[u32],
@@ -243,7 +217,7 @@ impl PolygonSet {
                             (ring.lats[vertex] - lat) * METERS_PER_DEGREE_LAT,
                         )
                     };
-                    // Closed by wrap-around, as the even-odd test above reads it.
+                    // Closed by wrap-around, as the even-odd test reads it.
                     (0..ring.lngs.len()).any(|point| {
                         let previous = if point == 0 {
                             ring.lngs.len() - 1
@@ -274,13 +248,7 @@ pub fn point_segment_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64)
     (px - cx).powi(2) + (py - cy).powi(2)
 }
 
-/// Even-odd scanline fill of the polygons at `indices` into a `width` by `height` mask,
-/// returning how many reached it. `project` carries a lng/lat to the mask's coordinate space;
-/// both tile projections are separable, but a single point map keeps this one loop. Taking
-/// every ring of a polygon together is what makes its inner rings cut holes rather than fill
-/// them; taking the polygons one at a time is what keeps two overlapping woods from canceling
-/// out. The mask is set, never toggled, so a polygon drawn twice — a canopy candidate gathered
-/// from two grid cells — is idempotent.
+/// Even-odd scanline fill into a mask, returning how many reached it; set, never toggled.
 fn fill_indices(
     mask: &mut [u8],
     width: usize,
@@ -367,8 +335,7 @@ pub fn fill_polygons(
     fill_indices(mask, width, height, set, clip, project, 0..set.rings.len())
 }
 
-/// Fill only the polygons a spatial grid gathered for this tile, so a million-polygon set is
-/// never scanned in full per tile. `candidates` is deduplicated already; each is a valid index.
+/// Fill only the polygons a grid gathered for this tile; `candidates` is already deduplicated.
 pub fn fill_polygons_indexed(
     mask: &mut [u8],
     width: usize,
@@ -389,9 +356,7 @@ pub fn fill_polygons_indexed(
     )
 }
 
-/// A uniform grid over a PolygonSet's bounding boxes, CSR-style: each cell lists the polygons
-/// whose box overlaps it. Built once, queried per tile — a tile gathers only the polygons its
-/// own extent can reach rather than testing all ~1.08 M of the canopy set every time.
+/// A CSR grid over a PolygonSet's boxes: each cell lists the polygons whose box overlaps it.
 pub struct PolygonGrid {
     bounds: Bounds,
     cols: usize,
@@ -493,9 +458,7 @@ impl PolygonGrid {
         }
     }
 
-    /// The deduplicated polygon indices whose grid cells the clip overlaps, into `out`. A
-    /// candidate's box may still miss the tile — the fill's own box test rejects it — but the
-    /// set the caller rasterizes is a few hundred rather than a million.
+    /// The deduplicated polygon indices whose grid cells the clip overlaps, into `out`.
     pub fn candidates(&self, clip: &Bounds, out: &mut Vec<u32>) {
         out.clear();
         if clip.east < self.bounds.west
@@ -524,9 +487,7 @@ impl PolygonGrid {
     }
 }
 
-/// Reusable scratch for `blurred_cover`, so the per-vertex hot path allocates nothing. One per
-/// worker thread: the candidate gather, the node mask, the projected-vertex buffers and the
-/// scanline crossings all live here and are cleared, never reallocated, between calls.
+/// Reusable per-thread scratch for `blurred_cover`, so the per-vertex hot path allocates nothing.
 #[derive(Default)]
 pub struct CoverScratch {
     candidates: Vec<u32>, // the polygons whose box reaches this node grid
@@ -537,19 +498,9 @@ pub struct CoverScratch {
     crossings: Vec<f64>,     // scanline crossings for the row being filled
 }
 
-/// The blurred canopy cover at one point: the oriented Gaussian convolution of the canopy
-/// indicator over the quadrature's `QUAD_NODES` x `QUAD_NODES` grid. The kernel runs `sigma_along`
-/// down the street's bearing and `sigma_across` over it (isotropic when the two are equal), so a
-/// sidewalk near but not under a crown reads partial shade.
-///
-/// Rather than test every node against the polygons one point at a time — which re-walks a park's
-/// hundred-thousand-vertex boundary once per node — this projects each nearby polygon into the
-/// oriented node grid and scanline-fills it there, so a ring is walked once per sample instead of
-/// once per node. `fill_indices` marks a cell iff its center is inside, so placing node `i` at
-/// cell center `i + 0.5` makes the result byte-for-byte identical to per-node point-in-polygon.
-/// The weights sum to one, so the return is the covered fraction in [0, 1].
-// The canopy set, its grid and the projection travel together and the two sigmas name the oriented
-// kernel; bundling them into a struct only to satisfy the arg-count lint would obscure the call.
+/// Oriented Gaussian canopy cover at a point, by scanline-filling polygons on the node grid.
+/// Nodes sit at cell centers, so it matches per-node point-in-polygon exactly.
+// Bundling these into a struct just for the lint would obscure the call.
 #[allow(clippy::too_many_arguments)]
 pub fn blurred_cover(
     set: &PolygonSet,
@@ -564,15 +515,12 @@ pub fn blurred_cover(
 ) -> f64 {
     let weights = &QUAD.1;
     let meters_per_degree_lng = projection.meters_per_degree_lng();
-    // The across axis is the street's left normal, so a vertex projects into the node frame exactly
-    // as `sidewalks::left_normal` places the sidewalks the grid is oriented to.
+    // The across axis is the left normal, matching `sidewalks::left_normal`.
     let (along_x, along_y) = (bearing.along_x, bearing.along_y);
     let (across_x, across_y) = (-bearing.along_y, bearing.along_x);
     let along_step = sigma_along / 4.0;
     let across_step = sigma_across / 4.0;
-    // The node farthest from the center sits at 2.5 sigma on each axis; its axis-aligned reach is
-    // at most 2.5 * hypot(along, across), whatever the bearing — enough to gather every polygon a
-    // node can land on.
+    // The farthest node's reach is at most 2.5 * hypot(along, across), whatever the bearing.
     let reach = 2.5 * sigma_along.hypot(sigma_across);
     let clip = Bounds {
         west: lng - reach / meters_per_degree_lng,
@@ -672,11 +620,7 @@ pub fn blurred_cover(
     covered
 }
 
-/// Separable Gaussian over a field of samples, zero-padded at the edges, with sigma in cells.
-/// The samples are anything that reads as a scalar — a 0/1 mask or a fractional coverage — so
-/// the fill can feather a supersample-averaged fraction and the land floor a binary mask through
-/// one kernel. The caller is responsible for the halo: this truncates at BLUR_RADII sigmas, so a
-/// buffer with no margin loses mass at its border.
+/// Separable Gaussian, sigma in cells, truncated at BLUR_RADII: the caller supplies the halo.
 pub fn feather<Sample: Copy + Into<f64>>(
     field: &[Sample],
     width: usize,
@@ -724,9 +668,7 @@ pub fn feather<Sample: Copy + Into<f64>>(
     blurred
 }
 
-/// Every edge, bucketed into the horizontal bands it spans. A shoreline runs to ~200k edges
-/// and the cover-distribution sampler throws a million points at it, so a query has to look at
-/// the handful of edges its own latitude can possibly cross, not all of them.
+/// Every edge bucketed into the latitude bands it spans, so a point query checks only a handful.
 pub struct PolygonIndex {
     south: f64,
     north: f64,
@@ -736,8 +678,7 @@ pub struct PolygonIndex {
     owner: Vec<u32>,
     starts: Vec<u32>,
     items: Vec<u32>,
-    // Crossings are counted per polygon and only the polygons the band touched are cleared, so
-    // a canopy set of a million does not pay to reset an array it never wrote to.
+    // Only the polygons a band touched are cleared, sparing a million-polygon reset.
     parity: Vec<u8>,
     touched: Vec<u32>,
 }

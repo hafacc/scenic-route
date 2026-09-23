@@ -1,13 +1,6 @@
 import { expect, test } from "bun:test";
 
-// The modules that reach for browser storage run their first read at IMPORT, so an environment they
-// mishandle takes the whole bundle down rather than degrading. That is not hypothetical: a
-// `typeof window === "undefined"` guard passed locally on a runtime with no window at all and threw
-// in CI on one that defines a window with no `localStorage` on it, which is a failure nothing else
-// here would have caught — every other test imports these modules only after something else has.
-//
-// So these import them under each shape by hand. `globalThis` is restored either way, because a
-// leaked global would change what every test after this one sees.
+// These modules read storage at import, and CI has a window with no `localStorage`; restore globals.
 
 async function importingUnder(
   globals: Record<string, unknown>,
@@ -23,8 +16,7 @@ async function importingUnder(
     });
   }
   try {
-    // A fresh query string each time, so the module's top-level read runs again rather than being
-    // served from the loader's cache.
+    // A fresh query string defeats the loader's cache, so the top-level read runs again.
     return await import(`${path}?env=${Math.random()}`);
   } finally {
     for (const [name, descriptor] of saved) {
@@ -83,6 +75,5 @@ test("the pre-document keys still migrate when there is no document at all", asy
   };
   expect(store.settings().weights.tree).toBe(0.35);
   expect(store.settings().allowSheds).toBe(false);
-  // And written forward, so the next read does not have to go looking for them again.
   expect(held.get("scenic-route:settings.v1")).toContain('"tree":0.35');
 });

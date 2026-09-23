@@ -14,25 +14,16 @@ import manifest from "../src/tree-cover/manifest.json";
 import { useCity } from "./city-context";
 import TreeDotsLayer from "./tree-dots-layer";
 
-// The low-zoom genus overlay: a client-shaded dominance texture. The raster half (z9-z14) is a stack
-// of DATA tiles baked by the genus-field pass — four lossless tiles per position, each carrying three
-// genera's local crown density in its R/G/B (12 genera / 3 = 4 tiles). One shared WebGL2 context reads
-// the enabled channels per pixel and shades them: the dominant genus, dithered against its runner-up
-// in proportion, faded by the total density so it reads like thinning-and-thickening tree cover rather
-// than a filled map. Toggling a genus is a uniform write and a redraw, so the dominance renormalizes
-// live (a region hands off to its runner-up) with no refetch — which a stack of pre-colored tiles,
-// which can only add ink, structurally could not do. From z15 up TreeDotsLayer draws crisp live dots.
+// A genus toggle is a uniform write and a redraw, so dominance renormalizes without a refetch.
 const TILE_URL = "tiles/genus-field/{layer}/{z}/{x}/{y}.webp";
-const LAYERS = 4; // 12 genera packed three-per-tile (R,G,B); see crates/tiler/src/genus_field.rs
+const LAYERS = 4; // 3 genera per tile (RGB)
 const TILE_SIZE = 256;
 const MIN_NATIVE_ZOOM = 9;
-const MAX_NATIVE_ZOOM = 14; // the data pyramid's finest zoom; from z15 TreeDotsLayer draws instead
+const MAX_NATIVE_ZOOM = 14; // finest data zoom; dots from z15
 const PANE_NAME = "genus-gl";
-const PANE_Z_INDEX = 250; // above the basemap tilePane (~200), below the overlayPane (400); see genus-layer
+const PANE_Z_INDEX = 250; // tilePane ~200 < this < overlayPane 400
 
-// The vertical flip lives here, deterministically: negate aPos.y before mapping to UV so the tile's
-// top samples the image's top row (north). Doing it in the shader rather than via UNPACK_FLIP_Y_WEBGL
-// because that pixelStore flag is unreliable — in practice ignored — for ImageBitmap texture uploads.
+// Flipped in the shader because UNPACK_FLIP_Y_WEBGL is ignored in practice for ImageBitmap uploads.
 const VERTEX_SRC = `#version 300 es
 in vec2 aPos;
 out vec2 vUv;
@@ -41,11 +32,7 @@ void main() {
   gl_Position = vec4(aPos, 0.0, 1.0);
 }`;
 
-// The look lives here, so tuning is a shader edit (instant HMR), not a rebake. Reads the enabled
-// genera's densities per pixel, colors the dominant, dithers it against the runner-up in proportion
-// to their split, and fades the whole by total density: sparse cover stays faint, a dense stand goes
-// near-opaque. Toggling a genus off drops its channel from the max scan, so the region falls to
-// whatever it's next-densest in — the live renormalization.
+// The look lives in the shader, so tuning is an HMR edit, not a rebake.
 const FRAGMENT_SRC = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -57,17 +44,14 @@ uniform sampler2D uData3;
 uniform uint uMask;
 uniform vec3 uPalette[12];
 
-// Density (a channel byte / 255, so coverage / 2.5) mapped to alpha: gain lifts the whole, gamma
-// pulls faint cover up so a lightly treed block still reads, and the ceiling keeps the basemap
-// showing through the densest stands.
+// Density is a channel byte / 255 (coverage / 2.5); the ceiling keeps the basemap showing.
 const float DENSITY_GAIN = 1.6;
 const float DENSITY_GAMMA = 0.7;
 const float MAX_ALPHA = 0.85;
 
 bool enabled(int id) { return (uMask & (1u << uint(id))) != 0u; }
 
-// A cheap per-pixel hash standing in for a blue-noise texture; its speckle repeats every tile, which
-// is invisible in noise. (A large per-tile world offset would overflow float32 and go constant.)
+// A per-pixel hash instead of blue noise; a large per-tile world offset would overflow float32.
 float hash21(vec2 p) {
   p = fract(p * vec2(123.34, 345.45));
   p += dot(p, p + 34.345);
@@ -151,7 +135,7 @@ function linkProgram(gl: WebGL2RenderingContext): WebGLProgram {
   return program;
 }
 
-// The genus palette as a flat RGB-in-0..1 array, uploaded once as the shader's color lookup.
+// Flat RGB in 0..1, uploaded once.
 const PALETTE = new Float32Array(
   GENUS_COLORS.flatMap(({ red, green, blue }) => [
     red / 255,
@@ -168,8 +152,7 @@ function maskFromEnabled(enabled: ReadonlySet<number>): number {
   return mask >>> 0;
 }
 
-// The active city's bounds, when it carries a genus layer, so Leaflet never requests a tile outside
-// the baked pyramid (a 404 the decoder would choke on).
+// Keeps Leaflet inside the baked pyramid, where a 404 would choke the decoder.
 function genusBounds(activeId: string): L.LatLngBounds | undefined {
   const boxes = manifest.cities
     .filter((city) => city.id === activeId && city.field.genus)
@@ -186,7 +169,7 @@ function genusBounds(activeId: string): L.LatLngBounds | undefined {
 
 interface TileEntry {
   canvas: HTMLCanvasElement;
-  textures: WebGLTexture[]; // one per packed layer, empty until loaded
+  textures: WebGLTexture[];
   coords: L.Coords;
   controller: AbortController;
 }
@@ -201,8 +184,7 @@ export default function GenusGlLayer() {
       pane.style.zIndex = String(PANE_Z_INDEX);
     }
 
-    // One offscreen canvas + context shared by every tile: each tile renders here, then blits into
-    // its own 2D canvas. A context per tile would exhaust the browser's ~8-16 live-context budget.
+    // One shared offscreen context: browsers allow only ~8-16 live contexts.
     const glCanvas = document.createElement("canvas");
     glCanvas.width = TILE_SIZE;
     glCanvas.height = TILE_SIZE;
@@ -216,7 +198,7 @@ export default function GenusGlLayer() {
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     gl.bufferData(
       gl.ARRAY_BUFFER,
-      new Float32Array([-1, -1, 3, -1, -1, 3]), // one oversized triangle covering the clip square
+      new Float32Array([-1, -1, 3, -1, -1, 3]), // oversized triangle covering clip space
       gl.STATIC_DRAW,
     );
 
@@ -225,8 +207,7 @@ export default function GenusGlLayer() {
       mask: gl.getUniformLocation(program, "uMask"),
       palette: gl.getUniformLocation(program, "uPalette"),
     };
-    // The four data samplers read from texture units 0..3, bound once — a tile's layers upload into
-    // those units and the program keeps pointing at them.
+    // Samplers bound once to units 0..3; each tile uploads into those units.
     const bindSamplers = (): void => {
       // biome-ignore lint/correctness/useHookAtTopLevel: gl.useProgram is a WebGL call, not a hook
       gl.useProgram(program);
@@ -236,8 +217,7 @@ export default function GenusGlLayer() {
     };
     bindSamplers();
 
-    // Orientation is handled in the vertex shader (it flips reliably); this flag is unreliable for
-    // ImageBitmap and left at its default. Premultiply off so the RGB density bytes decode intact.
+    // Tile bytes are data, not color, so they are neither premultiplied nor color-converted.
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     gl.pixelStorei(
       gl.UNPACK_COLORSPACE_CONVERSION_WEBGL,
@@ -270,7 +250,7 @@ export default function GenusGlLayer() {
 
     const draw = (entry: TileEntry): void => {
       if (entry.textures.length < LAYERS) {
-        return; // not fully loaded yet
+        return;
       }
       gl.viewport(0, 0, TILE_SIZE, TILE_SIZE);
       // biome-ignore lint/correctness/useHookAtTopLevel: gl.useProgram is a WebGL call, not a hook
@@ -294,8 +274,7 @@ export default function GenusGlLayer() {
       }
     };
 
-    // Fetch the four data tiles for a position, decode them WITHOUT the browser premultiplying or
-    // color-converting (they're data, not color), upload each as a texture, then draw and report.
+    // Decoded without premultiplying or color conversion, since they are data, not color.
     const load = (entry: TileEntry, done: (error?: Error) => void): void => {
       const { z, x, y } = entry.coords;
       const urls = Array.from({ length: LAYERS }, (_unused, layer) =>
@@ -367,14 +346,11 @@ export default function GenusGlLayer() {
       bounds: genusBounds(active.id),
       minNativeZoom: MIN_NATIVE_ZOOM,
       maxNativeZoom: MAX_NATIVE_ZOOM,
-      maxZoom: MAX_NATIVE_ZOOM, // hand off to TreeDotsLayer above
+      maxZoom: MAX_NATIVE_ZOOM,
       keepBuffer: KEEP_BUFFER,
     });
 
-    // The WebGL grid is the whole genus overlay below z15, where the dots layer has not taken over —
-    // so without this a total failure of the field tiles badges nothing at the zoom the reader is
-    // most likely to switch the layer on at. `genusBounds` keeps Leaflet from asking outside the
-    // baked pyramid, so every error here is a failure to reach rather than a sparse tile.
+    // `genusBounds` keeps Leaflet inside the pyramid, so every error here is a failure to reach.
     const detachStatus = watchLayerStatus(layer, "genus");
 
     layer.on("tileunload", (event: L.TileEvent) => {
@@ -398,9 +374,7 @@ export default function GenusGlLayer() {
       redrawAll();
     });
 
-    // iOS Safari drops the GL context under memory pressure / when backgrounded; without this the
-    // overlay silently goes blank. Preventing the default keeps it recoverable; on restore we relink
-    // the program and re-load every live tile (its textures died with the context).
+    // iOS Safari drops the GL context when backgrounded; preventing the default lets it restore.
     const onLost = (event: Event): void => {
       event.preventDefault();
     };

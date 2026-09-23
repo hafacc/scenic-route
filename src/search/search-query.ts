@@ -1,16 +1,4 @@
-// Reading and querying the SRCH index (./search-format.ts): decode a city's file once, then answer
-// a keystroke against it.
-//
-// Nothing here touches the DOM, the network or React. It is the whole search, as a function of bytes
-// and a query, so that the worker it will live behind is a message loop around it rather than a
-// second implementation of it — and so that a test can build an index of six documents and assert
-// what comes back.
-//
-// The shape of a query is: tokenize what was typed; look each token up in the sorted dictionary,
-// where a prefix is a contiguous RUN of entries; union each run's posting lists into a per-document
-// accumulator; keep the documents every query token reached; score those by match quality, by how
-// prominent the name is, and by how far it is from where the map is pointing. Only the winners have
-// their names decoded.
+// Queries the SRCH index (./search-format.ts); pure, so its worker is only a message loop around it.
 
 import { type Cursor, readUnsignedVarint, unzigzag } from "../tiles/varint";
 import {
@@ -51,87 +39,56 @@ import {
   unpackTokenInfo,
 } from "./search-format";
 
-// One letter of a name matches half a city, exactly as in the street search and the address search.
+// One letter of a name matches half a city.
 export const MIN_QUERY_CHARS = 2;
 
-// How many words of a query are looked up. Past this the extra words cost posting walks and change
-// nothing: the intersection is already down to a handful of documents. Eight is also the width of
-// the per-document bitmask of which words reached it, which is a byte.
+// Past eight the intersection is already tiny; eight is also the width of the per-document byte mask.
 const MAX_QUERY_TOKENS = 8;
 
 export const DEFAULT_LIMIT = 20;
 
-// How many candidates survive the first, cheap ordering. What a document's own words say — whether
-// two query words landed on the same one, whether the query opened on the first of them, whether it
-// named them all — cannot be read off the accumulators, so it is applied after the names are
-// decoded, to a pool wide enough that it can still change the order of what is shown.
+// Names are decoded only for this pool, where the order bonuses can still reorder it.
 const POOL_FACTOR = 4;
-// And how much wider again once a misspelled word has been corrected. A correction can add hundreds of
-// documents that each answer one more word of the query than they would have, and the cheap ordering
-// cannot yet see that two of those words landed on the SAME word of the name — so without the room,
-// a name that answered the query properly from across town is cut before anything reads it.
+// Wider after a correction, whose matches may double up on one name word the cheap order can't see.
 const FUZZY_POOL_FACTOR = 4;
 
-// Quality is summed in the accumulator as a fixed-point integer, so the array can be a Uint16Array:
-// eight tokens at 1.0 is 8,000, well inside it.
+// Fixed-point so quality fits a Uint16Array: eight tokens at 1.0 is 8,000.
 const QUALITY_SCALE = 1000;
 
 const EXACT_QUALITY = 1;
-// A prefix of the word being typed is nearly as good as having finished typing it, and the closer it
-// is to the whole word the better: "pizz" of "pizza" beats "pizz" of "pizzeria".
+// A prefix of the word being typed scores higher the more of the word it covers.
 const PREFIX_FLOOR = 0.8;
 const PREFIX_SPAN = 0.2;
-// A prefix of a word that is NOT the last one typed is a word the reader left unfinished on purpose
-// or mistyped, so it says less.
+// A prefix of an earlier word was left unfinished or mistyped, so it counts for less.
 const INNER_PREFIX_QUALITY = 0.7;
-// What a result keeps when one of the query's words appears nowhere in its name.
+// What a result keeps when one query word is in neither its name nor its street.
 const RELAXED_PENALTY = 0.4;
-// A word satisfied by the STREET the document sits on rather than by its own name — "Katz's
-// Delicatessen E Houston St", where no delicatessen is called "E Houston St" and the one that is
-// there is the answer. Below every name match, because a street names hundreds of places and a name
-// names one, and well above the relaxation that would otherwise be the only thing catching these.
+// A word answered by the street a place is on: below any name match, above the relaxation.
 const STREET_QUALITY = 0.6;
 
-// How much of the name the query accounted for. The exponent is small on purpose: "Joe's Pizza"
-// should beat "Joe's Pizza and Pasta Palace" on "joes pizza" without a long name being unfindable.
+// Small so "Joe's Pizza" beats a longer name without the longer one becoming unfindable.
 const COVERAGE_EXPONENT = 0.3;
 const FIRST_WORD_BONUS = 1.1;
 const WHOLE_NAME_BONUS = 1.15;
 
-// Prominence spans 3.3:1 with a floor, so a subway station outranks a nail salon on an equal match
-// and the nail salon is still reachable by its own name. The spread the tiers actually use is what
-// decides whether prominence can outweigh being nearer, and it is set in scripts/search-index.ts —
-// where the byte lives, and where a rebuild is all it costs to change one.
+// Prominence spans 3.3:1 so a station outranks a nail salon on an equal match without hiding it.
 const PROMINENCE_FLOOR = 0.3;
 const PROMINENCE_SPAN = 0.7;
 const PROMINENCE_MAX = 255;
 
-// Distance spans 4:1 — deliberately wider than any of the text penalties, because "the Starbucks I
-// am looking at" is the answer and "a Starbucks across the city" is not a tiebreak away from it. The
-// floor is what still lets a uniquely-named place on the far side of town be found.
+// Distance spans 4:1, wider than any text penalty; the floor keeps a unique far-off name findable.
 const DISTANCE_FLOOR = 0.25;
 const DISTANCE_SPAN = 0.75;
 const DISTANCE_SCALE_METERS = 1500;
 
-// How much of the distance term something the reader has named EXACTLY pays: a house number, and a
-// street or district whose whole name was typed. New York has five Court Streets and each is
-// kilometers long, so which of them is nearest ORDERS the several answers, but it must not decide
-// whether the far one is shown at all, the way it decides between two Starbucks. So these are
-// measured on a flatter curve than a name — 1.6:1 across the city rather than 4:1.
+// For something named exactly (a house number, a whole area name): 1.6:1, to order but not hide.
 const NAMED_DISTANCE_FLOOR = 0.6;
 const NAMED_DISTANCE_SPAN = 0.4;
 
-// The kinds whose one coordinate stands in for ground they cover rather than marking a spot: a
-// street is a line kilometers long, filed at the mean of its own addresses, and a neighborhood is a
-// district filed at its middle. How far that point is from the map center is not how far the thing
-// is, which is what the flatter curve above is for.
+// Filed at one point standing in for an area, so distance to that point is loose.
 const AREA_KINDS: ReadonlySet<DocKind> = new Set(["street", "neighborhood"]);
 
-// What one of those is worth when what was typed IS its name, whole and with nothing else in it. A
-// person who types a bare street name wants the street, not the courthouse, the post office and the
-// four subway stations named after it, and one who types Williamsburg wants the neighborhood rather
-// than the Montessori school in it — so it is scored the way an exact door is, at the top of the
-// scale that a station otherwise leads.
+// A bare street or neighborhood name wants the area, not the places named after it.
 const WHOLE_AREA_PROMINENCE = 255;
 
 const METERS_PER_DEGREE = 111_320;
@@ -146,7 +103,7 @@ export function distanceFactor(meters: number): number {
   );
 }
 
-// The same curve, flattened onto the narrower range something named exactly pays.
+// The distance curve flattened onto the named-exactly range.
 export function namedDistanceFactor(meters: number): number {
   return (
     NAMED_DISTANCE_FLOOR +
@@ -155,8 +112,7 @@ export function namedDistanceFactor(meters: number): number {
   );
 }
 
-// Where the results are measured from: what the map is centered on, which exists signed out and
-// without a permission prompt, and is what the reader is looking at.
+// The map center: available signed out and without a permission prompt.
 export interface SearchCenter {
   lat: number;
   lng: number;
@@ -169,25 +125,18 @@ export interface SearchHit {
   lat: number;
   lng: number;
   score: number;
-  // The match-quality half of the score, before prominence and distance. A house number resolved off
-  // a street this query matched is scored from here: the street's words are what was typed, and the
-  // door is somewhere else with a tier of its own.
+  // The match-quality part of the score, before prominence and distance.
   text: number;
   category: string | null;
-  // Into the ADDR place blob, or -1. The label a result is shown with is built from these by the
-  // caller, which is the side that holds the address file.
+  // Into the ADDR place blob, or -1.
   placeIndex: number;
   streetIndex: number; // into the ADDR street table, or -1
   number: HouseNumber | null;
 }
 
-// The reusable arrays a query accumulates into, sized once per index. `touched` is what makes
-// clearing them cost the number of documents the query reached rather than the number in the city.
+// Sized once per index; `touched` makes clearing cost the documents reached, not the city.
 interface Accumulators {
-  // Which query words reached the document, one bit each. It is also the per-word dedup mark —
-  // several dictionary tokens under one prefix reach one document, and only the first may count —
-  // and it is what the street link below needs, since "which words are still missing" cannot be
-  // read off a count.
+  // One bit per query word; also dedups several tokens under one prefix reaching one document.
   matched: Uint8Array;
   hitCount: Uint8Array;
   quality: Uint16Array;
@@ -208,8 +157,7 @@ export interface SearchIndex {
   latUnits: Int32Array;
   lngUnits: Int32Array;
   payload: Uint32Array; // where streetIndex and the house number sit, or 0 for neither
-  // Where each ADDR place is, as the mean of the documents in it, or null for a place with none.
-  // What a query naming a borough at its end is measured from, in place of the map center.
+  // Mean of each ADDR place's documents, or null; where a query ending in a borough is measured from.
   placeCenters: (SearchCenter | null)[];
   tokenCount: number;
   restartCount: number;
@@ -247,8 +195,6 @@ export function decodeSearchIndex(bytes: Uint8Array): SearchIndex {
   const lngUnits = new Int32Array(docCount);
   const payload = new Uint32Array(docCount);
 
-  // Summed per ADDR place as the documents go by, so the center of a borough costs one addition a
-  // document rather than a second pass over the file.
   const placeLat = new Array<number>(MAX_PLACES).fill(0);
   const placeLng = new Array<number>(MAX_PLACES).fill(0);
   const placeCount = new Array<number>(MAX_PLACES).fill(0);
@@ -346,9 +292,7 @@ export function docName(index: SearchIndex, doc: number): string {
   );
 }
 
-// The ADDR ordinal and the house number a document sits at, decoded only for a result that is going
-// to be shown. Both are absent for most documents, which is why they are a byte offset rather than
-// two more arrays.
+// Decoded only for shown results; most documents have neither, hence an offset not two arrays.
 function docPayload(
   index: SearchIndex,
   doc: number,
@@ -374,9 +318,7 @@ function docPayload(
   }
 }
 
-// The ADDR street ordinal alone, which is the first thing in the payload and the only part the
-// street link reads. Separate from docPayload because the link asks it of every document a query
-// reached and wants no house number decoded for the ones it then discards.
+// Just the street ordinal, for every document the street link checks, without decoding the number.
 function docStreetIndex(index: SearchIndex, doc: number): number {
   const offset = index.payload[doc];
   if (offset === 0 || (index.kindFlags[doc] & HAS_STREET) === 0) {
@@ -397,34 +339,27 @@ function compareToPrefix(
       return token[at] - prefix[at];
     }
   }
-  // A token shorter than the prefix sorts before it; one that carries it whole is a match, which is
-  // the zero every prefix hit reports.
   return length < prefix.length ? -1 : 0;
 }
 
-// One dictionary token a query token reached, and how well.
 interface Match {
   postings: number;
   postingCount: number;
   quality: number;
 }
 
-// One word of the query: what was typed, the bytes the dictionary is searched with, whether it is
-// the word still being typed, how wrong it was allowed to be spelled — zero until the fuzzy pass runs,
-// and zero for every word too short for it — and the dictionary tokens it reached.
+// `edits` is zero until the fuzzy pass runs, and for words too short for it.
 interface QueryWord {
   text: string;
   bytes: Uint8Array;
-  // Which bit of the per-document mask is this word's, which is where it sits in the query — fixed,
-  // so that the corrections a second pass adds land on the same bit the first pass used.
+  // Fixed per word, so the fuzzy pass lands on the bit the first pass used.
   mark: number;
   last: boolean;
   edits: number;
   matches: Match[];
 }
 
-// Every dictionary token carrying `prefix`, which is a contiguous run: the block-first tokens are
-// binary searched in the raw bytes, and only the block the search lands in is ever decoded.
+// The tokens carrying a prefix are a contiguous run; only the block the search lands in is decoded.
 function expand(
   index: SearchIndex,
   prefix: Uint8Array,
@@ -435,8 +370,7 @@ function expand(
   let high = index.restartCount - 1;
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
-    // Strictly less: a block whose first token already CARRIES the prefix may not hold the run's
-    // first entry, since the entry before it can carry the prefix too.
+    // Strictly less: the entry before a block that starts with the prefix can carry it too.
     if (compareBytes(blockToken(index, middle), prefix) < 0) {
       block = middle;
       low = middle + 1;
@@ -465,8 +399,7 @@ function expand(
       });
     }
   }
-  // Descending, so the first posting to reach a document is the best one it will get from this query
-  // token and every later touch can be skipped.
+  // Descending, so the first posting to reach a document is its best from this query token.
   return matches.sort((left, right) => right.quality - left.quality);
 }
 
@@ -474,28 +407,21 @@ export interface SearchRequest {
   text: string;
   center: SearchCenter;
   limit?: number;
-  // Which kinds of document may be ANSWERED with. Every kind is still matched whatever this says —
-  // a street a query names is what the street link below reads, whether or not the street itself is
-  // an answer — so this is what a caller whose street rows come from somewhere else asks for.
+  // Which kinds may be answers; every kind is still matched, since the street link reads streets.
   kinds?: readonly DocKind[];
 }
 
-// A document with a score against it: what the pool is ordered on before its name is read, and what
-// the finalists are ordered on after.
 interface Ranked {
   doc: number;
   score: number;
 }
 
 interface Candidate extends Ranked {
-  // What the accumulators held for this document, which they no longer hold once the query has
-  // cleared them and the pool is rescored against the decoded names.
+  // Snapshots of the accumulators, which are cleared before the pool is rescored.
   quality: number;
   named: number;
   linked: number;
-  // How far the document is from where the query is measured, which the rescore needs rather than
-  // the factor built from it: a street the decoded name turns out NOT to be wholly named is measured
-  // on the ordinary curve after the pool measured it on the flatter one.
+  // Meters, not a factor: the rescore may move a street from the flat curve to the ordinary one.
   meters: number;
 }
 
@@ -519,8 +445,6 @@ function metersFrom(
   );
 }
 
-// Score first, then the three deterministic tiebreaks the street search's comment asks for: a more
-// prominent name, then a shorter one, then the file's own order.
 function betterThan(index: SearchIndex, left: Ranked, right: Ranked): number {
   return (
     right.score - left.score ||
@@ -530,8 +454,7 @@ function betterThan(index: SearchIndex, left: Ranked, right: Ranked): number {
   );
 }
 
-// The words a query is looked up as. Past the cap the longest words are kept, and the LAST word
-// always is: it is the one being typed, and dropping it would answer a prefix nobody asked for.
+// Past the cap keep the longest words, and always the last, which is the one being typed.
 function queryTokens(text: string): string[] {
   const tokens = tokenize(text);
   if (tokens.length <= MAX_QUERY_TOKENS) {
@@ -545,15 +468,7 @@ function queryTokens(text: string): string[] {
   return [...rest, last];
 }
 
-// The documents whose query words are completed by the STREET they sit on: for each, how many words
-// that took. Typing a place and the street it is on is a query no name in the index carries whole —
-// "Katz's Delicatessen E Houston St" has three words no delicatessen is called — and it was, before
-// this, an EMPTY list rather than a wrong answer. The index already knows which ADDR street each
-// place joined to, and a street is itself a document, so the words the street's own document matched
-// are words the places on it have answered too.
-//
-// Both passes walk the documents the query reached, which is why they are here rather than folded
-// into the posting walk: what the street matched is only known once every posting has been read.
+// Places whose missing query words their street matched, and how many: "Katz's Deli E Houston St".
 function streetLinked(
   index: SearchIndex,
   tokenCount: number,
@@ -568,13 +483,11 @@ function streetLinked(
   for (const doc of touched) {
     if (unpackKind(index.kindFlags[doc]) === "street") {
       if (matched[doc] === everyToken) {
-        // A STREET answered the whole query on its own, so the query was a street name — "Bedford
-        // Av" — and lending its words to every shop with that address would bury it under them.
+        // The query was a street name; lending it to every shop on the street would bury the street.
         return linked;
       }
       const street = docStreetIndex(index, doc);
       if (street >= 0) {
-        // What the street itself matched is what every place on it may borrow.
         streets.set(street, (streets.get(street) ?? 0) | matched[doc]);
       }
     }
@@ -598,9 +511,6 @@ function streetLinked(
   return linked;
 }
 
-// How much of what was typed the document answered: the mean quality of the words it matched, docked
-// for the words of the NAME the query never named, and docked again where a word of the query went
-// unanswered altogether.
 function textScore(
   quality: number, // summed over the query's words, each at the best it matched
   named: number, // query words the name answered
@@ -616,17 +526,8 @@ function textScore(
   );
 }
 
-// Whether what was typed is one of those names and nothing besides. Three things have to hold, and
-// each of them rules out a different street the same words also reach: every word of the query
-// landed on a distinct word of the name with none of the name left unnamed, so "Court St" is not
-// Court Street Bagels; the query starts where the name starts, so it is not Stable Court; and
-// nothing but the word still being typed is an unfinished prefix, which is what tells 5th Avenue
-// from 57th.
-//
-// It is asked twice. The pool asks it before any name is decoded, where `named` counts two query
-// words that landed on ONE name word as two and `leads` is not yet known — both of which can only
-// overstate the answer, which is the direction the pool has to err in. The finalists ask it again
-// with what the decoded name settled.
+// Every query word on a distinct name word, from the first, only the last a prefix (5th Av vs 57th).
+// Before names are decoded it can only overstate, which is the side the pool must err on.
 function namedWholeArea(
   kind: DocKind,
   named: number,
@@ -644,7 +545,6 @@ function namedWholeArea(
   );
 }
 
-// The half of the score the query's words are not in: how prominent the document is and how far away.
 function placeFactor(
   index: SearchIndex,
   doc: number,
@@ -656,40 +556,21 @@ function placeFactor(
     : prominenceFactor(index.prominence[doc]) * distanceFactor(meters);
 }
 
-// The word sequences a document may be read as. Everything is its own name; a STREET is also its
-// name with the numbers spelled out, since that is what the index files it under — and reading "fifth
-// avenue" against ["fifth", "avenue"] rather than against ["5th", "avenue"] is the whole difference
-// between 5th Avenue, which the query names entirely, and 55th Avenue, which carries the word
-// `fifth` just as genuinely and is ["fifty", "fifth", "avenue"].
-//
-// A document is then scored under whichever of its spellings answers the query best, never under a
-// mix of two: one that answers it under neither gains nothing from being read twice.
+// Streets also read spelled out, as indexed, so "fifth avenue" names all of 5th Ave but not 55th Ave.
 function spellingsOf(kind: DocKind, name: string): string[][] {
   const words = tokenize(name);
   const spelled = kind === "street" ? spelledOrdinals(words) : null;
   return spelled === null ? [words] : [words, spelled];
 }
 
-// How many words of the query reached only a word of the name that another word of the query has a
-// better claim on. Typing "shake sh" at "Shake Top DeLite" matches both words against "Shake", and
-// counting that as two words answered puts it above the Shake Shack that answers one word each — so
-// the second word here is answered by nothing, and the document is a partial match.
-//
-// It is the largest pairing of query words with name words that gives each name word to at most one
-// query word, which is Kuhn's augmenting walk: offer a word every name word it prefixes, and let it
-// take one from an earlier word that still has somewhere else to go. The index carries no positions,
-// so this is asked of the decoded name — affordable only because the pool's names are decoded for
-// the order bonuses anyway.
+// Query words that only matched a name word another query word claimed ("shake sh" on "Shake Top").
+// Kuhn's augmenting-path matching over the decoded name, since the index stores no word positions.
 function doubledWords(
   queryWords: readonly QueryWord[],
   nameWords: readonly string[],
 ): number {
   const encoded = new Array<Uint8Array | null>(nameWords.length).fill(null);
-  // Whether the word the reader typed is a word of this name, by the same rule the dictionary was
-  // searched under: it starts one, or — where it was looked for misspelled — it is within the same
-  // number of edits of the start of one. Without the second half a word that only matched through a
-  // correction claims nothing, and the name word it corrected to is left free for the next query
-  // word to claim as well, which is the doubling this whole function exists to stop.
+  // The dictionary's rule, fuzzy included; else a corrected word claims nothing and doubling returns.
   const reaches = (word: number, name: number): boolean => {
     if (nameWords[name].startsWith(queryWords[word].text)) {
       return true;
@@ -735,16 +616,10 @@ function doubledWords(
   return reached - paired;
 }
 
-// A word one edit from what the dictionary holds is scored well below the same word spelled right, and
-// a word two edits away well below that: what these multiply is the prefix quality the same match
-// would have earned had it been typed correctly, so a misspelling can only ever ADD an answer under
-// the ones that match properly, never displace them.
+// Misspellings scale the would-be prefix quality down, so they only add answers below correct ones.
 const EDIT_PENALTY = [1, 0.55, 0.3];
 
-// Every dictionary token within an edit or two of a word, as matches to be unioned exactly like a
-// prefix run. The tokens the walk reaches at no edits at all are the ones that simply carry the word
-// as a prefix, which `expand` has already returned, so they are dropped here rather than having the
-// largest posting lists of the query read a second time.
+// Tokens within an edit or two; zero-edit hits are prefix matches `expand` already returned.
 function fuzzyExpand(
   index: SearchIndex,
   token: Uint8Array,
@@ -768,7 +643,7 @@ function fuzzyExpand(
   return matches;
 }
 
-// Cheapest first, so the expensive word walks a list that most documents have already failed out of.
+// Cheapest first, so pricier lists are walked once most documents have already failed out.
 function byMass(words: readonly QueryWord[]): readonly QueryWord[] {
   return [...words].sort(
     (left, right) => postingMass(left) - postingMass(right),
@@ -779,16 +654,8 @@ function postingMass(word: QueryWord): number {
   return word.matches.reduce((sum, match) => sum + match.postingCount, 0);
 }
 
-// Reads each word's matches into the accumulators, appending to `candidates` every document as it
-// completes the last word of the query it was missing — which is what saves a sweep over the city
-// afterwards to find them.
-//
-// It is called twice for a query that had to be corrected, the second time with the corrections
-// ALONE: what a word already reached it keeps, at the quality it first arrived with, and since every
-// correction scores below every properly spelled match, first is also best. So the second pass reads
-// only the posting lists the first one did not, which is what keeps a corrected query from costing
-// twice a plain one — and matters most where one word of the query is a single letter carrying tens
-// of thousands of documents.
+// Collects each document into `candidates` as it completes the query, saving a sweep afterward.
+// Reruns get only corrections: a document keeps its first quality, which is its best.
 function accumulate(
   index: SearchIndex,
   words: readonly QueryWord[],
@@ -847,16 +714,12 @@ export function searchNames(
   const everyToken = (1 << queryWords.length) - 1;
   const candidates: number[] = [];
   accumulate(index, byMass(queryWords), tokens.length, candidates);
-  // What was typed reaches almost nothing, so it is worth asking whether it was typed wrong. A query
-  // spelled right never pays for this, and one that is not pays for one walk over the dictionary per
-  // word — after which the walk above runs again over the corrections, because a word one edit away
-  // can complete a document that only one of the properly spelled words reached.
+  // Few results, so try corrections; rerun since one can complete a document a correct word reached.
   let corrected = false;
   if (candidates.length < limit) {
     for (const word of queryWords) {
       const edits = maxEditDistance(word.bytes.length);
-      // Descending, since a document keeps the first quality to reach it and the best has to be
-      // first — one edit before two.
+      // Descending, since a document keeps the first quality to reach it.
       word.matches =
         edits === 0
           ? []
@@ -872,14 +735,11 @@ export function searchNames(
       accumulate(index, byMass(queryWords), tokens.length, candidates);
     }
   }
-  // How many of the query's words the street a document sits on accounted for, for the documents
-  // where that is what completes the query. Empty for every query that named no street.
   const viaStreet = streetLinked(index, tokens.length, everyToken);
   for (const doc of viaStreet.keys()) {
     candidates.push(doc);
   }
-  // The word the reader typed that this name does not contain. It costs nothing to allow — the
-  // counts are already in the accumulator — and it is what keeps "joes pizza brooklyn" answering.
+  // Allow one missing word, which keeps "joes pizza brooklyn" answering.
   if (candidates.length < limit && tokens.length >= 2) {
     for (const doc of touched) {
       if (hitCount[doc] === tokens.length - 1 && !viaStreet.has(doc)) {
@@ -899,10 +759,7 @@ export function searchNames(
     const points = quality[doc] / QUALITY_SCALE;
     const { tokenCount } = unpackTokenInfo(index.tokenInfo[doc]);
     const meters = metersFrom(index, doc, center);
-    // Scored here as though every word the document matched was a word of its own, which is the most
-    // it can be worth; the pool is cut on that and the rescore below can only lower it, so nothing
-    // that deserves a place in the answer is dropped here for a reason the name has not been read
-    // for yet.
+    // An upper bound, since the rescore can only lower it, so the cut never drops a real answer.
     const place = placeFactor(
       index,
       doc,
@@ -913,10 +770,7 @@ export function searchNames(
         points,
         true,
         tokens.length,
-        // The document table holds the DISPLAY name's word count, and a street spelled out is longer
-        // than that — so a query that named every word of "twenty first street" reached more words
-        // than the count admits to. Erring toward the longer reading keeps the pool the upper bound
-        // it has to be.
+        // The table counts the display name, shorter than a spelled-out street; err long.
         Math.max(tokenCount, named),
       ),
     );
@@ -929,8 +783,7 @@ export function searchNames(
       score:
         textScore(points, named, linked, tokens.length, tokenCount) * place,
     };
-    // Bounded insertion rather than a heap: the pool is eighty entries, and all but a handful of
-    // candidates fail the one comparison against its worst member and stop there.
+    // Bounded insertion, not a heap: most candidates fail one comparison against the worst entry.
     if (pool.length < poolSize) {
       pool.push(candidate);
     } else if (betterThan(index, candidate, pool[poolSize - 1]) < 0) {
@@ -953,10 +806,7 @@ export function searchNames(
   }
   touched.length = 0;
 
-  // The three things the accumulators cannot answer, all of which need the document's own words:
-  // whether two query words shared one of them, whether the query opened on the first of them, and
-  // whether it named every one of them. Applied here, to a pool four times the length of the answer,
-  // so they can still reorder what is shown.
+  // The order bonuses need the decoded name, which is why they apply only to the pool.
   const typed = new Set(tokens);
   const finalists = pool.map(({ doc, quality, named, linked, meters }) => {
     const name = docName(index, doc);
@@ -980,8 +830,7 @@ export function searchNames(
           nameWords.length,
         ),
       );
-      // A word that only doubled up on another's takes its share of the quality with it: the
-      // accumulator holds one sum for the document, not a figure per word.
+      // A word that doubled up takes its share of quality with it: the accumulator holds one sum.
       const text =
         textScore(
           (quality * answered) / named,
@@ -1020,25 +869,14 @@ export function searchNames(
   });
 }
 
-// How prominent a door is. A house number the city's own file has, on a street whose WHOLE name was
-// typed, is the most precise answer anything here can give — a network geocoder answers the same
-// query with a point at an arbitrary end of a street kilometers long more often than not — so it is
-// baked at the top of the scale, where nothing that is merely a name can reach it.
-//
-// Both halves have to be the reader's. A near miss on the number is not what was asked for, and
-// neither is a real number on a street the query only prefix-matched: "5 Av" reaches every avenue in
-// the city, and answering it from the top of the scale puts a doorway on Avenue A above Fifth
-// Avenue. Either way the door is offered under its own real number, from near the bottom.
+// An exact number on a fully named street tops the scale; a near miss or a prefix like "5 Av" doesn't.
 const EXACT_ADDRESS_PROMINENCE = 255;
 const NEAREST_ADDRESS_PROMINENCE = 60;
 
-// How many streets one query may decode the addresses of. "100 av" names every Avenue in Brooklyn,
-// and each of those names is several streets rather than one; a run is cheap to walk but there is no
-// reason to walk hundreds of them for a list that shows a handful.
+// "100 av" names every avenue, so cap how many streets' addresses are decoded.
 const MAX_SCANNED_STREETS = 24;
 
-// One answer, with the line under it already built: nothing outside this module has to hold the
-// address file to say which door and which borough a result is at.
+// Labels are built here so callers need not hold the address file.
 export interface CityHit {
   kind: DocKind;
   name: string;
@@ -1047,8 +885,7 @@ export interface CityHit {
   lng: number;
   score: number;
   category: string | null; // the Overture slug, or a station's routes
-  // Whether the number asked for is the number found. Null for every answer that was not asked a
-  // number, which is all of them but the house-number path's.
+  // Whether the found number is the one asked; null when no number was asked.
   exact: boolean | null;
 }
 
@@ -1058,10 +895,7 @@ export interface CityRequest {
   limit?: number;
 }
 
-// The line under a result's name: the door it sits at and the borough it is in, from the address
-// file the ordinals in the index point into. A place that never joined an address still names its
-// borough — the builder takes that from the city's own boundaries — and a city that is one place
-// names nothing.
+// The door and borough under a result's name; a place with no address still gets its borough.
 function labelOf(
   addresses: AddressIndex,
   hit: Pick<SearchHit, "placeIndex" | "streetIndex" | "number">,
@@ -1078,9 +912,7 @@ function labelOf(
   return parts.join(", ");
 }
 
-// The same line, for a caller holding a document rather than a search hit: ./reverse.ts names the
-// point a pin was dropped on, and a pin has to read exactly as the same place would if it had been
-// typed into the box.
+// For ./reverse.ts, so a dropped pin reads exactly as the same place typed into search.
 export function docLabel(
   index: SearchIndex,
   addresses: AddressIndex,
@@ -1090,11 +922,7 @@ export function docLabel(
   return labelOf(addresses, { ...docPayload(index, doc), placeIndex });
 }
 
-// A place named at the end of what was typed, and what is left of the text without it. New York's
-// street names do not say which borough they are in, which is exactly what makes "312 Court St
-// Brooklyn" a natural thing to type — and "joes pizza brooklyn" too, though no pizzeria's own name
-// contains the word. The longest place wins, so a city with both "Island" and "Staten Island" strips
-// the one that was meant.
+// A place name ending the query ("312 Court St Brooklyn") and the rest; the longest wins.
 export function splitTrailingPlace(
   places: readonly string[],
   text: string,
@@ -1102,11 +930,9 @@ export function splitTrailingPlace(
   let best: { text: string; placeIndex: number; length: number } | null = null;
   for (let place = 0; place < places.length; place += 1) {
     const name = places[place];
-    // Measured in the ORIGINAL text, whose length is not always its lowercase's: Turkish İ
-    // lowercases to two code points, and an offset taken from the lowered text would then cut the
-    // rest of the query a character short.
+    // Measured on the original text: Turkish İ lowercases to two code points.
     const at = text.length - name.length;
-    // On a word boundary, or a city with an "Island" would read "Court St Islander" as one.
+    // On a word boundary, or "Court St Islander" would match "Island".
     if (
       at <= 0 ||
       text.slice(at).toLowerCase() !== name.toLowerCase() ||
@@ -1115,8 +941,7 @@ export function splitTrailingPlace(
       continue;
     }
     const rest = text.slice(0, at).replace(/[\s,]+$/, "");
-    // "Brooklyn" on its own is a place, not something in one: what is left still has to name
-    // something, or the whole query would be answered from a borough center with no words in it.
+    // What remains must still name something, or "Brooklyn" alone would answer from a borough center.
     if (
       rest.length >= MIN_QUERY_CHARS &&
       (best === null || name.length > best.length)
@@ -1129,18 +954,13 @@ export function splitTrailingPlace(
     : { text: best.text, placeIndex: best.placeIndex };
 }
 
-// Whether what was typed reaches every word of the street's name, rather than one word of it.
 function namesWholeStreet(asked: readonly string[], street: string): boolean {
   return tokenize(street).every((word) =>
     asked.some((token) => word.startsWith(token)),
   );
 }
 
-// The doors a house number opens: the streets whose names answer what was typed after the number,
-// each asked for that number out of its own ADDR run. The number the FILE has is what comes back,
-// never the one that was typed — a pin labeled 121 when the file knows only 119 and 123 is a wrong
-// answer wearing a right one's clothes — and a number past either end of a street is not answered at
-// all, since 9999 Broadway is not at the top of Broadway.
+// Answered with the number the file has, never the typed one; a number past a street's ends isn't.
 function addressAnswers(
   index: SearchIndex,
   addresses: AddressIndex,
@@ -1164,9 +984,7 @@ function addressAnswers(
   const asked = tokenize(text);
   const hits: CityHit[] = [];
   for (const match of streets) {
-    // A street the routing graph names has no run to look a number up in, and a place the reader
-    // named is a requirement rather than a preference: someone who typed Brooklyn has said which
-    // Court Street they mean, and the other four are no longer answers.
+    // No ADDR run means no number lookup, and a borough the reader named is a requirement.
     if (
       match.streetIndex < 0 ||
       (named !== null && match.placeIndex !== named.placeIndex)
@@ -1177,11 +995,7 @@ function addressAnswers(
       streetAddresses(addresses, match.streetIndex),
       number,
     );
-    // A number the street does not have is a guess, and a guess is only worth making when the reader
-    // named the whole street: "121 Broadway" is worth answering with 119, while "5 Av" — which
-    // prefix-matches the second word of every avenue in the city — is not worth answering with the
-    // first house number on Hudson Avenue. A number the street DOES have is still answered however
-    // little of the name was typed, but only the whole name earns the top of the scale.
+    // Guess a nearby number only for a fully named street: "5 Av" prefix-matches every avenue.
     const wholeStreet = namesWholeStreet(asked, match.name);
     if (found === null || (!found.exact && !wholeStreet)) {
       continue;
@@ -1211,10 +1025,7 @@ function addressAnswers(
   return hits;
 }
 
-// The general path, run twice where the query ends in a borough: once as typed, once without it and
-// measured from that borough instead of from the map center. Both are kept, because "5 Av Brooklyn"
-// is a street in Brooklyn and "Brooklyn Bridge" is a name that ends in one, and only the scores can
-// tell which was meant.
+// Run as typed and again without a trailing borough, measured from it; scores decide which was meant.
 function nameAnswers(
   index: SearchIndex,
   addresses: AddressIndex,
@@ -1245,9 +1056,7 @@ function nameAnswers(
   }
 }
 
-// The city's whole answer to what was typed: house numbers out of the address file and names out of
-// the index, ranked against each other by the one score. This is the search — the worker around it
-// is a message loop, and a test can ask it the same question with no worker at all.
+// House numbers and names ranked against each other by one score.
 export function searchCity(
   index: SearchIndex,
   addresses: AddressIndex,
@@ -1258,8 +1067,7 @@ export function searchCity(
     parsed === null
       ? []
       : addressAnswers(index, addresses, parsed, center, limit);
-  // The general path runs on the whole text even when a number opened it: "5 Guys" is a name, not an
-  // address, and the two paths' answers are told apart by their scores rather than by the parse.
+  // Names run even after an address parse: "5 Guys" is a name, and scores tell the two apart.
   const named = nameAnswers(index, addresses, text, center, limit).map(
     (hit) => ({
       kind: hit.kind,

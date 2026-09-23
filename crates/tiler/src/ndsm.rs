@@ -1,26 +1,5 @@
-//! Roof heights where nobody publishes any: a surface model binned out of a raw LiDAR point cloud,
-//! differenced against the bare-earth DEM under it, and sampled per building footprint by the same
-//! polygon-against-raster pass the crown heights come from.
-//!
-//! San Francisco is handed height above ground as a band of a finished product. The East Bay's 2021
-//! flight has no such derivative — no surface model, no canopy model — and its points carry no
-//! building class either: 87% of them are class 1, unclassified, which is roofs and walls and trees
-//! and rooftop plant together. So the separation here is geometric rather than by class. Binning to
-//! one-meter cells and keeping each cell's highest return dissolves the walls (a wall return shares
-//! its cell with the roof edge above it) and the ground and water and noise leave by class, which
-//! makes the 75th percentile of a footprint's cells a roof-plane statistic in all but name.
-//!
-//! Measured against the 32 downtown-Oakland buildings whose height is OSM-tagged: median error
-//! -3.3 m, mean absolute 5.7 m. The percentile is what buys that. Taking the maximum instead reads
-//! the masts — one downtown roof at 84 m carries a return at 126.7 m — and taking the median reads
-//! the podium a merged tower-plus-podium footprint is mostly made of.
-//!
-//! Two mosaics come out, not one: the surface above ground, and the ground itself. The second is
-//! what a building's base elevation is read from, and it is where the flight's own ground returns
-//! stand in for the DEM cell by cell — the survey staged no tile at all for the bay-dominated
-//! squares, which is where Oakland airport and Bay Farm Island are.
-//!
-//! The fetcher is scripts/lidar.ts, as ever: everything here reads cached files off disk.
+//! Roof heights from a raw LiDAR cloud: a highest-return surface less the bare-earth DEM, per footprint.
+//! The East Bay's points are 87% unclassified, so roofs are separated geometrically, not by class.
 
 use std::collections::VecDeque;
 use std::f64::consts::PI;
@@ -41,69 +20,46 @@ use crate::binfmt::{Coord, Polygon};
 use crate::dem::{Dem, TileGrid, read_tile_grid};
 use crate::heights::{self, Source, Tmerc};
 
-/// Web mercator, which is what an EPT index publishes its points in whatever grid they were flown
-/// on, so every point is projected back out of it before it is binned.
+/// Web mercator, which EPT publishes its points in regardless of the flown grid.
 const EARTH_RADIUS_METERS: f64 = 6_378_137.0;
 const MERCATOR_HALF_WIDTH_METERS: f64 = 20_037_508.342_789_244;
 
-/// The one class this flight puts anything above the ground in: unclassified. Ground is 2, water 9,
-/// noise 7 and 18 — those run from -99 m to +253 m and dropping them is not optional — and there is
-/// no building or vegetation class at all.
+/// Unclassified: the only class above ground in this flight, which has no building or vegetation class.
 const SURFACE_CLASS: u8 = 1;
-/// Bare earth. Read for the cells the staged DEM has no ground for: the bay-dominated squares the
-/// survey staged no tile for at all, and the water it staged as nodata.
+/// Bare earth, read where the staged DEM has no ground.
 const GROUND_CLASS: u8 = 2;
 
 const CELL_METERS: f64 = 1.0;
 
-/// The side of one written tile. Chosen to be the band height `crates/tiler/src/heights.rs` walks a
-/// mosaic in: a taller tile would be decoded once per band it spans, and these are 1 m cells, so a
-/// tile the size of the DEM's own 10 km squares would be decoded twenty times and hold 400 MB of
-/// float32 each time.
+/// One written tile, sized to heights.rs's mosaic band so each is decoded once.
 const TILE_METERS: f64 = 500.0;
 
-/// The side of one block of work. The staged DEM's naming grid, which is the largest area one
-/// decoded 400 MB tile answers for, and so the most ground a block can be differenced against
-/// without decoding the same tile twice.
+/// One block of work: the staged DEM's naming grid, so no 400 MB DEM tile is decoded twice.
 const SQUARE_METERS: f64 = 10_000.0;
 
-/// Written where no return landed or no ground was known, and below the -9000 every reader here
-/// treats as nodata.
+/// Written where no return landed or no ground was known; below the -9000 nodata cut.
 const NODATA_METERS: f32 = -9999.0;
 
-/// How far past the window's corners the grid reaches. The window is a longitude/latitude rectangle
-/// and the grid is a UTM one, and the ground the two disagree over at the corners is the grid
-/// convergence — about half a degree of rotation this far off the central meridian, which over a
-/// kilometer of window is meters.
+/// Grid margin past the window, covering the UTM grid convergence at the corners.
 const MARGIN_METERS: f64 = 16.0;
 
 const ROOF_PERCENTILE: f64 = 0.75;
-/// A building stands on one ground height, and the cells under its footprint disagree by whatever
-/// the terrain does across it. The middle one is the least surprising answer, and it is the
-/// statistic the bare-earth DEM is interpolated to give under a building in the first place.
+/// A building stands on one ground height; the median of its footprint's cells.
 const GROUND_PERCENTILE: f64 = 0.5;
 
-/// Taller than any building on earth, so the cell filter that keeps a crown pass honest is
-/// effectively off here. It is not zero work: the surface model measures whatever returned, and a
-/// residual noise return inside a footprint would otherwise be a roof.
+/// Taller than any building, so it only drops residual noise returns inside a footprint.
 const IMPLAUSIBLE_ROOF_METERS: f64 = 600.0;
 /// The same filter over the ground mosaic, above the highest ground any city sits on.
 const IMPLAUSIBLE_GROUND_METERS: f64 = 4_000.0;
 
-/// The two mosaics are two quantities, and the sampler is told which is which: the surface is a
-/// height above ground, where a cell at ground level holds no building, and the ground is an
-/// elevation, where one holds the shoreline Alameda and Bay Farm Island are built on.
+/// The surface is a height above ground, the ground an elevation (Alameda's shoreline must read).
 const ROOF: heights::Quantity = heights::Quantity::above_ground(IMPLAUSIBLE_ROOF_METERS);
 const GROUND: heights::Quantity = heights::Quantity::elevation(IMPLAUSIBLE_GROUND_METERS);
 
-/// How far a known ground height is carried into a cell that has none. Ground is continuous and the
-/// returns are dense, so this only ever bridges a building's own footprint or a patch of water; past
-/// it the ground stays unknown and the surface above it is not written at all.
+/// How far known ground is carried into cells without; past it the surface isn't written.
 const MAX_FILL_RINGS: usize = 64;
 
-/// A published height this far under the measured one is a building that did not exist when the
-/// flight happened, not a mismeasurement — the two downtown cases read 13.1 m against 120.4 and
-/// 1.6 m against 73. They are held out of the error summary rather than counted as error.
+/// A published height this far under the measured one was built after the flight, not mismeasured.
 const CONSTRUCTION_RATIO: f64 = 0.5;
 const CONSTRUCTION_METERS: f64 = 20.0;
 
@@ -116,8 +72,7 @@ pub struct Window {
     pub north: f64,
 }
 
-/// One cached point-cloud node and the ground its octree cube covers. The bounds are the fetcher's,
-/// taken from the cube rather than from the points, so they are a superset and never cut a return.
+/// One cached EPT node and its octree cube's bounds, a superset of its points.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Node {
@@ -131,20 +86,16 @@ struct Node {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Params {
-    /// The cached EPT nodes, decoded and binned together. Their point coverage may overlap; taking
-    /// the highest return per cell is idempotent under a duplicated point, so nothing is deduped.
+    /// The cached EPT nodes; duplicated points are harmless under a per-cell max.
     nodes: Vec<Node>,
-    /// The staged bare-earth DEM tiles the surface is differenced against. A cell none of them
-    /// answers for is filled from the cloud's own ground returns instead.
+    /// The staged bare-earth DEM tiles; cells none answers take the cloud's own ground returns.
     dem: Vec<PathBuf>,
-    /// What heights.rs calls the projection the DEM is published on, which the surface model is
-    /// binned onto so the two subtract cell for cell.
+    /// The DEM's projection name, which the surface is binned onto so the two subtract cell for cell.
     crs: String,
     window: Window,
     /// The directory the two mosaics are written under, as `ndsm/` and `ground/`.
     out: PathBuf,
-    /// GeoJSON footprints to sample the finished mosaics under. Absent, the rasters are written and
-    /// nothing is measured.
+    /// GeoJSON footprints to sample; absent, only the rasters are written.
     #[serde(default)]
     footprints: Option<PathBuf>,
     /// Where the per-footprint readings are written for the ingest to merge and encode.
@@ -157,8 +108,7 @@ pub struct Params {
 pub struct Report {
     nodes: usize,
     squares: usize,
-    /// Cells the survey's DEM had no ground for, taken from the flight's own ground returns instead
-    /// — the bay-dominated squares it staged no tile for at all, and the water it staged as nodata.
+    /// Cells whose ground came from the flight's own returns rather than the DEM.
     filled: u64,
     points: u64,
     /// Points of `SURFACE_CLASS` that landed in a grid.
@@ -172,8 +122,7 @@ pub struct Report {
     based: usize,
 }
 
-/// A rectangle of the output grid: the upper-left corner of cell (0, 0) at the origin, one meter
-/// cells, row-major, in the DEM's own projection.
+/// A row-major rectangle of 1 m cells in the DEM's projection, origin at cell (0, 0)'s upper-left.
 struct Grid {
     origin_x: f64,
     origin_y: f64,
@@ -182,12 +131,9 @@ struct Grid {
 }
 
 impl Grid {
-    /// The whole window, snapped out to the tile grid the mosaic is written on so that every tile
-    /// of it lands on a whole multiple of `TILE_METERS` — which is what lets tiles binned in
-    /// different squares be read back as one mosaic.
+    /// The whole window, snapped out to `TILE_METERS` so every block's tiles read back as one mosaic.
     fn over(window: &Window, projection: Tmerc) -> Grid {
-        // Edges as well as corners: a longitude/latitude rectangle is not a rectangle on the grid,
-        // and its widest point is in the middle of an edge rather than at a corner.
+        // Edges too: a lng/lat rectangle is widest on the grid mid-edge, not at a corner.
         let lngs = [window.west, (window.west + window.east) / 2.0, window.east];
         let lats = [
             window.south,
@@ -271,9 +217,7 @@ fn to_degrees(x: f64, y: f64) -> (f64, f64) {
     (lng, lat)
 }
 
-/// A height as a u32 that sorts the way the height does, so a cell's maximum is one `fetch_max` on a
-/// shared grid rather than one whole grid per worker. 0 stays free to mean "no return": it decodes
-/// to a NaN, which no LiDAR return is.
+/// A height as a u32 ordering like the height, so a cell's max is one `fetch_max`; 0 means no return.
 fn ordered(meters: f32) -> u32 {
     let bits = meters.to_bits();
     if bits & 0x8000_0000 == 0 {
@@ -291,9 +235,7 @@ fn from_ordered(key: u32) -> f32 {
     }
 }
 
-/// A node's own extent on the output grid, so a block decodes only the nodes that reach it. The
-/// cube is axis-aligned in web mercator and the grid is not, so the projected box is taken over the
-/// edges too and margined by the same convergence the window is.
+/// A node's box on the output grid, projected over its edges too and margined like the window.
 struct Reach {
     path: PathBuf,
     min_x: f64,
@@ -330,20 +272,16 @@ fn reach_of(node: &Node, projection: Tmerc) -> Reach {
 struct Binned {
     /// Per cell, the highest surface return as an `ordered` key, or 0 for none.
     surface: Vec<u32>,
-    /// Per cell, the ground returns' total in decimeters and how many there were — read only for
-    /// the cells the staged DEM has no ground for. At this flight's spacing a cell holds one or two
-    /// ground returns, so their mean is their median, and 32 bits is room to spare for the sum.
+    /// Ground returns' decimeter sum and count per cell; a cell holds one or two, so mean is median.
     ground_sum: Vec<i32>,
     ground_count: Vec<u32>,
     points: u64,
     surface_points: u64,
-    /// How many points of each classification landed in the grid. The flight's own summary of what
-    /// it thinks it flew over, and the reason the surface has to be separated geometrically.
+    /// Points per classification in the grid.
     classes: [u64; 256],
 }
 
-/// Every reaching node's returns binned to one block of the grid: the highest surface-class return
-/// per cell, and the ground-class returns beside it for the cells the staged DEM has no ground for.
+/// Bins a block: the highest surface return per cell, and the ground returns beside it.
 fn bin(nodes: &[&Reach], grid: &Grid, projection: Tmerc) -> Fallible<Binned> {
     let cells = grid.width * grid.height;
     let surface: Vec<AtomicU32> = (0..cells).map(|_| AtomicU32::new(0)).collect();
@@ -406,23 +344,16 @@ fn bin(nodes: &[&Reach], grid: &Grid, projection: Tmerc) -> Fallible<Binned> {
     Ok(binned)
 }
 
-/// A ground return as the integer a cell's total is summed in. Signed, because the region's ground
-/// runs below sea level wherever the flight crossed reclaimed land — the airport and Bay Farm
-/// Island — which is exactly where the staged DEM has no ground and these returns are read.
+/// A ground return in decimeters, signed: reclaimed land (the airport, Bay Farm) is below sea level.
 fn decimeters(height: f64) -> i32 {
     (height * 10.0)
         .round()
         .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
 }
 
-/// Carries each known height out to the unknown cells nearest it, breadth first, so a cell with no
-/// ground under it takes the ground of the closest cell that has one. Bounded, because past a
-/// certain distance there is nothing to interpolate between — that is a hole in the flight rather
-/// than a building's own footprint.
+/// Carries known heights breadth first into unknown cells up to `rings` away, nearest first.
 fn fill_nearest(values: &mut [f32], width: usize, height: usize, rings: usize) {
-    // Seeded with the known cells that touch an unknown one rather than with every known cell: a
-    // ten-kilometer square holds a hundred million of them, and the ones in the middle of a known
-    // patch have nothing to carry their height to.
+    // Seeded only with known cells bordering an unknown one; a 10 km square holds 10^8 known cells.
     let mut frontier: VecDeque<(usize, usize)> = VecDeque::new();
     for index in 0..values.len() {
         let row = index / width;
@@ -463,11 +394,7 @@ fn fill_nearest(values: &mut [f32], width: usize, height: usize, rings: usize) {
     }
 }
 
-/// The ground under one block: the staged DEM wherever it answers, and the flight's own
-/// ground-classified returns for the cells it does not. The two are merged cell by cell rather than
-/// block by block, because a block is a square of the DEM's naming grid only by size and not by
-/// alignment — the output grid is snapped to the tile the mosaic is written in — so the common case
-/// is a block reaching two staged tiles and holding the seam between them.
+/// A block's ground: the staged DEM where it answers, else the flight's ground returns, cell by cell.
 fn ground_of(
     grid: &Grid,
     staged: &[PathBuf],
@@ -500,8 +427,7 @@ fn ground_of(
     Ok((ground, filled))
 }
 
-/// The raster, as the two tags `dem.rs` needs to georeference it and nothing else: a GeoTIFF's CRS
-/// lives in keys this never writes, which is why every reader here is handed a projection by name.
+/// Writes only the two tags `dem.rs` reads; no CRS keys, which is why readers are given a projection.
 fn write_raster(
     path: &Path,
     origin_x: f64,
@@ -532,9 +458,7 @@ struct Written {
     grounded: u64,
 }
 
-/// The block cut into the tiles the mosaic is read back as. A tile no return landed in is not
-/// written at all — most of this window is water — and its ground is not written either, so the two
-/// mosaics stay tile for tile the same.
+/// Cuts the block into mosaic tiles, skipping ones with no ground in both mosaics so they stay aligned.
 fn write_tiles(
     grid: &Grid,
     binned: &Binned,
@@ -617,19 +541,14 @@ fn write_tiles(
     Ok(total)
 }
 
-/// One building the rasters are sampled under, and whatever height its source already carried —
-/// which is not used to measure anything here, only to report how far the measurement lands from it
-/// and to be merged with it by the ingest.
+/// A building to sample, with the height its source published for comparison and merging.
 struct Footprint {
-    /// Which feature of the file this came from, so the ingest can put the reading back on its own
-    /// building rather than on the one that happened to sort here.
+    /// The feature this came from, so the ingest puts the reading back on the right building.
     feature: usize,
     polygon: Polygon,
     name: Option<String>,
     published_meters: Option<f64>,
-    /// Whether that published height came from OpenStreetMap rather than a machine-learning model.
-    /// The distinction is the whole reason to measure: the ML heights in this county cap out at
-    /// 32.5 m, and the OSM ones are surveyed tags on the towers.
+    /// OSM-surveyed rather than ML-modeled; this county's ML heights cap out at 32.5 m.
     surveyed: bool,
 }
 
@@ -648,8 +567,7 @@ fn ring_of(coordinates: &serde_json::Value) -> Vec<Coord> {
         .collect()
 }
 
-/// GeoJSON footprints, kept to the ones lying wholly inside the window: a polygon crossing the edge
-/// would be measured over the cells that made it into the grid and read as a fraction of a building.
+/// Footprints wholly inside the window; one crossing the edge would read as part of a building.
 fn read_footprints(path: &Path, window: &Window) -> Fallible<Vec<Footprint>> {
     let document: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
     let mut footprints = Vec::new();
@@ -704,8 +622,7 @@ fn quantile(sorted: &[f64], quantile: f64) -> f64 {
     sorted.get(rank.max(1) - 1).copied().unwrap_or(f64::NAN)
 }
 
-/// How far the measurement lands from the published heights that are worth comparing against, at
-/// each of the percentiles the choice of statistic was made between.
+/// Error against the surveyed heights at each candidate percentile.
 fn describe_errors(footprints: &[Footprint], readings: &[Vec<u16>]) {
     let mut compared = 0;
     let mut construction = 0;
@@ -747,9 +664,7 @@ fn describe_errors(footprints: &[Footprint], readings: &[Vec<u16>]) {
     }
 }
 
-/// The tallest measurements, named — the check a numeric summary cannot make, because a raster
-/// offset by a block still has a plausible height distribution and puts the tower on the wrong
-/// polygon.
+/// The tallest measurements, named, to catch a raster offset that puts the tower on the wrong polygon.
 fn describe_tallest(footprints: &[Footprint], readings: &[Vec<u16>], count: usize) {
     let mut tallest: Vec<(f64, &Footprint)> = footprints
         .iter()
@@ -778,17 +693,14 @@ fn describe_tallest(footprints: &[Footprint], readings: &[Vec<u16>], count: usiz
 #[serde(rename_all = "camelCase")]
 struct Reading {
     feature: usize,
-    /// The 75th percentile of the surface cells inside the footprint, in meters, or absent where it
-    /// caught none.
+    /// The 75th percentile of surface cells inside, in meters; absent where none.
     roof_meters: Option<f64>,
     /// The median of the ground cells under it, likewise.
     base_meters: Option<f64>,
     cells: u32,
 }
 
-/// The staged tiles a block reaches, in the order they were given. A block is read from all of them
-/// — the mosaic reader decodes one at a time and takes whichever carried a value, which is what a
-/// block lying across a seam needs.
+/// The staged tiles a block reaches; a block across a seam needs all of them.
 fn reaching_dem(tiles: &[TileGrid], grid: &Grid) -> Vec<PathBuf> {
     tiles
         .iter()
@@ -991,8 +903,7 @@ mod tests {
     };
     use crate::heights::UTM_10N;
 
-    /// One staged 1 m tile of the DEM's 10 km naming grid, named for the square's north-west corner
-    /// and six pixels wider than the square on every side, which is how the survey stages them.
+    /// One staged 1 m tile of the 10 km naming grid, six pixels wider than the square each side.
     fn staged(origin_x: f64, origin_y: f64) -> TileGrid {
         TileGrid {
             path: PathBuf::from(format!("{origin_x}-{origin_y}.tif")),
@@ -1006,11 +917,7 @@ mod tests {
         }
     }
 
-    /// A block is one of the DEM's 10 km squares by size and not by alignment — the output grid is
-    /// snapped to the 500 m tile the mosaic is written in — so the ordinary block lies across the
-    /// seam between four staged tiles and has to be read from all of them. Asking instead for the
-    /// one tile holding a block whole finds none anywhere in the East Bay, and every block's ground
-    /// silently came from the flight's own returns instead of from the survey.
+    /// A block snapped to the 500 m tile grid straddles four staged tiles and must read all of them.
     #[test]
     fn a_block_across_a_seam_reads_every_staged_tile_it_touches() {
         let tiles = [
@@ -1035,8 +942,7 @@ mod tests {
         );
     }
 
-    /// The key a cell's maximum is taken on has to order the way the heights do across zero, which
-    /// the float's own bit pattern does not: -1 m and +1 m differ only in the sign bit.
+    /// The key must order across zero, which the float's bits don't (sign bit).
     #[test]
     fn the_cell_key_orders_heights_the_way_they_read() {
         let heights = [-120.5f32, -1.0, -0.0, 0.0, 0.05, 1.0, 122.4, 253.0];
@@ -1054,9 +960,7 @@ mod tests {
         assert!(from_ordered(0).is_nan(), "an empty cell reads as a height");
     }
 
-    /// Against the forward projection scripts/lidar.ts walks the octree with, at the corners of the
-    /// window it walks: the two have to agree, or the points would be binned somewhere other than
-    /// where the nodes holding them were asked for.
+    /// Must agree with scripts/lidar.ts's forward projection, or points bin away from their nodes.
     #[test]
     fn mercator_meters_come_back_as_the_degrees_they_were() {
         for (x, y, lng, lat) in [
@@ -1079,8 +983,7 @@ mod tests {
         }
     }
 
-    /// The ground under a building's own footprint is the one hole the fill exists to close, and it
-    /// has to close it with the nearest ground rather than with the first one the sweep meets.
+    /// A footprint's hole fills from the nearest ground, not the first the sweep meets.
     #[test]
     fn the_fill_takes_the_nearest_ground_and_stops() {
         let mut ground = vec![f32::NAN; 25];
@@ -1097,9 +1000,7 @@ mod tests {
         assert_eq!(far[2], 1.0, "ground not carried to the ring limit");
     }
 
-    /// The cells with no staged ground under them are the reclaimed ones — the airport and Bay Farm
-    /// Island — whose ground sits below sea level. Summing those returns unsigned reads them as sea
-    /// level, and every building standing on them comes out that much taller.
+    /// Reclaimed ground below sea level must survive the fill, or buildings there read taller.
     #[test]
     fn ground_below_sea_level_reaches_the_cells_it_fills() {
         let grid = Grid {

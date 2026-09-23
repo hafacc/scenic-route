@@ -4,12 +4,7 @@ import L from "leaflet";
 import { subscribeTheme } from "../theme/current";
 import { repaintOnRestore } from "./repaint";
 
-// A grid layer that draws its own tiles here rather than in the worker, and survives having their
-// pixels reclaimed (./repaint). Subclasses paint through `watch`.
-
-// Every one of these on the map, so a theme flip can hand them all back their tiles: what they draw
-// in is a color per theme, and Leaflet keeps a drawn tile forever otherwise. The same repaint
-// ./layer.ts does for the worker's layers.
+// Leaflet keeps a drawn tile forever, so a theme flip must redraw every grid.
 const grids = new Set<CanvasGrid>();
 
 subscribeTheme(() => {

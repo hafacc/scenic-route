@@ -1,12 +1,4 @@
-// A slice of the real shed history, taken from the prototype that preceded this encoder and no
-// longer exists in the tree. `SHEDS` and `COVERAGE` come from that prototype's CSV rows and a naive
-// day scan, not from any encoder's byte layout, so a mistake shared by encoder and reader still
-// fails — that is what the reader's oracle rests on.
-//
-// The three base64 blobs are NOT the prototype's. SHED names a span by the graph's
-// durable key rather than by an edge id, a layout the prototype never wrote, so they are this
-// encoder's own bytes: a regression pin rather than a foreign witness. The records above them are
-// still foreign, and they are the half that says what the format has to mean.
+// SHEDS and COVERAGE come from a retired prototype, not an encoder; the blobs are only regression pins.
 
 export interface FixtureShed {
   first: number;
@@ -15,7 +7,6 @@ export interface FixtureShed {
   spans: { edge: number; t0: number; t1: number }[];
 }
 
-// Coverage per edge on a day, as [edge, fraction] pairs ascending by edge.
 export interface FixtureCoverage {
   day: number;
   edges: [number, number][];
@@ -30,21 +21,15 @@ export const CLOSED_BASE64 =
 export const INDEX_BASE64 =
   "AAAgAAAAAAAEAEsAAAAHAD8AugAAAEUAmwDKAAAAoABxAdYAAACCAekB4wAAAAcCCALwAAAACQKhAvwAAAC7AhoDCQEAACwDOQNvAQAAPwPSA4ABAADvA0wEjQEAAGMEIAWlAQAAOQV8BbIBAAB+BW4GvgEAAHQGrAbLAQAAsgb6B9wBAAAHCLII6QEAALoIKwn2AQAALwnECRMCAADSCXkKIAIAAIEKjQs5AgAAlQupC0YCAAC1C8gLUgIAANEL";
 
-// The durable key space the fixture's artifact was placed against, as its header names it. Any
-// 64-bit figure will do here: what the reader has to do with it is refuse every graph that does not
-// carry the same one.
+// Any 64-bit figure; the reader must refuse every graph that doesn't carry it.
 export const GRAPH_KEY_HASH = "a362598948ca0eb3";
 
-// The day the slice runs through, which the header carries so the daily job knows where to pick the
-// feed up. The newest day any record touches.
+// The newest day any record touches.
 export const LAST_DAY = 3136;
 
-// Every edge id the fixture's spans stand on, ascending.
 export const FIXTURE_EDGES: number[] = [];
 
-// The job number `open.bin` names the record at `order` by. The slice came from the prototype's CSV
-// rows, which carried no job numbers, so these are synthetic — ascending with the record, as the
-// format requires, and covering both shapes the feed has issued so the codec is exercised either way.
+// Synthetic, ascending as the format requires, and covering both job-number shapes the feed issues.
 export function fixtureJob(order: number): string {
   if (order < 2) {
     return String(104_416_464 + order);
@@ -53,9 +38,7 @@ export function fixtureJob(order: number): string {
   }
 }
 
-// The durable key the fixture's synthetic graph gives an edge. It runs DESCENDING in the edge id and
-// spreads over all four sides and several ordinals, so a reader or encoder that quietly went on
-// treating the key as a position fails rather than passing by luck.
+// Descending and spread over sides and ordinals, so treating the key as a position fails.
 export function fixtureDurable(edge: number): {
   sourceId: number;
   side: number;
@@ -69,10 +52,7 @@ export function fixtureDurable(edge: number): {
   };
 }
 
-// The depth byte the fixture gives a span, in decimeters. The prototype's rows carry none — measuring
-// the pavement postdates them — so this is synthetic, as the job numbers are: it walks the range the
-// placement can produce and returns 0, "not measured", for one span in seven, so a codec that dropped
-// the byte or slipped a span's worth of alignment fails rather than passing by luck.
+// Synthetic decimeters, 0 (not measured) for one span in seven, so a slipped byte fails.
 export function fixtureDepth(edge: number): number {
   const rank = FIXTURE_EDGES.indexOf(edge);
   return rank % 7 === 0 ? 0 : 18 + ((rank * 13) % 63);

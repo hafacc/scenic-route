@@ -9,10 +9,7 @@ interface ShareControlProps {
 
 const CONFIRM_MS = 2200;
 
-// Copies a link to the current route together with the camera and overlays — the one place the view
-// enters a URL. The address bar is left alone, so this pill is the only confirmation there is; it sits
-// alongside the button rather than below, where the location banner (a higher stacking context, so it
-// cannot simply be out-z-indexed) would hide it.
+// Below the pill, the location banner (higher stacking context) hides it.
 export default function ShareControl({ composeUrl }: ShareControlProps) {
   const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
 

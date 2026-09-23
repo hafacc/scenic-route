@@ -3,11 +3,7 @@ import { projectX, projectY, unproject } from "./mercator";
 import { decodePoints, poiRenderer } from "./poi";
 import type { PoiParams } from "./protocol";
 
-// Label placement used to be greedy per tile, over a candidate window that differed from tile to
-// tile: a label near a shared edge could lose to a competitor one neighbor saw and the other did
-// not, and be drawn by one tile only — half a name, cut mid-glyph at the seam. These pin the
-// property that fixes it: placement is a whole-city decision, so every tile a label reaches into
-// draws it at the same world position.
+// Placement is city-wide, so every tile a label reaches draws it at the same world position.
 
 const TILE_SIZE = 256;
 const ZOOM = 17; // over LABEL_MIN_ZOOM, so labels draw
@@ -30,8 +26,7 @@ interface TextOp {
   y: number;
 }
 
-// A 2D context that records only what the assertions read: the fill of each label. Widths come from
-// `measure`, so the placement pass and the checks below agree on every box.
+// Records only each label's fill; widths come from `measure` so placement and checks agree.
 function recordingContext(ops: TextOp[]): OffscreenCanvasRenderingContext2D {
   return {
     font: "",
@@ -62,8 +57,7 @@ function writeVarint(bytes: number[], value: number): void {
   } while (zigzag !== 0);
 }
 
-// The LMRK/ARTW point blob the tiler writes: a 40-byte header, per-point zigzag-varint (lng, lat)
-// deltas of the quantized coordinates, then a u16-length UTF-8 name per point.
+// The tiler's LMRK/ARTW blob: header, zigzag-varint deltas, then a u16-length UTF-8 name per point.
 function encodePoints(
   magic: string,
   places: readonly { lng: number; lat: number; name: string }[],
@@ -115,9 +109,7 @@ const baseTileX = Math.floor(projectX(-73.99, ZOOM) / TILE_SIZE);
 const baseTileY = Math.floor(projectY(40.72, ZOOM) / TILE_SIZE);
 const BLOCK_TILES = 4;
 
-// Points scattered over the block densely enough that labels compete, plus one placed 30 px left of
-// an interior vertical seam so its name is guaranteed to straddle it. World pixels go through
-// `unproject` so the points land exactly where intended once projected back.
+// Dense enough that labels compete, plus one 30 px left of a vertical seam so its name straddles it.
 function testPoints(): { lng: number; lat: number; name: string }[] {
   const originX = baseTileX * TILE_SIZE;
   const originY = baseTileY * TILE_SIZE;
@@ -181,8 +173,7 @@ function drawBlock(): Map<string, TextOp[]> {
   return drawn;
 }
 
-// The label's box, from the recorded fill: text starts at x, and the anchor is "top" so the baseline
-// y is its bottom edge.
+// Text starts at x; the anchor is "top", so the baseline y is the box's bottom edge.
 function labelBox({ text, x, y }: TextOp) {
   return { x0: x, x1: x + measure(text), y0: y - LINE_HEIGHT, y1: y };
 }

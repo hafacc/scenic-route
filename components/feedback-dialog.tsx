@@ -9,19 +9,14 @@ interface FeedbackDialogProps {
   onClose: () => void;
 }
 
-// A half-typed complaint is not a preference, so it stays on the device that typed it rather than
-// joining the synced settings document.
+// A draft is not a preference, so it stays on this device rather than in the synced settings.
 const DRAFT_KEY = "scenic-route:feedback-draft";
 
-// What the security rule enforces, counted the way it counts: Firestore's string size() is UTF-8
-// BYTES, where a JavaScript string's length is UTF-16 units. Measuring characters here would take a
-// note of a thousand CJK characters — comfortably under any character count — and have the server
-// refuse it.
+// Counted like the security rule: Firestore's string size() is UTF-8 bytes, not UTF-16 units.
 const MAX_BYTES = 2000;
 const COUNTER_FROM = 1800;
 
-// A coarse guard on the textarea itself, in its own units. No note this long survives the byte cap,
-// and it stops a paste of a whole document from being measured on every keystroke.
+// A coarse UTF-16 cap that spares measuring a pasted document's bytes on every keystroke.
 const MAX_CHARS = 2000;
 
 function byteLength(text: string): number {
@@ -58,8 +53,7 @@ export default function FeedbackDialog({ onClose }: FeedbackDialogProps) {
     textareaRef.current?.focus();
   }, []);
 
-  // Set on the way in as well as cleared on the way out: an effect that only clears stays cleared
-  // through a remount, and then a refusal would land on a dialog it thinks is gone.
+  // Set on mount too, or a remount leaves it cleared and a refusal thinks the dialog is gone.
   useEffect(() => {
     openRef.current = true;
     return () => {
@@ -72,8 +66,7 @@ export default function FeedbackDialog({ onClose }: FeedbackDialogProps) {
     writeDraft(next);
   };
 
-  // Never awaited. Offline the SDK queues the write in IndexedDB and sends it on the next launch, so
-  // the only failure worth showing is a refusal, and that arrives long after the sender has moved on.
+  // Never awaited: offline, the SDK queues the write in IndexedDB until next launch.
   const handleSend = () => {
     const note = text.trim();
     if (!note) {
@@ -135,10 +128,7 @@ export default function FeedbackDialog({ onClose }: FeedbackDialogProps) {
                 ? "Sent — thank you."
                 : "Saved — it will be sent next time you're online."}
             </div>
-            {/* "Saved" is a promise the browser has to keep for us: the queue lives in IndexedDB,
-                and where that is refused — private browsing, or a device out of room — Firestore
-                falls back to a cache that goes when the tab does. Better to say so than to have the
-                note quietly not arrive. */}
+            {/* Where IndexedDB is refused, Firestore's queue lasts only as long as the tab. */}
             {sent === "offline" ? (
               <p className="mt-2 pl-[2.625rem] text-xs text-slate-500 dark:text-slate-400">
                 It waits in this browser, so if yours stores nothing between
@@ -158,9 +148,7 @@ export default function FeedbackDialog({ onClose }: FeedbackDialogProps) {
         </>
       ) : (
         <>
-          {/* The note is the one thing that gives way: the title above it and the buttons below it
-              stay put, and the box shrinks to its floor before the sheet does — which is what keeps
-              Send reachable while a phone keyboard is up. */}
+          {/* The note shrinks before the sheet does, keeping Send above a phone keyboard. */}
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
             {error ? (
               <div className="mt-4 shrink-0 rounded-xl bg-rose-100 px-3 py-2 text-xs text-rose-800 dark:bg-rose-900/40 dark:text-rose-100">
@@ -169,8 +157,7 @@ export default function FeedbackDialog({ onClose }: FeedbackDialogProps) {
             ) : null}
             <label className="mt-4 flex min-h-0 flex-col">
               <span className="sr-only">Your feedback</span>
-              {/* 16px on a phone: iOS Safari zooms the whole page in on a focused control whose
-                  text is any smaller, and this one is focused the moment the sheet opens. */}
+              {/* 16px on a phone: iOS Safari zooms the page on a focused control with smaller text. */}
               <textarea
                 ref={textareaRef}
                 value={text}

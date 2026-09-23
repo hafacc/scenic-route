@@ -1,13 +1,3 @@
-// Shared access to the ArcGIS feature services the Bay Area sources are read from: Alameda County's
-// centerline, parcels and address points, Oakland's and Berkeley's own layers, MTC's regional land
-// use and the Census Bureau's hydrography. Every Esri service answers the same query API, so a
-// second layer is a second query here rather than a second reader.
-//
-// What differs between them is the query — the fields, the `where`, the page size — and that stays
-// with the caller, which builds its own URL. What is shared is everything else: the envelope every
-// one of them is clipped to, the error shape, the retry ladder, and the walk down a layer a page at
-// a time.
-
 import { cached } from "./cache";
 import { fetchJson, type JsonRequest } from "./http";
 import type { Bounds } from "./manifest";
@@ -18,13 +8,10 @@ interface QueryResponse<Feature> {
   features?: Feature[];
 }
 
-// A layer read in hundreds of pages wants a ladder of attempts under it; one read in a single
-// request fails the build either way, which is why the default is not to retry.
+// No retry by default: a single-request layer fails the build either way.
 export type QueryOptions = Omit<JsonRequest<unknown>, "check">;
 
-// One JSON answer from a feature service. ArcGIS reports a query error as a 200 with an `{ error }`
-// body, so the status alone is not enough — an unchecked error page would cache as a permanent
-// empty page and truncate the layer.
+// ArcGIS reports query errors as a 200 with an `{ error }` body, which would cache as empty.
 export async function fetchArcgis<Value>(
   url: string,
   { timeoutMs = REQUEST_TIMEOUT_MS, ...options }: QueryOptions = {},
@@ -43,7 +30,6 @@ export async function fetchArcgis<Value>(
   });
 }
 
-// The features of one query.
 export async function fetchFeatures<Feature>(
   url: string,
   options: QueryOptions = {},
@@ -60,9 +46,6 @@ export async function fetchFeatures<Feature>(
   return answer.features as Feature[];
 }
 
-// The four parameters that clip a query to a lon/lat rectangle. Every layer here is read over a
-// box, and an envelope written a degree wrong is a layer that comes back empty rather than one that
-// fails.
 export function envelopeQuery(url: URL, box: Bounds): void {
   url.searchParams.set(
     "geometry",
@@ -80,17 +63,14 @@ export function envelopeQuery(url: URL, box: Bounds): void {
 }
 
 export interface PagedQuery extends QueryOptions {
-  // The caller's own query with `resultOffset` set to the offset it is handed. It has to carry an
-  // `orderByFields` too: without an order an ArcGIS layer may repeat or skip rows between pages.
+  // Must set `orderByFields`: without an order ArcGIS may repeat or skip rows between pages.
   pageUrl: (offset: number) => string;
   pageSize: number;
-  // A cache entry per page, named `${cacheName}-${offset}`. `null` for a read that must not be
-  // served from disk — see the snapshot in scripts/east-bay-trees.ts.
+  // Cached per page as `${cacheName}-${offset}`; `null` bypasses the disk cache.
   cacheName: string | null;
 }
 
-// The pages of one layer, in order, until one comes back short of the page size — which is the only
-// end-of-layer signal a query answers.
+// A short page is the only end-of-layer signal a query gives.
 export async function* featurePages<Feature>({
   pageUrl,
   pageSize,
@@ -100,7 +80,6 @@ export async function* featurePages<Feature>({
   for (let offset = 0; ; offset += pageSize) {
     const url = pageUrl(offset);
     const read = (): Promise<Feature[]> => fetchFeatures<Feature>(url, options);
-    // Quietly, because a layer is hundreds of entries and its hit notices would bury the build log.
     const page =
       cacheName === null
         ? await read()
@@ -112,7 +91,6 @@ export async function* featurePages<Feature>({
   }
 }
 
-// A whole layer, for a caller with no reason to see it a page at a time.
 export async function allFeatures<Feature>(
   query: PagedQuery,
 ): Promise<Feature[]> {

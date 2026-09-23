@@ -5,8 +5,6 @@ import manifest from "../tree-cover/manifest.json";
 import type { RoutingGraph } from "./graph";
 import { computeEdgeShade, loadShadeBin, type ShadeBins } from "./shade";
 
-// suncalc as shade.ts consumes it, replicated here so the test can predict the sun position for a date
-// and place bins around it.
 const sun = SunCalc as unknown as {
   getPosition: (
     date: Date,
@@ -30,12 +28,10 @@ const HEADER_BYTES = 12;
 const EDGE_COUNT = 4;
 const DAY = new Date("2026-07-19T16:30:00Z"); // ~12:30 EDT, sun well up over NYC, canopy in leaf
 const WINTER = new Date("2026-01-15T17:30:00Z"); // ~12:30 EST, sun up, canopy leaf-off
-// ~23:00 EDT: dark at departure and still dark 4 h on, so the whole elapsed-time schedule is night
-// (a departure whose forward window reached sunrise would bake a non-null, part-daylight field).
+// ~23:00 EDT and dark for the whole 4 h schedule; a window reaching sunrise would bake a partial field.
 const NIGHT = new Date("2026-07-20T03:00:00Z");
 
-// Encode one SHDB bin file: magic + u16 version + u16 pad + u32 edgeCount, then the building and tree
-// occlusion rows, one unsigned byte per edge each.
+// magic + u16 version + u16 pad + u32 edgeCount, then building and tree rows, one byte per edge each.
 function buildBin(buildings: number[], trees: number[]): ArrayBuffer {
   const buffer = new ArrayBuffer(HEADER_BYTES + buildings.length * 2);
   const view = new DataView(buffer);
@@ -51,9 +47,7 @@ function buildBin(buildings: number[], trees: number[]): ArrayBuffer {
   return buffer;
 }
 
-// The sun for DAY, in the (declination, hourAngle) the bins are keyed on: two bins in its season band
-// straddle its hour angle symmetrically (equal distance) and a third sits far off in the same band;
-// the nearest two by hour angle are then bins 0 and 1, blended 50/50.
+// Bins 0 and 1 straddle DAY's hour angle equally, so they're blended 50/50; bin 2 sits far off.
 const daySun = sunAt(DAY);
 const dayDecl = declinationOf(daySun.elevation, daySun.azimuth, CENTER_LAT);
 const dayHour = hourAngleOf(
@@ -63,16 +57,13 @@ const dayHour = hourAngleOf(
   dayDecl,
 );
 const daySeason = seasonBand(dayDecl);
-// Edge 0 sits under a building in both near bins, edge 1 under a crown in EVERY bin (so its blend is
-// the same whichever bins are selected — what the seasonal test turns on), edge 2 only half-covered
-// in bin 1, edge 3 in the open.
+// Edge 1 is under a crown in every bin, so its blend is the same whichever bins are selected.
 const binFiles: Record<number, ArrayBuffer> = {
   0: buildBin([255, 0, 0, 0], [0, 255, 0, 0]),
   1: buildBin([255, 0, 128, 0], [0, 255, 0, 0]),
   2: buildBin([0, 0, 0, 0], [0, 255, 0, 0]),
 };
-// A 90° elevation is a sun that never rises over NYC; it is here so each bin's derived intensity is
-// exactly 1 and the composited bytes are hand-checkable. Only season/hourAngle select a bin.
+// 90° elevation makes each bin's intensity exactly 1, so the composited bytes are hand-checkable.
 const bin = (index: number, hourAngle: number) => ({
   index,
   season: daySeason,
@@ -90,7 +81,6 @@ const originalFetch = globalThis.fetch;
 beforeAll(() => {
   globalThis.fetch = ((input: RequestInfo | URL): Promise<Response> => {
     const url = String(input);
-    // The city segment is what keeps two latitudes' bins apart; the default city is nyc.
     if (url === "routing/shade/nyc/bins.json") {
       return Promise.resolve(new Response(JSON.stringify(binsJson)));
     }
@@ -121,8 +111,7 @@ test("loadShadeBin decodes a bin file to its two occlusion rows", async () => {
 });
 
 test("a rejected bin load only forgets itself", async () => {
-  // A stalled fetch is evicted by the cache, a second fetch of the same bin succeeds, and only then
-  // does the first one fail. Deleting by key alone would throw away the good entry it never owned.
+  // The first fetch fails only after eviction and a successful refetch of the same bin.
   const outer = globalThis.fetch;
   let fetches = 0;
   let stall: ((error: Error) => void) | null = null;
@@ -142,7 +131,6 @@ test("a rejected bin load only forgets itself", async () => {
   try {
     const first = loadShadeBin(9, "stalled");
     first.catch(() => undefined); // the rejection below is the point; it must not go unhandled
-    // Past any capacity this cache is given, so the stalled entry is certainly gone.
     for (let filler = 0; filler < 40; filler += 1) {
       await loadShadeBin(0, `filler${filler}`);
     }
@@ -168,18 +156,11 @@ test("computeEdgeShade composites the two occlusions and blends the nearest bins
 
   expect(graph.shade).not.toBeNull();
   const shade = graph.shade as NonNullable<RoutingGraph["shade"]>;
-  // At the departure instant (elapsed 0) bins 0 and 1 straddle the sun at equal distance, so each
-  // edge is the average of the two bins' composited bytes, /128. Per bin, at intensity 1:
-  //   edge 0: fully building-shaded in both, 1 - 2*1 = -1, clamped to -127.
-  //   edge 1: fully crown-shaded in both; in-leaf tau 0.814 gives 1 - 2*0.814 = -0.628 -> -80.
-  //   edge 2: open in bin 0 (+127); half building-shaded in bin 1, 1 - 2*(128/255) -> -1.
-  //   edge 3: open in both, +127.
+  // Per bin: -1 clamps to -127; in-leaf tau 0.814 gives -0.628 -> -80; half-shaded edge 2 -> -1.
   const expected = [-127, -80, (127 - 1) / 2, 127].map((value) => value / 128);
   for (let edge = 0; edge < expected.length; edge++) {
     expect(shade.attrAt(edge, 0)).toBeCloseTo(expected[edge], 6);
   }
-  // maxAbs bounds every bin's attributes by its own intensity (1 here), encoded: the admissible floor
-  // needs an upper bound, and it must stay under 1.
   expect(shade.maxAbs).toBeCloseTo(127 / 128, 6);
   expect(shade.maxAbs).toBeLessThan(1);
 });
@@ -197,8 +178,7 @@ test("computeEdgeShade applies the season's canopy transmittance", async () => {
     0,
   );
 
-  // Edge 1's crown covers it in every bin, so only tau moves between the two dates: in leaf it stops
-  // 0.814 of the light (net shaded), leaf-off only 0.40 (net sunlit), off the same baked geometry.
+  // Only tau differs between dates: in leaf a crown stops 0.814 of the light, leaf-off 0.40.
   expect(inLeaf).toBeCloseTo(-80 / 128, 6);
   expect(leafOff).toBeCloseTo(26 / 128, 6);
 });
@@ -208,9 +188,7 @@ test("computeEdgeShade advances the sun with elapsed walking time", async () => 
   await computeEdgeShade(graph, DAY);
   const shade = graph.shade as NonNullable<RoutingGraph["shade"]>;
 
-  // Edge 2 is open in bin 0 (the later, larger-hour-angle bin) and half building-shaded in bin 1. As
-  // the walk elapses the sun's hour angle grows toward bin 0, so the blend shifts off bin 1 toward 0 —
-  // a meter reached an hour in is costed against a later sun than one reached at the start.
+  // The sun's hour angle grows toward bin 0 as the walk elapses, so the blend shifts off bin 1.
   const atStart = shade.attrAt(2, 0);
   const anHourIn = shade.attrAt(2, 3600);
   expect(atStart).toBeCloseTo(63 / 128, 6);
@@ -222,7 +200,7 @@ test("computeEdgeShade clears the field when the whole walk is below the horizon
   expect(sunAt(NIGHT).elevation).toBeLessThanOrEqual(0.5); // precondition: it is night at departure
 
   const graph = makeGraph(EDGE_COUNT);
-  // stale daytime field, to prove reset
+  // stale daytime field, to prove the reset
   graph.shade = { attrAt: () => 0.5, intensityAt: () => 0.5, maxAbs: 0.5 };
   await computeEdgeShade(graph, NIGHT);
 

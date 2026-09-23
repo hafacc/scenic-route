@@ -14,36 +14,20 @@ import { drawSweepGl } from "./sweep-gl";
 import { palette } from "./theme";
 import { drawRamped } from "./theme-gl";
 
-// The baked shade pyramids, magnified through src/tiles/magnify.ts rather than by the browser and
-// composited here rather than stacked. A shade tile carries only the fraction of light its pixel has
-// lost; the shadow's color is the palette's and is applied on the way onto the tile (./theme-gl.ts).
-//
-// Building shadows and tree shadows are baked as two pyramids over the same ground, and both are read
-// here so the one shade layer can composite them per pixel. Two Leaflet layers would source-over
-// instead, which is the wrong arithmetic on baked alphas (see `compositeAlpha`).
-//
-// From `vectorZoom` the tile is instead SWEPT from the caster chunks (src/tiles/sweep.ts): the same
-// shadows at the tile's own resolution, rather than a raster that stopped resolving being enlarged.
-// A deploy with no caster chunks falls back here at every zoom.
+// Building and tree pyramids are composited per pixel here, since two layers would source-over them.
+// From `vectorZoom` the tile is swept from caster chunks instead; a deploy without them falls back here.
 
-// Keep in sync with MAX_SHADE_ALPHA in crates/tiler/src/shade.rs. Both pyramids bake alpha as
-// MAX_SHADE_ALPHA * intensity * fraction; undoing that scale is what recovers the shaded fractions the
-// composite multiplies.
+// Keep in sync with crates/tiler/src/shade.rs, which bakes alpha as this * intensity * fraction.
 const MAX_SHADE_ALPHA = 190;
 
-// The most source tiles one prefetch may warm, leaving the rest of the cache to the bins actually
-// being drawn — a prefetch that evicted those would cost more than it saves. A bin's ground costs two
-// of them once the tree pyramid is there, since a draw needs both to composite.
+// Leaves the rest of the cache to the bins being drawn; a bin costs two tiles (buildings and trees).
 const PREFETCH_LIMIT = 192;
 
-// One bin's pyramid, as a {z}/{x}/{y} template the shared magnifier can read.
 function binTemplate(template: string, bin: number): string {
   return template.replace("{bin}", String(bin));
 }
 
-// Fetch and decode source tiles ahead of any draw. The entries land with no users, so they stay as
-// evictable as any other and the cap still bounds the total; warming stops at the budget, so the
-// bins past it are never fetched only to be thrown away.
+// Warmed entries have no users, so they stay evictable and the cache cap still bounds them.
 export function warm({
   url,
   treeUrl,
@@ -59,10 +43,7 @@ export function warm({
   }
 }
 
-// One pixel of the two pyramids composited, in their baked alphas: what is left of the light after a
-// building AND a crown have had a go at it, `MAX * intensity * (1 - (1 - b)(1 - tau*t))` with the
-// baked scale `MAX * intensity` divided back out. Drawing the two as stacked layers would source-over
-// them instead, which double-scales the cross term — ~25% too dark where both fall.
+// `MAX * intensity * (1 - (1 - b)(1 - tau*t))` in baked alphas; source-over would be ~25% too dark.
 export function compositeAlpha(
   buildings: number,
   trees: number,
@@ -70,9 +51,7 @@ export function compositeAlpha(
   intensity: number,
 ): number {
   const baked = MAX_SHADE_ALPHA * intensity;
-  // A full shadow quantizes UP to the alpha lattice, so a baked alpha can land a step above the scale
-  // it was baked at; the cross term reads both capped there, or it would over-subtract and leave the
-  // composite lighter than the source it started from.
+  // A full shadow quantizes up past `baked`, so both are capped or the cross term over-subtracts.
   const both =
     baked > 0
       ? (tau * Math.min(buildings, baked) * Math.min(trees, baked)) / baked
@@ -80,8 +59,7 @@ export function compositeAlpha(
   return Math.min(255, Math.round(buildings + tau * trees - both));
 }
 
-// The two patches merged into the one the tile is drawn from. Only alpha carries anything: the
-// pyramids' color plane is dead weight left over from when the slate was baked, and is not read.
+// Only alpha is read; the pyramids' color plane is dead weight.
 function merge(
   buildings: OffscreenCanvas | null,
   trees: OffscreenCanvas | null,
@@ -90,7 +68,7 @@ function merge(
 ): OffscreenCanvas | null {
   const treeContext = trees?.getContext("2d");
   if (!treeContext) {
-    return buildings; // no canopy over this ground: the building patch already is the composite
+    return buildings; // no canopy here, so the building patch is the composite
   }
   const target = buildings ?? new OffscreenCanvas(size, size);
   const context = target.getContext("2d");
@@ -111,13 +89,9 @@ function merge(
   return target;
 }
 
-// Where a tile's shade comes from: the casters it is swept from, or the baked pixels it is cut out of.
 type ShadeSource = { swept: SweptGround } | { baked: Patch | null };
 
-// The tile's source pixels: both pyramids cut out of the same ground and composited into one patch.
-// Throws where a pyramid could not be reached, as against merely having nothing over this ground —
-// the shade layer's whole job is to say where the sun is, and a tile that quietly draws no shade
-// because its source did not arrive is the one answer it must never give.
+// Throws on an unreachable pyramid: a tile silently drawing no shade is the one wrong answer.
 async function bakedPatch(
   params: ShadeParams,
   coords: TileCoords,
@@ -127,10 +101,7 @@ async function bakedPatch(
     assemble(binTemplate(params.url, params.bin), cut),
     assemble(binTemplate(params.treeUrl, params.bin), cut),
   ]);
-  // Either pyramid missing entirely is fatal to the tile, not just the building one: drawing the
-  // canopy's shadows alone over ground whose buildings did not arrive puts a sunlit street where a
-  // tower stands. A neighbor that failed while the center tile arrived only costs the resample a
-  // little context at the edge.
+  // Either pyramid failing is fatal: tree shadows alone would show a sunlit street under a tower.
   if (
     (!buildings.patch && buildings.failed) ||
     (!trees.patch && trees.failed)
@@ -160,8 +131,7 @@ export const shadeRenderer: TileRenderer<ShadeParams, ShadeSource> = {
   load,
   draw(context, source, coords, params, ratio) {
     if ("swept" in source) {
-      // On the GPU where there is one (src/tiles/sweep-gl.ts), which is an order of magnitude cheaper
-      // per tile; the Canvas2D sweep is both the fallback and the reference the GPU path is held to.
+      // The GPU sweep is ~10× cheaper; the Canvas2D sweep is its fallback and reference.
       if (!drawSweepGl(context, source.swept, coords, params, ratio)) {
         drawSweep(context, source.swept, coords, params, ratio);
       }

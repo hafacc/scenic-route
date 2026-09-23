@@ -32,15 +32,7 @@ import { SHEET_SCROLL, Sheet } from "./sheet-shell";
 import { type RowDrag, useRowDrag } from "./use-row-drag";
 import { useSettings } from "./use-settings";
 
-// The reader's preferences. Opened at `#settings`, like the About dialog, so it is deep-linkable and
-// the back button dismisses it — and so the layers menu and the route panel can link INTO a section
-// rather than describing where it is.
-
-// The handle a row is dragged by, and the arrow keys that do the same thing without a pointer.
-// `touch-none` is on the handle alone, so a finger anywhere else on the row still scrolls the sheet.
-// A long press on it must start a drag and nothing else: `select-none` keeps the press off the
-// glyph's own text run, and iOS Safari needs `-webkit-touch-callout` cleared as well or it answers
-// with the copy/share callout instead.
+// iOS Safari needs `-webkit-touch-callout` cleared, or a long press opens the callout.
 function DragHandle({
   label,
   index,
@@ -75,8 +67,6 @@ function DragHandle({
   );
 }
 
-// What a row wears while its list is being dragged in: the dragged one lifts and follows the finger,
-// the rest slide out of its way.
 function draggingRow(index: number, drag: RowDrag): CSSProperties {
   const lifted = drag.isDragging(index);
   return {
@@ -161,8 +151,7 @@ function LayerRows() {
   );
 }
 
-// The eye every hideable row wears. `where` is what the row is being taken out of, said out loud,
-// because "hide" alone leaves a reader guessing whether the thing stops applying.
+// `where` names what the row leaves, since "hide" alone doesn't say whether it still applies.
 function HideToggle({
   off,
   label,
@@ -189,7 +178,6 @@ function HideToggle({
   );
 }
 
-// The pill every on/off row in here wears.
 function Switch({
   label,
   on,
@@ -220,9 +208,7 @@ function Switch({
   );
 }
 
-// One of the gates, editing the same state as the route panel's header toggles. Hideable like a
-// factor and on the same bargain: the gate keeps gating, so a closed one that has been hidden is
-// counted in the panel's "hidden preferences still apply" line.
+// A hidden gate keeps gating, so it counts toward "hidden preferences still apply".
 function GateRow({
   gate,
   on,
@@ -388,9 +374,7 @@ function FactorRows({
   );
 }
 
-// How much of the map to keep, and how much is kept. The figure comes from the worker's own book
-// (src/sw/ledger.ts) rather than from the worker, which is stopped between requests: the book is
-// ordinary same-origin IndexedDB, so the page can read it without waking anything.
+// Read from the worker's ledger (src/sw/ledger.ts), since the worker stops between requests.
 function OfflineSection({ wanted }: { wanted: boolean }) {
   const { coverage } = useSettings();
   const [held, setHeld] = useState<number | null>(null);
@@ -398,9 +382,7 @@ function OfflineSection({ wanted }: { wanted: boolean }) {
   const measure = useCallback(() => {
     void totals()
       .then((stores) => {
-        // The overlay store only. The routing graphs are held under their own cap, none of these
-        // options touch them and Clear does not either, so counting them here would answer a
-        // question this section says it is not asking.
+        // The overlay store only; the routing graphs have their own cap.
         setHeld(stores.overlay ?? 0);
       })
       .catch(() => {
@@ -410,8 +392,7 @@ function OfflineSection({ wanted }: { wanted: boolean }) {
 
   useEffect(measure, [measure]);
 
-  // Empty either way: nothing cached yet, or the book could not be read. The reader can act on
-  // neither, and "nothing kept yet" is true of both.
+  // Empty covers both nothing cached and an unreadable ledger; the reader can act on neither.
   const kept = held === null ? "" : formatBytes(held);
 
   return (
@@ -424,8 +405,7 @@ function OfflineSection({ wanted }: { wanted: boolean }) {
         {COVERAGE.map((option) => (
           <li key={option.id}>
             <label className="flex w-full cursor-pointer items-center gap-3 rounded-xl px-2 py-2 hover:bg-slate-50 dark:hover:bg-slate-700/60">
-              {/* The dot beside it is the one that shows; a native radio cannot be styled to match
-                  the rest of the page, and swapping it for a button loses the arrow-key group. */}
+              {/* Styled by proxy, since a button would lose the native radio's arrow-key group. */}
               <input
                 type="radio"
                 name="offline-coverage"
@@ -462,8 +442,7 @@ function OfflineSection({ wanted }: { wanted: boolean }) {
           type="button"
           onClick={() => {
             clearOfflineMaps();
-            // The worker deletes in the background and the book is what this reads, so the figure is
-            // taken again a moment later rather than assumed to be zero.
+            // The worker deletes in the background, so the figure is re-read shortly after.
             window.setTimeout(measure, 600);
           }}
           className="font-medium text-brand-600 hover:underline dark:text-brand-400"
@@ -475,12 +454,10 @@ function OfflineSection({ wanted }: { wanted: boolean }) {
   );
 }
 
-// The page's groups, in order. Named here rather than at each heading so the deep links, the
-// scroll-to and the headings themselves cannot disagree about what a section is called.
+// Named once here so the deep links, the scroll-to and the headings can't disagree.
 export const SECTIONS = ["layers", "routing", "offline"] as const;
 
-// How long the group the reader was sent to stays tinted. Long enough to be seen after a smooth
-// scroll, short enough that it is plainly a flash rather than a state.
+// Long enough to be seen after a smooth scroll, short enough to read as a flash.
 const HIGHLIGHT_MS = 1600;
 export type SettingsSection = (typeof SECTIONS)[number];
 
@@ -490,10 +467,7 @@ const SECTION_TITLE: Record<SettingsSection, string> = {
   offline: "Offline maps",
 };
 
-// One group. It carries the id the deep link scrolls to, and flashes when it was the one asked for —
-// a page that jumps somewhere without saying why reads as a page that lost your place. The flash
-// FADES, because its job is to catch the eye on arrival; left on, it reads as a selection the reader
-// cannot clear.
+// The flash fades; left on, it reads as a selection the reader can't clear.
 function Section({
   id,
   caption,
@@ -545,19 +519,16 @@ export default function SettingsDialog({
   section,
   onClose,
 }: {
-  // These three go together, and only with the routing group: Modes has no sliders to edit.
+  // Only with the routing group: Modes has no sliders.
   weights?: RouteWeights;
   onWeight?: (key: FactorKey, weight: number) => void;
   onGate?: (key: GateKey, on: boolean) => void;
   sections?: readonly SettingsSection[];
-  syncingAs: string | null; // the signed-in address, or null on a device that is only ever local
-  // The group the reader asked for, so a link from the layers menu lands on the layers rather than
-  // at the top of a page they then have to search. Empty string is "the page, no group in mind".
+  syncingAs: string | null;
+  // The empty string means the page with no group in mind.
   section: string | null;
   onClose: () => void;
 }) {
-  // The card is the capped box and the sections are the one thing inside it that scrolls, so the
-  // title and the close stay put however long the page gets.
   return (
     <Sheet
       onClose={onClose}

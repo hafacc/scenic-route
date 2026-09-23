@@ -10,16 +10,12 @@ import {
   toNeighborhoods,
 } from "./places";
 
-// Somewhere for the addresses of a test that is not about where they are. A place looked up `here`
-// is on top of all of them, so every join is well inside the distance the builder allows.
 const HERE = { lat: 40.7, lng: -74 };
 
 function house(number: string, at = HERE): PlacedAddress {
   return { number: parseHouseNumber(number)!, ...at };
 }
 
-// A stand-in for one city's address file, written the way the city publishes it: upper case, with
-// its own abbreviations, and house numbers as text so a test reads like the rows it stands for.
 function index(
   streets: Readonly<Record<string, readonly PlacedAddress[]>>,
 ): PlaceAddressIndex {
@@ -34,7 +30,6 @@ test("folds the spellings the two files disagree about", () => {
   expect(normalizeStreet("03 St")).toBe("3 ST");
   expect(normalizeStreet("O'Farrell St")).toBe("OFARRELL ST");
   expect(normalizeStreet("St. Nicholas Ave")).toBe("ST NICHOLAS AVE");
-  // Both sides fold the same way, which is the only thing that makes the join safe.
   expect(normalizeStreet("W  39 ST")).toBe(normalizeStreet("West 39th Street"));
 });
 
@@ -47,9 +42,8 @@ test("splits the house number off the front of the line", () => {
     number: { major: 269, minor: 0, suffix: 2 },
     street: "GUERRERO ST",
   });
-  // A directional is part of the street, not a suffix letter on the number.
   expect(splitAddress("1 W 39th St")?.street).toBe("W 39 ST");
-  // The unit inside the building is not something the address file carries.
+  // The address file carries no units.
   expect(splitAddress("305 W 39th St Ste 210")?.street).toBe("W 39 ST");
 });
 
@@ -73,7 +67,7 @@ test("joins a Queens house number written either way", () => {
   const addresses = index({ "LIBERTY AVE": [house("126-10")] });
   const hyphenated = matchAddress("126-10 Liberty Ave", HERE, addresses);
   expect(hyphenated?.houseNumber).toEqual({ major: 126, minor: 10, suffix: 0 });
-  // Overture as often as not runs the two halves together; it is the same doorway.
+  // Overture often runs the two halves together.
   expect(matchAddress("12610 Liberty Ave", HERE, addresses)).toEqual(
     hyphenated!,
   );
@@ -121,11 +115,8 @@ test("joins the names the two files disagree about", () => {
 
 test("answers null where the place has no doorway to join", () => {
   const addresses = index({ "POLK ST": [house("1517")] });
-  // A landmark, whose address line names no house at all.
   expect(matchAddress("Ocean Beach Parking", HERE, addresses)).toBeNull();
-  // A street the address file does not have.
   expect(matchAddress("1 Ferry Plz", HERE, addresses)).toBeNull();
-  // A house number that street does not have.
   expect(matchAddress("1519 Polk St", HERE, addresses)).toBeNull();
 });
 
@@ -137,10 +128,8 @@ test("picks the borough's own house out of the streets that share a name", () =>
   });
   const hit = matchAddress("312 Court St", statenIsland, addresses);
   expect(hit?.street).toBe("COURT ST");
-  // Named for the distance, since both houses answer to the same street and number.
   expect(hit?.meters).toBeLessThan(1);
 
-  // The same query from a place seven kilometers from either is a match the builder throws away.
   const far = matchAddress(
     "312 Court St",
     { lat: 40.75, lng: -73.98 },
@@ -154,7 +143,7 @@ test("one district written down twice is one row, and a community board is none"
     { name: "Herald Square", lat: 40.7503, lng: -73.9878 },
     { name: "Herald Square", lat: 40.7495, lng: -73.988 },
     { name: "Manhattan Community Board 5", lat: 40.75, lng: -73.98 },
-    // Two real places of one name: Chelsea in Manhattan and Chelsea in Staten Island.
+    // Chelsea in Manhattan and Chelsea in Staten Island.
     { name: "Chelsea", lat: 40.7465, lng: -74.0015 },
     { name: "Chelsea", lat: 40.6007, lng: -74.1949 },
   ]);

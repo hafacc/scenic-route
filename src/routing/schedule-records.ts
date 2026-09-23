@@ -1,12 +1,8 @@
-// How both published timetables are fetched. The ferry one (FSCH) and the rail one (TSCH) hold
-// different things, but they are published the same way — `<id>.bin` is the record in effect and
-// `<id>-past.bin` every superseded one, appended whole (scripts/schedule-record.ts) — so reading
-// them is one thing, parameterised by where they live and how a record is decoded.
+// `<id>.bin` is the record in effect and `<id>-past.bin` every superseded one (scripts/schedule-record.ts).
 
 import { artifactUrl } from "./artifact-base";
 
-// What the reader needs of a record: the days it was the timetable in effect for. `lastDay` is 0
-// while it still is.
+// `lastDay` is 0 while the record is still in effect.
 export interface DatedRecord {
   firstDay: number;
   lastDay: number;
@@ -17,9 +13,7 @@ export interface DecodedRecord<Record extends DatedRecord> {
   nextOffset: number;
 }
 
-// The record covering `day`, or null where none does — which is every day before the first the daily
-// job ever wrote. Both files are fetched once per city and kept: the route re-resolves on every clock
-// tick, once a minute while tracking "now", and the artifact does not change under a session.
+// Fetched once per city and kept, since the route re-resolves every minute and the artifact doesn't change.
 export function scheduleReader<Record extends DatedRecord>(
   base: string,
   decode: (bytes: Uint8Array, offset?: number) => DecodedRecord<Record>,
@@ -36,8 +30,7 @@ export function scheduleReader<Record extends DatedRecord>(
     if (existing) {
       return existing;
     }
-    // A failed load is dropped rather than remembered, so a network blip does not disable the
-    // timetable for the rest of the session.
+    // Not memoized, so a network blip doesn't disable the timetable for the session.
     const request = load().catch((error: unknown) => {
       store.delete(key);
       throw error;

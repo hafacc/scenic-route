@@ -42,13 +42,7 @@ import {
   SHEDS,
 } from "./sheds.fixture";
 
-// The reader against a slice of the real shed history (sheds.fixture.ts). The expected records and
-// coverage there come from the Python prototype's CSV rows and a naive day-by-day scan, so nothing
-// about the byte layout is asserted by the thing that produced it.
-//
-// What the fixture does not carry is the prototype's own BYTES: the three blobs are this encoder's
-// output, a regression pin rather than a foreign witness (sheds.fixture.ts says why). The records
-// above them are still foreign.
+// Expected records come from the prototype's CSV, not an encoder; the blobs are only regression pins.
 
 function buffer(base64: string): ArrayBuffer {
   const binary = atob(base64);
@@ -65,8 +59,6 @@ const history = decodeSheds(
   buffer(INDEX_BASE64),
 );
 
-// The fixture's records with every span named the way the artifact names it, and every record named
-// by the job number `open.bin` carries for it.
 const DURABLE_SHEDS = SHEDS.map((shed, order) => ({
   job: fixtureJob(order),
   first: shed.first,
@@ -85,10 +77,7 @@ const MIDTOWN = { lat: 40.75, lng: -73.98 };
 const QUANTUM = 1e-6;
 const SIDE_SHIFT = 3; // the graph's kind-and-side byte, bits 3-5
 
-// A graph of straight edges out of one node, edge `i` running at `bearings[i]` (degrees) for ~110 m.
-// Geometry-less, so edgePath reads the node coordinates — which is all the shed field needs of a
-// graph. It names itself with the key space the fixture's artifact was placed against, or nothing
-// it carries would resolve onto it.
+// Geometry-less straight edges named with the fixture's key space, or nothing would resolve onto it.
 function straightGraph(edgeCount: number, ...bearings: number[]): RoutingGraph {
   const nodeQx = new Int32Array(edgeCount + 1);
   const nodeQy = new Int32Array(edgeCount + 1);
@@ -120,9 +109,7 @@ function straightGraph(edgeCount: number, ...bearings: number[]): RoutingGraph {
   } as unknown as RoutingGraph;
 }
 
-// A graph of `edgeCount` straight edges carrying the fixture's durable key column, with the key of
-// fixture edge `e` sitting at `place(e)`. A key placed outside the graph is simply not in it, which
-// is how a span this graph has no edge for gets exercised.
+// A key placed outside the graph exercises a span with no edge.
 function movedGraph(
   edgeCount: number,
   place: (edge: number) => number,
@@ -150,17 +137,14 @@ function namedGraph(edgeCount: number): RoutingGraph {
 const EDGE_COUNT = Math.max(...FIXTURE_EDGES) + 1;
 const graph = namedGraph(EDGE_COUNT);
 
-// Every shed the fixture says stood on `day`, by the definition the format is meant to encode. This
-// is the oracle the seek-and-suffix decode is checked against.
+// The oracle the seek-and-suffix decode is checked against.
 function standingOn(day: number): FixtureShed[] {
   return SHEDS.filter(
     (shed) => shed.first <= day && (shed.close === null || shed.close >= day),
   );
 }
 
-// Both sides flattened to one comparable shape: the fixture holds the quantized bytes the format
-// stores, the reader hands back the fractions they stand for. Spans go into edge order on both sides
-// — the format stores them in durable-key order, which is its own business and not an assertion.
+// Spans sorted by edge on both sides; the stored durable-key order isn't asserted.
 function normalize(sheds: readonly Shed[]): string {
   return JSON.stringify(
     sheds
@@ -209,8 +193,6 @@ test("the header describes the two halves it was written with", () => {
 });
 
 test("the encoder writes the bytes checked in beside the records", () => {
-  // Fed the fixture's declared records — which came from the prototype's CSV rows, not from any
-  // encoder — our writer has to land on the three blobs checked in beside them, byte for byte.
   const rebuilt = encodeSheds(DURABLE_SHEDS, GRAPH_KEY_HASH, LAST_DAY);
   expect(rebuilt.open).toEqual(new Uint8Array(buffer(OPEN_BASE64)));
   expect(rebuilt.closed).toEqual(new Uint8Array(buffer(CLOSED_BASE64)));
@@ -218,10 +200,7 @@ test("the encoder writes the bytes checked in beside the records", () => {
 });
 
 test("the daily job's window in the header moves the records, not the answers", () => {
-  // `closed.bin` ends its header with the truncation window `update-sheds` picks the feed back up
-  // with, which is 60 bytes the client walks straight past — and 60 bytes every offset in `index.bin`
-  // has to have moved by. Same records, same days, from a file the reader has to measure rather than
-  // assume the shape of.
+  // 60 bytes of daily-job state in closed.bin's header must shift every index.bin offset.
   const counts = Array.from({ length: 30 }, (_, order) => 8_900 + order);
   const withWindow = encodeSheds(
     DURABLE_SHEDS,
@@ -277,7 +256,6 @@ test("a shed decodes on the first and last day it stood, and not around them", (
   }
 });
 
-// Every day any record touches, and every month boundary the index carries.
 function probeDays(): Set<number> {
   const days = new Set<number>();
   for (const shed of SHEDS) {
@@ -297,9 +275,7 @@ function probeDays(): Set<number> {
   return days;
 }
 
-// The suffix read is where a subtle bug would live: seeking past the head of closed.bin means the
-// close-day chain has to re-base from the index rather than replay it, and a record's edge deltas
-// have to restart rather than carry the previous record's last edge.
+// Seeking must re-base the close-day chain from the index and restart each record's edge deltas.
 test("seeking to a past day decodes the records the file was built from", () => {
   expect(history.months.length).toBeGreaterThan(1); // or the seek is never exercised
   for (const day of probeDays()) {
@@ -309,10 +285,7 @@ test("seeking to a past day decodes the records the file was built from", () => 
   }
 });
 
-// The whole point of the durable key. A rebuilt graph renumbers every edge, and an artifact keyed on
-// positions would silently move scaffolding onto other streets; keyed on (source id, side, ordinal)
-// it lands back where it was. The "rebuild" here reverses the edge order, which is as thorough a
-// renumbering as there is.
+// Reversing the edge order is as thorough a renumbering as there is.
 test("a shed lands on the same street after a rebuild renumbers every edge", () => {
   const rebuilt = movedGraph(EDGE_COUNT, (edge) => EDGE_COUNT - 1 - edge);
   let moved = 0;
@@ -334,10 +307,7 @@ test("a shed lands on the same street after a rebuild renumbers every edge", () 
   expect(moved).toBeGreaterThan(0); // or the renumbering was never exercised
 });
 
-// What the durable key cannot promise on its own (`sameGraph`, sheds.ts): an artifact whose header
-// names another key space resolves NOTHING rather than whatever its keys happen to hit. That is the
-// guarantee every reader here rests on, since wrong-and-invisible is the one failure a blank map
-// cannot be mistaken for.
+// Wrong-but-invisible scaffolding is worse than a blank map.
 test("an artifact placed against another key space resolves no span at all", () => {
   const stale: ShedHistory = { ...history, graphKeyHash: "0000000000000000" };
   let resolved = 0;
@@ -352,8 +322,7 @@ test("an artifact placed against another key space resolves no span at all", () 
 });
 
 test("the index seek agrees with a full linear scan", () => {
-  // The same history with no index: every seek falls back to the head of closed.bin, so the walk is
-  // the whole file. Only the seek differs between the two, so a disagreement is the seek's.
+  // No index, so every seek starts at the head; a disagreement is the seek's.
   const scanned: ShedHistory = {
     ...history,
     months: new Uint16Array(0),
@@ -379,9 +348,6 @@ test("coverage per edge matches the encoder's own day scan", () => {
   }
 });
 
-// The depth an edge reads is the mean of the depths its spans MEASURED, weighted by how much of the
-// edge each covers — stated here over the fixture's own spans rather than taken from the reader.
-// Every reader turns a 0 into its own fallback; nothing pulls the mean toward one.
 test("an edge's depth is its spans' own, weighted by the length they cover", () => {
   let shared = 0;
   for (const { day } of COVERAGE) {
@@ -391,7 +357,6 @@ test("an edge's depth is its spans' own, weighted by the length they cover", () 
     for (const shed of standingOn(day)) {
       for (const span of shed.spans) {
         const along = (span.t1 - span.t0) / 255;
-        // A span the artifact measured nothing for is not in the mean at all.
         if (fixtureDepth(span.edge) > 0) {
           weight.set(span.edge, (weight.get(span.edge) ?? 0) + along);
           total.set(
@@ -414,8 +379,7 @@ test("an edge's depth is its spans' own, weighted by the length they cover", () 
 });
 
 test("concurrent sheds on one edge clamp at full coverage", () => {
-  // The fixture holds a day where two permits overlap on one edge and sum past its length; without
-  // the clamp a cost model would see an edge more than covered.
+  // Two permits on one edge sum past its length on this day.
   let clamped = 0;
   for (const { day } of COVERAGE) {
     const raw = new Map<number, number>();
@@ -439,8 +403,7 @@ test("concurrent sheds on one edge clamp at full coverage", () => {
 });
 
 test("a doubtful placement covers its edge like any other", () => {
-  // Confidence is a diagnostic the artifact carries, not a weight: the fixture has sheds down at 0.23
-  // and their spans have to land on the edge whole, the same as a placement nothing doubts.
+  // Confidence is diagnostic, not a weight: 0.23-confidence spans land whole.
   let doubted = 0;
   for (const { day } of COVERAGE) {
     const coverage = shedCoverage(graph, history, day);
@@ -458,7 +421,6 @@ test("a doubtful placement covers its edge like any other", () => {
   expect(doubted).toBeGreaterThan(0); // or the fixture has nothing doubtful in it
 });
 
-// The three artifact files, served from the fixture, so computeEdgeSheds can be exercised end to end.
 const SERVED: Record<string, string> = {
   [SHED_URLS.open]: OPEN_BASE64,
   [SHED_URLS.closed]: CLOSED_BASE64,
@@ -482,7 +444,7 @@ function serveFixture(): void {
 test("computeEdgeSheds fills the graph with the day's coverage, capped below 1", async () => {
   serveFixture();
 
-  // A day the fixture covers, with the graph cut short of its highest edge so the drop is exercised.
+  // The graph is cut short of its highest edge so the drop is exercised.
   const { day, edges } = COVERAGE[COVERAGE.length - 1];
   const highest = edges[edges.length - 1][0];
   const cut = namedGraph(highest);
@@ -497,8 +459,7 @@ test("computeEdgeSheds fills the graph with the day's coverage, capped below 1",
       expect(sheds.coverage[edge]).toBe(
         Math.min(254, Math.round(deck.covered * 255)),
       );
-      // The field is where the fallback and the floor land, so an edge no span measured reads the
-      // fallback rather than 0, and one measured under what can be built reads the floor.
+      // Unmeasured reads the fallback, and measured-under-buildable reads the floor.
       expect(sheds.depth[edge]).toBeCloseTo(
         Math.max(
           MIN_DECK_DEPTH_METERS,
@@ -508,7 +469,7 @@ test("computeEdgeSheds fills the graph with the day's coverage, capped below 1",
       );
     }
   }
-  // A fully covered edge stops at the 254 ceiling, which is what keeps a discount factor positive.
+  // The 254 ceiling keeps a discount factor positive.
   const full = [...expected].filter(
     ([edge, deck]) => edge < highest && deck.covered === 1,
   );
@@ -518,9 +479,6 @@ test("computeEdgeSheds fills the graph with the day's coverage, capped below 1",
   }
 });
 
-// The router's half of the same guarantee: the field it costs against is the seeded empty one, so a
-// walk is priced with no scaffolding at all rather than with scaffolding on the wrong street, and the
-// mismatch is said out loud for the caller's catch to log.
 test("a graph the artifact was not placed against costs no scaffolding", async () => {
   serveFixture();
   const { day } = COVERAGE[COVERAGE.length - 1];
@@ -541,21 +499,16 @@ test("a Date maps to its own local calendar day", () => {
   expect(shedDay(new Date(2026, 6, 29, 12, 0))).toBe(3135);
 });
 
-// A deck is a floating slab, so how much of its own sidewalk it still shades depends on the angle
-// between the sun and the street — not on the sun's elevation alone. These build the field over
-// synthetic straight streets so the two can be varied independently.
+// Synthetic straight streets vary the sun's angle to the street independently of its elevation.
 
 const NORTH_SOUTH = 0;
 const EAST_WEST = 1;
 
 beforeEach(clearEdgePathCache);
 
-// Two measured depths either side of the fallback, so the falloff is pinned against the number the
-// artifact carries rather than against one constant: a narrow side street and a wide avenue.
 const NARROW_METERS = 2.5;
 const WIDE_METERS = 6;
 
-// One north-south street and one east-west one, both fully decked to `depth`, at a stated instant.
 function twoStreets(date: Date, depth = DEFAULT_DECK_DEPTH_METERS): ShedField {
   const graph = straightGraph(2, 0, 90);
   const decks = new Map<number, EdgeDeck>([
@@ -565,9 +518,7 @@ function twoStreets(date: Date, depth = DEFAULT_DECK_DEPTH_METERS): ShedField {
   return shedField(graph, decks, date);
 }
 
-// The model stated independently: the sun's horizontal translate, the part of it that runs ACROSS the
-// deck's depth, and the floor the shed's own fascia and posts leave. Times the coverage as the field's
-// byte holds it, since a fully decked edge quantizes to 254/255 rather than 1.
+// Times the byte's coverage, since a fully decked edge quantizes to 254/255.
 function expectedShare(
   date: Date,
   bearingDeg: number,
@@ -583,8 +534,7 @@ function expectedShare(
 }
 
 test("at one sun, a street the light runs along stays shaded and one it crosses does not", () => {
-  // 09:00 EDT in July: a 36 degree sun almost due east, so it runs down an east-west street and
-  // straight across a north-south one. The elevation is identical for both — only the angle differs.
+  // 09:00 EDT in July: a 36° sun almost due east, along one street and across the other.
   const date = new Date(Date.UTC(2026, 6, 15, 13));
   const field = twoStreets(date);
   const along = shedShade(field, EAST_WEST, 0);
@@ -596,8 +546,7 @@ test("at one sun, a street the light runs along stays shaded and one it crosses 
 });
 
 test("the sun's angle to the street outranks its elevation", () => {
-  // Solar noon, a 71 degree sun due south: nearly twice the elevation of the case above, and yet the
-  // east-west street it now crosses is LESS shaded than it was at 36 degrees running along it.
+  // Solar noon, a 71° sun due south: higher, yet the east-west street is less shaded than at 36°.
   const noon = new Date(Date.UTC(2026, 6, 15, 17));
   const highSun = twoStreets(noon);
   expect(shedShade(highSun, NORTH_SOUTH, 0)).toBeGreaterThan(0.98);
@@ -614,7 +563,6 @@ test("the shaded share follows the sun down and never exceeds the coverage", () 
   const bearings = [0, 90];
   for (const edge of [NORTH_SOUTH, EAST_WEST]) {
     let previous = Number.POSITIVE_INFINITY;
-    // Afternoon into evening: the sun falls, so the shadow slides further and the share cannot rise.
     for (const hourUtc of [17, 18, 19, 20, 21, 22, 23]) {
       const date = new Date(Date.UTC(2026, 6, 15, hourUtc));
       const share = shedShade(twoStreets(date), edge, 0);
@@ -630,9 +578,6 @@ test("the shaded share follows the sun down and never exceeds the coverage", () 
 });
 
 test("a deeper deck holds its shade to a lower sun than a shallow one", () => {
-  // Solar noon, the sun due south and so straight across an east-west street. Same sun, same
-  // coverage, same bearing: only the measured depth differs, and the wide pavement's deck is still
-  // shading its own curb where the narrow one's has let the light under.
   const noon = new Date(Date.UTC(2026, 6, 15, 17));
   const narrow = shedShade(twoStreets(noon, NARROW_METERS), EAST_WEST, 0);
   const wide = shedShade(twoStreets(noon, WIDE_METERS), EAST_WEST, 0);
@@ -672,8 +617,6 @@ test("the sun keeps moving as the walk does", () => {
 });
 
 test("re-aiming the sun moves the shade without rebuilding the coverage", () => {
-  // The hour slider moves the sun but not which sheds are standing, so the field is re-aimed rather
-  // than rebuilt — the coverage and the bearings have to survive that untouched.
   const morning = new Date(Date.UTC(2026, 6, 15, 13));
   const noon = new Date(Date.UTC(2026, 6, 15, 17));
   const field = twoStreets(morning);
@@ -692,8 +635,6 @@ test("re-aiming the sun moves the shade without rebuilding the coverage", () => 
   );
 });
 
-// The worker never sets the active city, so a field built there aimed New York's sun over every
-// city's sheds until the city traveled with the date.
 test("the sun is aimed over the city the field was built for", () => {
   const sanFrancisco = cityById("sf");
   const newYork = cityById("nyc");
@@ -708,11 +649,7 @@ test("the sun is aimed over the city the field was built for", () => {
   expect(shedShade(field, NORTH_SOUTH, 0)).not.toBeCloseTo(west, 3);
 });
 
-// The hash both of the artifact's graph figures are built on. Recomputed from the graph's own bytes
-// rather than read out of routing/version.json, because the daily job snaps against whatever graph
-// the live site is serving and that deploy can predate the version file. Pinned against the FNV-1a
-// 64 reference vectors, not against the graph pass's output, so the two implementations stay
-// independent.
+// Pinned to the FNV-1a 64 reference vectors, not the graph pass's output, to keep them independent.
 test("the graph hash is FNV-1a 64", () => {
   const of = (text: string): string =>
     graphHashOf(new TextEncoder().encode(text));

@@ -19,32 +19,25 @@ import ModeBar from "./mode-bar";
 import ModesPanel from "./panel";
 import type { CardView } from "./route-cards";
 
-// The chrome the floating controls all wear, worn here by the one bar the mode and its switches
-// share — the same row the card heads with on a phone.
 const FLOATING_BAR =
   "flex items-center rounded-full bg-white/85 px-2 py-1.5 shadow-lg ring-1 ring-black/5 backdrop-blur-md dark:bg-slate-800/80 dark:ring-white/10";
 
 export interface ModesState {
-  // What the reader picked, which a city that does not offer it stands its own first mode in for.
+  // What the reader picked; a city that doesn't offer it substitutes its own first mode.
   modeId: ModeId;
   toggles: Toggles;
   alt: number | null;
   cards: readonly CardView[];
-  // Whether a sweep is running, and the summary of the max-scenic route it has already found.
   planning: boolean;
   planningLine: string | null;
-  // Whether the card is on the directions screen with no destination in hand — a field the reader
-  // has just emptied, which is a question rather than a way back to the search.
+  // A destination field just emptied on the directions screen; a question, not a way back.
   directionsOpen: boolean;
   onMode: (id: ModeId) => void;
   onToggles: (toggles: Toggles) => void;
   onSelect: (index: number) => void;
-  // Which card the pointer is over, whose line is drawn as the chosen one is for as long as it is.
   onHover: (index: number | null) => void;
   onBack: () => void;
   onClose: () => void;
-  // The walk the cards are about; null while there is no destination, which is not a walk anyone
-  // has moved away from.
   onEndpoints: (key: EndpointsKey | null) => void;
 }
 
@@ -63,8 +56,7 @@ export function ModesControls({
     [city, state.modeId],
   );
 
-  // The tab and the browser's own chrome follow the mode with everything else it colors. Both are
-  // put back on the way out, so Explorer and the installed app keep the app's green.
+  // Both are restored on unmount, so Explorer and the installed app keep the app's green.
   useEffect(() => {
     const icon =
       document.head.querySelector<HTMLLinkElement>('link[rel~="icon"]');
@@ -85,15 +77,13 @@ export function ModesControls({
     };
   }, [mode.color]);
 
-  // Reached through a ref because the deck rebuilds the callback every render: listing it below
-  // would refire the effect every render rather than when an end moves.
+  // Through a ref, since the deck rebuilds the callback every render.
   const endpointsRef = useRef(onEndpoints);
   useEffect(() => {
     endpointsRef.current = onEndpoints;
   }, [onEndpoints]);
 
-  // The two ends as separate strings so the effect can compare them without a new object every
-  // render; the start is null while none has been named, which the promotion below then fills in.
+  // Separate strings so the effect compares by value; the start is null until one is named.
   const startKey = shell.manualStart
     ? `${shell.manualStart.lat},${shell.manualStart.lng}`
     : null;
@@ -104,8 +94,7 @@ export function ModesControls({
     );
   }, [startKey, destKey]);
 
-  // The route is already in the hash; the camera and the city live in a URL only here. The clock is
-  // in neither: Modes routes at now, and `encodeModes` writes no hour.
+  // The clock is in neither: Modes routes at now, and `encodeModes` writes no hour.
   const composeShareUrl = useCallback((): string => {
     const params = encodeModes({
       start: shell.manualStart,
@@ -119,7 +108,7 @@ export function ModesControls({
     });
     const camera = shell.camera();
     if (camera) {
-      // The layers are the mode's, so the link says which mode rather than listing them.
+      // The layers are the mode's, so the link names the mode rather than listing them.
       for (const [key, value] of encodeView(camera, [], city.id)) {
         if (key !== "layers") {
           params.append(key, value);
@@ -151,8 +140,6 @@ export function ModesControls({
         onSelectCity={shell.onSelectCity}
         composeShareUrl={composeShareUrl}
       />
-      {/* Between the two button clusters, where there is room for four chips and the switches on a
-          wide screen. On a phone the same row rides the head of the card instead. */}
       <div
         className={`absolute top-3 left-1/2 z-[1000] hidden max-w-[56vw] -translate-x-1/2 md:flex ${FLOATING_BAR}`}
       >
@@ -203,15 +190,13 @@ export function ModesPanels({
     [city, state.modeId],
   );
 
-  // Which of the two screens the card is: a destination — from a link, from the search, or from a
-  // tap on the map — is what turns finding a place into walking to one. Words a link carried that
-  // resolved to nothing certain count as one, because the box they are typed into is the answer.
+  // Unresolved link text counts as a destination, since the box it is typed into is the answer.
   const routing =
     shell.dest !== null || shell.destPrefill !== null || state.directionsOpen;
   const { onClose } = state;
   const { onToggleRouting } = shell;
   const close = useCallback(() => {
-    onToggleRouting(); // the shell's own close: both ends, the route and the peek bar
+    onToggleRouting();
     onClose();
   }, [onToggleRouting, onClose]);
 

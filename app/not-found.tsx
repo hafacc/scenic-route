@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import { ABOUT_PAGE, MODES_PAGE } from "../src/pages";
 
-// The export writes this to out/404.html, which GitHub Pages serves for anything it cannot find and
-// the service worker precaches as part of the shell.
+// Exported as out/404.html, which GitHub Pages serves for any miss; the service worker precaches it.
 export const metadata: Metadata = {
   title: "Page not found",
   robots: { index: false },
@@ -15,9 +14,7 @@ export default function NotFound() {
       <p className="text-slate-600 dark:text-slate-300">
         There is nothing at this address. The map is the place to start.
       </p>
-      {/* Relative, so they resolve under whatever base path the deploy injects — which is also why
-          they only land right for a miss one level down, the shape a typed-in URL actually takes.
-          A root-absolute href would leave the site entirely, which is worse at every depth. */}
+      {/* Relative for the injected basePath, so they're only right for a miss one level down. */}
       <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm font-medium">
         <a
           href={MODES_PAGE.href}

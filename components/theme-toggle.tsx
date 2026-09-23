@@ -16,8 +16,7 @@ const META: Record<
   system: { label: "System theme", next: "light", Icon: BsCircleHalf },
 };
 
-// next-themes hands back whatever string is in storage, so anything unrecognized (or the
-// undefined it renders with on the server) falls back to the default choice.
+// next-themes returns whatever string is stored (undefined on the server), so unknowns fall back.
 function toChoice(theme: string | undefined): ThemeChoice {
   return theme === "light" || theme === "dark" ? theme : "system";
 }
@@ -30,13 +29,10 @@ export default function ThemeToggle({ className }: { className?: string }) {
     setMounted(true);
   }, []);
 
-  // The stored theme cannot be drawn before mount without a hydration mismatch, so until
-  // then the button is the placeholder it renders on the server.
+  // The stored theme can't render before mount without a hydration mismatch.
   const current: ThemeChoice = mounted ? toChoice(theme) : "system";
 
-  // The choice the next click steps from, moved on by the click itself rather than by the
-  // re-render: two clicks landing in one React batch would otherwise both step from the
-  // same theme and the second would be swallowed.
+  // Stepped by the click, or two clicks in one React batch both step from one theme.
   const stepFrom = useRef<ThemeChoice>(current);
   useEffect(() => {
     stepFrom.current = current;

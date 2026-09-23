@@ -42,7 +42,7 @@ test("every route field survives a round trip", () => {
     shelter: 0.25,
     transit: 1.5,
     allowFerries: false,
-    // No key of its own: the planner owns it, so a link neither carries nor restores it.
+    // No key of its own: the planner owns it.
     allowTransit: true,
     allowSheds: false,
     allowCrossings: true,
@@ -150,9 +150,7 @@ test("rewriting the route keeps foreign keys, including the About flag", () => {
   expect(hashParams(hash).has("about")).toBe(true);
 });
 
-// The key was written as `crossings=0` before the flag was inverted and is `crossings=1` now, and in
-// both schemes it was only ever written when crossings are FREE. A link shared before the rename has
-// to keep describing the route it described.
+// `crossings=0` predates the flag inversion; both schemes wrote it only when crossings are free.
 test("both spellings of the crossings key mean crossings are free", () => {
   const decode = (hash: string) =>
     decodeRoute(hashParams(hash)).weights.allowCrossings;
@@ -182,7 +180,6 @@ test("every Modes field survives a round trip", () => {
   expect(modeRoundTrip(state)).toEqual(state);
 });
 
-// Modes routes at now: it writes no clock, and it reads none out of a link that carries Explorer's.
 test("a pinned clock is neither written nor read by Modes", () => {
   const pinned = formatHash(
     encodeModes({
@@ -210,8 +207,7 @@ test("only the Modes fields off their defaults are written", () => {
   expect(hash).toBe("#mode=rain&sun=sun");
 });
 
-// The recipient's own settings fill in whatever the link leaves out, so a link that pins a card has
-// to pin the plan that card belongs to — every key of it, however ordinary the sender's own are.
+// The recipient's settings fill the gaps, so a link pinning a card must pin every key of its plan.
 test("a link that pins a card pins the plan it is a card of", () => {
   const sent: ModeUrlState = {
     ...DEFAULT_MODE_STATE,
@@ -229,7 +225,6 @@ test("a link that pins a card pins the plan it is a card of", () => {
   expect(opened.alt).toBe(2);
 });
 
-// The one key both pages encode the same way.
 test("the ferry gate is spelled the way Explorer spells it", () => {
   const barred = formatHash(
     encodeModes({
@@ -242,7 +237,6 @@ test("the ferry gate is spelled the way Explorer spells it", () => {
   expect(decodeRoute(hashParams(barred)).weights.allowFerries).toBe(false);
 });
 
-// Old links break by design, but they must break by opening rather than by refusing to.
 test("a link written before Modes existed opens the default mode where it points", () => {
   const decoded = decodeModes(
     hashParams("#from=40.7,-74&to=40.75,-73.98&tree=0.9&shade=-1&crossings=1"),

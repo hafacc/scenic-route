@@ -14,9 +14,7 @@ import {
 } from "./cost";
 import type { RoutingGraph } from "./graph";
 
-// Two ways of climbing the same hill over the same distance: all of it in one steep block, or the
-// same rise spread evenly. Total height climbed is identical, so anything proportional to height
-// scores them the same — which is what the hill penalty used to do.
+// Same total rise over the same distance, so a height-proportional penalty would score them the same.
 const REFERENCE_GRADE = 0.12;
 const MAX_GRADE = 0.35;
 
@@ -24,8 +22,7 @@ function reliefByte(grade: number): number {
   return Math.round(Math.min(1, grade / MAX_GRADE) * 254);
 }
 
-// A chain of equal-length edges, each given how much of its length it climbs and how much it drops,
-// wired a -> b in order so node `edge` is the a end of edge `edge`.
+// Wired a -> b in order, so node `edge` is the a end of edge `edge`.
 function chain(
   slopes: readonly (readonly [number, number])[],
   meters: number,
@@ -58,7 +55,6 @@ function chain(
   } as unknown as RoutingGraph;
 }
 
-// Edges that only climb, which is what the penalty tests are about: it reads the two bytes' sum.
 function stretch(grades: readonly number[], meters: number): RoutingGraph {
   return chain(
     grades.map((grade) => [grade, 0] as const),
@@ -100,8 +96,6 @@ function penalty(grades: readonly number[], hill: number): number {
 
 test("the same climb costs more concentrated into one steep block than spread out", () => {
   expect(penalty(CONCENTRATED, 1)).toBeGreaterThan(penalty(GRADUAL, 1));
-  // And it is the shape, not the strength: the gap widens with the weight rather than appearing at
-  // some threshold.
   const atOne = penalty(CONCENTRATED, 1) - penalty(GRADUAL, 1);
   const atFour = penalty(CONCENTRATED, 4) - penalty(GRADUAL, 4);
   expect(atFour).toBeGreaterThan(atOne * 3);
@@ -121,7 +115,7 @@ test("with the hill weight at zero the steep route still takes longer to walk", 
 });
 
 test("the penalty is the weight itself at the reference grade, and grows quadratically", () => {
-  // To one decimal: a grade makes the round trip through a byte, so 12% comes back as 11.94%.
+  // To one decimal: 12% round-trips through a byte as 11.94%.
   const graph = stretch([REFERENCE_GRADE, 2 * REFERENCE_GRADE], BLOCK_METERS);
   expect(edgeMultiplier(graph, 0, weights(1))).toBeCloseTo(2, 1); // 1 + 1 * 1^2
   expect(edgeMultiplier(graph, 1, weights(1))).toBeCloseTo(5, 1); // 1 + 1 * 2^2
@@ -136,8 +130,6 @@ test("a 30% street is told apart from a 12% one rather than both saturating", ()
 
 test("the penalty reads a hill the same in both directions", () => {
   const graph = chain([[0.2, 0]], BLOCK_METERS);
-  // Walked b -> a the climb becomes a drop, and the two bytes swap; their sum, which is all the
-  // penalty sees, does not move.
   expect(edgeGrade(graph, 0)).toBeCloseTo(0.2, 2);
   expect(edgeMultiplier(graph, 0, weights(1))).toBeCloseTo(
     1 + (0.2 / REFERENCE_GRADE) ** 2,
@@ -150,15 +142,13 @@ test("a descent is walked faster than the climb back up it", () => {
   const up = rawSeconds(graph, 0, 0); // entered at node a: the stored a -> b climb
   const down = rawSeconds(graph, 0, 1); // entered at node b: the same block downhill
   expect(down).toBeLessThan(up);
-  // An 8% descent is quicker than flat, which is the half of Tobler an absolute grade cannot
-  // express: 100 m of it takes 71.6 s down, 101.6 s up, and 76.9 s on the level.
+  // 100 m at 8% takes 71.6 s down, 101.6 s up and 76.9 s on the level.
   expect(down).toBeLessThan(BLOCK_METERS / WALK_METERS_PER_SECOND);
 });
 
 test("Tobler peaks at a gentle descent, not at flat", () => {
   expect(gradeSpeedFactor(0)).toBe(1);
   expect(gradeSpeedFactor(-0.05)).toBeCloseTo(1.1912, 4);
-  // Ten percent down is where the descent stops paying and a walker is back to level speed.
   expect(gradeSpeedFactor(-0.1)).toBeCloseTo(1, 6);
   expect(gradeSpeedFactor(-0.3)).toBeLessThan(1);
   for (const grade of [0.02, 0.12, 0.3, 0.5]) {
@@ -169,19 +159,15 @@ test("Tobler peaks at a gentle descent, not at flat", () => {
 
 test("an edge that crests is slower than a steady climb of the same total grade", () => {
   const meters = 200;
-  // Both carry 20% of grade over the same length; one climbs it, the other climbs half and drops
-  // half. The crest walks its drop faster, so it costs less time — and exactly the same penalty.
   const steady = chain([[0.2, 0]], meters);
   const crest = chain([[0.1, 0.1]], meters);
   expect(edgeGrade(steady, 0)).toBeCloseTo(edgeGrade(crest, 0), 2);
   expect(rawSeconds(crest, 0, -1)).toBeLessThan(rawSeconds(steady, 0, -1));
-  // A crest reads the same both ways: it climbs and drops as much either direction.
   expect(rawSeconds(crest, 0, 0)).toBeCloseTo(rawSeconds(crest, 0, 1), 6);
 });
 
 test("the A* per-meter floor never exceeds what a meter actually costs", () => {
-  // Every mix of climb and drop the bytes can carry, including the gentle descents that walk faster
-  // than flat — the case that makes the flat speed an invalid divisor.
+  // Gentle descents walk faster than flat, which makes the flat speed an invalid divisor.
   const slopes: [number, number][] = [];
   for (const ascent of [0, 0.01, 0.03, 0.05, 0.1, 0.2, 0.35]) {
     for (const descent of [0, 0.01, 0.03, 0.05, 0.1, 0.2, 0.35]) {
@@ -198,9 +184,7 @@ test("the A* per-meter floor never exceeds what a meter actually costs", () => {
       }
     }
   }
-  // And the bound is the fastest edge in the graph, not a blanket constant: the 5% descent is where
-  // Tobler peaks, at 1.1912 times the flat speed — 1.1888 here, since 5% round-trips through a byte
-  // as 4.97%.
+  // Tobler peaks at a 5% descent, 1.1912x flat; 5% round-trips through a byte as 4.97%.
   expect(maxSpeedFactor(graph)).toBeCloseTo(1.1888, 4);
   const gentleDrop = slopes.findIndex(
     ([up, down]) => up === 0 && down === 0.05,

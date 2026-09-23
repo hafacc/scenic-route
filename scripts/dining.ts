@@ -1,10 +1,4 @@
-// `bun run scripts/dining.ts`: fetches NYC outdoor dining and writes it as data/dining/nyc.bin (magic
-// DINE) — the sidewalk/roadway café points a future "nice commercial areas" routing factor will read
-// as an outdoor-dining density, the signal for a relaxing storefront corridor (as opposed to merely
-// dense/city-y). Two sources merged: the NYC Dining Out café-license inventory (Sidewalk|Roadway
-// permits) and OSM outdoor_seating=yes (which carries the cafés the license set is thin on). Points
-// only; the commercial overlay snaps these to street segments and highlights the blocks they cluster
-// on. Layout: scripts/README.md.
+// NYC café licenses merged with OSM outdoor_seating=yes, which covers cafés the licenses miss.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -28,8 +22,8 @@ const OSM_SEATING_DEDUP_METERS = 30;
 interface DiningRow {
   latitude?: string;
   longitude?: string;
-  assumed_name_s?: string; // the DBA, the name the client draws
-  business_legal_name?: string; // fallback when the DBA is blank
+  assumed_name_s?: string; // the DBA
+  business_legal_name?: string;
 }
 
 function toPoints(
@@ -40,7 +34,7 @@ function toPoints(
   for (const row of rows) {
     const lat = Number.parseFloat(row.latitude ?? "");
     const lng = Number.parseFloat(row.longitude ?? "");
-    // Some rows carry blank or 0/0 coordinates; NYC never sits on the null island, so drop those.
+    // Some rows carry blank or 0/0 coordinates.
     if (
       !Number.isFinite(lat) ||
       !Number.isFinite(lng) ||
@@ -59,8 +53,7 @@ function toPoints(
   return points;
 }
 
-// Keeps the OSM cafés that are not already a licensed one. Both sets are small (thousands), so a
-// direct radius scan is cheaper than indexing — no grid is worth its bookkeeping here.
+// Both sets are thousands of points, so a direct scan beats building an index.
 function dedupOsm(osm: OsmSeating[], licensed: NamedPoint[]): NamedPoint[] {
   return osm
     .filter(
@@ -77,9 +70,7 @@ export async function ingestDining(
   cityId: string,
   land: LandContext,
 ): Promise<SourceFile> {
-  // New York only. The fetch below reads a NYC dataset unconditionally, so another city would clip
-  // New York's rows against its own coastline, drop every one of them, and write a silently empty
-  // artifact that `serveSources` would then publish.
+  // Another city would clip NYC rows to its own land and silently write an empty artifact.
   if (cityId !== "nyc") {
     throw new Error(`no outdoor dining source for ${cityId}`);
   }
@@ -87,7 +78,7 @@ export async function ingestDining(
   const started = performance.now();
   await mkdir(DINING_DIR, { recursive: true });
 
-  // `*` so a newly-read column is free after one refetch (the disk cache keys on the query).
+  // `*` because the disk cache keys on the query, so a narrower select would refetch per column.
   const licensedRows = await NYC_OPEN_DATA.dataset<DiningRow>(
     DINING_DATASET,
     { $select: "*" },

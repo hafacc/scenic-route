@@ -5,9 +5,7 @@ import { decodeIndustrial, industrialRenderer } from "./industrial";
 import { projectX, projectY } from "./mercator";
 import type { IndustrialParams } from "./protocol";
 
-// INDL rides the shared polygon layout, so these run the real encoder (scripts/geometry.ts) into the
-// real decoder (./industrial.ts): a change to one that the other did not follow fails here rather
-// than painting a city wrong.
+// Runs the real encoder (scripts/geometry.ts) into the real decoder, so a one-sided change fails.
 
 const TILE_SIZE = 256;
 const QUANTIZATION_DEG = 2e-6; // a coordinate survives the 1e-6 quantization to within a step

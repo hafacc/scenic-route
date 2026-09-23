@@ -1,11 +1,4 @@
-// The places the app covers, and which of them a point belongs to. Exactly one is active at a time:
-// it owns the routing graph, the tile pyramids and the overlay set, so switching swaps all three and
-// two of them are never on screen together.
-//
-// "City" is the code's word for one of these and stays that way, but one of them is now a region —
-// `sf` is San Francisco and the East Bay together, named "Bay Area" — so the reader-facing word is
-// "region" and a name may need an article. See `cityInSentence`.
-
+// "City" is the code's word, but `sf` is a region ("Bay Area"), so reader-facing text says "region".
 import type { OverlayId } from "./overlays/registry";
 import manifest from "./tree-cover/manifest.json";
 import type { LatLng } from "./url-state";
@@ -22,26 +15,19 @@ export interface City {
   name: string;
   bounds: CityBounds;
   center: LatLng;
-  // The IANA zone the city keeps time in. Every published timetable is written in it, so a walker
-  // reading one from another zone resolves the hour, the weekday and the service day through this
-  // and never through the browser's own offset.
+  // Timetables are written in this zone, so hours and service days never use the browser's offset.
   timeZone: string;
-  // The overlays this city offers, in switcher order. A city without a pyramid simply omits it, so a
-  // shared link naming an overlay the active city lacks drops that one rather than breaking.
+  // In switcher order; a shared link naming an overlay the city lacks drops it rather than breaking.
   overlays: readonly OverlayId[];
-  // Curb to the baked sidewalk line, the offset the graph pass lays this city's sidewalks at.
+  // Curb to the baked sidewalk line.
   sidewalkInsetMeters: number;
-  // How long a walker here will stand on a pier before the ferry stops being a way to get anywhere.
-  // Absent means the default in src/routing/cost.ts. Set it where the timetable is thin AND the water
-  // cannot be walked round, since that combination turns "wait too long" into "no route".
+  // Longest pier wait before the ferry stops counting; absent means src/routing/cost.ts's default.
   maxFerryWaitSeconds?: number;
-  // The same judgment about a platform. Absent means the default; both regions take it, their rail
-  // running often enough by day that a longer wait is a walk in disguise.
+  // The same cap for a platform; absent means the default.
   maxTransitWaitSeconds?: number;
 }
 
-// Authored per city rather than derived from the artifacts on disk: a city may have the data for a
-// layer and still not want it in the switcher.
+// Authored, not derived: a city may have a layer's data and still not want it in the switcher.
 const OVERLAYS_BY_CITY: Record<string, readonly OverlayId[]> = {
   nyc: [
     "canopy",
@@ -58,11 +44,7 @@ const OVERLAYS_BY_CITY: Record<string, readonly OverlayId[]> = {
     "shade",
     "scaffolding",
   ],
-  // No scaffolding feed here to build a shed layer from, and no legacy-business register outside San
-  // Francisco's own, so that layer stays the city register it already is. Commercial waits on the
-  // region-wide land-use, dining and open-streets artifacts the Bay Area has none of. Its rail is
-  // Muni's and BART's rather than a subway, but it is the same artifact and the same layer, so it
-  // rides under the same id.
+  // Its Muni and BART rail rides under the "subway" id: same artifact, same layer.
   sf: [
     "canopy",
     "genus",
@@ -79,38 +61,27 @@ const OVERLAYS_BY_CITY: Record<string, readonly OverlayId[]> = {
   ],
 };
 
-// The ids whose name takes a definite article mid-sentence: "outside New York City", but "outside
-// the Bay Area". Nothing in the name itself says which, and the wrong answer shows up in every
-// sentence the name appears in, so it is authored here beside the overlay list.
+// Ids whose name takes "the" mid-sentence: "outside the Bay Area"; the name itself can't say.
 const ARTICLED_NAMES: ReadonlySet<string> = new Set(["sf"]);
 
-// The name as it reads inside a sentence rather than as a label.
 export function cityInSentence(city: City): string {
   return ARTICLED_NAMES.has(city.id) ? `the ${city.name}` : city.name;
 }
 
 const METERS_PER_DEGREE_LAT = 111_320;
 
-// What a city is framed at when the app opens on it with no camera of its own to restore.
+// The zoom a city opens at when there is no camera to restore.
 export const CITY_ZOOM = 13;
 
-// Past this the camera cuts rather than flies. Well beyond any pan inside one city — New York's own
-// diagonal is about 50 km — and far below the distance to another city, so the only thing it catches
-// is a move that was never a pan. Everything keyed on the viewport renders against each frame of an
-// animated crossing and reports what it finds over the ocean in between, which is nothing.
+// Past this the camera cuts rather than flies, so viewport consumers never render the ocean between.
 export const CROSS_CITY_METERS = 120_000;
 
-// Authored, not measured. New York keeps the default: its ferry runs every 30-60 minutes all night
-// and a bridge is always there, so a wait past the cap simply means the search walks. The Bay is the
-// other case — the only way across on foot, with a 140-minute midday gap in the timetable — where a
-// short cap does not reroute a walker, it refuses them. 150 minutes clears that gap; the price is
-// that a route may propose a long wait, which is at least a true answer.
+// The Bay's ferry is the only way across on foot with a 140-minute midday gap, so a short cap refuses.
 const MAX_FERRY_WAIT_BY_CITY: Record<string, number> = {
   sf: 150 * 60,
 };
 
-// Authored here rather than derived from the bounds: a coordinate does not carry a zone, and a wrong
-// guess shows up as the wrong trains rather than as an error.
+// A coordinate carries no zone, and a wrong guess shows up as the wrong trains rather than an error.
 const TIME_ZONE_BY_CITY: Record<string, string> = {
   nyc: "America/New_York",
   sf: "America/Los_Angeles",
@@ -132,8 +103,7 @@ export const CITIES: readonly City[] = manifest.cities.map((city) => ({
 
 export const DEFAULT_CITY: City = CITIES[0];
 
-// Meters from a point to a city's bounds, 0 anywhere inside them. Longitude is scaled by the point's
-// latitude, so an east-west gap counts for what it is on the ground rather than in degrees.
+// 0 inside; longitude is scaled by latitude so the gap is in ground meters.
 export function metersFromCity(city: City, point: LatLng): number {
   const { bounds } = city;
   const north = Math.max(0, bounds.south - point.lat, point.lat - bounds.north);
@@ -148,11 +118,7 @@ export function cityById(id: string | null): City | null {
   return CITIES.find((city) => city.id === id) ?? null;
 }
 
-// Read by the modules that are not React and so cannot be handed the city as a prop: the sun's
-// position for the shade model, and the sidewalk offset the shed decks are measured against. Exactly
-// one city is live at a time by design, so these read it rather than threading a parameter down
-// through the tile pipeline for a value that cannot differ within one render. It starts at the
-// default so it is never unset, and the app assigns it wherever it assigns the city.
+// For non-React modules; exactly one city is live at a time, so a global beats threading a parameter.
 let active: City = DEFAULT_CITY;
 
 export function setActiveCity(city: City): void {
@@ -167,8 +133,7 @@ export function containsPoint(city: City, point: LatLng): boolean {
   return metersFromCity(city, point) === 0;
 }
 
-// The cities any part of which is on screen. Overlap, not containment: a city half off the edge is
-// still one you are looking at.
+// Overlap, not containment: a city half off the edge is still in view.
 export function citiesInView(view: CityBounds): City[] {
   return CITIES.filter(
     ({ bounds }) =>
@@ -179,8 +144,7 @@ export function citiesInView(view: CityBounds): City[] {
   );
 }
 
-// The city a point belongs to, or the closest one when it is outside every city. Never null: an
-// out-of-coverage visitor is taken to the nearest city rather than left on an empty map.
+// Never null: an out-of-coverage visitor goes to the nearest city rather than an empty map.
 export function nearestCity(point: LatLng): City {
   return CITIES.reduce((best, city) =>
     metersFromCity(city, point) < metersFromCity(best, point) ? city : best,

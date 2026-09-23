@@ -1,17 +1,5 @@
-//! The graph pass's own disk cache: one city's finished topology, and one file per attribute column
-//! baked over it. A cache and not an output — `.build/graph-cache/<city>/` is gitignored build glue,
-//! and a build that finds none of it is a build that computes everything, exactly as before.
-//!
-//! Why the pass needs one at all: the topology is a few seconds and the columns over it are most of
-//! an hour — New York's direct-canopy integration is 140 s and its per-bin shade bake is twenty-odd
-//! minutes — so a re-ingested landmark file, which moves one 0.2 s column, has been re-running all
-//! of it. The stamp beside the graph blob is what decides whether the pass runs at all; these keys
-//! decide what it does once it has to.
-//!
-//! Every entry is named by a content key the driver computes (crates/tiler/src/build.rs), and every
-//! column's key folds the base's. That is the whole correctness argument for merging a column into
-//! the graph by POSITION: a column entry is only ever read back beside the very base it was baked
-//! over, because a base that moved renames every column with it.
+//! The graph pass's disk cache: one city's topology and one file per attribute column over it.
+//! Every column's key folds the base's, which is what makes merging a column by position safe.
 
 use std::collections::HashSet;
 use std::fs;
@@ -31,15 +19,10 @@ pub const CANOPY: &str = "canopy";
 pub const INDUSTRIAL: &str = "industrial";
 pub const HISTORIC: &str = "historic";
 pub const BRIDGE: &str = "bridge";
-/// One entry per sun bin, keyed on that bin alone — so a schedule that gained a bin bakes one bin.
+/// One entry per sun bin, keyed on that bin alone.
 pub const SHADE: &str = "shade";
 
-/// What this city's entries are called this build: the base's content key, and one per column, each
-/// of which folds `base`.
-///
-/// The keys are computed by the driver rather than here, because it is the driver that knows what
-/// the pass is a function of — the same expressions its stamps come from, so the pass's own
-/// freshness and the cache it hits cannot disagree about what an input is.
+/// This build's entry names: the base's content key and one per column, each folding `base`.
 #[derive(Clone)]
 pub struct Keys {
     pub dir: PathBuf,
@@ -53,13 +36,11 @@ pub struct Keys {
     pub industrial: String,
     pub historic: String,
     pub bridge: String,
-    /// In schedule order, and empty for a city that bakes no per-edge shade.
+    /// In schedule order; empty for a city that bakes no per-edge shade.
     pub shade: Vec<String>,
 }
 
-/// Whether an entry is on disk, asked without opening it. The driver asks about the relief column
-/// before the passes run: a graph whose relief is cached reads no DEM, and opening San Francisco's
-/// is 651 files of georeferencing.
+/// Whether an entry is on disk, without opening it; a cached relief column skips reading the DEM.
 pub fn holds(dir: &Path, name: &str, key: &str) -> bool {
     entry(dir, name, key).is_file()
 }
@@ -71,8 +52,7 @@ fn entry(dir: &Path, name: &str, key: &str) -> PathBuf {
 /// One city's entries, and what this build asked for.
 pub struct Cache {
     dir: PathBuf,
-    /// Every entry read or written this build, so `prune` can take away the rest: a re-ingest leaves
-    /// the base it moved off behind, and nothing will ever read that one again.
+    /// Every entry read or written this build, so `prune` can remove the rest.
     claimed: HashSet<String>,
 }
 
@@ -84,9 +64,7 @@ impl Cache {
         }
     }
 
-    /// The bytes this key names, if they are there and there are `expect` of them. A length that
-    /// does not match is a half-written entry a killed build left, which is a miss rather than an
-    /// error — the graph would otherwise be assembled out of a truncated column.
+    /// The bytes this key names if exactly `expect` of them; a short file is a killed build's.
     pub fn load(&mut self, name: &str, key: &str, expect: usize) -> Fallible<Option<Vec<u8>>> {
         self.claimed.insert(file_name(name, key));
         let path = entry(&self.dir, name, key);
@@ -111,8 +89,7 @@ impl Cache {
         }
     }
 
-    /// Written through a temporary name and renamed into place, so a build killed mid-write leaves
-    /// no entry a later one would read as whole.
+    /// Written through a temporary name and renamed, so a killed build leaves no partial entry.
     pub fn store(&mut self, name: &str, key: &str, bytes: &[u8]) -> Fallible<()> {
         self.claimed.insert(file_name(name, key));
         fs::create_dir_all(&self.dir)?;
@@ -121,8 +98,7 @@ impl Cache {
         Ok(fs::rename(&staged, entry(&self.dir, name, key))?)
     }
 
-    /// Take away every entry this build did not ask for. One generation is what the cache is worth:
-    /// a base is a hundred megabytes and a re-ingest is not a thing anyone goes back from.
+    /// Remove every entry this build did not ask for; one generation is all the cache keeps.
     pub fn prune(&self) -> Fallible<()> {
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
@@ -148,9 +124,7 @@ fn file_name(name: &str, key: &str) -> String {
     format!("{name}-{key}.bin")
 }
 
-/// A little-endian writer for the base entry. The entry carries no format version of its own: its
-/// key folds the tiler's code, so a build whose layout changed asks for a name no earlier build
-/// wrote.
+/// A little-endian writer for the base entry; its key folds the tiler's code, so no version.
 #[derive(Default)]
 pub struct Writer {
     pub bytes: Vec<u8>,
@@ -195,8 +169,7 @@ impl Writer {
     }
 }
 
-/// The reader for what `Writer` wrote. Every read is bounds-checked: the entry is a file on disk,
-/// and one truncated by a full filesystem must fail rather than index past its end.
+/// The reader for what `Writer` wrote; every read is bounds-checked against a truncated file.
 pub struct Reader<'a> {
     bytes: &'a [u8],
     at: usize,
@@ -255,7 +228,7 @@ impl<'a> Reader<'a> {
         self.take(count)
     }
 
-    /// That every field was read, which is what says the two sides of the format agree.
+    /// That every field was read, so the two sides of the format agree.
     pub fn finish(&self) -> Fallible<()> {
         if self.at == self.bytes.len() {
             Ok(())
@@ -296,8 +269,7 @@ mod tests {
         assert!(cache.load(ART, "abc", 6).expect("a load").is_none());
     }
 
-    /// A killed build leaves a column shorter than the edge list it was baked over; assembling a
-    /// graph out of it would write another column's bytes into the record.
+    /// A killed build leaves a column shorter than the edge list, which must not be assembled.
     #[test]
     fn an_entry_of_the_wrong_length_is_a_miss() {
         let dir = scratch("truncated");

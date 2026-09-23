@@ -19,29 +19,16 @@ import {
 } from "../src/tiles/shed-decks";
 import { useCity } from "./city-context";
 
-// The "Scaffolding" overlay: every sidewalk shed standing on the map's picked DATE, drawn as the
-// stretch of sidewalk it decks over. The SHED artifact (src/routing/sheds.ts) carries eight and a
-// half years of them as spans along GRPH edges, so scrubbing the date picker back re-reads the
-// history rather than re-fetching anything.
-//
-// The deck geometry is src/tiles/shed-decks.ts's, which the shade layer casts the decks' shadows
-// from — so a band and the shadow leaving it cannot disagree. A deck arrives as the polygon it
-// covers, already pinned between the building line and the curb at its own measured depth, so this
-// only scales it into the tile and fills it. Where that depth falls under a pixel the minimum width
-// opens the band out instead of dropping it.
-//
-// Everything is drawn on the main thread rather than in the tile worker: the graph and the artifact
-// are both already there (the router reads them), and a day's ~13k spans project once into world
-// coordinates, after which a tile is a scale and a bounding-box test.
+// Main thread, not the tile worker: the graph and artifact are already here.
 
 const PANE_NAME = "sheds";
-const PANE_Z_INDEX = 285; // above the commercial band (280), below the scenic lines (290)
+const PANE_Z_INDEX = 285; // above commercial (280), below lines (290)
 const MIN_ZOOM = 10;
 const MAX_ZOOM = 20;
 const TILE_SIZE = 256;
 
-const MIN_WIDTH = 1.5; // px, so a city-wide view still shows where the scaffolding is
-const SHED_ALPHA = 0.75; // the basemap's street still reads through the band
+const MIN_WIDTH = 1.5; // px
+const SHED_ALPHA = 0.75;
 
 // Zoom 0 is the whole world in 256 px, which a double resolves far past z20.
 const REFERENCE_ZOOM = 0;
@@ -72,18 +59,14 @@ class ShedGrid extends CanvasGrid {
     return tile;
   }
 
-  // One Path2D for the whole tile, filled once. The decks are short and there are thousands of them,
-  // so a fill each would cost far more than the geometry does — and one nonzero fill also unions two
-  // sheds that overlap, which separate fills would darken twice over.
+  // One Path2D per tile: per-deck fills are costly and would darken overlapping sheds twice.
   private draw(
     context: CanvasRenderingContext2D,
     decks: ShedDecks,
     coords: L.Coords,
   ): void {
     const scale = 2 ** (coords.z - REFERENCE_ZOOM);
-    // The tile's own window in reference units, widened by half the minimum width so a deck just
-    // outside it still paints the sliver of itself that reaches in. The boxes are the rings' own, so
-    // each deck's depth is already in them and only the opening out has anything left to add.
+    // Widened by half the minimum width, so a deck just outside still paints its sliver.
     const margin = MIN_WIDTH / 2 / scale;
     const left = (coords.x * TILE_SIZE) / scale - margin;
     const top = (coords.y * TILE_SIZE) / scale - margin;
@@ -128,10 +111,9 @@ export default function ShedLayer() {
     let canceled = false;
     let graph: RoutingGraph | null = null;
     let history: ShedHistory | null = null;
-    let drawnDay = Number.NaN; // no day drawn yet; every real day differs from it
+    let drawnDay = Number.NaN;
 
-    // The picked DATE chooses the standing set. The store also ticks with the wall clock and with
-    // the hour slider, neither of which moves the day, so the rebuild is gated on the day itself.
+    // The store also ticks with the clock and the hour slider, so the rebuild is gated on the day.
     const apply = (): void => {
       if (!graph || !history) {
         return;

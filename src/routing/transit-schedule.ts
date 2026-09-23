@@ -1,22 +1,4 @@
-// The rail timetable the router departs against (magic TSCH, written by scripts/transit-schedule.ts).
-//
-// The graph carries the topology — which pattern calls at which station, and the seconds between one
-// stop and the next — and each of its board edges names a LANE, the pattern a walker would be
-// getting on. This says when that pattern leaves: for the day being routed, the headway bands at the
-// pattern's first stop, shifted by the stop's own offset so the answer is the next train from the
-// platform the walker is standing on.
-//
-// It is bands rather than departures, so a `board` answer is the modeled train and not a promise
-// about a particular one: over the 2026 feeds the modeled departure is a mean of 20 seconds from the
-// real one. That is the trade the artifact exists to make — a departure list would be ten times the
-// records for a wait nobody can tell apart.
-//
-// A different artifact for a different day, exactly as the ferry timetable does it: the daily job
-// records the day range each one was in effect for, so routing on a past day resolves to the
-// timetable that actually ran. Days before the first recorded one — and any day at all when the fetch
-// fails — get no timetable, and the router falls back to whatever it does without one.
-//
-// Layout: scripts/README.md.
+// Headway bands, not departures: 2026 feeds model departures within 20 s on average at a tenth the size.
 
 import { type Cursor, readUnsignedVarint } from "../tiles/varint";
 import {
@@ -39,11 +21,7 @@ const HEADER_BYTES = 44;
 const PATTERN_BYTES = 12;
 const LANE_BYTES = 12;
 
-// Where the timetable comes from: `public/transit-schedule/` on `main`, which the daily job commits
-// to, read over raw.githubusercontent.com rather than out of the deploy — the same reasoning as the
-// ferry timetable and the shed artifact, since a schedule change must reach the client without a
-// deploy. In development it stays on the local `public/transit-schedule/`, which is also the only way
-// to see a pipeline change before it is pushed.
+// Read from `main` over raw.githubusercontent.com so schedule changes skip a deploy; local in development.
 const SCHEDULE_MAIN_URL =
   "https://raw.githubusercontent.com/hafaio/scenic-route/main/public/transit-schedule";
 const SCHEDULE_BASE =
@@ -52,39 +30,28 @@ const SCHEDULE_BASE =
     ? "transit-schedule"
     : SCHEDULE_MAIN_URL);
 
-// One window of even service at a pattern's first stop: trains at `start`, `start + headway`, … up
-// to `end`, and `end` itself, which is the window's last train whether or not the grid lands on it.
-// A `headway` of 0 is a window of one train.
+// `end` is the window's last train whether or not the grid lands on it; a `headway` of 0 is one train.
 export interface Band {
   start: number; // seconds from midnight of the day being routed
   end: number;
   headway: number;
 }
 
-// The train a walker catches: when it leaves the stop they are standing at, and how long they wait
-// for it first.
 export interface Departure {
   departure: number;
   wait: number;
 }
 
-// What the cost model asks of a timetable.
 export interface TransitTimetable {
-  // Whether this lane is in the timetable at all. A board edge whose lane the timetable does not name
-  // — a pattern the feed has since changed — is not scheduled, and the caller decides what that
-  // means rather than being handed a wrong departure.
+  // An unnamed lane is unscheduled, and the caller decides what that means.
   covers(laneId: number): boolean;
-  // The first departure at `stopIndex` of the lane at or after `elapsedSeconds` into the walk, or
-  // null once the day's last train has gone. Null is what makes a missed train cost Infinity and
-  // drop out of the search.
+  // Null once the day's last train has gone, which makes a missed train cost Infinity.
   board(
     laneId: number,
     stopIndex: number,
     elapsedSeconds: number,
   ): Departure | null;
-  // The least anyone can wait for a train: zero, because a train can be standing at the platform.
-  // The A* transit credit is built from this, so it has to be a true lower bound over every
-  // departure time.
+  // Zero, since a train can be standing at the platform; the A* transit credit needs a true lower bound.
   readonly minWaitSeconds: number;
 }
 
@@ -99,7 +66,6 @@ interface Pattern {
   offsets: number[]; // seconds from the first stop's departure to each stop
 }
 
-// One decoded TSCH record: the timetable plus the day range it was in effect for.
 export interface ScheduleRecord {
   firstDay: number;
   lastDay: number; // 0 while this is the timetable in effect
@@ -194,9 +160,7 @@ export function decodeSchedule(
   };
 }
 
-// The first train of a band at or after `at`, or null when the band is already over. `end` is a
-// departure in its own right: the band's headway is the mean over the window, so the grid can land a
-// few seconds short of the last train, and answering null there would lose it.
+// `end` is a departure too: the headway is a window mean, so the grid can land short of the last train.
 function nextInBand(band: Band, at: number): number | null {
   if (at <= band.start) {
     return band.start;
@@ -225,9 +189,7 @@ class ResolvedTimetable implements TransitTimetable {
     private readonly lanes: ReadonlyMap<number, ResolvedLane>,
   ) {}
 
-  // Coverage is over the WHOLE record, not the day being routed: a pattern that runs on weekends only
-  // is covered on a Wednesday and simply has no train, which is a different answer from "this lane is
-  // not in the timetable".
+  // Over the whole record, so a weekend-only lane is covered on a Wednesday but has no train.
   covers(laneId: number): boolean {
     return this.covered.has(laneId);
   }
@@ -243,8 +205,7 @@ class ResolvedTimetable implements TransitTimetable {
       return null;
     }
     const wall = this.departureSecondsOfDay + elapsedSeconds;
-    // The bands are the FIRST stop's departures, so the walk down the line comes off the clock
-    // before the search and goes back on after it.
+    // Bands are the first stop's departures, so the stop's offset comes off the clock and back on.
     const wanted = wall - offset;
     let best: number | null = null;
     for (const band of lane.bands) {
@@ -264,8 +225,7 @@ class ResolvedTimetable implements TransitTimetable {
   }
 }
 
-// Resolve a decoded timetable against a departure instant: which services run on the three days
-// around it, and per lane the bands of those days as seconds from midnight of the routed day.
+// Bands as seconds from midnight of the routed day, over the three service days around it.
 export function resolveTimetable(
   record: ScheduleRecord,
   date: Date,
@@ -314,12 +274,9 @@ export function resolveTimetable(
   );
 }
 
-// The two published files, read through the shared reader: which record was in effect on a day is
-// the same question of both artifacts, asked of this one's own directory and decoder.
 export const loadScheduleRecord = scheduleReader(SCHEDULE_BASE, decodeSchedule);
 
-// The timetable in effect on the departure date, resolved against it, or null when no record covers
-// that day — which is every day before the first the daily job ever wrote.
+// Null for any day before the first the daily job ever wrote.
 export async function loadTimetable(
   cityId: string,
   date: Date,

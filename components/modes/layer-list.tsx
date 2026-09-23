@@ -9,9 +9,7 @@ import {
 } from "../../src/overlays/registry";
 import { useMapTheme } from "../use-map-theme";
 
-// The mode's own layers, and the only place they are turned off: Modes has no layers menu, so the
-// key doubles as one. A hidden row stays in the list, dimmed — the mode still has that layer, it is
-// just not drawn — and what is drawn never changes what is walked.
+// Modes has no layers menu, so this key is where a layer is hidden; hiding never changes routing.
 export default function ModeLayers({
   city,
   overlays,

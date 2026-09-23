@@ -5,8 +5,7 @@ import type { RouteResult } from "./search";
 
 const METERS_PER_DEGREE_LAT = 111_320;
 
-// An L-shaped route: north from A to B, then east from B to C. The maneuver lengths are set to the
-// geodesic leg lengths so the along-route intervals line up with the polyline.
+// An L: north from A to B, then east to C; maneuver lengths match the geodesic legs.
 const START_LAT = 40.74;
 const START_LNG = -73.99;
 const CORNER_LAT = 40.741;
@@ -36,8 +35,6 @@ function makeManeuver(
   };
 }
 
-// Where the walker stands after `alongMeters` of the route: up the north leg, then east from the
-// corner.
 function userAt(alongMeters: number): { lat: number; lng: number } {
   if (alongMeters <= northLegMeters) {
     return {
@@ -73,8 +70,7 @@ const maneuvers: Maneuver[] = [
   }),
 ];
 
-// The same route with a landmark passed a third of the way up the north leg: a zero-length row
-// carrying its own position rather than the turn's.
+// A zero-length landmark row a third of the way up the north leg.
 const landmarkMeters = northLegMeters / 3;
 const withLandmark: Maneuver[] = [
   makeManeuver("start", 0, northLegMeters, { lat: START_LAT, lng: START_LNG }),
@@ -90,7 +86,6 @@ const withLandmark: Maneuver[] = [
 ];
 
 test("a point near the start points at the first action with the right distance", () => {
-  // A fifth of the way up the north leg.
   const along = northLegMeters / 5;
   const user = {
     lat: START_LAT + (CORNER_LAT - START_LAT) / 5,
@@ -109,7 +104,6 @@ test("a point near the start points at the first action with the right distance"
 });
 
 test("a mid-route point sits in the second maneuver with arrive next", () => {
-  // Halfway along the east leg.
   const user = { lat: CORNER_LAT, lng: (START_LNG + EAST_LNG) / 2 };
   const progress = navProgress(makeRoute(), maneuvers, user);
   expect(progress).not.toBeNull();

@@ -7,29 +7,20 @@ import type { TileRenderer } from "./renderer";
 import { themeName } from "./theme";
 import type { Cursor } from "./varint";
 
-// The manufacturing and industrial tax lots (magic INDL), drawn as filled polygons — an inspection
-// layer for seeing where the city's industrial land is. The decoding and the drawing both live here
-// in the tile worker.
-
 const TILE_SIZE = 256;
-const CELL_DEG = 0.005; // ~550 m buckets; a lot is filed under every cell its bounding box spans
+const CELL_DEG = 0.005; // ~550 m; a lot is filed under every cell its bounding box spans
 // At an alpha that leaves the streets and the water under a lot reading through.
 const FILL_ALPHA = 0.45;
-// A lot smaller than this on screen is drawn as a square of it instead. At the citywide zooms a
-// tax lot is a fraction of a pixel, and antialiasing fades a fraction of a pixel to nothing —
-// which would leave the zoomed-out view, the one the layer's extent is read from, blank.
+// Smaller lots are drawn as a square, since antialiasing fades sub-pixel ones to nothing.
 const MIN_LOT_PX = 1.5;
 
 interface Lots {
-  lots: Polyline[][]; // per lot its rings, filled even-odd so an inner ring punches a hole
-  // Lot indices filed by `${cellX},${cellY}`, so a tile draw gathers only the lots whose bounding
-  // box reaches it rather than all ~9k of them.
+  lots: Polyline[][]; // filled even-odd so an inner ring punches a hole
+  // Lot indices by `${cellX},${cellY}` over each bounding box.
   buckets: Map<string, number[]>;
 }
 
-// INDL is the shared polygon layout (scripts/geometry.ts encodePolygons, crates/tiler/src/binfmt.rs
-// read_polygons): a 40-byte header, then `count` polygons, each a u16 ring count then per ring a u32
-// vertex count and varint (lng, lat) deltas.
+// encodePolygons' layout (scripts/geometry.ts, crates/tiler/src/binfmt.rs read_polygons).
 export function decodeIndustrial(buffer: ArrayBuffer): Lots {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
@@ -54,8 +45,7 @@ export function decodeIndustrial(buffer: ArrayBuffer): Lots {
     lots.push(rings);
   }
 
-  // One two-point line per lot — its bounding box's corners — so the shared bucketing files each lot
-  // under the cells its box spans, exactly as it files a polyline under the cells its box spans.
+  // Its box's two corners, so the shared bucketing files it under every cell the box spans.
   const boxes = lots.map((rings) => {
     let minLng = Number.POSITIVE_INFINITY;
     let maxLng = Number.NEGATIVE_INFINITY;

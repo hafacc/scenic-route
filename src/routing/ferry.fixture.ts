@@ -1,12 +1,4 @@
-// The synthetic routing graph the ferry tests are run over, and the two questions that need one.
-//
-// A ferry test cannot use a fixture cut out of a real city: the crossings that matter are the ones
-// where the water is the only way through, and the shape of that — two land masses, no walking edge
-// between them — is a statement about the graph rather than about any city's geometry. So it is
-// built here, and both the cost tests (src/routing/ferry-cost.test.ts) and the sole-crossing tests
-// (src/routing/sole-crossing.test.ts) read it, which is what keeps the two asking about the same
-// object. The tunnel tests (src/routing/tunnel-cost.test.ts) build their own line of pavement with
-// the same builder; the graph below is a ferry's, the builder is anyone's.
+// Synthetic, since the crossings that matter have no walking edge across the water at all.
 
 import type { RouteWeights } from "./cost";
 import type { RoutingGraph } from "./graph";
@@ -37,11 +29,9 @@ export const weights = (
   shelter: 0,
   transit: 0,
   allowFerries,
-  // The fixture has no rail at all; stated for the reason the crossing gate below is.
   allowTransit: true,
   allowSheds: true,
-  // The fixture draws no crossing edges, so this is free either way; it is stated because a
-  // RouteWeights that omits it reads as "avoid crossings", which is not what these tests mean.
+  // No crossing edges, but omitting it would read as "avoid crossings".
   allowCrossings: true,
 });
 
@@ -59,9 +49,7 @@ export interface EdgeSpec {
   tunnel?: boolean; // walking edges only: sets the flags-byte tunnel bit the tiler writes
 }
 
-// Build a synthetic routing graph from nodes and edges. Every edge is a straight line, so its
-// length is the geodesic span between its two (quantized-and-reconstructed) endpoints — exactly the
-// coordinates the A* heuristic reads, which keeps the walking lower bound admissible by construction.
+// Straight edges, so lengths match the coordinates the A* heuristic reads.
 export function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
   const nodeCount = nodes.length;
   const edgeCount = edges.length;
@@ -168,9 +156,7 @@ export function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
     shade: null,
     edgeDurationSeconds,
     ferryEdges: Uint32Array.from(ferryEdges),
-    // No timetable and no rail in this fixture, and these say so. They are not decoration: the
-    // heuristic floor reads `transit` on every search, and an absent one leaves it NaN — which is a
-    // graph whose A* silently degenerates to Dijkstra rather than one with no trains.
+    // An absent `transit` leaves the heuristic floor NaN, degenerating A* to Dijkstra.
     ferries: null,
     transit: null,
     minRideSecPerMeter: Number.POSITIVE_INFINITY,
@@ -182,9 +168,7 @@ export function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
   } as unknown as RoutingGraph;
 }
 
-// A start/dest snap sitting exactly on a node, entered through one of its incident walking edges
-// (snaps never land on a ferry). metersFromA is 0 or the full length so the virtual point coincides
-// with the node.
+// metersFromA is 0 or the full length so the snap coincides with the node; never on a ferry.
 export function snapAtNode(
   graph: RoutingGraph,
   node: number,

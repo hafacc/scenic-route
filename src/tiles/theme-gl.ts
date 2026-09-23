@@ -3,29 +3,18 @@
 import { type Channel, type Ramp, STOPS_LIMIT } from "../theme/palette";
 import { type Patch, draw as resample } from "./magnify";
 
-// The one place a value tile becomes a colored one.
-//
-// The raster overlays ship data — canopy cover, height and relief, the fraction of light lost to a
-// shadow — and the palette (src/theme/palette.ts) says what that data looks like. Every one of them
-// is doing the same thing to its pixels, so they all do it here, through one shader with the ramp as
-// its uniforms. That is what makes a theme a value: changing it is a redraw, never a rebuild.
-//
-// ONE context serves every tile: they are expensive and browsers cap a document at around 16. The
-// tile arrives as an OffscreenCanvas already committed to a 2D context, so the pixels are shaded on
-// this module's own canvas and composed onto the tile, exactly as ./sweep-gl.ts does.
+// Every value tile is colored here through the palette ramp, so a theme change is only a redraw.
+// One shared context, since browsers cap a document at ~16; the result is composed onto the 2D tile.
 
 const TILE_SIZE = 256;
 
-// Which texture channel a `Channel` is, as the shader indexes them.
 const CHANNELS: Record<Channel, number> = { red: 0, green: 1, alpha: 3 };
 
 const VERTEX = `#version 300 es
 in vec2 point;
 void main() { gl_Position = vec4(point, 0.0, 1.0); }`;
 
-// The value tile read through the ramp. `size - 1 - y` because gl_FragCoord counts up from the
-// bottom while the staging canvas's rows count down from the top, and the drawing buffer is
-// presented the same way round as the canvas it is composed onto.
+// `size - 1 - y` because gl_FragCoord counts up from the bottom and canvas rows count down.
 const FRAGMENT = `#version 300 es
 precision highp float;
 uniform sampler2D source;
@@ -91,7 +80,7 @@ function compile(gl: WebGL2RenderingContext): WebGLProgram {
   return program;
 }
 
-// The ramp's stops as the shader's uniform array: RGB on 0..1, padded to its fixed length.
+// RGB on 0..1, padded to the uniform array's fixed length.
 function stopsOf(ramp: Ramp): Float32Array {
   const packed = new Float32Array(STOPS_LIMIT * 3);
   for (const [index, { red, green, blue }] of ramp.stops.entries()) {
@@ -101,9 +90,7 @@ function stopsOf(ramp: Ramp): Float32Array {
 }
 
 class Painter {
-  // The value pixels, resampled to the tile's own device pixels before they are colored. The
-  // resample runs on the VALUES rather than on a picture of them, which is the point of shipping
-  // values: the ramp is applied to what the interpolation actually produced.
+  // Values resampled before coloring, so the ramp applies to what interpolation produced.
   readonly stage: OffscreenCanvas;
   readonly stageContext: OffscreenCanvasRenderingContext2D;
   readonly canvas: OffscreenCanvas;
@@ -152,9 +139,7 @@ class Painter {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    // The staging canvas's backing store is premultiplied, as every 2D canvas's is, so this flag is
-    // what makes the browser UNDO that on the way to the card and hand the shader the values back.
-    // Color conversion is off for the same reason: these are data, not a picture.
+    // 2D canvases store premultiplied alpha, so undo it; these are data, so no color conversion.
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     gl.pixelStorei(
       gl.UNPACK_COLORSPACE_CONVERSION_WEBGL,
@@ -188,14 +173,11 @@ class Painter {
     return this.gl.isContextLost();
   }
 
-  // Browsers cap a document at around 16 live contexts and reclaim the oldest when a new one takes
-  // it past that, so a painter replaced for a new device ratio gives its own up rather than waiting
-  // to be collected.
+  // Browsers cap live contexts at ~16 and reclaim the oldest, so release this one rather than wait.
   dispose(): void {
     this.gl.getExtension("WEBGL_lose_context")?.loseContext();
   }
 
-  // Color whatever is on the staging canvas, leaving it on this painter's own canvas.
   paint(ramp: Ramp): void {
     const { gl, size, uniforms } = this;
     gl.useProgram(this.program);
@@ -232,10 +214,7 @@ class Painter {
 
 let painter: Painter | null = null;
 
-// The shared painter at this tile size, rebuilt when the device ratio changes under it or its
-// context was lost. Unlike the swept shade there is no second path to fall back to — an overlay whose
-// values were never colored has nothing to show — so a card that cannot do this throws, and the
-// tile reaches Leaflet as an error the layers menu can report.
+// There is no fallback path, so a card that can't do this throws for the layers menu to report.
 function painterFor(size: number): Painter {
   if (painter?.lost) {
     painter = null; // a lost context cannot be revived, only replaced
@@ -247,8 +226,7 @@ function painterFor(size: number): Painter {
   return painter;
 }
 
-// One tile's values cut out of a baked pyramid, resampled, colored through the ramp, and composed
-// onto the tile. A null patch is a pyramid with nothing over this ground, which draws as nothing.
+// A null patch is empty ground and draws nothing.
 export function drawRamped(
   context: OffscreenCanvasRenderingContext2D,
   source: Patch | null,
@@ -264,11 +242,7 @@ export function drawRamped(
   painted.stageContext.scale(ratio, ratio);
   resample(painted.stageContext, source);
   painted.paint(ramp);
-  // Checked after the draw as well as before it. A context can go away mid-tile — a driver reset, or
-  // the browser reclaiming the oldest one when the document passes its cap — and every call in
-  // `paint` is then a silent no-op. Left unchecked the tile would be composed from an empty drawing
-  // buffer and reported as drawn, and Leaflet never asks for a tile twice: the shade layer in
-  // particular would show no shade at all, which is the one answer it must never give.
+  // A context lost mid-tile makes `paint` a silent no-op, and Leaflet never re-requests a drawn tile.
   if (painted.lost) {
     throw new Error("theme shader: the graphics context was lost mid-tile");
   }

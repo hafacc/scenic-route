@@ -1,16 +1,4 @@
-//! The per-edge bridge byte (GRPH record byte 38): the share of a walk that crosses open water on a
-//! bridge deck.
-//!
-//! Being on a deck is not by itself the thing worth walking: a viaduct over a rail yard or an
-//! expressway is one too, and a tunnel is under one rather than on it. What separates the crossing
-//! of a river from those is what lies beneath the deck, so a deck's own polyline is tested against
-//! the city's land mask — the same LAND outlines the overlays are clipped to — and the byte is the
-//! share of its length that is NOT over land. Everything off a deck reads 0, so a street that merely runs
-//! along a shore is priced by what it is rather than by where it is.
-//!
-//! Measured with `geometry::contained_fraction`, as the historic-district byte is: both are asking
-//! what the walk itself is over, which is an underfoot question, and neither has anything to probe
-//! sideways for.
+//! Per-edge bridge byte (GRPH byte 38): the share of a deck's length not over land.
 
 use std::path::Path;
 
@@ -31,9 +19,7 @@ pub struct Bridge {
     pub max_byte: u8,
 }
 
-/// Every edge's over-water share, in the graph's edge order. A deck whose whole bounding box misses
-/// the land mask gathers no candidate outline, which `contained_fraction` answers 0 to and which
-/// here reads as the open water it is — the middle of a long span is exactly that case.
+/// Every edge's over-water share in graph order; a deck that misses the land mask reads open water.
 fn fractions(
     edge_polys: &[Vec<Coord>],
     on_bridge: &[bool],
@@ -54,10 +40,7 @@ fn fractions(
         .collect()
 }
 
-/// The bridge byte of every edge. `on_bridge` is the caller's own reading of which edges are on a
-/// bridge deck — a tunnel is on a deck too, and is not one of them. `reference_lat` is the graph
-/// origin's latitude, the one east-west scale the whole city is measured at, as the other per-edge
-/// bakes use.
+/// The bridge byte of every edge; `on_bridge` excludes tunnels.
 pub fn bridge(
     edge_polys: &[Vec<Coord>],
     on_bridge: &[bool],
@@ -107,8 +90,7 @@ mod tests {
         METERS_PER_DEGREE_LAT * LAT.to_radians().cos()
     }
 
-    /// A point `east_meters` east and `north_meters` north of a reference in the middle of New York,
-    /// so the tests read in meters and still exercise the cos(lat) scaling of the real bake.
+    /// A point in meters from a reference in New York, so tests exercise the real cos(lat) scaling.
     fn at(east_meters: f64, north_meters: f64) -> Coord {
         Coord {
             lng: -74.0 + east_meters / meters_per_degree_lng(),
@@ -126,8 +108,7 @@ mod tests {
         ]
     }
 
-    /// The share of a 100 m east-west deck (or, with `deck` false, ordinary street) at the reference
-    /// latitude that runs over water.
+    /// The water share of a 100 m east-west deck (or street, with `deck` false).
     fn water_share(deck: bool, land: &[Polygon]) -> f64 {
         let set = flatten(land);
         let grid = PolygonGrid::new(&set);
@@ -139,15 +120,13 @@ mod tests {
         round_half_up(fraction * 255.0).min(BYTE_CEILING) as u8
     }
 
-    /// The measurement the whole factor rests on: land under the western half of the deck and open
-    /// water under the eastern half reads half a bridge.
+    /// Land under the deck's western half and water under its eastern half reads half a bridge.
     #[test]
     fn a_deck_half_over_water_reads_half() {
         let share = water_share(true, &[vec![rectangle(-50.0, -50.0, 50.0, 50.0)]]);
 
         assert!((share - 0.5).abs() < 0.01, "half a deck reads {share}");
-        // The fixture's deck is a hair over 100 m once its degrees are meters, so it takes 101
-        // samples rather than 100 and the share lands a step either side of half.
+        // The deck is a hair over 100 m, so it takes 101 samples and lands a step off half.
         assert!(
             matches!(byte_of(share), 127..=129),
             "{share} reads {}",
@@ -155,8 +134,7 @@ mod tests {
         );
     }
 
-    /// What the land mask is here to rule out: a viaduct over a rail yard or an expressway is on a
-    /// deck for its whole length and over the ground for all of it.
+    /// A viaduct over a rail yard is on a deck over ground for its whole length.
     #[test]
     fn a_deck_over_land_is_not_a_bridge() {
         assert_eq!(
@@ -165,8 +143,7 @@ mod tests {
         );
     }
 
-    /// The same test the structure flag cannot make on its own: a tunnel carries it and passes under
-    /// the land, which is land under the line exactly as a viaduct's yard is.
+    /// A tunnel carries the structure flag but passes under land, so it reads as a viaduct does.
     #[test]
     fn a_tunnel_under_land_is_not_a_bridge() {
         assert_eq!(
@@ -175,7 +152,7 @@ mod tests {
         );
     }
 
-    /// Nothing off a deck is ever a bridge, whatever is under it — a street on a pier is a street.
+    /// Nothing off a deck is a bridge: a street on a pier is a street.
     #[test]
     fn a_street_over_water_reads_nothing() {
         assert_eq!(
@@ -184,8 +161,7 @@ mod tests {
         );
     }
 
-    /// A span whose whole box misses the mask has no candidate outline to test, and the open water
-    /// that leaves is the answer rather than a gap in it.
+    /// A span whose box misses the mask has no candidate outline and reads as open water.
     #[test]
     fn a_deck_far_from_any_shore_is_all_water() {
         assert_eq!(
@@ -197,7 +173,7 @@ mod tests {
         );
     }
 
-    /// A ferry carries no polyline, and must not lift the graph-wide max the A* floor is taken from.
+    /// A ferry carries no polyline and must not lift the graph-wide max the A* floor uses.
     #[test]
     fn an_edge_with_no_polyline_reads_nothing() {
         let land = [vec![rectangle(-50.0, -50.0, 50.0, 50.0)]];
@@ -210,8 +186,7 @@ mod tests {
         );
     }
 
-    /// The column the record carries: the byte follows the measured share, only a deck counts, and
-    /// the meters reported are the share of each deck's own length.
+    /// The byte follows the share, only decks count, and the meters are per deck.
     #[test]
     fn the_column_counts_only_the_decks_it_measured() {
         let baked = column(&[0.5, 0.0, 1.0], &[100.0, 100.0, 40.0], 7);

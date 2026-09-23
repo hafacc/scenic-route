@@ -13,12 +13,6 @@ import {
 import type { FactorAvailability } from "../../src/modes/modes";
 import { HILLS_VALUES, SUN_VALUES, type Toggles } from "../../src/modes/modes";
 
-// Icons with no words: the glyph says which state a switch is in, color says it is doing
-// something, and the label is left to the screen reader. One tap moves to the next state.
-//
-// One component in two placements, as the mode row is: on a phone it is pinned at the end of that
-// row, which the chips scroll under, and on a wide screen it is its own pill beside it.
-
 const GRAY = "text-slate-400 dark:text-slate-500";
 
 interface ToggleFace {
@@ -77,8 +71,7 @@ function ToggleButton({
   onClick,
 }: {
   face: ToggleFace;
-  // Only the two-state switches: a tri-state is not pressed or unpressed, and its label is the
-  // whole of what it says.
+  // Two-state switches only: a tri-state is neither pressed nor unpressed.
   pressed?: boolean;
   onClick: () => void;
 }) {
@@ -102,7 +95,7 @@ export default function ToggleRow({
   onChange,
 }: {
   toggles: Toggles;
-  // A switch with no data behind it is hidden, not grayed: grayed reads as a state the reader chose.
+  // Hidden, not grayed, when there is no data: grayed reads as a state the reader chose.
   available: FactorAvailability;
   onChange: (toggles: Toggles) => void;
 }) {

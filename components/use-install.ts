@@ -2,26 +2,21 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-// Chromium fires this before showing its own install affordance; preventing it hands the offer to
-// the menu row, and the saved event is the only way to open that flow later — it cannot be
-// constructed, and it is spent once prompted. Safari and Firefox never fire it at all, which is
-// what the instructions dialog is for.
+// Chromium only. The saved event is the only way to prompt later, and is spent once prompted.
 interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
 }
 
 function isInstalled(): boolean {
   const nav: Navigator & { standalone?: boolean } = window.navigator;
-  // `standalone` is iOS Safari's own flag; it predates display-mode and is still the only signal a
-  // home-screen launch gives there.
+  // `standalone` is iOS Safari's flag and the only signal a home-screen launch gives there.
   return (
     window.matchMedia("(display-mode: standalone)").matches ||
     nav.standalone === true
   );
 }
 
-// Whether this is the installed home-screen app rather than a browser tab. Read in an effect because
-// the server has no window to ask, so the first render must assume a tab.
+// Read in an effect since the server has no window, so the first render assumes a tab.
 export function useStandalone(): boolean {
   const [standalone, setStandalone] = useState<boolean>(false);
   useEffect(() => {
@@ -30,8 +25,7 @@ export function useStandalone(): boolean {
   return standalone;
 }
 
-// Whether to offer installing at all, and the browser's own install flow when it has one. `install`
-// resolves false when there is none, and the caller should explain the browser's menu instead.
+// `install` resolves false when there is no flow; the caller should explain the browser menu.
 export function useInstall(): {
   installable: boolean;
   install: () => Promise<boolean>;
@@ -61,16 +55,13 @@ export function useInstall(): {
     if (!offer) {
       return false;
     } else {
-      // Dropped whether they accept or decline: the event is spent, and Chromium fires a fresh one
-      // if the site is still installable next load.
+      // Dropped either way: the event is spent, and Chromium fires a fresh one next load.
       setOffer(null);
       try {
         await offer.prompt();
         return true;
       } catch {
-        // Thrown when the event has already been prompted, or when the gesture that reached here
-        // was not fresh enough to carry one. Reported as no flow rather than swallowed, so the
-        // click still lands on the instructions instead of doing nothing at all.
+        // Throws if already prompted or the gesture went stale; the instructions show instead.
         return false;
       }
     }

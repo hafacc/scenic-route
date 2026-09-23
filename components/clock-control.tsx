@@ -18,21 +18,11 @@ import {
 } from "../src/route-time/store";
 import { SHED_EPOCH_DAY } from "../src/routing/sheds";
 
-// The map's global date and time control, a toolbar icon like the others. Both are global properties,
-// not tied to any one overlay — the shade layer takes the sun's position AND the canopy's seasonal
-// transmittance from them, ferry schedules will follow later. Clicking the clock opens a popover with a
-// "Now" button (track the live wall clock) and a slider to scrub the day; the calendar button beside it
-// expands a row for pinning a date, which is independent of the time — December at the live time of day
-// is a valid pick. Either icon lights when its axis is pinned. State lives in the route-time store.
-
 const STEP_HOUR = 0.25;
-// The whole day in 15-minute steps, the same span year-round: the clock drives more than shade, so the
-// scrubber always covers the same wide day rather than tracking the picked season's daylight.
+// The same full day year-round, since the clock drives more than shade.
 const MIN_HOUR = 0;
 const MAX_HOUR = 23.75;
-// How far ahead a date can be pinned. Everything the future can show — the sun's position, the
-// canopy's phenology — repeats yearly, so a further date shows nothing new. The past reaches back to
-// SHED_EPOCH_DAY instead, because the scaffolding history genuinely differs day by day that far back.
+// Sun and phenology repeat yearly; the past reaches SHED_EPOCH_DAY for scaffolding history.
 const FUTURE_YEARS = 1;
 
 const ICON_ON = "h-4 w-4 text-brand-600 dark:text-brand-400";
@@ -52,7 +42,7 @@ function formatHour(hour: number): string {
   return `${displayHour}:${String(minutes).padStart(2, "0")} ${period}`;
 }
 
-// The pinned day for the popover header, e.g. "Dec 21" — the year only once it isn't this one.
+// The pinned day, e.g. "Dec 21", with the year only when it isn't this one.
 function formatDayLabel(day: string): string {
   const date = parseDay(day);
   const year =
@@ -64,7 +54,6 @@ function formatDayLabel(day: string): string {
   });
 }
 
-// `years` from today, as the date input's upper bound.
 function dayFromNow(years: number): string {
   const today = new Date();
   return formatDay(
@@ -74,20 +63,17 @@ function dayFromNow(years: number): string {
 
 export default function ClockControl() {
   const [open, setOpen] = useState(false);
-  const [dayOpen, setDayOpen] = useState(false); // the date row beneath the slider is expanded
+  const [dayOpen, setDayOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // Re-render on any store change (mode, custom time, or the once-a-minute "now" tick).
   const [, bump] = useState(0);
   useEffect(() => subscribeRouteTime(() => bump((value) => value + 1)), []);
 
-  // Tell time-dependent overlays the popover is open, so they can prefetch the day's tiles while the
-  // slider is in use and drop them again on close.
+  // Lets time-dependent overlays prefetch the day's tiles while scrubbing.
   useEffect(() => {
     setPickerOpen(open);
     return () => setPickerOpen(false);
   }, [open]);
 
-  // Close the popover on an outside click or Escape, mirroring the toolbar menu.
   useEffect(() => {
     if (!open) {
       return;
@@ -148,8 +134,7 @@ export default function ClockControl() {
           <div className="flex items-center gap-2.5">
             <button
               type="button"
-              // Back to live entirely: "now" means this instant, not this time of day in December.
-              // The day row's own Today pill is the one that clears only the date.
+              // "Now" is this instant, not this time of day on the pinned date.
               onClick={() => {
                 setTimeMode("now");
                 setDateMode("today");

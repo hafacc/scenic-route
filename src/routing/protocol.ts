@@ -1,5 +1,4 @@
-// The messages the page and the routing worker exchange. Types only, so the page can talk to the
-// worker without pulling the engine — and with it the whole cost model — into the main bundle.
+// Types only, so talking to the worker doesn't pull the cost model into the main bundle.
 
 import type { Plan } from "./alternatives";
 import type { RouteClock } from "./contexts";
@@ -9,9 +8,6 @@ import type { RouteResult, RouteStep } from "./search";
 import type { Snap } from "./snap";
 import type { WaypointPlan } from "./waypoints";
 
-// One search, or the whole set of them a mode offers: the same question either way, answered with
-// one route or with a plan. The weights are the mode's own, toggles folded in, which a plan then
-// backs off from.
 export interface RouteRequest {
   cityId: string;
   clock: RouteClock;
@@ -30,9 +26,7 @@ export interface DragRequest {
   anchorSeconds: number;
 }
 
-// The chosen route, to be squeezed into the pins the Google Maps export hands over. Its steps and
-// nothing else: that is all the planner reads, and a result's stitched path would dwarf them on the
-// wire. What the pins are priced against — the shade and shed fields — only the worker builds.
+// Steps only: a result's stitched path would dwarf them on the wire.
 export interface WaypointRequest {
   cityId: string;
   clock: RouteClock;
@@ -41,7 +35,7 @@ export interface WaypointRequest {
 }
 
 export type RouterRequest =
-  // The graph's own bytes, cloned rather than refetched: the page has already downloaded them.
+  // Cloned rather than refetched: the page has already downloaded them.
   | {
       type: "load";
       id: number;
@@ -56,13 +50,11 @@ export type RouterRequest =
   | { type: "drag:end" }
   // Drop the weight brackets, whose stale baseline would read an endpoint drop's route as unchanged.
   | { type: "reset" }
-  // Every route a mode offers, from one set of endpoints (src/routing/alternatives.ts).
   | { type: "plan"; id: number; request: RouteRequest }
   | ({ type: "waypoints"; id: number } & WaypointRequest);
 
 export type RouterResponse =
-  // The city's graph is decoded and ready to be searched. Answered because a decode can fail — on a
-  // phone, for want of memory — and the page has to know rather than wait.
+  // Answered because a decode can fail for want of memory on a phone.
   | { type: "loaded"; id: number }
   | {
       type: "result";
@@ -72,12 +64,9 @@ export type RouterResponse =
       shadeRebuilt: boolean;
       shadeLost: boolean;
     }
-  // Superseded before it ran; this only settles the promise the page is waiting on.
   | { type: "stale"; id: number }
   | { type: "error"; id: number; message: string }
-  // The max-scenic route, sent the moment it is found so the map can draw something while the rest
-  // of the sweep runs. The alternatives ride back with `done`: the page has nothing to say about a
-  // route until the plan settles which of them are cards, and cloning each one twice is not free.
+  // Sent early so the map can draw while the sweep runs; alternatives ride back with `done`.
   | { type: "preview"; id: number; result: RouteResult }
   | { type: "done"; id: number; plan: Plan }
   | { type: "waypoints"; id: number; plan: WaypointPlan };
