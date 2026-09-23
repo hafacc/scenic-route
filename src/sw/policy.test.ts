@@ -63,7 +63,7 @@ test("another origin is left alone entirely", () => {
 });
 
 test("the daily feeds are cached, but network first", () => {
-  const base = "https://raw.githubusercontent.com/hafaio/scenic-route/main";
+  const base = "https://raw.githubusercontent.com/hafacc/scenic-route/main";
   expect(fileRequest(`${base}/public/sheds/nyc.bin`, SCOPE)).toEqual({
     path: "sheds/nyc.bin",
     store: "routing",

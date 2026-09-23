@@ -7,7 +7,7 @@ export type Store = "shell" | "routing" | "overlay";
 
 // Rewritten daily on the default branch, so read from raw rather than the deploy.
 const FEED_HOST = "raw.githubusercontent.com";
-const FEED_PREFIX = "/hafaio/scenic-route/main/public/";
+const FEED_PREFIX = "/hafacc/scenic-route/main/public/";
 const FEED_DIRS = ["sheds/", "ferry-schedule/", "transit-schedule/"];
 
 // Protomaps' terms allow keeping tiles; only those over a city are kept, not ocean pans.

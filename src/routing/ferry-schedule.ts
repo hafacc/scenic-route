@@ -26,7 +26,7 @@ const NO_ROUTE_NAME = 0xffff;
 
 // Read from `main` over raw.githubusercontent.com so schedule changes skip a deploy; local in development.
 const SCHEDULE_MAIN_URL =
-  "https://raw.githubusercontent.com/hafaio/scenic-route/main/public/ferry-schedule";
+  "https://raw.githubusercontent.com/hafacc/scenic-route/main/public/ferry-schedule";
 const SCHEDULE_BASE =
   process.env.NEXT_PUBLIC_FERRY_SCHEDULE_BASE ??
   (process.env.NODE_ENV === "development"
