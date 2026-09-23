@@ -38,7 +38,7 @@ export interface FeedSource {
 // New York: SI Ferry is NYC DOT's own download (behind an Akamai edge that needs a browser
 // User-Agent); NYC Ferry is Hornblower's feed served through Connexionz.
 //
-// San Francisco: WETA / SF Bay Ferry, published keyless and open under ODC-BY. The licence is stated
+// San Francisco: WETA / SF Bay Ferry, published keyless and open under ODC-BY. The license is stated
 // only on https://sanfranciscobayferry.com/developers/ — the feed's own feed_info.feed_license
 // column is empty — so that page is the whole of the permission. This city is San Francisco plus the
 // East Bay, two land masses a pedestrian cannot walk between (nobody walks the Bay Bridge), so
@@ -47,7 +47,7 @@ export interface FeedSource {
 // Golden Gate Transit's ferries are deliberately absent, for two independent reasons. Every one of
 // its five ferry routes serves Marin — Sausalito, Larkspur, Tiburon, Angel Island — which is outside
 // this city's land, so all it could contribute is another San Francisco pier and no crossing anyone
-// could walk off. And an exhaustive search turned up no licence or terms of use for its feed
+// could walk off. And an exhaustive search turned up no license or terms of use for its feed
 // anywhere: no developer page, no feed_info.txt, nothing in its sitemap, where WETA's ODC-BY is
 // written down in plain words.
 const CITY_FEEDS: Readonly<Record<string, readonly FeedSource[]>> = {

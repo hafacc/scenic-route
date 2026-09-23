@@ -457,7 +457,7 @@ export interface OsmSeating extends Coord {
 
 // OSM outdoor-seating points: outdoor_seating=yes (cafés, restaurants, bars with pavement tables). A
 // node is a point; a way (a building or seating area outline) is taken at its center. Supplements the
-// NYC Dining Out café-licence inventory. The dining ingest clips these to land and dedups them
+// NYC Dining Out café-license inventory. The dining ingest clips these to land and dedups them
 // against the licensed cafés.
 export async function fetchOutdoorSeating(
   south: number,

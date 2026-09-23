@@ -26,7 +26,21 @@ export const EXPLORER_PAGE: AppPage = {
   label: "Explorer",
 };
 
-export const APP_PAGES: readonly AppPage[] = [MODES_PAGE, EXPLORER_PAGE];
+// The one page that is prose rather than a map: server-rendered, so it is the only document in the
+// export a crawler can read anything off. A file beside the root document for the same reason the
+// explorer is one.
+export const ABOUT_PAGE: AppPage = {
+  file: "about.html",
+  path: "about",
+  href: "about",
+  label: "About",
+};
+
+export const APP_PAGES: readonly AppPage[] = [
+  MODES_PAGE,
+  EXPLORER_PAGE,
+  ABOUT_PAGE,
+];
 
 // The rest of the export's shell: the not-found document is the app's own, and the manifest is what
 // an installed copy starts from.

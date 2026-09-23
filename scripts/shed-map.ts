@@ -985,7 +985,7 @@ export function confidenceOf(result: ShedPlacement): number {
   // ground, but which of its two street walls the structure is against is inferred from the length
   // alone. Recovered length is milder still, being on the permit's own street and its own lot — but
   // the run could not join the two pieces on foot, so which piece it occupies is inferred too.
-  const onLicence =
+  const onLicense =
     result.coveredMeters <= 0 ? 1 : 1 - 0.25 * share(result.offStreetMeters);
   const contiguity =
     result.coveredMeters <= 0 ? 1 : 1 - 0.15 * share(result.recoveredMeters);
@@ -995,7 +995,7 @@ export function confidenceOf(result: ShedPlacement): number {
     (0.35 + 0.65 * measured) *
     placed *
     source *
-    onLicence *
+    onLicense *
     contiguity;
   return Math.round(product * 1000) / 1000;
 }

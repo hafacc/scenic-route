@@ -2,7 +2,6 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { FiEye, FiEyeOff, FiX } from "react-icons/fi";
 import { MdDragIndicator } from "react-icons/md";
 import {
@@ -29,6 +28,7 @@ import {
 import { totals } from "../src/sw/ledger";
 import { useCity } from "./city-context";
 import { clearOfflineMaps } from "./service-worker";
+import { SHEET_SCROLL, Sheet } from "./sheet-shell";
 import { type RowDrag, useRowDrag } from "./use-row-drag";
 import { useSettings } from "./use-settings";
 
@@ -556,88 +556,64 @@ export default function SettingsDialog({
   section: string | null;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  // The card is the capped box and the sections are the one thing inside it that scrolls, so the
+  // title and the close stay put however long the page gets.
+  return (
+    <Sheet
+      onClose={onClose}
+      closeLabel="Close settings"
+      labelledBy="settings-title"
+      width="md:max-w-md"
+    >
+      <div className="flex shrink-0 items-start gap-3">
+        <h2
+          id="settings-title"
+          className="min-w-0 flex-1 text-lg font-semibold tracking-tight"
+        >
+          Settings
+        </h2>
+        <button
+          type="button"
+          onClick={onClose}
+          className="-m-1 grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+          aria-label="Close"
+        >
+          <FiX />
+        </button>
+      </div>
 
-  // Portalled to the body at a z-index above the toolbar: the toolbar that opens these sits in a
-  // stacking context of its own at z-1200, and a dialog left inside the page's layers paints under
-  // its buttons while its scrim no longer blocks them.
-  return createPortal(
-    <div className="fixed inset-0 z-[1300] flex items-end justify-center md:items-center">
-      <button
-        type="button"
-        aria-label="Close settings"
-        onClick={onClose}
-        className="absolute inset-0 cursor-default bg-slate-950/40 backdrop-blur-sm"
-      />
-      {/* The card is the capped box and the sections are the one thing inside it that scrolls, so the
-          title and the close stay put however long the page gets (the rule at the top of
-          app/globals.css). `90dvh` rather than `vh` because on a phone `100vh` is the viewport with
-          the browser chrome retracted. */}
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settings-title"
-        className="relative flex max-h-[90dvh] w-full flex-col rounded-t-3xl bg-white p-6 shadow-2xl ring-1 ring-black/5 dark:bg-slate-800 dark:ring-white/10 md:max-w-md md:rounded-3xl md:p-7"
-      >
-        <div className="flex shrink-0 items-start gap-3">
-          <h2
-            id="settings-title"
-            className="min-w-0 flex-1 text-lg font-semibold tracking-tight"
+      <div className={SHEET_SCROLL}>
+        {sections.includes("layers") ? (
+          <Section
+            id="layers"
+            wanted={section === "layers"}
+            caption="The order of the layers menu, and which layers it offers. One order for every region — each shows the layers it has data for."
           >
-            Settings
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="-m-1 grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
-            aria-label="Close"
+            <LayerRows />
+          </Section>
+        ) : null}
+
+        {sections.includes("routing") && weights && onWeight && onGate ? (
+          <Section
+            id="routing"
+            wanted={section === "routing"}
+            caption="One value per preference — these are the route panel's own sliders. Hiding one takes it out of the panel; it still prices the route."
           >
-            <FiX />
-          </button>
-        </div>
+            <FactorRows weights={weights} onWeight={onWeight} />
+            <GateRows weights={weights} onGate={onGate} />
+          </Section>
+        ) : null}
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          {sections.includes("layers") ? (
-            <Section
-              id="layers"
-              wanted={section === "layers"}
-              caption="The order of the layers menu, and which layers it offers. One order for every region — each shows the layers it has data for."
-            >
-              <LayerRows />
-            </Section>
-          ) : null}
+        {sections.includes("offline") ? (
+          <OfflineSection wanted={section === "offline"} />
+        ) : null}
 
-          {sections.includes("routing") && weights && onWeight && onGate ? (
-            <Section
-              id="routing"
-              wanted={section === "routing"}
-              caption="One value per preference — these are the route panel's own sliders. Hiding one takes it out of the panel; it still prices the route."
-            >
-              <FactorRows weights={weights} onWeight={onWeight} />
-              <GateRows weights={weights} onGate={onGate} />
-            </Section>
-          ) : null}
-
-          {sections.includes("offline") ? (
-            <OfflineSection wanted={section === "offline"} />
-          ) : null}
-
-          <div className="mt-7 border-t border-slate-200/60 pt-4 text-xs text-slate-500 dark:border-slate-700/60 dark:text-slate-400">
-            {syncingAs === null
-              ? "These settings are kept on this device. Sign in and they follow you to your others."
-              : `Synced with ${syncingAs}. Changes here reach your other devices, and theirs reach this one.`}
-          </div>
+        <div className="mt-7 border-t border-slate-200/60 pt-4 text-xs text-slate-500 dark:border-slate-700/60 dark:text-slate-400">
+          {syncingAs === null
+            ? "These settings are kept on this device. Sign in and they follow you to your others."
+            : `Synced with ${syncingAs}. Changes here reach your other devices, and theirs reach this one.`}
         </div>
       </div>
-    </div>,
-    document.body,
+    </Sheet>
   );
 }

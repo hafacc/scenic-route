@@ -7,14 +7,14 @@
 // still walk through and buy something from, which is a third thing and reads as one on the map.
 //
 // WHAT THIS IS NOT, and why it took a survey to get here. The obvious source — how long a business
-// has held a licence — does not exist in any usable form, and that is measured rather than assumed:
+// has held a license — does not exist in any usable form, and that is measured rather than assumed:
 //
-//   - NYC's DCWP licences cover regulated trades (home-improvement contractors, tobacco dealers,
+//   - NYC's DCWP licenses cover regulated trades (home-improvement contractors, tobacco dealers,
 //     sightseeing guides), not diners or hardware stores, and nothing predates 1994 except 102
 //     sentinel rows dated 1900 — the file begins where the agency's digitisation does.
 //   - The State Liquor Authority's `originalissuedate` has a statewide MINIMUM of 2017 and is 96%
 //     dated 2023 or later: licensing moved systems and "original issue" reset with it. The older
-//     list that carried deep dates is retired and answers 403. A NY liquor licence does not survive
+//     list that carried deep dates is retired and answers 403. A NY liquor license does not survive
 //     a sale anyway, so even those dates measured the owner, not the business.
 //   - OpenStreetMap's `start_date` is on 212 of 46,396 NYC shop and food POIs, and 43 in SF.
 //
