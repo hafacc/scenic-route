@@ -1,15 +1,4 @@
-// The queries the search is not allowed to get wrong, asked of the artifacts the app actually ships
-// rather than of a corpus built for the occasion.
-//
-// Every case here is something that was once wrong: the subway station that outranked Fifth Avenue,
-// the storefront filed as a park that outranked Prospect Park, the shop called Shake Top DeLite that
-// outranked Shake Shack. `search-query.test.ts` is where a RULE is stated against a handful of
-// documents; this is where the rules are checked against 380,000 real ones, because a weight moved by
-// a tenth changes nothing there and everything here. A ranking change that breaks one of these fails
-// a test rather than being noticed in a browser three weeks later.
-//
-// Both files are read off disk and decoded in about 150 ms, and the whole set answers in well under a
-// second, so this needs no browser, no worker and no network.
+// Ranking checked against the shipped artifacts, where a weight moved a tenth changes everything.
 
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -41,8 +30,7 @@ function artifact(name: string): Uint8Array {
   );
 }
 
-// The center a city opens on when nothing has said otherwise, derived the way src/cities.ts derives
-// it, so a bounds change moves both together.
+// Derived the way src/cities.ts derives it, so a bounds change moves both together.
 function load(cityId: string): City {
   const bounds = manifest.cities.find(({ id }) => id === cityId)?.bounds;
   if (bounds === undefined) {
@@ -68,30 +56,25 @@ function metersApart(left: Point, right: Point): number {
   return Math.hypot(north, east);
 }
 
-// Where the map is when the query is typed. It is part of the case, not scenery: the same words at
-// two ends of the city are two different questions, and half of these answers move with it.
+// Part of the case: half of these answers move with the map center.
 const BRYANT_PARK: Point = { lat: 40.7536, lng: -73.9832 };
 const UNION_SQUARE: Point = { lat: 40.73, lng: -73.99 };
 const UPPER_EAST_SIDE: Point = { lat: 40.773, lng: -73.963 };
 const DUMBO: Point = { lat: 40.7033, lng: -73.9938 };
 const MISSION: Point = { lat: 37.7599, lng: -122.4148 };
 
-// How many answers the search box asks the worker for — MAX_LOCAL_RESULTS in src/geocode.ts. It is
-// part of the question, not a display cap: the correction pass only runs when the first pass came
-// back thinner than this, so asking for a different number is asking something else.
+// MAX_LOCAL_RESULTS in src/geocode.ts; the correction pass only runs below it, so it changes answers.
 const ASKED = 8;
 
 interface Golden {
   query: string;
   from: Point;
-  // The name the leading row must carry, spelled exactly as the artifact spells it.
+  // Spelled exactly as the artifact spells it.
   name: string;
-  // Where that answer really is, and how far the row may be from it. A street is one point standing
-  // for its whole length, so its tolerance is loose where a shop's is a block.
+  // A street is one point for its whole length, so its tolerance is loose.
   at: Point;
   within: number;
   kind: DocKind;
-  // Whether the house number asked for is the one found. Only the address cases ask a number.
   exact?: boolean;
   why: string;
 }
@@ -312,9 +295,6 @@ for (const golden of SF_GOLDEN) {
   });
 }
 
-// The other direction: a point, not a name. A document the index cannot be searched for must not be
-// what a dropped pin is called either — San Francisco shipped a place named for Apple's private-use
-// glyph, sitting on this corner, and it beat the door seven meters further away.
 test("the map center picks the branch, not the city", () => {
   const branch = (from: Point): Point => {
     const [top] = searchCity(nyc.index, nyc.addresses, {
@@ -325,8 +305,7 @@ test("the map center picks the branch, not the city", () => {
     expect(top.name).toBe("Shake Shack");
     return top;
   };
-  // The same chain, the same query, two ends of the same city: what changes the answer is the only
-  // spatial input the search has. Nothing here knows where the device is, and nothing needs to.
+  // The map center is the search's only spatial input.
   expect(metersApart(branch(BRYANT_PARK), BRYANT_PARK)).toBeLessThan(500);
   expect(metersApart(branch(DUMBO), DUMBO)).toBeLessThan(500);
 });

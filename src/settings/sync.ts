@@ -4,30 +4,10 @@ import { GATE_KEYS } from "../routing/cost";
 import { FACTORS, type FactorKey } from "../routing/factors";
 import { DEFAULT_SETTINGS, type Settings } from "./store";
 
-// Settings across two devices.
-//
-// Local-first, and that is not a fallback: localStorage is always this device's truth, nothing
-// reaches Firebase until the reader signs in, and signing out leaves everything where it is. What
-// signing in buys is a merge, not a master copy.
-//
-// The merge is per FIELD rather than per document, decided by which side changed that field last —
-// so a phone that set the layer order and a laptop that moved the tree slider both keep what they
-// did, where a whole-document last-writer-wins would have thrown one of them away. Weights are
-// merged per factor for the same reason, and the Modes switches per switch.
-//
-// Clock skew makes this approximate: two devices whose clocks differ by a minute can order two edits
-// a few seconds apart wrongly. At settings stakes that is the right trade against the machinery
-// exact ordering would need.
+// Local-first: localStorage is this device's truth, and signing in merges each field by latest edit.
+// Clock skew can misorder edits seconds apart, which is acceptable at settings stakes.
 
-// Everything the merge decides, as the paths `Settings.updatedAt` is keyed by. A field absent from
-// this list is not synced at all — which is the right answer for anything about THIS device, and
-// silently wrong for anything else: the page says changes here reach your other devices, so a field
-// left out is that sentence lying.
-//
-// The gates are spread from GATE_KEYS rather than written out, for the reason the route cache
-// learned twice: a hand-written list of gates is a list that forgets the next one. This one had
-// already forgotten the crossing gate, so a reader who turned crossings loose on their phone found
-// them priced again on their laptop.
+// A field absent here isn't synced; gates are spread from GATE_KEYS so a new one can't be forgotten.
 const FIELDS = [
   "layerOrder",
   "hiddenLayers",
@@ -45,9 +25,7 @@ const weightPath = (key: FactorKey): string => `weights.${key}`;
 const togglePath = (key: keyof Toggles): string => `toggles.${key}`;
 const modeLayersPath = (id: ModeId): string => `modeLayers.${id}`;
 
-// Which side of a field to take: the one that changed it later, and the local one when neither has
-// ever changed it or the two are somehow simultaneous. Preferring local on a tie is what keeps a
-// sign-in from moving anything the reader has not touched on another device.
+// Local wins ties, so signing in never moves anything the reader hasn't touched elsewhere.
 function later(
   local: Readonly<Record<string, number>>,
   remote: Readonly<Record<string, number>>,
@@ -62,8 +40,6 @@ export function mergeSettings(local: Settings, remote: Settings): Settings {
 
   for (const field of FIELDS) {
     if (later(local.updatedAt, remote.updatedAt, field) === "remote") {
-      // Every field is assigned through this one line, so the types are widened at the assignment
-      // rather than the loop being written out eight times.
       (merged as Record<SyncedField, unknown>)[field] = remote[field];
       stamps[field] = remote.updatedAt[field];
     }
@@ -85,21 +61,18 @@ export function mergeSettings(local: Settings, remote: Settings): Settings {
 
   merged.weights = weights;
 
-  // One switch at a time, as the row itself sets them: a phone that barred ferries and a laptop
-  // that asked for shade both keep what they did.
+  // Per switch, so two devices moving different switches both keep theirs.
   const toggles: Toggles = { ...local.toggles };
   for (const key of TOGGLE_KEYS) {
     const path = togglePath(key);
     if (later(local.updatedAt, remote.updatedAt, path) === "remote") {
-      // Widened at the assignment, as the field loop above is: each key has its own value type.
       (toggles as Record<keyof Toggles, unknown>)[key] = remote.toggles[key];
       stamps[path] = remote.updatedAt[path];
     }
   }
   merged.toggles = toggles;
 
-  // One mode's list at a time, for the reason the switches are merged one at a time: hiding a layer
-  // in Historic on a phone says nothing about what Naturalist draws on a laptop.
+  // Per mode, since hiding a layer in one mode says nothing about another.
   const modeLayers: Partial<Record<ModeId, readonly OverlayId[]>> = {
     ...local.modeLayers,
   };
@@ -121,9 +94,7 @@ export function mergeSettings(local: Settings, remote: Settings): Settings {
   return merged;
 }
 
-// A document read back from Firestore, which is whatever was last written there — by a build that
-// may be newer than this one. Everything unrecognized is dropped rather than trusted, the same way
-// the local document is read (./store.ts), so a field this build cannot name cannot corrupt it.
+// Possibly written by a newer build, so unrecognized fields are dropped as in ./store.ts.
 export function settingsFromRemote(
   document: unknown,
   read: (stored: Partial<Settings>) => Settings,

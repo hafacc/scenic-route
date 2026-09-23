@@ -7,12 +7,7 @@ import {
   UNNAMED_ID,
 } from "../../scripts/geometry";
 
-// The committed networks' shared layout (STRT, PATH, SWLK), pinned against a file assembled here
-// from the table in scripts/README.md rather than by the encoder under test — the CSTR mistake
-// DESIGN.md records is a fault mirrored into an encoder and its decoder, which a round-trip
-// cannot see. The fixture writer below is deliberately its own implementation: its own varint,
-// its own region arithmetic. The ingest lives in scripts/, as the shed encoder the sheds test
-// pins does; CI runs `bun test src`.
+// Pinned against scripts/README.md, not the encoder: a round trip can't see a mirrored mistake.
 
 const COORD_SCALE = 1e-6;
 
@@ -40,8 +35,7 @@ function zigzag(value: number): number {
   return value < 0 ? -2 * value - 1 : 2 * value;
 }
 
-// One network file: the 64-byte header, a 24-byte record each, the varint-delta coordinate blob,
-// the fixed-size density blob (two bytes a vertex, left then right) and the trailing name blob.
+// Header, 24-byte records, the varint-delta coordinates, two density bytes a vertex, then names.
 function writeNetwork(
   magic: string,
   format: number,
@@ -126,7 +120,6 @@ function writeNetwork(
   return file;
 }
 
-// A SWLK extract: a named esplanade sidewalk on a bridge deck, then an unnamed crossing.
 const SIDEWALK_RECORDS: Fixture[] = [
   {
     id: 1_234_567,
@@ -159,8 +152,7 @@ const SIDEWALK_RECORDS: Fixture[] = [
 const SIDEWALK_NAMES = ["HUDSON RIVER GREENWAY"];
 
 test("the network decoder reads a hand-written SWLK file", () => {
-  // Non-zero densities, so a decoder reading the region at the wrong offset cannot pass by
-  // finding the zeros the encoder happens to leave there.
+  // Non-zero, so a decoder at the wrong offset can't pass on the encoder's leftover zeros.
   const densities = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
   const decoded = decodeNetwork(
     writeNetwork("SWLK", 1, SIDEWALK_RECORDS, SIDEWALK_NAMES, densities),
@@ -178,8 +170,7 @@ test("the network decoder reads a hand-written SWLK file", () => {
   ]);
   expect(decoded.records.map((record) => record.flags)).toEqual([4, 0]);
 
-  // The delta chain restarts per record, and each record's coordinates are found through its own
-  // blob offset — a decoder that ran one chain across the file would put record 1 elsewhere.
+  // The delta chain restarts per record, found through each record's own blob offset.
   const [first, second] = decoded.records;
   expect(first.points).toHaveLength(3);
   expect(second.points).toHaveLength(2);
@@ -215,12 +206,9 @@ test("the network encoder writes those same bytes", () => {
   expect([...encoded]).toEqual([...expected]);
 });
 
-// STRT v6 widened the flags byte rather than the record: the three old bits keep their places and
-// the four sidewalk bits ride above them, so a reader that masked the byte down to its old three
-// values (or a writer that spilled into byte 22) shows up here.
+// STRT v6 put the four sidewalk bits above the old three in the same flags byte.
 test("STRT v6 carries the per-side sidewalk bits in the flags byte", () => {
-  // Bits 0, 2, 4 and 5: vehicular-only, structure, OSM right, surveyed left — plus bit 7, which no
-  // flag claims, so a reader that masks the byte down to what it knows drops it.
+  // Bit 7 is unclaimed, so a reader masking the byte down to known flags drops it.
   const flags = 0b1011_0101;
   const street: Fixture = {
     id: 7,

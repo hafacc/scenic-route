@@ -1,104 +1,55 @@
-// SRCH: every name in a city, indexed for a search box that has no network.
-//
-// Naming a place used to mean a round trip to a public geocoder, and the three searches that did
-// ship offline — street names off the routing graph, stations, house numbers out of ADDR — each
-// scanned their own list with their own ranking. This is one index over all of it, those three
-// included, plus the curated points the app draws and could not search: a sorted token dictionary, a
-// posting list per token, and a document table of names and coordinates.
-//
-// ADDRESSES ARE NOT IN IT, and that is the whole reason it is small. Tokenizing New York's 967,230
-// addresses would put `street` and `avenue` into a million documents each, and every way of coping
-// with a posting list that size — stop words, caps, tiered lists — degrades exactly the queries
-// addresses exist to answer. Instead a STREET is one document (9,387 of them in New York, one per
-// ADDR (name, place) pair) carrying its ADDR street ordinal, and a house number is resolved after
-// the match by decoding that one street's run, which is what src/search/addresses.ts already does.
-// With addresses out, no posting list in New York exceeds ~14k entries, so nothing in the query path
-// needs a cap.
-//
-// Written by scripts/search-index.ts to public/search/<city>.bin.gz, read by
-// src/search/search-query.ts. Gzipped for the same two reasons ADDR is: Pages serves .bin
-// uncompressed, and the file is half the size this way both in the repo and against the Pages cap.
-//
-// Layout, all integers LEB128 varints unless stated:
+// SRCH: every name in a city, for offline search; gzipped because Pages serves .bin uncompressed.
+// Addresses are excluded to keep postings small: a street is one doc, numbers come from its ADDR run.
+// Layout, LEB128 varints unless stated:
 //
 //   "SRCH"                      magic, 4 bytes
 //   format                      1 byte
 //   categoryBytes               length of the category blob
-//   <categories>                what a document is, "\n"-joined, UTF-8: the Overture slug for a
-//                               place, the routes a station serves
+//   <categories>                "\n"-joined UTF-8: a place's Overture slug, a station's routes
 //   docCount
 //   per doc, in Hilbert order over its quantized coordinates:
 //     nameLen                   the display name, UTF-8, original case and punctuation
 //     <name>
 //     kindFlags                 1 byte: kind (low 4 bits) | hasStreet (0x10) | hasNumber (0x20)
-//     tokenInfo                 1 byte: the DISPLAY name's word count, capped at 15 (high 4 bits) —
-//                               which is neither the number of tokens the doc is indexed under, since
-//                               a street is indexed under every spelling of itself, nor the number of
-//                               DISTINCT words it has, since "Boutique Boutique" is a two-word name
-//                               that one typed word covers half of
-//                               | ADDR place index plus one (low 4 bits), 0 where the doc has no
-//                               place — an unjoined place, or a city that is one place
+//     tokenInfo                 1 byte: display-name words ≤ 15 (high 4) | ADDR place + 1 or 0 (low 4)
 //     prominence                1 byte, how much a name outranks another on an equal match
 //     category                  index into <categories> plus one; 0 where the doc has none
 //     latDelta, lngDelta        zigzag, units of 1e-5°, from the previous doc
 //     streetIndex               only when hasStreet: ordinal into the ADDR street table
 //     number                    only when hasNumber: major * 2 + hasExtra
-//     extra                     only when the low bit of `number` is set: minor * 32 + suffix,
-//                               exactly as ADDR packs one
+//     extra                     only when `number`'s low bit is set: minor * 32 + suffix, as in ADDR
 //   tokenCount
-//   dictBytes                   length of the token-entry region, which is what locates the
-//                               postings region behind it
+//   dictBytes                   length of the token entries, which locates the postings behind them
 //   restartCount                ceil(tokenCount / 16)
 //   per restart, fixed width, u32 LE x 2:
 //     dictOffset                the block's first entry, from the start of the token entries
 //     postingsOffset            that entry's posting list, from the start of the postings region
 //   per token, sorted bytewise, front-coded in blocks of 16:
-//     lcp                       bytes shared with the predecessor; 0 at a block start, so a block
-//                               decodes without its neighbors
+//     lcp                       bytes shared with the predecessor; 0 at a block start
 //     tailLen
 //     <tail>                    UTF-8 bytes after the shared prefix
 //     postingCount              documents carrying the token
-//     postingBytes              the posting list's length, so a run's cost can be summed and a
-//                               list skipped without decoding it
+//     postingBytes              the list's length, so a list can be skipped undecoded
 //   per token, concatenated in dictionary order:
 //     <postings>                ascending doc ids, delta varints, the first absolute
 //
-// The document order is a Hilbert curve over the quantized coordinates, purely so the coordinate
-// deltas are small: spatially adjacent documents are meters apart, so a delta pair costs about four
-// bytes instead of eight, and the posting lists pick up spatial coherence that gzip likes. Nothing
-// at query time depends on the order.
-//
-// The dictionary is front-coded in blocks of 16 with a fixed-width restart table, so a query token
-// is found by binary search over block-first tokens — which are stored whole, at lcp 0 — comparing
-// raw bytes with no decoding, and only the ≤ 16 entries of the block it lands in are ever expanded.
-// A prefix match is then a contiguous run of the dictionary, which is why prefix search costs the
-// same as exact search plus the run.
-//
-// There are no positions, no fields and no per-posting payload, which is what keeps a posting at
-// about two bytes. Match quality is a property of WHICH dictionary token matched — exact, a prefix,
-// or (later) an edit away — and that is known on the dictionary side before a posting is read;
-// coverage needs only the name's token count, which rides in the document table.
+// Documents are in Hilbert order only so coordinate deltas are small; queries don't depend on it.
+// No positions or payloads: match quality comes from which token matched, known before postings.
 
 export const SEARCH_MAGIC = "SRCH";
 export const SEARCH_FORMAT = 1;
 
-// The same hundred-thousandths of a degree ADDR stores an address at, imported rather than restated
-// so a pin from this file and a pin from that one land on the same grid.
+// Imported so pins from this file and from ADDR land on the same grid.
 export { COORD_SCALE } from "./address-format";
 
-// Front-coding restarts. Sixteen is the trade between the restart table (eight bytes a block) and
-// the decode a hit costs (at most sixteen entries): at New York's ~98k tokens it is ~49 KB of table
-// against tails that are otherwise ~438 KB.
+// Sixteen trades the restart table (8 bytes a block) against the decode per hit (≤ 16 entries).
 export const DICT_BLOCK = 16;
 export const RESTART_BYTES = 8;
 
-// The document table's four bits of token count. A name with more words than this counts as this
-// many, which only affects the coverage term in ranking — and a sixteen-word name has no coverage
-// worth measuring anyway.
+// Longer names count as 15, which only blunts the coverage term.
 export const MAX_NAME_TOKENS = 15;
 
-// What a document is. The number is what the low nibble of `kindFlags` holds, so the order is
-// frozen; adding a kind appends.
+// Stored as an index in the low nibble of `kindFlags`, so the order is frozen; append only.
 export const DOC_KINDS = [
   "place",
   "street",
@@ -113,11 +64,9 @@ export const DOC_KINDS = [
 export type DocKind = (typeof DOC_KINDS)[number];
 
 export const KIND_MASK = 0x0f;
-// The document names a street of the ADDR file, and `streetIndex` follows.
+// The document names an ADDR street, and `streetIndex` follows.
 export const HAS_STREET = 0x10;
-// The document sits at a house number, and the ADDR number pair follows. Two bits rather than one
-// because a street document has an ordinal and no number, a place that joined has both, and a street
-// the graph names but ADDR does not has neither.
+// The ADDR number pair follows; a street doc has only an ordinal, a graph-only street neither.
 export const HAS_NUMBER = 0x20;
 
 export function packKindFlags(
@@ -136,13 +85,9 @@ export function unpackKind(kindFlags: number): DocKind {
   return DOC_KINDS[kindFlags & KIND_MASK];
 }
 
-// How many places the low nibble of `tokenInfo` can name, which is one short of the sixteen it can
-// hold because zero is "no place". New York files five boroughs and San Francisco none.
+// Zero in the low nibble means no place, leaving 15.
 export const MAX_PLACES = 15;
 
-// `placeIndex` is the ADDR place index plus one, so that zero can mean "no place": San Francisco is
-// one place and labels nothing, and a New York place that never joined to an address has no borough
-// to name until something geographic gives it one.
 export function packTokenInfo(tokenCount: number, placeIndex: number): number {
   return Math.min(tokenCount, MAX_NAME_TOKENS) * 16 + (placeIndex + 1);
 }
@@ -157,17 +102,12 @@ export function unpackTokenInfo(tokenInfo: number): {
   };
 }
 
-// Apostrophes go before the split rather than becoming separators: "Joe's" is one word, and letting
-// it break in two makes `s` the corpus's largest posting list at 15,354 entries — larger than any
-// real token. The curly ones are here because the sources use both.
+// Stripped, not split on: splitting "Joe's" would make `s` the largest posting list in the corpus.
 const APOSTROPHES = /['‘’ʼ`]/gu;
 const COMBINING_MARKS = /\p{M}/gu;
 const SEPARATORS = /[^\p{L}\p{N}]+/gu;
 
-// Shared by the builder and the client, and the two must never diverge: a name tokenized one way and
-// a query the other is a name that cannot be found. Decomposing first is what folds Café onto Cafe;
-// splitting on Unicode classes rather than on spaces is what keeps a CJK name a run of its own
-// characters instead of nothing at all.
+// Builder and client share this and must never diverge, or names become unfindable.
 export function normalizeText(text: string): string {
   return text
     .normalize("NFKD")
@@ -257,10 +197,7 @@ const TEN_ORDINALS = [
 // The highest numbered street either city has, plus room: New York files a West 271st.
 export const MAX_ORDINAL = 999;
 
-// "fifth avenue" spelled out, as the tokens it would be typed as. Streets index these alongside their
-// digits, because the two cities write a numbered street four ways — "5 AV", "5th Avenue", "Fifth
-// Avenue" — and only the first two fall out of the name itself. A compound spells as its words, so
-// "twenty first street" matches the same way "21st" does. Empty outside the range.
+// Streets are indexed spelled out too, since sources write "5 AV", "5th Avenue" and "Fifth Avenue".
 export function ordinalWords(value: number): string[] {
   if (!Number.isInteger(value) || value < 1 || value > MAX_ORDINAL) {
     return [];
@@ -285,23 +222,15 @@ export function ordinalWords(value: number): string[] {
   return words;
 }
 
-// With the ordinal suffix or without, which is the two ways the sources write one: the address file
-// has "5 AV" and the display name "5th Avenue".
+// Suffix optional: ADDR writes "5 AV", display names "5th Avenue".
 const NUMBERED_WORD = /^([0-9]+)(?:st|nd|rd|th)?$/u;
 
-// What a word of a street name counts off — 5 for both "5" and "5th" — or null where it counts
-// nothing.
 export function ordinalValue(word: string): number | null {
   const digits = NUMBERED_WORD.exec(word);
   return digits === null ? null : Number(digits[1]);
 }
 
-// A name with each of its numbers spelled out — ["5th", "avenue"] to ["fifth", "avenue"], ["21st",
-// "street"] to ["twenty", "first", "street"] — or null where it has no number to spell.
-//
-// A street is indexed under these words as well as its own, and the query side rebuilds them to tell
-// WHICH words of the name a query that spelled one out named: "fifth avenue" is both words of 5th
-// Avenue and two of the three of 55th Avenue, which carries the word `fifth` just as genuinely.
+// A name with its numbers spelled out, or null if none; the query side uses it to tell 5th from 55th.
 export function spelledOrdinals(words: readonly string[]): string[] | null {
   const spelled: string[] = [];
   let numbered = false;
@@ -318,9 +247,7 @@ export function spelledOrdinals(words: readonly string[]): string[] | null {
   return numbered ? spelled : null;
 }
 
-// Bytewise, which is the order the dictionary is written in and so the order a client binary
-// searching it has to compare with. UTF-8 sorts the same as code points, so this is a comparison of
-// the encoded bytes even though it reads the string.
+// The dictionary's sort order; UTF-8 byte order matches code point order.
 export function compareBytes(left: Uint8Array, right: Uint8Array): number {
   const shared = Math.min(left.length, right.length);
   for (let index = 0; index < shared; index += 1) {

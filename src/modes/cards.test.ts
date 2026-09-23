@@ -26,7 +26,6 @@ const ride = (shortName: string, seconds: number) => ({
   seconds,
 });
 
-// A boat, and how many trains had been ridden before it — which is what orders the two.
 const boat = (seconds: number, ridesBefore = 0) => ({ seconds, ridesBefore });
 
 describe("cardLine", () => {
@@ -224,7 +223,6 @@ describe("ferrySummaries", () => {
 
 describe("chips", () => {
   test("only the mode's own discounts, never its penalties", () => {
-    // Naturalist prefers trees and avoids industry; the penalty is not a chip.
     expect(chipFactors(NATURALIST, ALL_FACTORS)).toEqual(["tree", "bridge"]);
     expect(chipFactors(HISTORIC, ALL_FACTORS)).toEqual([
       "landmark",
@@ -301,7 +299,6 @@ describe("cardColors", () => {
       plain(1),
     ]);
     expect(colors[1]).toBe("#d946ef");
-    // Art is spoken for, so the remaining middle card skips past it.
     expect(colors[2]).not.toBe("#d946ef");
     expect(colors).toEqual([
       HISTORIC.color,

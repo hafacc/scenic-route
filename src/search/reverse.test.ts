@@ -1,11 +1,4 @@
-// What a point picked off the map is called, asked of the artifacts the app actually ships.
-//
-// The same standard as ./golden.test.ts and for the same reason: the rules are stated against a
-// handful of documents elsewhere, and only the real files can say whether a tap on the Empire State
-// Building names the tower or the valuation firm on its fourth floor. Every case here is a point
-// with a known truth — a building, the middle of a park, open water — and the last two tests are the
-// two promises the module makes: that an address it gives is one the city published, and that
-// answering costs a few milliseconds rather than a network round trip.
+// Reverse naming checked against the shipped artifacts, since only real files have the real tenants.
 
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -57,16 +50,11 @@ function metersApart(left: Point, right: Point): number {
 }
 
 interface Named {
-  // Where the reader tapped, and what is there.
   at: Point;
   what: string;
-  // The name the answer must carry, spelled as the artifact spells it. Null with no `kind` beside it is
-  // the case where the honest answer is nothing at all; null WITH one asks only that something real
-  // was found, for a spot where which of several tenants Overture filed is not a promise worth
-  // freezing into a test.
+  // Null without `kind` expects no answer; with one, any real answer where the tenant isn't a promise.
   name: string | null;
   kind?: ReverseHit["kind"];
-  // Whether the point is AT what it was named after, rather than merely beside it.
   standing?: boolean;
   why: string;
 }
@@ -193,9 +181,7 @@ for (const named of SF_NAMED) {
   });
 }
 
-// Every address in the file, asked what it is called from its own doorstep. It has to come back with
-// that address or with something real at the same spot — the shop in it, the park it stands in —
-// never with a number from another building and never with nothing.
+// Each address from its own doorstep must return itself or something real at the same spot.
 function ownDoorstep(city: City, cityId: string): void {
   const streetCount = city.addresses.streetName.length;
   let named = 0;
@@ -219,10 +205,7 @@ function ownDoorstep(city: City, cityId: string): void {
     ).toBeLessThan(60);
     if (hit.kind === "address") {
       numbered += 1;
-      // The street has to be the one stood on, unless the answer is standing on the very same point:
-      // both cities file whole blocks of numbers at one coordinate — every address on San
-      // Francisco's Bertha Lane shares one — and a corner is filed twice, once per street, so 299
-      // Nevada Street and 801 Jarboe Avenue are one doorway written two ways.
+      // Unless at the very same point: blocks can share a coordinate, and corners are filed per street.
       const onStreet = city.addresses.names[city.addresses.streetName[street]];
       const wanted = `${formatHouseNumber(address.number)} ${onStreet}`;
       expect(
@@ -232,7 +215,6 @@ function ownDoorstep(city: City, cityId: string): void {
     }
   }
   expect(named).toBe(200);
-  // Most doorsteps have no name of their own, so most of them answer with their own number.
   expect(numbered).toBeGreaterThan(100);
 }
 
@@ -244,8 +226,6 @@ test("sf: a point on a building is that building", () => {
   ownDoorstep(sf, "sf");
 });
 
-// The promise the search box already keeps, kept in the other direction: a number that comes back is
-// a number the city published, at the coordinates it published for it.
 test("no house number is ever invented", () => {
   const checked: string[] = [];
   for (let step = 0; step < 120; step += 1) {
@@ -267,9 +247,7 @@ test("no house number is ever invented", () => {
   expect(checked.length).toBeGreaterThan(20);
 });
 
-// Fast enough to relabel a dragged endpoint. The bound is loose because it is a floor under "this is
-// not a network round trip", not a benchmark: the measured median is about 2 ms in New York and 1 ms
-// in San Francisco, on the whole of both cities' files.
+// A loose floor under "not a network round trip"; the median is about 2 ms in NYC and 1 ms in SF.
 test("naming a point costs milliseconds", () => {
   const times: number[] = [];
   for (let step = 0; step < 200; step += 1) {

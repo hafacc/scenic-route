@@ -3,9 +3,7 @@ import { dueForCheck, offersReload, UPDATE_CHECK_MS } from "./update";
 
 test("only a raised marker interrupts a session", () => {
   expect(offersReload(4, 3)).toBe(true);
-  // The ordinary deploy, which the reader never hears about.
   expect(offersReload(3, 3)).toBe(false);
-  // A rollback, which is not something to offer either.
   expect(offersReload(2, 3)).toBe(false);
 });
 

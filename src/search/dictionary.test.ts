@@ -1,14 +1,4 @@
-// The fuzzy walk (./dictionary.ts) against a brute-force answer.
-//
-// The walk is the one piece of this index that cannot be read and believed: it prunes subtrees it
-// never decodes, reuses table rows across words that share a prefix, and takes whole runs of the
-// dictionary on the strength of one accepted prefix. Every one of those is a chance to drop a word
-// that should have matched. So the claim is checked the only way it can be — against every word in
-// the dictionary, measured by a plain double loop, on a corpus random enough to hit the cases.
-//
-// What the walk promises, exactly: for every token, the FEWEST leading bytes of it that are within
-// `maxDistance` edits of the whole query, where an edit is an inserted, deleted or substituted byte
-// or a swap of two adjacent ones and no run of bytes is edited twice.
+// The fuzzy walk (./dictionary.ts) prunes and takes whole runs, so it is checked against brute force.
 
 import { expect, test } from "bun:test";
 import { encodeSearch, type SearchDoc } from "../../scripts/search-index";
@@ -34,7 +24,6 @@ function random(seed: number): () => number {
   };
 }
 
-// One document per token, so that every token is in the dictionary and nothing else is.
 function dictionaryOf(tokens: readonly string[]): SearchIndex {
   const docs: SearchDoc[] = tokens.map((token, at) => ({
     name: token,
@@ -51,8 +40,7 @@ function dictionaryOf(tokens: readonly string[]): SearchIndex {
   return decodeSearchIndex(encodeSearch(docs).bytes);
 }
 
-// Which token each posting list belongs to, which is how a match is named: the walk reports where a
-// token's postings are, and nothing else identifies it.
+// The walk reports only where a token's postings are, so that is how a match is named.
 function tokensByPostings(index: SearchIndex): Map<number, string> {
   const decoder = new TextDecoder();
   const cursor: DictCursor = {
@@ -77,8 +65,7 @@ function tokensByPostings(index: SearchIndex): Map<number, string> {
   return byPostings;
 }
 
-// The restricted edit distance — insert, delete, substitute, or swap two adjacent bytes, with no
-// stretch of bytes edited twice — written the slow obvious way.
+// Restricted edit distance (no stretch edited twice), written the slow obvious way.
 function editDistance(left: Uint8Array, right: Uint8Array): number {
   const table = Array.from({ length: left.length + 1 }, () =>
     new Array<number>(right.length + 1).fill(0),
@@ -111,9 +98,7 @@ function editDistance(left: Uint8Array, right: Uint8Array): number {
   return table[left.length][right.length];
 }
 
-// What the walk should have said about one token: the shortest start of it that is close enough to
-// the query, or nothing. At least one letter of it — a query shorter than the distance allowed is
-// within that distance of NOTHING, and answering it with every word in the city is no answer.
+// At least one letter: a query shorter than the distance is within it of every word.
 function bruteForce(
   query: Uint8Array,
   token: string,
@@ -156,9 +141,7 @@ function expectSameAsBruteForce(
 
 test("the walk finds exactly the words a brute-force count of edits finds", () => {
   const next = random(20260825);
-  // A four-letter alphabet, so the dictionary is dense with shared prefixes and near misses — which
-  // is what exercises the pruning and the run-taking. A wider one would leave every word far from
-  // every other and the walk would prune before it could be wrong.
+  // A small alphabet makes shared prefixes and near misses dense, exercising the pruning.
   const alphabet = "abcd";
   const tokens = [
     ...new Set(
@@ -174,8 +157,7 @@ test("the walk finds exactly the words a brute-force count of edits finds", () =
   const index = dictionaryOf(tokens);
 
   for (let trial = 0; trial < 120; trial += 1) {
-    // Half the queries are words of the dictionary knocked about a little, which is what a typo is;
-    // half are random, which is what reaches the cases a typo never produces.
+    // Half are typos of real words; half random, to reach cases a typo never produces.
     const length = 1 + Math.floor(next() * 8);
     const query =
       next() < 0.5
@@ -190,7 +172,6 @@ test("the walk finds exactly the words a brute-force count of edits finds", () =
   }
 });
 
-// A word with one letter changed, dropped, added or swapped with its neighbor.
 function mutate(token: string, next: () => number): string {
   if (token.length < 2) {
     return token;
@@ -209,8 +190,7 @@ function mutate(token: string, next: () => number): string {
 }
 
 test("a run taken on one accepted prefix crosses the front-coded blocks whole", () => {
-  // Sixty tokens under one prefix is four blocks of sixteen, where the shared-prefix byte is reset
-  // to zero: a walk that trusted it to stay high would lose three quarters of the run.
+  // Sixty tokens span four blocks, where lcp resets to zero.
   const tokens = [
     ...Array.from(
       { length: 60 },
@@ -246,9 +226,7 @@ test("real words are reached by the ways a real word is typed wrong", () => {
   expect(found("delicatesen")).toEqual(["delicatessen", "delicatessens"]);
   expect(found("brooklny")).toEqual(["brooklyn"]);
   expect(found("theatr")).toEqual(["theater", "theatre"]);
-  // No first letter is pinned, so a word missing its opening letter is still found.
   expect(found("izza")).toEqual(["pizza"]);
-  // Three letters is under the gate, so nothing is looked for at all.
   expect(maxEditDistance(3)).toBe(0);
 });
 
@@ -262,9 +240,7 @@ test("the walk reports the fewest letters of a word that the query reaches", () 
       match,
     ]),
   );
-  // All three are reached through the same four letters — one accepted prefix speaking for a whole
-  // run of the dictionary — and each is reported at its own length, which is what the ranking scores
-  // a long word matched by a short query on.
+  // One accepted prefix takes the whole run, but each is reported at its own length.
   expect([...matches.keys()].sort()).toEqual(tokens);
   for (const token of tokens) {
     expect(matches.get(token)?.matchedLength).toBe(4);
@@ -275,9 +251,7 @@ test("the walk reports the fewest letters of a word that the query reaches", () 
 });
 
 test("a letter written in two bytes is measured in the bytes it is written in", () => {
-  // Normalization folds "Café" onto "cafe" before anything gets here, so an accent only survives in
-  // a name no folding covers — and there the walk counts bytes, which is what the brute force does
-  // too. What must not happen is a half-decoded character being called a match.
+  // Past normalization the walk counts bytes; a half-decoded character must never match.
   const tokens = ["cafe", "cafes", "café", "καφε", "καφές"].sort();
   const index = dictionaryOf(tokens);
   for (const query of ["cafe", "cafés", "καφε", "kaφe"]) {

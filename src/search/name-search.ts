@@ -9,47 +9,29 @@ import type {
   ReverseMessage,
 } from "./protocol";
 
-// The page's half of the search worker (./worker.ts), following the tile layer's pattern: one worker
-// for the whole app, started on first use, told which city it is answering for and then asked one
-// question at a time.
-//
-// A keystroke asked before the city's index has loaded is answered with null rather than waited on.
-// The index is seven megabytes on a first visit, and blocking the box on it would make every early
-// keystroke feel broken; null is "this source has nothing to say yet", which is exactly how the
-// search box already treats an address file that has not arrived. Naming a dropped pin
-// (`reverseNameIndex`) is the one thing here that does wait, because the pin has something to show
-// in the meantime.
+// Queries before the ~7 MB index loads get null rather than waiting; only pin naming waits.
 
 let worker: Worker | undefined;
-// The city the worker was last told to load, and the one it has finished loading. They differ while
-// a load is in flight, and after a failure the first goes back to null so the next ask retries.
+// They differ while a load is in flight; after a failure `requested` resets so the next ask retries.
 let requested: string | null = null;
 let ready: string | null = null;
 
 let nextQuery = 1;
-// The one question outstanding. A newer one supersedes it — the box has moved on, and its own
-// request was aborted — so the older promise is answered with null rather than left to hang.
+// A newer query supersedes this one, whose promise gets null rather than hanging.
 let asked: {
   id: number;
   resolve: (hits: IndexHit[] | null) => void;
 } | null = null;
 
-// And the one point waiting to be named, superseded the same way: a dragged endpoint asks what it is
-// called several times a second, and an answer for a point it has already left is not an answer.
+// Superseded the same way: a dragged endpoint asks several times a second.
 let named: {
   id: number;
   resolve: (hit: ReverseHit | null) => void;
 } | null = null;
 
-// Who is waiting for the files to finish loading. The search box never waits — an unanswered
-// keystroke is worse than an empty list — but a pin does: it reads "Dropped pin" until the label
-// arrives, and a label a second late is still the right label.
 let waiting: (() => void)[] = [];
 
-// How many pins are waiting to be named, and whether it was one of them that pulled the index in.
-// The routing panel keeps the index for as long as it is open; a pin dropped while it is shut would
-// otherwise leave twenty megabytes of decoded tables behind to name one point, so that copy is
-// dropped again as soon as the label is built.
+// Pins pull the index in only while naming, then drop its ~20 MB of tables unless the panel holds it.
 let naming = 0;
 let heldForNaming = false;
 
@@ -102,24 +84,15 @@ function searchWorker(): Worker {
 }
 
 function indexUrls(cityId: string): { searchUrl: string; addressUrl: string } {
-  // Resolved against the document, since these paths pick up the basePath the deploy injects and a
-  // relative URL inside a worker would resolve against its own chunk instead.
+  // Against the document, for the deploy's basePath; inside the worker it would resolve to its chunk.
   return {
     searchUrl: new URL(`search/${cityId}.bin.gz`, document.baseURI).href,
     addressUrl: new URL(`addresses/${cityId}.bin.gz`, document.baseURI).href,
   };
 }
 
-// Pulls the two files onto the device without decoding either of them. An offline search that only
-// answers for the city you happened to search while you still had signal is most of the way to no
-// offline search at all — so the bytes are fetched for every visitor, since it is the network that
-// goes away, not the memory. Only the reader who opens the search box pays for the index itself
-// (`warmNameIndex`), which costs forty megabytes of decoded tables on a phone that is already
-// carrying the routing graph.
-//
-// The bodies are read a chunk at a time and dropped: what this is for is the service worker's copy
-// (src/sw/policy keeps both directories), and holding the whole download to throw it away would be
-// most of the cost it exists to avoid.
+// Fetches both files for the service worker's cache for every visitor, without decoding them.
+// Read in chunks and dropped, as holding the whole body would cost most of what this avoids.
 export async function prefetchNameIndex(cityId: string): Promise<void> {
   if (requested === cityId) {
     return; // the worker is already reading them; a second fetch would only race its own cache
@@ -137,14 +110,12 @@ export async function prefetchNameIndex(cityId: string): Promise<void> {
           }
         }
       } catch {
-        // No signal, or a file this deploy does not carry. The worker fetches them again when
-        // someone actually searches, and reports its own failure then.
+        // The worker refetches and reports failures when someone searches.
       }
     }),
   );
 }
 
-// Hands the files to the worker, which decodes them and holds them for the rest of the session.
 function warm(cityId: string, forNaming: boolean): void {
   if (!forNaming) {
     heldForNaming = false; // the panel is open, and it keeps the index for as long as it is
@@ -169,10 +140,7 @@ export function warmNameIndex(cityId: string): void {
   warm(cityId, false);
 }
 
-// Gives the decoded index back. Once the box is gone its tables are forty megabytes held against the
-// next search that may never come; the files themselves stay on the device, so warming it again
-// reads from disk rather than the network. A pin still waiting to be named is answered with null and
-// keeps whatever label it already has.
+// Decoded tables are ~40 MB; the files stay cached, so rewarming reads from disk.
 export function releaseNameIndex(): void {
   if (!worker) {
     return;
@@ -187,10 +155,7 @@ export function releaseNameIndex(): void {
   stopWaiting();
 }
 
-// Where the map is, for the search box — which runs long before anything asks for a route and cannot
-// take the camera as a prop. Set from the map's settled camera, and kept WITH the city it belongs
-// to: a center in Brooklyn says nothing about which of San Francisco's streets was meant, so after a
-// switch it is ignored until the map settles over the new city.
+// Kept with its city, since a center in another city says nothing about this one.
 let mapCenter: { cityId: string; at: { lat: number; lng: number } } | null =
   null;
 
@@ -201,9 +166,7 @@ export function setSearchCenter(
   mapCenter = { cityId, at };
 }
 
-// Where the map is pointing, for a search over this city — null until it has settled over one, which
-// is when the city's own center stands in for it. Every result the index gives is ranked by how far
-// it is from here.
+// Null until the map settles over this city.
 export function searchCenter(
   cityId: string,
 ): { lat: number; lng: number } | null {
@@ -219,8 +182,7 @@ export interface NameSearch {
   limit: number;
 }
 
-// The index's answers, or null where it has none to give yet — a city still loading, or one whose
-// file this device has never managed to fetch.
+// Null while the city loads or when its file couldn't be fetched.
 export function searchNameIndex({
   cityId,
   text,
@@ -247,11 +209,7 @@ export function searchNameIndex({
   });
 }
 
-// Waits for the city's index to be in memory, the way naming a pin does, and answers whether it
-// arrived. A destination carried as words in a link is asked once and has nothing to show in the
-// meantime, so it waits rather than taking the empty answer a keystroke gets — at load the index is
-// never ready yet, and answering nothing would put every shared address in front of the reader as
-// an empty list.
+// A link's destination waits: the index is never ready at load, and null would show an empty list.
 export async function awaitNameIndex(cityId: string): Promise<boolean> {
   warmNameIndex(cityId);
   if (ready !== cityId) {
@@ -260,12 +218,7 @@ export async function awaitNameIndex(cityId: string): Promise<boolean> {
   return ready === cityId;
 }
 
-// What a point on the map is called, out of the same two files the box searches: the nearest house
-// number, or the name of whatever the point is standing on. Null where the city has nothing near
-// enough — a pin in the middle of the harbor keeps whatever the caller already put on it.
-//
-// This one waits for the index rather than answering without it, because a pin has something to show
-// in the meantime and nothing to lose by being labeled a second late.
+// Null where nothing is near enough, e.g. the middle of the harbor.
 export async function reverseNameIndex(
   cityId: string,
   at: { lat: number; lng: number },

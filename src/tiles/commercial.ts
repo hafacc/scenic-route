@@ -7,24 +7,11 @@ import type { CommercialParams, TileCoords } from "./protocol";
 import type { TileRenderer } from "./renderer";
 import { themeName } from "./theme";
 
-// The "commercial" overlay. It highlights whole blocks, not points. The heavy work — snapping ~800k
-// PLUTO land-use lots and ~1M building footprints onto every street segment — is done at BUILD TIME by
-// the commercial pass (crates/tiler/src/commercial.rs), which writes per-segment SIGNALS to
-// public/commercial/{x}/{y}.bin (magic CMRC), one file per STCK street chunk, aligned by segment
-// index. Each segment carries three bytes: commercialFrac (commercial lots / all fronting lots,
-// 0..255), medianHeightMeters (median snapped roof height, 255 when none), and flags (bit0 an Open
-// Street, bit1 outdoor seating).
-//
-// The overlay just reads those signals and applies the GATE client-side, so the thresholds stay
-// tunable without a rebuild. A block lights when it is commercial (>50% commercial frontage) AND
-// low-rise AND (on an Open Street OR has outdoor seating) — i.e. a charming low-rise retail strip, not
-// a Midtown office canyon. A qualifying block is drawn as one wide violet band over the street, whole
-// length — a block is on or off, never a spot, never a fade.
+// Signals are baked per segment by crates/tiler/src/commercial.rs; the gate runs here to stay tunable.
 
 const TILE_SIZE = 256;
 
-// The z12 STCK street chunks (geometry) and their CMRC signal siblings, fetched lazily per chunk as
-// the display tiles over them are drawn. Relative, so they pick up the deploy's basePath.
+// Relative, so it picks up the deploy's basePath.
 const CHUNK_URL = "streets/{x}/{y}.bin";
 const CHUNK_ZOOM = 12;
 
@@ -35,19 +22,14 @@ const COMMERCIAL_BYTES_PER_SEGMENT = 3; // [commercialFrac, medianHeightMeters, 
 const FLAG_OPEN_STREET = 1; // bit0: an Open Street sample snapped to the segment
 const FLAG_SEATING = 2; // bit1: a dining / outdoor-seating point snapped to the segment
 
-// The knobs below are the client-side gate, tuned by eye against the running map (no rebuild needed).
-// Stage 1: the share of fronting lots that must be commercial for the block to qualify. Over half.
+// Share of fronting lots that must be commercial.
 const COMMERCIAL_FRACTION = 0.5;
-// Stage 2: the block must be low-rise — median snapped roof height at or below this. Drops Midtown /
-// big-box canyons, keeps brownstone-height retail strips. (255 m "no buildings" also fails this.)
+// Max median snapped roof height; the 255 "no buildings" sentinel also fails it.
 const LOW_RISE_METERS = 25;
 
-// The band composites at one flat opacity — lower than a thin line would take, since the band is fat
-// and neighboring bands overlap at corners, so it stays airy.
+// Lower than a thin line would take, since fat bands overlap at corners.
 const BAND_OPACITY = 0.45;
 
-// The band's stroke wants the overlay's violet as channels rather than as hex, so both themes' are
-// parsed once up front.
 function channels(hex: string): readonly [number, number, number] {
   const { red, green, blue } = hexToRgb(hex);
   return [red, green, blue];
@@ -58,59 +40,42 @@ const BAND_CHANNELS: Record<ThemeName, readonly [number, number, number]> = {
   dark: channels(COMMERCIAL_COLOR.dark),
 };
 
-// The vector band's ground width: the roadway plus the frontage lots on both sides, so it reads as the
-// commercial BLOCK strip rather than a centerline over the street. A NYC lot is ~30 m deep, the road
-// ~12 m, so ~50 m covers the street and most of the frontage each side. From z13 down that comes to
-// a couple of pixels or less, so it is floored — the floor is what keeps the city overview a legible
-// wash instead of invisible hairlines, and it is narrow enough that at z10 the strips still read as
-// strips rather than one blanket.
+// ~12 m road plus most of the ~30 m lots each side; floored so the overview isn't invisible hairlines.
 const BAND_METERS = 50;
 const MIN_BAND_PX = 4;
 
-// Feathered band edges. The feather is a share of the band's OWN width, so it shrinks with the band
-// as the map zooms out — a fixed pixel blur swallows a thin band and turns the strips into a wash —
-// capped so a wide band at high zoom keeps the soft edge it has. The band is drawn onto an offscreen
-// padded by BLUR_PAD (~3× the widest blur, so a band near the tile edge still has pixels for the blur
-// to pull from), blurred, then only the center TILE_SIZE region is composited — so a blurred edge
-// lines up with the neighboring tile's. All three are tunable by eye.
+// Blur scales with band width so thin bands survive; the pad (~3× max blur) feeds blur at tile edges.
 const BLUR_FRACTION = 0.18;
 const MAX_BLUR_PX = 5;
 const BLUR_PAD = 15;
 
 const EQUATOR_METERS_PER_PIXEL = 156_543.033_92; // web mercator, at the equator, at z0
 
-// One block-length CSCL centerline: just the geometry, the unit the overlay highlights. The chunk's
-// per-vertex density bytes are consumed to advance the cursor but not kept — this overlay is on/off.
+// One block-length CSCL centerline.
 interface Segment {
   lngs: Float64Array;
   lats: Float64Array;
 }
 
-// One z12 chunk's model, built lazily the first time a display tile needs that chunk: the chunk's
-// segments, whether each passes the client gate (aligned by index), and the longest segment (to size
-// the draw's scratch arrays). No snapping happens here — the signals are precomputed — so building a
-// chunk is cheap and there is no on-toggle stall.
+// `qualifies` is the gate per segment; `longest` sizes the draw's scratch arrays.
 interface ChunkModel {
   segments: Segment[];
   qualifies: Uint8Array;
   longest: number;
 }
 
-// The precomputed per-segment signals from one CMRC chunk, parallel to its STCK sibling's segments.
+// Index-aligned with the sibling STCK chunk's segments.
 interface Signals {
   commercialFrac: Uint8Array;
   medianHeight: Uint8Array;
   flags: Uint8Array;
 }
 
-// One tile's geometry and its aligned signals.
 interface TileData {
   segments: Segment[];
   signals: Signals;
 }
 
-// Decode one CMRC signal chunk: the 12-byte header, then 3 bytes per segment in STCK order. Returns
-// three parallel byte arrays, index-aligned with the sibling STCK chunk's segments.
 function decodeCommercial(buffer: ArrayBuffer): Signals {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
@@ -124,8 +89,7 @@ function decodeCommercial(buffer: ArrayBuffer): Signals {
   const medianHeight = new Uint8Array(count);
   const flags = new Uint8Array(count);
   let offset = view.getUint16(6, true);
-  // The fixed count * 3-byte body must fit, or the reads below would run off the end and pull
-  // `undefined` (coerced to 0) into the signals instead of failing loudly on a truncated chunk.
+  // Reads past the end give undefined (coerced to 0), so a truncated chunk must fail here.
   if (offset + count * COMMERCIAL_BYTES_PER_SEGMENT > bytes.length) {
     throw new Error("commercial chunk truncated");
   }
@@ -141,8 +105,7 @@ function decodeCommercial(buffer: ArrayBuffer): Signals {
 const chunks = new Map<string, Promise<Segment[]>>();
 const signalChunks = new Map<string, Promise<Signals | null>>();
 
-// One in-flight fetch per chunk, shared and cached. A 404 is a water tile: it stands as empty. Any
-// other failure drops the entry so a later request goes back for it.
+// A 404 is a water tile and caches as empty; any other failure is evicted so it can be retried.
 function loadChunk(tileX: number, tileY: number): Promise<Segment[]> {
   const key = `${tileX}/${tileY}`;
   const pending = chunks.get(key);
@@ -155,8 +118,7 @@ function loadChunk(tileX: number, tileY: number): Promise<Segment[]> {
   const request = fetch(url)
     .then(async (response) => {
       if (response.ok) {
-        // Decode the full STCK segments, then keep only the geometry — the transient densities /
-        // offset are collected, since this overlay caches its segments and highlights whole blocks.
+        // Keep only the geometry, since the segments stay cached.
         const buffer = await response.arrayBuffer();
         return decodeStreetChunk(buffer).map((segment) => ({
           lngs: segment.lngs,
@@ -176,8 +138,7 @@ function loadChunk(tileX: number, tileY: number): Promise<Segment[]> {
   return request;
 }
 
-// The CMRC signal sibling of a chunk. A 404 is a tile with no precomputed signals (water, or not yet
-// built): null, and the tile draws nothing.
+// A 404 (water, or not yet built) is null, and the tile draws nothing.
 function loadSignals(tileX: number, tileY: number): Promise<Signals | null> {
   const key = `${tileX}/${tileY}`;
   const pending = signalChunks.get(key);
@@ -205,9 +166,7 @@ function loadSignals(tileX: number, tileY: number): Promise<Signals | null> {
   return request;
 }
 
-// A tile's geometry and its aligned signals, fetched together. If the signals are missing or their
-// count disagrees with the geometry, the segments get all-zero signals (so nothing qualifies) rather
-// than reading past the end.
+// Missing or misaligned signals become all zeros, so nothing qualifies.
 async function loadTile(tileX: number, tileY: number): Promise<TileData> {
   const [segments, signals] = await Promise.all([
     loadChunk(tileX, tileY),
@@ -227,9 +186,7 @@ async function loadTile(tileX: number, tileY: number): Promise<TileData> {
   };
 }
 
-// The z12 chunks a display tile covers. At z>=12 a tile sits inside a single chunk (its ancestor at
-// CHUNK_ZOOM). Below z12 one tile spans a 2^(12-z) square of chunks — 4 at z11, 16 at z10 — so an
-// overview tile pulls in only the handful under it, not the whole city.
+// Below z12 a tile spans a 2^(12-z) square of chunks, so an overview fetches only those under it.
 function coveringChunks(coords: TileCoords): { x: number; y: number }[] {
   if (coords.z >= CHUNK_ZOOM) {
     const shift = coords.z - CHUNK_ZOOM;
@@ -247,12 +204,8 @@ function coveringChunks(coords: TileCoords): { x: number; y: number }[] {
   return chunkList;
 }
 
-// One in-flight model per z12 chunk, keyed by its tile coords, shared by every display tile over it.
 const chunkModels = new Map<string, Promise<ChunkModel>>();
 
-// Load one chunk's geometry and signals and reduce to its model: the segment array plus a per-segment
-// `qualifies` byte from the CLIENT gate (commercial >50% AND low-rise AND open-street | seating). No
-// snapping — the signals are precomputed — so this is cheap and does not stall on toggle.
 function loadChunkModel(tileX: number, tileY: number): Promise<ChunkModel> {
   const key = `${tileX}/${tileY}`;
   const pending = chunkModels.get(key);
@@ -295,9 +248,7 @@ function load(
   );
 }
 
-// Tile draws run one at a time — the worker handles one draw message at a time and each draw runs
-// synchronously to completion — so the drawing scratch buffers are reused across every tile instead
-// of allocated per tile. Lazily created; a canvas is resized only if the device pixel ratio changes.
+// Draws run one at a time and synchronously, so one scratch canvas serves every tile.
 let bandScratch: OffscreenCanvas | null = null;
 
 function sizedCanvas(
@@ -307,13 +258,12 @@ function sizedCanvas(
 ): OffscreenCanvas {
   const reused = canvas ?? new OffscreenCanvas(width, height);
   if (reused.width !== width || reused.height !== height) {
-    reused.width = width; // assigning either dimension also resets the canvas to transparent
+    reused.width = width; // resizing also clears the canvas
     reused.height = height;
   }
   return reused;
 }
 
-// The meters a screen pixel spans at this tile's center, for sizing the ground-width band.
 function metersPerPixel(coords: TileCoords): number {
   const center = unproject(
     coords.x * TILE_SIZE + TILE_SIZE / 2,
@@ -326,13 +276,7 @@ function metersPerPixel(coords: TileCoords): number {
   );
 }
 
-// Stroke the whole unioned band path opaque onto a padded offscreen, blur it to feather the edges,
-// then composite the center region onto the tile at BAND_OPACITY. Stroking the union at alpha 1
-// paints overlapping and abutting bands as one solid shape (no darker patches where blocks cross);
-// one uniform opacity at composite keeps it flat. Square caps let a block ending at a T/L fill the
-// corner flush; miter joins keep a within-street bend continuous. The offscreen is padded by
-// BLUR_PAD so a band near the tile edge has pixels for the blur to draw from, and only the center
-// TILE_SIZE region is copied out, so a feathered edge lines up with the neighboring tile's.
+// Stroked opaque as one union so crossings don't darken; square caps fill T and L corners flush.
 function compositeBand(
   context: OffscreenCanvasRenderingContext2D,
   path: Path2D,
@@ -346,7 +290,7 @@ function compositeBand(
   if (!offContext) {
     return;
   }
-  // Reused across tiles, so undo the previous tile's transform and clear its pixels first.
+  // Reused across tiles, so undo the previous tile's state first.
   offContext.setTransform(1, 0, 0, 1, 0, 0);
   offContext.filter = "none";
   offContext.clearRect(0, 0, offscreen.width, offscreen.height);
@@ -374,10 +318,6 @@ function compositeBand(
   context.globalAlpha = 1;
 }
 
-// Draw each qualifying block as one WIDE violet band over the street — a rectangle that reads as the
-// whole block, not a centerline. Projected at the tile's own zoom, so the band stays crisp however
-// far in the map goes. Every qualifying block goes into ONE unioned path, composited (and feathered)
-// once.
 function draw(
   context: OffscreenCanvasRenderingContext2D,
   models: ChunkModel[],
@@ -417,9 +357,7 @@ function draw(
         low = Math.min(low, ys[vertex]);
         high = Math.max(high, ys[vertex]);
       }
-      // A chunk covers a whole z12 tile, so most of its segments miss this display tile. A segment
-      // can cross the tile between two vertices both outside it, so the test is on its box, not its
-      // vertices.
+      // A segment can cross the tile between two outside vertices, so test its box.
       const overlaps =
         right >= -margin &&
         left <= TILE_SIZE + margin &&

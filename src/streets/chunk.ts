@@ -1,33 +1,20 @@
-// The shared STCK street-chunk decoder. One .bin per z12 tile (layout: scripts/README.md), built by
-// the tiler and read by every overlay that draws over the streets. Both the street-score layer (which
-// needs the per-vertex canopy densities and the sidewalk offset) and the commercial/dining overlay
-// (which needs only the geometry) decode the same bytes, so the format lives here once, bounds-checked:
-// a truncated or malformed chunk throws a clear error rather than reading past the buffer and drawing
-// silent garbage geometry / NaN coordinates.
-
+// One STCK chunk per z12 tile (layout: scripts/README.md), bounds-checked so bad bytes throw.
 const CHUNK_FORMAT = 4;
-const SIDES = 2; // density bytes per street vertex: left sidewalk then right, interleaved
+const SIDES = 2; // density bytes per vertex: left sidewalk then right, interleaved
 const METERS_PER_DECIMETER = 0.1;
 
-// One block-length CSCL centerline, decoded. The full segment shape: geometry, the per-vertex canopy
-// densities (both sidewalks, left then right, interleaved), and half the distance between the two
-// sidewalks. An overlay that only wants geometry keeps lngs/lats and lets the rest be collected.
 export interface StreetSegment {
   lngs: Float64Array;
   lats: Float64Array;
-  // The canopy cover at each vertex, 0..255 for a covered fraction of 0..1: both sidewalks, left then
-  // right, interleaved. A segment with no offset carries the same value in both.
+  // 0..255 for a covered fraction of 0..1; a segment with no offset repeats the value.
   densities: Uint8Array;
-  // Half the distance between the two sidewalks, in meters. Zero for a path or a boardwalk, which *is*
-  // the walking surface and is drawn as a single line on its centerline.
+  // Meters; zero for a path or boardwalk, which is itself the walking surface.
   offsetMeters: number;
-  // An OSM path whose whole component the routing graph dropped, so no route can reach it. Drawing it
-  // would offer a walk the router will never return. Always false for a street.
+  // In a component the routing graph dropped, so drawing it would offer an unroutable walk.
   stranded: boolean;
 }
 
-// A varint's bytes may run off the end of a truncated chunk; each read is guarded so it throws the
-// clear error rather than reading `undefined` (which coerces to 0) and decoding silent garbage.
+// Guarded because reading past the end yields `undefined`, which coerces to 0 and decodes garbage.
 function readVarint(bytes: Uint8Array, cursor: { offset: number }): number {
   let value = 0;
   let shift = 0;
@@ -44,11 +31,6 @@ function readVarint(bytes: Uint8Array, cursor: { offset: number }): number {
   return (value >>> 1) ^ -(value & 1);
 }
 
-// Decode one STCK v4 street chunk into its full segments. Header: magic "STCK", version u16 at 4, the
-// body offset u16 at 6, the segment count u32 at 8, the stranded bitmap's offset u32 at 12, then the
-// origin lng/lat and scale as f64 at 16, 24 and 32. Each segment is a u16 vertex count, a byte at +2
-// giving the sidewalk offset in decimeters, then zigzag-varint delta lng/lat per vertex, then
-// SIDES * vertices density bytes. The bitmap trails the segments, one bit each in their own order.
 export function decodeStreetChunk(buffer: ArrayBuffer): StreetSegment[] {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
@@ -70,7 +52,6 @@ export function decodeStreetChunk(buffer: ArrayBuffer): StreetSegment[] {
 
   const segments: StreetSegment[] = [];
   for (let segment = 0; segment < count; segment++) {
-    // The 3-byte segment header (vertex count u16, offset byte) must itself fit before it is read.
     if (cursor.offset + 3 > bytes.length) {
       throw new Error("street chunk truncated");
     }
@@ -87,8 +68,6 @@ export function decodeStreetChunk(buffer: ArrayBuffer): StreetSegment[] {
       lngs[vertex] = originLng + quantizedX * scale;
       lats[vertex] = originLat + quantizedY * scale;
     }
-    // The density block is a fixed span, so it can be bounds-checked before the slice rather than
-    // silently clamping to a short array past the end.
     if (cursor.offset + SIDES * vertices > bytes.length) {
       throw new Error("street chunk truncated");
     }

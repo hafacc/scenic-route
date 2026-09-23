@@ -1,9 +1,7 @@
 import { expect, test } from "bun:test";
 import { decodeStreetChunk } from "./chunk";
 
-// The committed STCK layout, pinned against a chunk assembled here from the table in
-// scripts/README.md rather than by the tiler that writes it — an encoder and its decoder can agree
-// on a mistake, and this file is the one place that disagrees with both. `bun test src` runs it.
+// Built from scripts/README.md, not the tiler: an encoder and decoder can share a mistake.
 
 const COORD_SCALE = 1e-6;
 const HEADER_BYTES = 40;
@@ -29,8 +27,7 @@ function zigzag(value: number): number {
   return value < 0 ? -2 * value - 1 : 2 * value;
 }
 
-// One chunk: the 40-byte header, each segment's own header + delta coordinates + density bytes, then
-// the trailing stranded bitmap, one bit per segment in that same order, least significant bit first.
+// Header, then each segment's header, deltas and densities, then the stranded bitmap, LSB first.
 function writeChunk(
   originLng: number,
   originLat: number,
@@ -80,7 +77,6 @@ function writeChunk(
 const ORIGIN_LNG = -74.01;
 const ORIGIN_LAT = 40.7;
 
-// A street with its two sidewalks 3.4 m out, then a stranded park path, then a path the graph kept.
 const SEGMENTS: Fixture[] = [
   {
     offsetDecimeters: 34,
@@ -118,7 +114,7 @@ test("the chunk decoder reads a hand-written STCK file", () => {
   );
 
   expect(decoded).toHaveLength(3);
-  // Decimeters on the wire, meters out, so the street's 34 is a 3.4 m half-offset.
+  // Decimeters on the wire, meters out.
   decoded.forEach((segment, index) => {
     expect(segment.offsetMeters).toBeCloseTo(
       SEGMENTS[index].offsetDecimeters / 10,
@@ -138,8 +134,6 @@ test("the chunk decoder reads a hand-written STCK file", () => {
   });
 });
 
-// The bitmap is found through the header's own offset and indexed by segment, so a decoder that
-// walked it as bytes rather than bits, or read it from the wrong end of the body, shows up here.
 test("a segment's stranded bit follows the segment, not its neighbors", () => {
   const decoded = decodeStreetChunk(
     writeChunk(ORIGIN_LNG, ORIGIN_LAT, SEGMENTS).buffer as ArrayBuffer,
@@ -151,8 +145,7 @@ test("a segment's stranded bit follows the segment, not its neighbors", () => {
   ]);
 });
 
-// Nine segments so the bitmap spills into a second byte, with only the ninth set: a decoder shifting
-// by the wrong amount, or masking the byte down to its first, reads that bit off the first segment.
+// Nine segments so the bitmap spills into a second byte, with only the ninth set.
 test("the stranded bitmap carries past its first byte", () => {
   const many: Fixture[] = Array.from({ length: 9 }, (_, index) => ({
     offsetDecimeters: 0,

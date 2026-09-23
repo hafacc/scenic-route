@@ -1,44 +1,16 @@
-// Rounding the corners of a ferry route, which is a different problem from curving a subway line and
-// so is deliberately not the same code.
-//
-// A ferry shape is a handful of vertices over kilometers: a crossing, a turn at a pier, a run down
-// the river. Its corners are real corners with long straights between them, so a fillet — walk back
-// along the way in, forward along the way out, join the two — leaves every straight exactly on the
-// published line and bends only at the corner. That is what ../tiles/spline does NOT do: it fits a
-// curve through every vertex and moves the whole path, which bowed a route's out-and-back legs to a
-// pier apart into a lens and made routes sharing water appear to twist around each other.
-//
-// The subway keeps the spline, and must: its lines are 54,906 vertices meters apart, where a curve is
-// a bend spread over many of them rather than a corner between two straights. Clamping a fillet to
-// segments that short rounds nothing and leaves the map angular — which is exactly what happened when
-// this was tried in the shared module.
-
-// Rounded corners on a polyline, emitted as line segments and cubic beziers.
-// Ferry geometry is coarse — a GTFS crossing is 4 to 12 vertices for a kilometer of water — so
-// stroked as chords it reads as a polygon rather than a boat's path. Softening it is a corner
-// problem, not a curve-fitting one: what looks wrong is the angle at each vertex, not the straight
-// run between two of them.
+// Fillets, not ./spline: a curve through every vertex bows a ferry's out-and-back legs apart.
+// The subway keeps the spline: its vertices are meters apart, too close for a fillet to round.
 
 const RADIUS_PX = 14;
-// A corner may eat no more than half of either segment it sits on, so two corners sharing a short
-// segment meet at its midpoint at worst — they can never overshoot each other and fold the line back
-// on itself.
+// A corner eats at most half of each segment, so two corners can never overlap and fold the line.
 const MAX_SEGMENT_FRACTION = 0.5;
-// Vertices this close to their predecessor are dropped. A GTFS crossing repeats its terminal as both
-// the stop and the shape's first point, meters apart or less, and a pair that close is a direction
-// read off nothing but rounding error.
+// GTFS repeats a terminal as both stop and first shape point, a direction made of rounding error.
 const MIN_GAP_PX = 0.25;
-// Corners whose fillet would pull the line less than this off the vertex are drawn as a plain
-// segment: below a twentieth of a pixel there is nothing to see, and it keeps a straight run a
-// single `lineTo`.
+// A fillet cutting less than this off its vertex is invisible, so the corner stays a plain lineTo.
 const MIN_CUT_PX = 0.05;
-// A quadratic bezier's control points as a cubic's: both controls two thirds of the way from their
-// own end to the quadratic's single control point. Exact, not an approximation — it is the same
-// curve, written in the form the sink takes.
+// A quadratic's control point as a cubic's two; exact, not an approximation.
 const QUADRATIC_AS_CUBIC = 2 / 3;
 
-// The subset of the canvas path API the rounding issues, so a test can record the path rather than
-// rasterize it.
 export interface PathSink {
   moveTo(x: number, y: number): void;
   lineTo(x: number, y: number): void;
@@ -52,9 +24,7 @@ export interface PathSink {
   ): void;
 }
 
-// Appends the rounded path through (xs, ys) to `sink`, without beginning or stroking it. The caller
-// passes the whole polyline: a corner is rounded using the segments either side of it, so a tile
-// that clipped first would round the seam vertices against a direction the line does not have.
+// Pass the whole polyline: clipping first would round seam vertices toward a direction it lacks.
 export function roundedPath(
   sink: PathSink,
   xs: readonly number[],
@@ -94,11 +64,7 @@ export function roundedPath(
       const enterY = keptY[vertex] - (inY / inLength) * trim;
       const leaveX = keptX[vertex] + (outX / outLength) * trim;
       const leaveY = keptY[vertex] + (outY / outLength) * trim;
-      // How far the curve's midpoint falls short of the vertex, which is how much of the corner the
-      // rounding actually takes off: nothing on a straight, trim/2 on a full reversal. It is why a
-      // hairpin needs no special case — the same fillet on a 170° turn is simply a tight one, and it
-      // stays inside the corner rather than looping past it, which is what the old fit did over the
-      // slips the ferry shapes back into.
+      // Depth cut off the corner: 0 on a straight, trim/2 on a reversal, so hairpins need no case.
       const cut =
         Math.hypot(
           enterX + leaveX - 2 * keptX[vertex],
@@ -120,12 +86,5 @@ export function roundedPath(
   }
 }
 
-// The most the drawn path can sit off the polyline it was given, in pixels: a fillet's furthest point
-// from its own two segments is trim·sin(turn)/4, worst at a right angle — a sharper corner cuts more
-// off the vertex but hugs the segments closer on the way past — plus the near-duplicate drop, since a
-// vertex left out is up to that far off the line drawn past it. 3.75 px at the radius above, and a
-// random-walk sweep of 500 polylines reaches 3.56 of it.
-//
-// Exported for the test that pins it, and for a caller weighing the rounding against the 2 px it
-// strokes.
+// Max px the path sits off the polyline: a fillet's trim·sin(turn)/4 peaks at 90°, plus the gap drop.
 export const MAX_ROUNDING_PX = RADIUS_PX / 4 + MIN_GAP_PX;

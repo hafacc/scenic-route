@@ -18,8 +18,7 @@ import {
   type Toggles,
 } from "./modes";
 
-// These walk the table rather than naming modes, so a fifth one is held to the same rules the day it
-// is added.
+// These walk the table, so a new mode is held to the same rules.
 
 const FACTOR_KEYS = new Set<string>(FACTORS.map(({ key }) => key));
 
@@ -63,7 +62,7 @@ test("every mode names factors this build has, at a fraction of their maxima", (
   }
 });
 
-// A mode that named one would be overruled by its toggle, silently.
+// A mode that named one would be silently overruled by its toggle.
 test("no mode names the sun or the hill factor", () => {
   for (const mode of MODES) {
     expect(mode.weights.shade, `${mode.id}`).toBeUndefined();
@@ -78,7 +77,7 @@ test("the default mode is the first chip", () => {
   expect(modeById("cartographer")).toBeNull();
 });
 
-// Effective weights rather than fractions: industrial's maximum is 5, every other factor's is 1.
+// Effective weights: industrial's max is 5, every other factor's is 1.
 test("each mode spends what the table says it spends", () => {
   const weights = Object.fromEntries(
     MODES.map((mode) => [mode.id, spent(neutral(mode))]),
@@ -89,9 +88,7 @@ test("each mode spends what the table says it spends", () => {
     industrial: 5,
     transit: 3,
   });
-  // Rain is the one mode that does not price a ride: a train is shelter, waiting included.
   expect(weights.rain).toEqual({ shelter: 1, bridge: 1 });
-  // Historic is the one mode that asks for the boat: a harbour crossing is a way of seeing the city.
   expect(weights.historic).toEqual({
     landmark: 1,
     art: 0.9,
@@ -140,8 +137,6 @@ test("the hills toggle steps from free to the top of the slider", () => {
   expect(hill("none")).toBe(5);
 });
 
-// There is no switch for the rail: a mode says what a ride costs and the planner is the only thing
-// that ever shuts it off, for the walking card it offers beside a ride.
 test("every mode leaves the rail reachable and prices it with a weight", () => {
   for (const mode of MODES) {
     const weights = effectiveWeights(mode, DEFAULT_TOGGLES, ALL_FACTORS);
@@ -224,8 +219,7 @@ test("a city offers the modes its layers can answer, with the layers it has", ()
   const nyc = modesForCity(cityNamed("nyc"));
   expect(nyc.map((mode) => mode.id)).toEqual(MODES.map((mode) => mode.id));
 
-  // No commercial artifact outside New York, and no scaffolding feed for Rain to draw — which
-  // leaves Rain there with nothing to draw at all, and still routing on the canopy overhead.
+  // No commercial or scaffolding data outside New York; Rain still routes on the canopy.
   const bay = modesForCity(cityNamed("sf"));
   expect(bay.map((mode) => mode.id)).toEqual([
     "naturalist",

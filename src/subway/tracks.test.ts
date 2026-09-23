@@ -2,9 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Polyline } from "../tiles/polylines";
 import { sliceTrack, trackShapes } from "./tracks";
 
-// A trunk running due east along the 40.75 parallel that splits at 0.02 degrees: one variant carries
-// on east, the other turns north. Two stations on the trunk, one on each branch. Degrees are used
-// directly rather than a real feed's coordinates so the answers can be read off by eye.
+// A trunk along the 40.75 parallel splitting at 0.02°, one branch east and one north.
 const line = (points: [number, number][]): Polyline => ({
   lngs: Float64Array.from(points.map(([lng]) => lng)),
   lats: Float64Array.from(points.map(([, lat]) => lat)),
@@ -36,14 +34,12 @@ describe("sliceTrack", () => {
     );
     expect(sliced).not.toBeNull();
     const cut = sliced as Polyline;
-    // The ends are the projections, and the trunk vertex between them is kept.
     expect([...cut.lngs]).toEqual([-73.995, -73.99, -73.985]);
     expect([...cut.lats]).toEqual([40.75, 40.75, 40.75]);
   });
 
   test("the slice starts and ends at the stations, not at their projections", () => {
-    // Both platforms stand a little off the track, which is where a real one is: the ride has to
-    // reach back to them, or it is drawn floating clear of the walk that gets you there.
+    // Platforms stand off the track, so the ride must reach back to them.
     const board = at(-73.995, 40.7505);
     const alight = at(-73.985, 40.7495);
     const cut = sliceTrack([EAST, NORTH], board, alight) as Polyline;
@@ -63,8 +59,6 @@ describe("sliceTrack", () => {
     );
     expect(sliced).not.toBeNull();
     const cut = sliced as Polyline;
-    // Down the trunk to the junction and then north: the east variant would have been a straight
-    // line more than a kilometer off the second station.
     expect([...cut.lngs]).toEqual([-73.99, -73.98, -73.98, -73.98]);
     expect([...cut.lats].map((lat) => Number(lat.toFixed(6)))).toEqual([
       40.75, 40.75, 40.76, 40.765,
@@ -119,8 +113,7 @@ describe("trackShapes", () => {
   });
 
   test("a name the two files agree on carries a livery they do not", () => {
-    // The graph and the display artifact are built from different feeds; where the colors have
-    // drifted the name is still the join, rather than the line going undrawn.
+    // The graph and artifact come from different feeds; drifted colors fall back to the name.
     expect(
       trackShapes(subway, { shortName: "N", color: "#ffffff" }),
     ).toHaveLength(1);

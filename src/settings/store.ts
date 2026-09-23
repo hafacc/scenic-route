@@ -18,52 +18,32 @@ import {
 } from "../routing/factors";
 import { COVERAGE, DEFAULT_COVERAGE } from "./offline";
 
-// The reader's own preferences, as one versioned document rather than the scatter of keys the app
-// grew — every slider and toggle wrote its own. One document is what makes the settings page
-// possible, and it is also the unit a future sync would send.
-//
-// Deliberately NOT in the URL: the hash carries a VIEW, which is a thing you share, and a preference
-// is a thing about you. A shared link must not re-order the recipient's menu.
+// Not in the URL, since a shared link mustn't reorder the recipient's menu.
 
 const KEY = "scenic-route:settings.v1";
 
 export interface Settings {
-  // The overlay ids in the order the layers menu lists them. Empty means "however the registry lists
-  // them", which is what a reader who has never reordered anything gets.
+  // Empty means the registry's order.
   layerOrder: readonly OverlayId[];
-  // Overlays the reader has taken out of the menu. They are not offered and not drawn; a city that
-  // never had one is unaffected either way.
   hiddenLayers: readonly OverlayId[];
-  // One weight per scenic factor — the same value the route panel's slider and the settings page's
-  // slider both move. There is deliberately no default beside it: a "default" the reader could set
-  // without it taking effect would be a second thing to keep in step with the first. A factor
-  // missing here has never been moved and takes the built-in default.
+  // A missing factor has never been moved and takes the built-in default.
   weights: Partial<Record<FactorKey, number>>;
   allowFerries: boolean;
   allowSheds: boolean;
   allowCrossings: boolean;
-  // The scenic factors in the order the route panel lists them. Empty is the table's own order, in
-  // src/routing/factors.tsx.
+  // Empty is the table's order in src/routing/factors.tsx.
   factorOrder: readonly FactorKey[];
-  // Factors the reader has taken out of the route panel: no slider and no summary chip. Their
-  // weights still price the route, so the panel counts the non-zero ones and says so.
+  // Hidden factors still price the route.
   hiddenFactors: readonly FactorKey[];
-  // Which mode the Modes page opens in, and where its three switches are left.
   mode: ModeId;
   toggles: Toggles;
-  // Per mode, the overlays the reader has switched OFF in its layer list. Absent or empty means the
-  // mode draws everything it comes with; the mode still WALKS by its own weights either way.
+  // Overlays switched off per mode; the mode still walks by its own weights.
   modeLayers: Partial<Record<ModeId, readonly OverlayId[]>>;
-  // The gates taken out of the panel's header. Same bargain as a hidden factor: the gate keeps
-  // gating, so a hidden one that is CLOSED is counted alongside them.
+  // Hidden gates keep gating.
   hiddenGates: readonly GateKey[];
-  // How much of the map to keep for offline use, as one of the coverage options in ./offline.ts. The
-  // service worker is the one that enforces it and holds its own copy, since it runs when no page
-  // does; this is the reader's side of that, and components/service-worker.tsx carries it across.
+  // A ./offline.ts coverage id; the service worker holds and enforces its own copy.
   coverage: string;
-  // When each field was last changed on some device, keyed by path — the field's own name, or
-  // `weights.<factor>` for one slider. Not a preference itself: it is what lets two signed-in
-  // devices merge rather than one of them winning wholesale. See ./sync.ts.
+  // Keyed by field name or `weights.<factor>`; drives the per-field merge in ./sync.ts.
   updatedAt: Readonly<Record<string, number>>;
 }
 
@@ -86,12 +66,7 @@ export const DEFAULT_SETTINGS: Settings = {
 
 const REGISTRY_ORDER: readonly OverlayId[] = OVERLAYS.map(({ id }) => id);
 
-// Where each weight lived before this document existed, and where the two gates did. Folded in on
-// the first read that finds no weights in the document, then left alone rather than deleted —
-// removing them would be a destructive write on behalf of a reader who has not asked for anything,
-// and they cost a few dozen bytes. They are a snapshot of migration day, not a live mirror: nothing
-// writes them any more.
-// A factor that landed after the document did — transit — has none, which is why this is partial.
+// Pre-document keys, folded in once and never deleted or written; transit postdates them.
 const LEGACY_WEIGHT_KEYS: Partial<Record<FactorKey, string>> = {
   tree: "scenic-route:tree-weight",
   ferry: "scenic-route:ferry-weight",
@@ -108,10 +83,7 @@ const LEGACY_WEIGHT_KEYS: Partial<Record<FactorKey, string>> = {
 const LEGACY_FERRY_GATE = "scenic-route:allow-ferries";
 const LEGACY_SHED_GATE = "scenic-route:allow-sheds";
 
-// Every list and map read back out of the document is filtered PER ENTRY rather than accepted or
-// rejected whole. An id this build does not know is the ordinary consequence of the reader having
-// arranged their settings on a newer one — a release adds an overlay, they open a tab still running
-// the old build — and throwing the whole field away over one of them would undo everything they set.
+// Filtered per entry, since an unknown id usually means the settings came from a newer build.
 const OVERLAY_IDS = new Set<string>(REGISTRY_ORDER);
 const FACTOR_KEYS = new Set<string>(FACTORS.map(({ key }) => key));
 
@@ -133,10 +105,7 @@ function factorKeys(value: unknown): FactorKey[] {
 
 const GATE_KEYS = new Set<string>(GATES.map(({ key }) => key));
 
-// What the crossings gate was called before the flag was inverted. A reader who hid it back then
-// stored that spelling, and filtering against the current names alone would drop it — putting a gate
-// they had deliberately hidden back in the panel, on upgrade, with nothing said. The weight beside it
-// already gets this treatment; the list of hidden ones needs it for the same rename.
+// Hidden gates stored under the pre-inversion name, which would otherwise reappear on upgrade.
 const RENAMED_GATES: Readonly<Record<string, GateKey>> = {
   fewerCrossings: "allowCrossings",
 };
@@ -161,8 +130,7 @@ function gateKeys(value: unknown): GateKey[] {
   }
 }
 
-// What this device last chose about crossings, under either spelling. `fewerCrossings: false` was
-// how "crossings are free" was written before the flag was inverted.
+// `fewerCrossings: false` was how "crossings are free" was stored before the flag was inverted.
 function allowCrossingsIn(stored: Partial<Settings>): boolean {
   const legacy = (stored as { fewerCrossings?: unknown }).fewerCrossings;
   if (stored.allowCrossings === undefined && typeof legacy === "boolean") {
@@ -172,12 +140,11 @@ function allowCrossingsIn(stored: Partial<Settings>): boolean {
   }
 }
 
-// A mode this build does not offer reads as the default, the way a stale overlay id is dropped.
 function storedMode(value: unknown): ModeId {
   return typeof value === "string" && isModeId(value) ? value : DEFAULT_MODE.id;
 }
 
-// Per switch, so a spelling this build cannot read costs that one switch its position, not all three.
+// Per switch, so an unreadable one costs only its own position.
 function storedToggles(value: unknown): Toggles {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return DEFAULT_TOGGLES;
@@ -192,8 +159,6 @@ function storedToggles(value: unknown): Toggles {
   }
 }
 
-// Per mode, and per id within a mode: a mode this build does not offer, or an overlay it does not
-// know, is dropped without costing the rest of the map.
 function storedModeLayers(
   value: unknown,
 ): Partial<Record<ModeId, readonly OverlayId[]>> {
@@ -236,7 +201,7 @@ interface LegacyPrefs {
   weights: Partial<Record<FactorKey, number>>;
   allowFerries: boolean;
   allowSheds: boolean;
-  found: boolean; // whether any of the old keys was there at all, so the fold is worth writing back
+  found: boolean; // whether any old key was present, so the fold is worth writing back
 }
 
 function legacyPrefs(legacy: (key: string) => string | null): LegacyPrefs {
@@ -261,19 +226,13 @@ function legacyPrefs(legacy: (key: string) => string | null): LegacyPrefs {
   };
 }
 
-// The settings a stored document and the pre-document keys add up to, and whether the document is
-// now behind what was read. Separate from `read` so the migration can be exercised without a
-// browser: `legacy` is `localStorage.getItem`.
+// Separate from `read` so the migration can be tested without a browser; `legacy` is `getItem`.
 export function settingsFrom(
   stored: Partial<Settings>,
   legacy: (key: string) => string | null,
 ): { settings: Settings; migrated: boolean } {
   const { layerOrder, hiddenLayers, weights, hiddenFactors } = stored;
-  // The ABSENCE of a weights field is what says the document predates route preferences, and only
-  // then do the old keys get a say. Not "the field failed to validate": a document that carries
-  // weights this build cannot read is a NEWER one, and folding a snapshot of the pre-document keys
-  // over it — then writing that back — would replace what the reader set with what they set before
-  // any of this existed.
+  // Only an absent weights field means pre-document; unreadable weights mean a newer build, not a fold.
   const folded = weights === undefined ? legacyPrefs(legacy) : null;
   return {
     settings: {
@@ -284,9 +243,7 @@ export function settingsFrom(
         ? folded.allowFerries
         : stored.allowFerries !== false,
       allowSheds: folded ? folded.allowSheds : stored.allowSheds !== false,
-      // Absent reads as OFF, unlike the two gates above it — see DEFAULT_WEIGHTS. A document saved
-      // before the flag was inverted spells it `fewerCrossings` and means the opposite, so it is
-      // read once and turned round rather than being silently dropped.
+      // Absent reads as off, unlike the two gates above; the pre-inversion `fewerCrossings` is flipped.
       allowCrossings: allowCrossingsIn(stored),
       factorOrder: factorKeys(stored.factorOrder),
       hiddenFactors: factorKeys(hiddenFactors),
@@ -303,10 +260,7 @@ export function settingsFrom(
   };
 }
 
-// The store, or null where there is not one. Tested for by REACHING for it rather than by asking
-// whether a `window` exists: the server render has no window, a private window can have one whose
-// storage throws on access, and a test runner can define a window with no `localStorage` on it at
-// all — which a `typeof window` guard sails straight past, throwing at module load.
+// Probed by access, since a window can exist with storage that throws or no `localStorage` at all.
 function store(): Storage | null {
   try {
     return typeof localStorage === "undefined" ? null : localStorage;
@@ -315,10 +269,7 @@ function store(): Storage | null {
   }
 }
 
-// What was stored, or an empty document. Absent and unreadable give the same answer deliberately:
-// either way there is nothing to go on, which is exactly the state that makes the pre-document keys
-// worth reading. Letting `JSON.parse(null)` throw instead would skip the migration for every reader
-// it exists for.
+// Absent and unreadable both read as empty, so the migration still runs.
 function document(raw: string | null): Partial<Settings> {
   try {
     return raw === null ? {} : ((JSON.parse(raw) ?? {}) as Partial<Settings>);
@@ -327,23 +278,18 @@ function document(raw: string | null): Partial<Settings> {
   }
 }
 
-// A document from somewhere other than this device's localStorage — Firestore — validated by exactly
-// the same rules. `legacy` answers nothing: the pre-document keys are this device's history and have
-// no business in what another one sent.
+// Same validation for a remote document, but this device's legacy keys have no say in it.
 export function settingsFromDocument(stored: Partial<Settings>): Settings {
   return settingsFrom(stored, () => null).settings;
 }
 
-// Anything unreadable reads as the defaults rather than throwing: a preference is not worth a blank
-// map, and a document written by a newer version of the app has to degrade rather than break.
+// A newer build's document must degrade rather than break.
 function read(): Settings {
   const held = store();
   if (held === null) {
     return DEFAULT_SETTINGS;
   }
-  // The whole read is guarded, not just the parse: reaching `localStorage` can succeed on a browser
-  // where storage is blocked and then throw on the first `getItem`, and the pre-document keys are
-  // read one call at a time well past where a parse guard would reach.
+  // Guarded whole, since blocked storage can throw on the first `getItem`, not just the parse.
   try {
     const { settings, migrated } = settingsFrom(
       document(held.getItem(KEY)),
@@ -362,7 +308,7 @@ function write(next: Settings): void {
   try {
     store()?.setItem(KEY, JSON.stringify(next));
   } catch {
-    // A full or blocked store costs the preference its persistence, not the session.
+    // A full or blocked store costs persistence, not the session.
   }
 }
 
@@ -375,7 +321,6 @@ function announce(): void {
   }
 }
 
-// Another tab of the same app is the same reader, so its edits are this one's too.
 if (typeof addEventListener === "function") {
   addEventListener("storage", (event) => {
     if (event.key === KEY) {
@@ -389,11 +334,7 @@ export function settings(): Settings {
   return current;
 }
 
-// Every change is stamped, so a device that has been offline can be merged rather than overwritten.
-// Weights are stamped per factor, and the Modes switches per switch: two devices moving two
-// different ones is the ordinary case, and stamping the whole map or the whole set of switches would
-// make one of them lose the other's. Both are written as a whole object by callers who change one
-// key of it, so what was actually touched is read off the values rather than off the patch.
+// Stamped per factor and per switch, read off the values since callers write the whole object back.
 function stamped(patch: Partial<Settings>, at: number): Record<string, number> {
   const marks: Record<string, number> = {};
   for (const [field, value] of Object.entries(patch)) {
@@ -411,8 +352,7 @@ function stamped(patch: Partial<Settings>, at: number): Record<string, number> {
         }
       }
     } else if (field === "modeLayers") {
-      // Per mode, by the list's contents: the caller writes the whole map back with one mode's
-      // list replaced, and every list in it is a fresh array.
+      // Compared by contents, since every list in the rewritten map is a fresh array.
       for (const [id, hidden] of Object.entries(value as object)) {
         const before = current.modeLayers[id as ModeId] ?? [];
         if ((hidden as readonly OverlayId[]).join() !== before.join()) {
@@ -439,8 +379,7 @@ export function updateSettings(
   announce();
 }
 
-// A merged document arriving from another device. Already stamped, so it replaces rather than being
-// stamped again — restamping would make every sign-in look like a fresh edit to every other device.
+// Already stamped; restamping would make every sign-in look like a fresh edit.
 export function adoptSettings(next: Settings): void {
   current = next;
   write(current);
@@ -454,10 +393,7 @@ export function subscribeSettings(listener: () => void): () => void {
   };
 }
 
-// A stored order reconciled with the built-in one, which is what changes under it. Ids the build has
-// dropped go; ids it has gained are inserted where IT puts them relative to the neighbors that
-// survived, so a new overlay or a new factor lands somewhere sensible rather than at the end of a
-// list the reader arranged.
+// Ids the build dropped go; new ones land beside their surviving neighbors, not at the end.
 export function mergeOrder<Key extends string>(
   stored: readonly Key[],
   registry: readonly Key[],
@@ -478,7 +414,6 @@ export function mergeOrder<Key extends string>(
   return merged;
 }
 
-// The overlays a city offers, in the reader's order and without the ones they have hidden.
 export function orderedOverlays(
   offered: readonly OverlayId[],
   { layerOrder, hiddenLayers }: Pick<Settings, "layerOrder" | "hiddenLayers">,
@@ -494,8 +429,7 @@ export function layerMenuOrder(stored: readonly OverlayId[]): OverlayId[] {
   return mergeOrder(stored, REGISTRY_ORDER);
 }
 
-// The scenic factors in the reader's order. Hiding is NOT applied here: the route panel drops the
-// hidden ones and the settings page shows them grayed, so the two want the same list.
+// Hiding isn't applied, since the settings page shows hidden ones grayed.
 export function factorRunOrder(stored: readonly FactorKey[]): FactorKey[] {
   return mergeOrder(
     stored,

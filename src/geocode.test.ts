@@ -30,7 +30,6 @@ function door(displayName: string): GeocodeResult {
   };
 }
 
-// Stands in for the city's index: the queries it has answers for, and a record of what it was asked.
 function index(answers: Record<string, GeocodeResult[]>) {
   const asked: string[] = [];
   const search = async (
@@ -45,9 +44,7 @@ function index(answers: Record<string, GeocodeResult[]>) {
 }
 
 test("the door wins over the name it was shared beside", async () => {
-  // What a maps app sends. Both halves match something — the name in the place index, the address in
-  // the address file — and only the address is precise enough to route to without asking. Stopping
-  // at the first half that answered would stop at the name and never look at the door.
+  // What a maps app sends: stopping at the first half that answered would never reach the door.
   const { asked, search } = index({
     "Katz's Delicatessen": [place("Katz's Delicatessen, Manhattan")],
     "205 E Houston St": [door("205 E Houston St, Manhattan")],
@@ -85,8 +82,6 @@ test("a whole share that names a door is not taken apart at all", async () => {
 });
 
 test("a share with no door at all keeps the first name that answered", async () => {
-  // Nothing here is certain enough to route to, so what comes back is the words to put in the box
-  // and the candidates to put under them — and the words are the ones that found the candidates.
   const { search } = index({
     "Joe's Pizza": [
       place("Joe's Pizza, Carmine St"),
@@ -106,8 +101,6 @@ test("a share the city has never heard of resolves to nothing", async () => {
 });
 
 test("a near-miss house number is offered rather than routed to", async () => {
-  // The address file answers "205 E Houston St" with the nearest door it has, which is not the one
-  // that was asked for. A guess set silently as the destination is worse than a list to pick from.
   const near: GeocodeResult = { ...door("209 E Houston St"), exact: false };
   const { search } = index({ "205 E Houston St": [near] });
   const found = await resolveSharedQuery("205 E Houston St", CITY, search);
@@ -116,8 +109,7 @@ test("a near-miss house number is offered rather than routed to", async () => {
 });
 
 test("a lookup the reader has moved past stops asking", async () => {
-  // Each search warms the index for its city, so one left running after the city changed would drag
-  // the index back to the city nobody is looking at any more.
+  // Each search warms the index for its city, dragging it back to one nobody is viewing.
   let done = false;
   const { asked, search } = index({ Brooklyn: [place("Brooklyn")] });
   const found = await resolveSharedQuery(
