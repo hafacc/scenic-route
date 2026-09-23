@@ -1,16 +1,6 @@
-// The RFC 4180 reader the ingests share. Hand-written for the reason `scripts/gtfs.ts` unzips by
-// hand: these are build scripts reading a handful of published tables, and a dependency for either
-// job would be larger than the job.
-//
-// `scripts/addresses.ts` keeps its own generator instead, and deliberately: the address exports it
-// walks are tens of megabytes, so it yields a record at a time and projects to named columns as it
-// goes, where this collects the whole table into rows.
-
 export type CsvRow = Record<string, string>;
 
-// Handles RFC 4180 quoting (a "" inside a quoted field is one literal quote) and both CRLF and LF
-// line breaks; a leading UTF-8 BOM on the first cell is stripped so the first header name is not
-// read as "﻿route_id". The first record is the header, and every later one is keyed by it.
+// Strips a leading BOM, which would otherwise prefix the first header name.
 export function parseCsv(text: string): CsvRow[] {
   const clean = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   const rows: string[][] = [];

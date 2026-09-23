@@ -1,21 +1,4 @@
-// `bun run update-ferry-schedule`: the ferry timetable the router departs against, as its own small
-// artifact rather than a number baked into the graph. Every ferry city on one run, so a city that
-// gains ferries is covered without the daily workflow being touched.
-//
-// data/ferries/<id>.bin (FERR) collapses the whole schedule into one crossing-plus-average-wait
-// figure per stop pair, and the graph pass bakes that into the 37 MB routing graph. Nothing in the
-// daily path can rebuild that graph, so the timetable lives on its own instead, in
-// public/ferry-schedule/<id>.bin — magic FSCH, ~15 KB, fetched by the client the way the shed
-// artifact is. A client that cannot read it falls back to the graph's baked figure and routes
-// exactly as it did before.
-//
-// Two files per city. `<id>.bin` is the timetable in effect now; `<id>-past.bin` is every superseded
-// one, appended whole and never rewritten — a record carries the day range it was in effect, so a
-// route planned on a past day is planned against the timetable that actually ran. Only the feeds
-// decide the contents: the record's body is a pure function of the city's zips, so a day that finds
-// them unchanged rewrites identical bytes and the daily job's "nothing to commit" path fires.
-//
-// Layout: scripts/README.md.
+// A separate artifact, not baked into the graph, because the daily job can't rebuild the graph.
 
 import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
@@ -44,9 +27,7 @@ import {
   type Service,
 } from "./schedule-record";
 
-// NOT public/ferries/ — that is the tile build's own output for the drawn ferry lines, gitignored
-// and rebuilt by a deploy. This artifact is committed and rebuilt daily, so it lives beside the shed
-// one under its own tracked directory.
+// Not public/ferries/, which is gitignored tile-build output; this one is committed.
 const PUBLIC_DIR = join(import.meta.dirname, "..", "public");
 export const SCHEDULE_DIR = join(PUBLIC_DIR, "ferry-schedule");
 
@@ -55,22 +36,16 @@ export const SCHEDULE_FORMAT = 1;
 const HEADER_BYTES = 40;
 const LANE_BYTES = 16;
 const NO_ROUTE_NAME = 0xffff;
-// Joins a lane's parts into a map key. NUL because a GTFS stop or route name may contain any
-// printable character, spaces and punctuation included, but never this one.
+// NUL: GTFS names may contain any printable character, but never this.
 const KEY_SEPARATOR = "\u0000";
 
-// One (origin, destination, route, service) departure list. Directional on purpose: a timetable is
-// not symmetric, and the reverse leg is what a destination drag re-solves against. Splitting by
-// route as well as by stop pair keeps the departure list small enough to leave the route name off
-// each departure, and lets the directions name the boat you actually catch.
+// Directional, since timetables aren't symmetric.
 interface Lane {
   fromName: string;
   toName: string;
   routeName: string;
   serviceKey: string;
-  // departure seconds from local midnight of the service day (GTFS allows past 86400), paired with
-  // that trip's own crossing time — merged routes cross at different speeds, so it is per departure
-  // rather than per lane.
+  // Seconds from service-day midnight (may pass 86400); crossing is per trip, as speeds differ.
   departures: { at: number; crossing: number }[];
 }
 
@@ -80,11 +55,7 @@ export interface Timetable {
   exceptions: Exception[];
 }
 
-// One feed's ferry trips, cut into consecutive-stop departures and folded into the shared lanes.
-// Only route_type 4 is kept (the NYC Ferry feed also carries its shuttle buses), and the same
-// out-of-city stop names the FERR ingest drops are dropped here, so the two artifacts describe the
-// same network. The names are all this job knows: it runs daily in CI and must not depend on the two
-// GIS services the ingest's land check reads.
+// Excludes by stop name, not a land check, so the daily CI job needs no GIS services.
 function consolidate(
   feed: GtfsFeed,
   feedId: string,
@@ -162,10 +133,7 @@ function consolidate(
       if (crossing < 0) {
         continue;
       }
-      // The join onto the routing graph is by stop NAME — each ferry edge records its two terminal
-      // names and nothing else that survives a rebuild — so two ferry stops sharing a name would
-      // make a lane ambiguous. The NYC Ferry feed does repeat names, but only across its shuttle-BUS
-      // stops, which the route-type filter drops before this sees them.
+      // The graph joins by stop name, so a shared name would make a lane ambiguous.
       for (const [stopId, name] of [
         [`${feedId}:${from.stop_id}`, fromName],
         [`${feedId}:${to.stop_id}`, toName],
@@ -198,8 +166,6 @@ function consolidate(
   }
 }
 
-// `excluded` defaults to nothing so a caller building a timetable out of feeds it wrote itself — the
-// tests do — need not name a city's exclusions to say it has none.
 export function buildTimetable(
   feeds: { source: FeedSource; feed: GtfsFeed }[],
   excluded: ReadonlySet<string> = new Set<string>(),
@@ -215,11 +181,9 @@ export function buildTimetable(
     usedServices,
   );
 
-  // Everything is ordered before it is written: the record's bytes have to be a pure function of the
-  // feeds, or an unchanged day would look like a schedule change to the daily job.
+  // Sorted so the bytes are a pure function of the feeds; otherwise no-op days look like changes.
   for (const lane of lanes.values()) {
-    // Two trips of one route leaving one stop at the same second are the same sailing listed twice;
-    // sorting the crossing time second keeps the quicker of them, deterministically.
+    // Same-second departures are one sailing listed twice; keep the quicker crossing.
     const sorted = [...lane.departures].sort(
       (left, right) => left.at - right.at || left.crossing - right.crossing,
     );
@@ -234,9 +198,7 @@ export function buildTimetable(
   return { lanes: ordered, services, exceptions };
 }
 
-// Writes one FSCH record: the header, the service and exception tables, the lane table, the varint
-// departure blob and the name table. Little-endian throughout, and every section a multiple of 4 so
-// that records concatenated into the history file stay aligned.
+// Little-endian; every section a multiple of 4 so concatenated history records stay aligned.
 export function encodeTimetable(
   timetable: Timetable,
   firstDay: number,
@@ -258,9 +220,7 @@ export function encodeTimetable(
   ].sort();
   const nameIndex = new Map(names.map((name, index) => [name, index]));
 
-  // The departure blob: per lane, the first departure absolute and the rest as gaps, each followed by
-  // that sailing's crossing time. All non-negative (the list is sorted and a crossing cannot run
-  // backwards), so plain LEB128 rather than zigzag.
+  // Departure gaps and crossings are all non-negative, so plain LEB128 rather than zigzag.
   const departureBytes: number[] = [];
   const laneOffsets: number[] = [];
   const scratch = new Uint8Array(10);
@@ -330,8 +290,7 @@ export function encodeTimetable(
   const laneOffset = exceptionOffset + exceptionTable.length;
   const departureOffset = laneOffset + laneTable.length;
   const nameOffset = departureOffset + departureBlob.length;
-  // Padded to 4 so the next record in the history file starts aligned, and counted in `total` so
-  // walking that file by record length lands on the padding rather than in it.
+  // Padding counts in `total` so walking the history file by record length stays aligned.
   const total = (nameOffset + nameTable.length + 3) & ~3;
 
   const bytes = new Uint8Array(total);
@@ -366,10 +325,6 @@ export interface ScheduleUpdate {
   sha256: string;
 }
 
-// Fetches the city's feeds, builds its timetable and — only if it differs from the one in effect —
-// closes the standing record into `<id>-past.bin` and opens a new one. `today` is the day the new
-// record takes effect from; the superseded one is closed the day before, so the two ranges meet
-// without overlapping and no day is left without a timetable.
 export async function updateFerrySchedule(
   cityId: string,
   today: string,
@@ -413,11 +368,9 @@ export async function updateFerrySchedule(
   };
 }
 
-// One city with `--city`, otherwise every city that has ferries — which is what the daily job runs,
-// so adding a ferry city needs no change to the workflow. One `today` for the whole run, so two
-// cities whose feeds both moved open their new records on the same day even across midnight.
+// One `today` for the whole run, so every city opens its new record on the same day.
 if (import.meta.main) {
-  // The cache flags are declared so parseArgs does not reject them; scripts/cache.ts reads argv itself.
+  // Declared only so parseArgs accepts them; scripts/cache.ts reads argv itself.
   const { values } = parseArgs({
     options: {
       city: { type: "string" },

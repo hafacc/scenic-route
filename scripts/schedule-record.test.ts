@@ -1,7 +1,3 @@
-// The publishing both daily timetables share: an unchanged feed must rewrite the standing record
-// byte for byte, and a changed one must close the old record on the day before the new one opens, so
-// that every past day still resolves to the timetable that actually ran on it.
-
 import { expect, test } from "bun:test";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -27,8 +23,7 @@ import {
 
 const HEADER_BYTES = 16;
 
-// A record shaped like the two real ones as far as the publisher looks: a day range at bytes 8 and
-// 12, and a body that stands for the feed.
+// The publisher reads only the day range at bytes 8 and 12.
 function record(firstDay: number, body: string): Uint8Array {
   const bytes = new Uint8Array(HEADER_BYTES + body.length);
   const view = new DataView(bytes.buffer);
@@ -66,9 +61,6 @@ async function read(path: string): Promise<Uint8Array | null> {
   }
 }
 
-// Both timetables open with these two tables and the client reads both out of one decoder, so the
-// two halves of that layout are checked against each other here rather than against a copy of the
-// figures.
 test("the calendar tables read back as what was written", () => {
   const services = [
     {
@@ -118,7 +110,7 @@ test("an unchanged feed keeps the standing record, day and all", async () => {
     changed: true,
     firstDay: 20260901,
   });
-  // A week later, the same feed: the record must not move, or every day would be a commit.
+  // The record must not move, or every day would be a commit.
   expect(await publish(directory, 20260908, "one")).toEqual({
     changed: false,
     firstDay: 20260901,
@@ -137,7 +129,6 @@ test("a changed feed retires the standing record the day before", async () => {
   const current = await read(join(directory, "city.bin"));
   const past = await read(join(directory, "city-past.bin"));
   expect(rangeOf(current ?? new Uint8Array())).toEqual([20260908, 0]);
-  // The two ranges meet without overlapping, so no day is left without a timetable.
   expect(rangeOf(past ?? new Uint8Array())).toEqual([20260901, 20260907]);
 });
 
@@ -145,15 +136,13 @@ test("a second change on the same day replaces it in place", async () => {
   const directory = await mkdtemp(join(tmpdir(), "schedule-"));
   await publish(directory, 20260901, "one");
   await publish(directory, 20260901, "two");
-  // Closing a record that covered no completed day would append a range no day can ever match.
+  // Closing a record that covered no completed day would append a range no day can match.
   expect(await read(join(directory, "city-past.bin"))).toBeNull();
   expect(
     rangeOf((await read(join(directory, "city.bin"))) ?? new Uint8Array()),
   ).toEqual([20260901, 0]);
 });
 
-// A feed with one service in calendar.txt, one named only by calendar_dates.txt, and one nothing
-// uses.
 function calendarFeed(): GtfsFeed {
   return {
     routes: [],
@@ -206,8 +195,7 @@ test("only the services a timetable uses are published", () => {
     "f:holiday",
     "f:weekday",
   ]);
-  // A service named only by calendar_dates has no weekday of its own: only its exception days ever
-  // turn it on.
+  // A service named only by calendar_dates runs only on its exception days.
   expect(services[0]).toEqual({
     key: "f:holiday",
     mask: 0,

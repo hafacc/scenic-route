@@ -1,10 +1,4 @@
-// Usage:
-//   bun run set-admin <email> [true|false]
-//
-// Sets (or clears) the `admin` custom claim on a Firebase Auth user, which
-// the /logger route uses as its access gate. Requires a service-account JSON
-// key downloaded from the Firebase console (Project settings → Service
-// accounts → Generate new private key) saved as ./service-account.json.
+// Sets the `admin` claim gating /logger; needs ./service-account.json from the Firebase console.
 
 import { readFileSync } from "node:fs";
 import { cert, initializeApp, type ServiceAccount } from "firebase-admin/app";

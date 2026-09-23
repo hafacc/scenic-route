@@ -1,11 +1,3 @@
-// The half of a transit-lines ingest that is not the feed: which of a route's shape variants are
-// worth drawing, and the SBWY blob they are written as — a route table carrying the agency's own
-// colors and names, one polyline per drawn variant, and a station table naming the routes calling
-// there as a bitmask. Layout: scripts/README.md.
-//
-// Both cities' ingests write through this: New York's (scripts/subway.ts) reads one feed, San
-// Francisco's (scripts/subway-sf.ts) two, and what they share is everything downstream of the feed.
-
 import { COORD_SCALE, haversineMeters, writeVarint, zigzag } from "./geometry";
 import type { GtfsFeed } from "./gtfs";
 import type { Coord } from "./socrata";
@@ -16,29 +8,14 @@ const SUBWAY_HEADER_BYTES = 60;
 const SUBWAY_ROUTE_BYTES = 16;
 const SUBWAY_LINE_BYTES = 8;
 const SUBWAY_STATION_BYTES = 20;
-// A station names the routes calling there as one u32 bit per route index, so a 33rd route would be
-// a format change; the encoder refuses rather than dropping the routes that no longer fit.
+// The station route mask is a u32.
 const MAX_ROUTES = 32;
 
-// How much track a non-primary shape has to add to earn a place. A route's reverse-direction shapes
-// normally retrace its forward ones down the same rails, and a line drawn on top of itself adds
-// nothing — but a pattern that runs one way ONLY (a cable car's one-way street couplet, New York's
-// southbound-only West End patterns) is track the map would otherwise be missing entirely. So a
-// non-primary shape is kept when it covers at least this many grid cells no kept shape of the route
-// covers, about 150 m of track: above the few meters the two directions wobble apart at terminals
-// and relay tracks, and far below a block of one-way street.
-//
-// San Francisco's 28 non-primary shapes measure 0-4 fresh cells each except three — the F's Jefferson
-// Street loop at Fisherman's Wharf (7) and the Powell-Hyde cable car's Washington Street leg (8 and
-// 10), the two places a Muni line genuinely runs back a different street. Anything from 5 to 7 picks
-// exactly those three, and drawing them cuts the stations sitting more than 100 m from a line of a
-// route they are on from 12 of 367 to 5. New York's feed is coarser and its own plateau runs 5 to 30.
+// ~150 m of new track a non-primary must add; SF's one-way detours measure 7-10, the rest 0-4.
 const NEW_TRACK_CELLS = 5;
-// The coverage grid's cell, ~39 m of latitude and ~30 m of longitude at these latitudes.
-// Deliberately coarser than the tracks are apart, so a shape running the opposite rail of one
-// already drawn reads as track already covered rather than as new.
+// ~39 m by ~30 m: coarser than rails are apart, so the opposite rail reads as covered.
 const COVERAGE_CELL_DEGREES = 0.00035;
-// Packs a (row, column) cell into one number. Columns run to about -3.5e5 here, nowhere near it.
+// Columns run to about -3.5e5 here.
 const CELL_STRIDE = 10_000_000;
 
 export interface Rgb {
@@ -47,8 +24,7 @@ export interface Rgb {
   blue: number;
 }
 
-// One route as it is drawn: the agency's colors and names, and the polylines the variant selection
-// kept. `shortName` is what a rider says ("N", "Yellow"), `longName` the corridor ("JUDAH").
+// `shortName` is what a rider says ("N", "Yellow"), `longName` the corridor ("JUDAH").
 export interface TransitRoute {
   id: string;
   shortName: string;
@@ -59,45 +35,25 @@ export interface TransitRoute {
   lines: Coord[][];
 }
 
-// One station marker: where it is, what it is called, which routes call there as a bit per index
-// into the route table, and which complex the agency puts it in.
 export interface TransitStation extends Coord {
   name: string;
-  routeMask: number;
-  // The connected component of the feed's own transfers.txt this station falls in, from 1, or 0
-  // when the feed publishes no transfer between two different stations at all. Two stations sharing
-  // a non-zero id are one complex however far apart they are; two carrying 0 are a question the
-  // agency did not answer, and the client falls back to distance and name (../src/subway/format).
+  routeMask: number; // bit per route index
+  // transfers.txt component from 1; 0 = unknown, and the client falls back to distance.
   complex: number;
 }
 
-// One shape variant a route runs, as drawn: several polylines rather than one because clipping a
-// shape to the city can cut it into pieces. A variant is accepted or rejected whole — the pieces are
-// one run of track that happens to leave the map and come back.
+// Several lines because clipping to the city can cut a shape; accepted or rejected whole.
 export interface ShapeVariant {
   shapeId: string;
-  // A forward-direction shape, kept unless it duplicates one already taken. Everything else has to
-  // reach track the route does not already cover.
-  primary: boolean;
+  primary: boolean; // forward direction: kept unless a duplicate
   trips: number;
   lines: Coord[][];
 }
 
-// GTFS transfer_type 3: the agency saying a rider CANNOT cross between this pair. Neither feed here
-// publishes one, but joining on it would read a row as the opposite of what it says.
+// GTFS transfer_type 3: no transfer possible between the pair.
 const NO_TRANSFER = "3";
 
-// Which complex each of a feed's stations belongs to, from the agency's own transfers.txt: the
-// connected components of the stations it says a rider can walk between, numbered from `firstId` so
-// two feeds written into one file can be given disjoint ranges. Rows are keyed on stop ids that may
-// be platforms rather than stations, so both ends are resolved to their parent the way the station
-// table is.
-//
-// Empty when the feed names no transfer between two DIFFERENT stations — Muni publishes no
-// transfers.txt at all and BART's 40 rows are all platform-to-platform inside one station, so
-// neither says anything about which of its stations are one place. A feed that says nothing must
-// leave every station at 0 rather than claim each is a complex of its own, because 0 is what sends
-// the client back to the geometric rule that is all San Francisco has ever had.
+// Empty, not one complex per station, when no transfer joins two different stations (Muni, BART).
 export function transferComplexes(
   feed: GtfsFeed,
   firstId: number,
@@ -129,8 +85,7 @@ export function transferComplexes(
     if (from === to) {
       continue;
     }
-    // The lower id always wins the root, so a complex's root is the same whatever order the rows
-    // came in and the numbering below is the same across runs.
+    // Lower id wins the root, so numbering is independent of row order.
     const roots = [find(from), find(to)].sort();
     parent.set(roots[1], roots[0]);
     joins += 1;
@@ -153,13 +108,10 @@ export function transferComplexes(
   return complexes;
 }
 
-// How far apart two same-named stops can stand and still be one station. A terminal's several curbs,
-// and the two ends of a long platform, arrive as separate stops in every feed here.
+// A terminal's several curbs arrive as separate stops in every feed here.
 export const STATION_MERGE_METERS = 100;
 
-// Same-named points chained into clusters, each within STATION_MERGE_METERS of another member.
-// Single-link, so a row of curbs strung along a block joins up; what a cluster becomes — a station
-// marker, a routing station, the key its stops are remapped onto — is the caller's business.
+// Single-link, so a row of curbs strung along a block joins up.
 export function clusterByName<Point extends Coord & { name: string }>(
   points: readonly Point[],
 ): Point[][] {
@@ -200,7 +152,6 @@ export function clusterByName<Point extends Coord & { name: string }>(
   return clusters;
 }
 
-// Where a cluster of stops stands, as the one point the merged station is drawn and routed at.
 export function centroid(points: readonly Coord[]): Coord {
   return {
     lat: points.reduce((sum, one) => sum + one.lat, 0) / points.length,
@@ -208,8 +159,6 @@ export function centroid(points: readonly Coord[]): Coord {
   };
 }
 
-// The first complex id no station in `complexes` uses, so the next feed's ids do not collide with
-// this one's.
 export function nextComplexId(complexes: ReadonlyMap<string, number>): number {
   return Math.max(0, ...complexes.values()) + 1;
 }
@@ -238,8 +187,7 @@ function addTrack(points: readonly Coord[], covered: Set<number>): void {
   }
 }
 
-// How many distinct cells of a shape no cell of `covered` touches — its own cell or any of the eight
-// around it, so a shape on the opposite rail of one already drawn counts as covered.
+// A cell counts as covered if any of its eight neighbors is.
 function newTrackCells(
   lines: readonly Coord[][],
   covered: Set<number>,
@@ -272,13 +220,7 @@ function newTrackCells(
   return fresh;
 }
 
-// Every variant of a route that draws track, primary shapes first and within those the busiest
-// first, ties broken by shape id so the order is the same across runs. Express patterns, branches,
-// rush-hour put-ins, the lot: a variant is real service on real track, and thinning them to a
-// representative set is a rendering decision an ingest has no business making — variants sharing a
-// trunk are separated with an offset, which cannot be done at all with data that was thrown away.
-// Two things are dropped, and only two: a variant whose geometry is identical to one already taken,
-// and a non-primary variant that reaches no track the route already covers.
+// Drops only duplicates and retracing non-primaries: thinning is the renderer's job.
 export function chooseLines(variants: readonly ShapeVariant[]): Coord[][] {
   const ordered = [...variants].sort(
     (left, right) =>
@@ -312,12 +254,7 @@ export function chooseLines(variants: readonly ShapeVariant[]): Coord[][] {
   return lines;
 }
 
-// Writes the system as SBWY v3: a header, a route table (colors, name ids and the run of lines each
-// route owns), a line table (a geometry pointer, a vertex count and the owning route), a station
-// table (a position, a name id, the route mask and the complex id), a varint geometry blob and a
-// trailing name blob.
-// All little-endian, coordinates quantized to COORD_SCALE about the south-west origin, exactly as
-// the sibling sources. Layout: scripts/README.md.
+// SBWY layout: scripts/README.md.
 export function encodeSubway(
   routes: readonly TransitRoute[],
   stations: readonly TransitStation[],
@@ -346,8 +283,6 @@ export function encodeSubway(
     swallow(station);
   }
 
-  // Route names and station names share one deduped, sorted table, as FERR pools its stop and route
-  // names.
   const names = [
     ...new Set([
       ...routes.flatMap((route) => [route.shortName, route.longName]),
@@ -356,8 +291,6 @@ export function encodeSubway(
   ].sort();
   const nameIndex = new Map(names.map((name, index) => [name, index]));
 
-  // The geometry blob: per line, its vertices as zigzag-LEB128 varint deltas, the first pair
-  // absolute (from the origin) and the rest from the previous vertex.
   const geometryBytes: number[] = [];
   const lineTable = new Uint8Array(
     routes.reduce((total, route) => total + route.lines.length, 0) *

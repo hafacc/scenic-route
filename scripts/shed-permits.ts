@@ -1,43 +1,26 @@
-// Reconstructs the life of every NYC sidewalk shed from a clone of NYCDOB/ActiveShedPermits, a repo
-// whose only content is one CSV snapshot of the city's active shed permits, committed most days
-// since December 2017. Walking the history turns those snapshots into one record per permit: the
-// attributes the feed last carried for it, and the stretches of days it was actually standing.
-// Every commit is resolved to its snapshot blob in one batch, and each distinct blob is parsed
-// exactly once as it streams past, so the ~2,600 snapshots are read in a single pass.
-//
-// The git half of that is package.json's, not this file's: `git log` naming every commit's candidate
-// paths, `git cat-file --batch-check` resolving them into .build/shed-index.txt, and `git cat-file
-// --batch` streaming the blobs into the walk's stdin. What is left here is the reading — which commit
-// a blob belongs to, and the framing the batch stream hands its bytes over in.
+// NYCDOB/ActiveShedPermits commits one CSV snapshot of active shed permits most days since 2017.
+// The git plumbing that streams the blobs in lives in package.json.
 
 import { readFile } from "node:fs/promises";
 
-// Everything the placement reads off a snapshot row, parsed. An interval carries the reading in
-// force on the day it ended and is placed from that, never from the one the feed carries now: the
-// DOB goes on correcting a permit's geocode and length years after the shed came down, and a record
-// that moved with those corrections could not be appended to `closed.bin` and then left alone —
-// which is the whole of what makes an update's output independent of where the update started.
+// The DOB corrects geocodes for years after a shed is gone, so an interval keeps its final reading.
 export interface ShedAttributes {
   bin: string;
   street: string;
   linearFeet: number; // NaN when the feed carries none
   lat: number | null;
   lng: number | null;
-  boroughDigit: string; // the last non-blank Borough Digit / Block / Lot the feed had given it
+  boroughDigit: string; // Borough Digit / Block / Lot: the last non-blank ones given
   block: string;
   lot: string;
 }
 
-// One shed permit over its whole life: the attributes of the last snapshot that carried it,
-// and every stretch of days it stood.
 export interface ShedPermit extends ShedAttributes {
   job: string;
-  houseNumber: string; // the one attribute of the row the placement does not read
-  runs: ShedInterval[]; // every stretch it was actually in the feed, ascending and disjoint
-  intervals: ShedInterval[]; // the same runs with renewal gaps merged; what a query for a day reads
-  // The feed changed something the placement reads while this walk was watching. The daily job places
-  // only the permits it has never seen, so this is how it hears about a corrected length or geocode
-  // on one it has: over a three-month catch-up it fires on 1.6% of the standing set.
+  houseNumber: string;
+  runs: ShedInterval[]; // ascending and disjoint
+  intervals: ShedInterval[]; // runs with renewal gaps merged
+  // The daily job places only unseen permits, so this is how it hears of a corrected one.
   corrected: boolean;
 }
 
@@ -45,25 +28,16 @@ export interface ShedInterval {
   first: string; // ISO YYYY-MM-DD
   last: string;
   open: boolean; // still standing in the newest snapshot
-  attributes: ShedAttributes; // as the feed had them on `last`, which is what places this record
+  attributes: ShedAttributes; // as of `last`
 }
 
-// A shed that reappears within this many days of coming down was never really down: the feed drops
-// permits for a few days around a renewal, and the two runs are one shed standing.
+// The feed drops permits for a few days around a renewal.
 export const MERGE_TOLERANCE_DAYS = 14;
-// Snapshots this far below the row count of the thirty snapshots BEFORE them are partial writes, not
-// a day when the city's sheds vanished. The window is wide because degraded writes come in multi-week
-// runs; 30 days still outvotes the longest observed break, a fortnight in mid-2019. It looks only
-// backwards, so a day's verdict is final the moment it is made — a two-sided window would let a later
-// run disagree with an earlier one about a day both had seen, which is the whole reason the old job
-// needed a settled-day clock. The same depth doubles as the reorder buffer: snapshots are filed under
-// the day they claim and judged thirty behind the read head, which is what collapses the several
-// commits a day the repo often has into one snapshot.
+// Degraded writes come in multi-week runs; backward-only, so a day's verdict is final once made.
+// Also the reorder depth that collapses a day's several commits into one snapshot.
 export const TRUNCATION_NEIGHBORS = 30;
 const TRUNCATION_RATIO = 0.75;
-// How many judged days a walk keeps the row count of, so it can hand the next one its window. A run
-// re-reads the last MERGE_TOLERANCE_DAYS of the feed, so the thirty counts that window has to be
-// seeded with are thirty days further back than the last day this walk saw.
+// A run re-reads the last MERGE_TOLERANCE_DAYS, so its window must be seeded from further back.
 const JUDGED_TAIL = TRUNCATION_NEIGHBORS + MERGE_TOLERANCE_DAYS;
 const PROGRESS_INTERVAL = 500;
 const DAY_MS = 86_400_000;
@@ -85,8 +59,7 @@ type Column =
   | "lot"
   | "currentDate";
 
-// Columns are resolved by header name, not position: the feed has shipped seven distinct headers
-// and has both added and reordered columns. The first candidate a header carries wins.
+// By name, not position: the feed has shipped seven headers, adding and reordering columns.
 const COLUMNS: Record<Column, readonly string[]> = {
   job: ["job number", "job_number", "job #", "job"],
   bin: ["bin number", "bin_number", "bin"],
@@ -107,9 +80,7 @@ const COLUMNS: Record<Column, readonly string[]> = {
 
 type ColumnIndex = Record<Column, number>;
 
-// The fields of one row, cleaned but unparsed. Every string here is a slice of the one line it was
-// decoded from, so a row kept for the final record pins a few hundred bytes rather than the whole
-// snapshot text.
+// Slices of their own line, so a kept row pins a few hundred bytes, not the whole snapshot.
 export interface SnapshotRow {
   bin: string;
   street: string;
@@ -123,11 +94,10 @@ export interface SnapshotRow {
 }
 
 interface ParsedSnapshot {
-  csvDate: string | null; // the date the rows claim, absent when none of them parse
+  csvDate: string | null;
   rows: Map<string, SnapshotRow>;
 }
 
-// A snapshot pinned to the day it describes, ready to be folded into the runs.
 export interface DatedSnapshot {
   date: string;
   rows: Map<string, SnapshotRow>;
@@ -142,7 +112,7 @@ function clean(text: string): string {
   }
 }
 
-// The feed started decorating BIS job numbers with a "(BIS)" suffix in 2018. It is the same job.
+// The feed started suffixing BIS job numbers with "(BIS)" in 2018; it is the same job.
 function normalizeJob(job: string): string {
   return job.replace(/\(BIS\)$/i, "").trim();
 }
@@ -160,8 +130,7 @@ function isoDate(year: number, month: number, day: number): string | null {
   }
 }
 
-// The Current Date column, which the feed has written as YYYY-MM-DD, M/D/YYYY and M/D/YY, each
-// sometimes with a time trailing it. Anything else — including an impossible day — is no date.
+// The feed has written YYYY-MM-DD, M/D/YYYY and M/D/YY, sometimes with a trailing time.
 function parseSnapshotDate(raw: string): string | null {
   const text = clean(raw);
   const dashed = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
@@ -188,15 +157,12 @@ function shiftDay(iso: string, days: number): string {
   return new Date(Date.parse(iso) + days * DAY_MS).toISOString().slice(0, 10);
 }
 
-// The day a walk that has read the feed through `lastDay` has to be picked up from: every day whose
-// intervals could still change, which is the renewal tolerance and no more. A shed last seen before
-// it can no longer be extended by anything the feed publishes next.
+// A shed last seen before this can no longer be extended by anything the feed publishes next.
 export function resumeFrom(lastDay: string): string {
   return shiftDay(lastDay, 1 - MERGE_TOLERANCE_DAYS);
 }
 
-// A number the feed may have written with thousands separators. A blank or unparseable value is NaN,
-// which is what the record carries for a shed the feed gave no linear feet.
+// The feed may write thousands separators.
 function toNumber(raw: string): number {
   if (raw === "") {
     return Number.NaN;
@@ -213,7 +179,7 @@ function toCoordinate(raw: string): number | null {
 function resolveHeader(header: readonly string[]): ColumnIndex {
   const byName = new Map<string, number>();
   for (const [index, name] of header.entries()) {
-    // trim() drops the BOM as well as spaces, so the first name is not read as "﻿Job Number".
+    // trim() also drops the BOM off the first name.
     byName.set(name.trim().toLowerCase(), index);
   }
   const columns: ColumnIndex = {
@@ -242,15 +208,12 @@ function resolveHeader(header: readonly string[]): ColumnIndex {
   return columns;
 }
 
-// One record of a snapshot CSV, read in place and reused for the next. A plain line is kept as its
-// decoded text with the offset of each of its fields beside it, so only the eleven columns the
-// record reads ever become strings — the feed's snapshots carry twenty-five. A line with a quote in
-// it cannot be sliced (a "" collapses to one character) and arrives already split.
+// Reused per record; offsets so only the columns read become strings. Quoted lines arrive split.
 interface CsvRecord {
   line: string;
-  starts: number[]; // the offset of each field, then one past the end of the line
+  starts: number[]; // each field's offset, then one past the end of the line
   fields: string[] | null;
-  next: number; // where the record after this one starts
+  next: number;
 }
 
 function field(record: CsvRecord, index: number): string {
@@ -275,8 +238,6 @@ function recordFields(record: CsvRecord): string[] {
   }
 }
 
-// Splits one record's text into fields. A field is quoted only when the quote opens it, a "" inside
-// a quoted field is one literal quote, and an embedded line break is just another character.
 function splitQuotedRecord(text: string): string[] {
   const fields: string[] = [];
   let value = "";
@@ -309,7 +270,6 @@ function splitQuotedRecord(text: string): string[] {
   return fields;
 }
 
-// Where the record starting at `start` ends: the first line break that is not inside a quoted field.
 function findRecordEnd(bytes: Uint8Array, start: number): number {
   let quoted = false;
   let atFieldStart = true;
@@ -337,9 +297,7 @@ function findRecordEnd(bytes: Uint8Array, start: number): number {
   return bytes.length;
 }
 
-// Reads the record at `start` into `record`. Decoding a line at a time rather than the whole
-// snapshot at once is what keeps the memory flat: a field the run builder keeps is a view on its own
-// ~200 byte line, not on the 2 MB snapshot text it came from.
+// A line at a time, so a kept field views its ~200 byte line, not the 2 MB snapshot text.
 function readRecord(
   bytes: Uint8Array,
   start: number,
@@ -377,8 +335,7 @@ function readRecord(
   }
 }
 
-// One snapshot CSV. The date is the one the most rows claim, so a handful of stale rows cannot
-// misfile the day; a later row for a job replaces an earlier one.
+// Dated by majority, so a handful of stale rows can't misfile the day.
 function parseSnapshot(bytes: Uint8Array): ParsedSnapshot {
   const rows = new Map<string, SnapshotRow>();
   const decoder = new TextDecoder();
@@ -393,8 +350,7 @@ function parseSnapshot(bytes: Uint8Array): ParsedSnapshot {
     throw new Error(`no job column in header: ${header.slice(0, 5).join(",")}`);
   }
   const votes = new Map<string, number>();
-  // Nearly every row of a snapshot repeats the same Current Date, so the last one parsed is worth
-  // remembering: it turns one date parse per row into one per distinct date.
+  // Nearly every row repeats the same Current Date.
   let lastRaw = "";
   let lastDate: string | null = null;
   let cursor = record.next;
@@ -436,34 +392,23 @@ function parseSnapshot(bytes: Uint8Array): ParsedSnapshot {
   return { csvDate, rows };
 }
 
-// A commit that carries a snapshot, paired with the blob it carries.
 export interface SnapshotSource {
   blob: string;
-  commitDate: string; // the commit's own UTC date, the fallback when the CSV carries none
+  commitDate: string; // UTC; the fallback when the CSV carries no date
 }
 
-// The commit-to-blob table package.json resolves before the walk starts, as `git cat-file
-// --batch-check` answered it: one line per commit and candidate path, in commit order, reading
-// "<blob> blob <commit sha> <commit seconds>" for a path that commit carries and "<commit sha>:<path>
-// missing" for one it does not. A commit is read from the FIRST path it carries — 747 of them carry
-// both, having kept the old copy beside the new one when the snapshot moved into data/ — so which
-// paths the log names, and in which order, is package.json's to say and is not repeated here.
-//
-// `readFrom` drops everything before that day, which is how an update reads a month of history rather
-// than nine years of it. It takes the whole run of commits from the first one that reaches the day
-// rather than filtering by date, because a commit stamp can fall before the one committed ahead of it
-// and a filter would leave a hole where the walk needs a stretch.
+// A commit is read from the first path it carries: 747 carry both the old and the new location.
+// `readFrom` cuts at the first commit reaching the day, since commit stamps aren't monotonic.
 export function readSnapshotIndex(
   text: string,
   readFrom?: string,
 ): SnapshotSource[] {
   const sources: SnapshotSource[] = [];
-  let taken = ""; // the commit the last source came from, so a second path it carries is skipped
+  let taken = "";
   for (const line of text.split("\n")) {
     const [blob, kind, commit, seconds] = line.split(" ");
     if (kind !== "blob") {
-      // "missing" is a path the commit does not carry, and the empty line is the one the file ends
-      // with. Anything else is a git that answered something this cannot read.
+      // "missing" is a path the commit does not carry; the file ends with an empty line.
       if (kind !== "missing" && line !== "") {
         throw new Error(`git cat-file --batch-check answered "${line}"`);
       }
@@ -490,11 +435,7 @@ export async function loadSnapshotIndex(
   return readSnapshotIndex(await readFile(path, "utf-8"), readFrom);
 }
 
-// What the pipeline package.json puts a shed script at the END of reads: the commit index git
-// resolved, named as the script's first argument, and the blobs git is piping into its stdin.
-// `readFrom` has to be the day package.json handed `scripts/shed-blobs.ts`, because that is what
-// decided which blobs are in the stream — a script reading further back would wait for one nobody
-// asked git for.
+// `readFrom` must match the day package.json handed scripts/shed-blobs.ts, or it waits on a blob.
 export async function shedSnapshots(
   script: string,
   readFrom?: string,
@@ -515,9 +456,7 @@ export async function shedSnapshots(
   };
 }
 
-// Every blob the walk has to be sent, in the order it first needs one. Distinct, because the feed
-// commits a CSV it did not change often enough that 3,623 snapshot-carrying commits name 2,614
-// different blobs, and asking for each one once is 4.6 GB down the pipe rather than 7.5 GB.
+// Distinct: the feed often recommits an unchanged CSV, so this is 4.6 GB down the pipe, not 7.5.
 export function distinctBlobs(sources: readonly SnapshotSource[]): string[] {
   const blobs: string[] = [];
   const seen = new Set<string>();
@@ -530,14 +469,8 @@ export function distinctBlobs(sources: readonly SnapshotSource[]): string[] {
   return blobs;
 }
 
-// The blobs `git cat-file --batch` writes back, in the order they were asked for. Each record is a
-// "<sha> blob <size>" line, the bytes, and a newline; the bytes are yielded as they arrive so the
-// several gigabytes of history never sit in memory at once. Every blob is handed back in the same
-// reused buffer, so it is only valid until the next one is asked for.
-//
-// The sha on each record is checked against the blob it should be answering. That is what stands in
-// for a failed stage of the pipeline being noticed: a pipeline exits with the status of its LAST
-// command, so git dying halfway would otherwise reach the walk as a history that simply stopped.
+// Each blob reuses one buffer, valid until the next. Shas are checked because a pipeline's status is
+// its last command's, so git dying halfway would otherwise look like a history that just stopped.
 async function* readBlobs(
   stream: AsyncIterable<Uint8Array>,
   blobs: readonly string[],
@@ -559,7 +492,7 @@ async function* readBlobs(
     queued += next.value.length;
   }
 
-  // Moves `size` bytes out of the queue, into `into` when there is one and nowhere when there is not.
+  // A null `into` discards.
   function take(size: number, into: Uint8Array | null): void {
     let filled = 0;
     while (filled < size) {
@@ -620,23 +553,20 @@ async function* readBlobs(
   }
 }
 
-// A shed's presence run while it is still standing: the first and last day it was seen.
 interface OpenRun {
   first: string;
   last: string;
 }
 
 interface RunTracker {
-  order: string[]; // every job, in the order the feed first mentioned it
+  order: string[]; // by first mention
   open: Map<string, OpenRun>;
   closed: Map<string, ShedInterval[]>;
-  // What the placement reads for the job as the feed has it now. The object is replaced only when
-  // one of its fields changes, so two intervals share it exactly when they place the same way and
-  // the placement can be run once per distinct object rather than once per record.
+  // Replaced only on change, so intervals share the object exactly when they place the same way.
   attributes: Map<string, ShedAttributes>;
-  houseNumbers: Map<string, string>; // the last one the feed gave, which nothing is placed against
+  houseNumbers: Map<string, string>;
   located: Map<string, SnapshotRow>; // the last row that gave the job a block and lot
-  corrected: Set<string>; // jobs whose placement-bearing fields the feed has changed since
+  corrected: Set<string>;
 }
 
 function closeRun(
@@ -646,8 +576,6 @@ function closeRun(
   open: boolean,
 ): void {
   const intervals = tracker.closed.get(job);
-  // The attributes in force on the run's last day, which are the ones it is placed from forever
-  // after: the job has not been in a snapshot since, so nothing has changed them.
   const interval: ShedInterval = {
     first: run.first,
     last: run.last,
@@ -661,8 +589,7 @@ function closeRun(
   }
 }
 
-// One row as the placement reads it. The block and lot come from the last row that CARRIED them
-// rather than from this one, so a day the feed leaves them blank is not a change of address.
+// Block and lot from the last row carrying them, so a blank day isn't a change of address.
 function attributesOf(
   row: SnapshotRow,
   located: SnapshotRow | undefined,
@@ -679,8 +606,7 @@ function attributesOf(
   };
 }
 
-// Whether two readings would put the shed in the same place. `Object.is` for the length, so a permit
-// the feed gives no linear feet — NaN — compares equal to itself.
+// `Object.is`, so a NaN length compares equal to itself.
 function sameAttributes(left: ShedAttributes, right: ShedAttributes): boolean {
   return (
     left.bin === right.bin &&
@@ -694,7 +620,6 @@ function sameAttributes(left: ShedAttributes, right: ShedAttributes): boolean {
   );
 }
 
-// Folds one day into the runs: a job present opens or extends its run, a job absent ends it.
 function applySnapshot(tracker: RunTracker, snapshot: DatedSnapshot): void {
   for (const [job, row] of snapshot.rows) {
     if (row.block !== "" && row.lot !== "") {
@@ -725,14 +650,12 @@ function applySnapshot(tracker: RunTracker, snapshot: DatedSnapshot): void {
   }
 }
 
-// Runs separated by a short gap are one shed: the later run's attributes and open flag win, which is
-// what makes the merged record describe the shed as the feed last knew it.
+// The later run's attributes and open flag win.
 export function mergeIntervals(
   intervals: readonly ShedInterval[],
 ): ShedInterval[] {
   if (intervals.length === 0) {
-    // A permit the durable record still holds the geometry of, whose only sighting a later walk has
-    // since judged a truncated snapshot. It stands nowhere and no day sees it.
+    // A kept permit whose only sighting a later walk judged a truncated snapshot.
     return [];
   }
   const merged: ShedInterval[] = [];
@@ -754,15 +677,12 @@ export function mergeIntervals(
   return merged;
 }
 
-// The snapshots waiting to be judged. The judgment itself reads only the 30 days BEFORE the one at
-// the head, whose row counts are all that is kept of them; the queue exists to file a snapshot under
-// the day it claims and to let a later commit for a day replace an earlier one.
 interface SnapshotWindow {
   pending: DatedSnapshot[];
-  before: number[]; // the row counts of the 30 most recently judged days
-  judged: string; // the last day judged, after which a snapshot for that day is too late
-  seed: readonly number[]; // the counts this walk was handed, for the ones it hands on in turn
-  tail: DayCount[]; // the last JUDGED_TAIL of the days it judged itself
+  before: number[]; // row counts of the most recently judged days
+  judged: string; // a snapshot for this day or earlier is too late
+  seed: readonly number[]; // the counts this walk was handed
+  tail: DayCount[];
   kept: number;
   dropped: number;
   stale: number;
@@ -770,8 +690,6 @@ interface SnapshotWindow {
   lastDate: string;
 }
 
-// One judged day's row count, dated so the next walk can be handed the counts from before the day it
-// picks up at rather than the ones from before the day this walk stopped at.
 export interface DayCount {
   date: string;
   rows: number;
@@ -796,9 +714,7 @@ function judgeSnapshot(
     window.kept += 1;
     emit(snapshot);
   }
-  // Dropped or kept, the day counts as a neighbor: the rule asks what a snapshot looked like beside
-  // the ones around it, and a walk that left the truncated ones out would judge the next one against
-  // a window that depends on its own earlier verdicts.
+  // Dropped days count too, or the window would depend on its own earlier verdicts.
   window.judged = snapshot.date;
   window.pending.shift();
   window.before.push(snapshot.rows.size);
@@ -811,9 +727,7 @@ function judgeSnapshot(
   }
 }
 
-// Files a snapshot under the day it describes and judges whatever the window is now deep enough to
-// judge. A later commit for a day still pending replaces it, which is how the several commits a day
-// the repo often has collapse to one snapshot.
+// A later commit for a pending day replaces it.
 function acceptSnapshot(
   window: SnapshotWindow,
   snapshot: DatedSnapshot,
@@ -839,23 +753,17 @@ function acceptSnapshot(
 
 export interface ShedWalk {
   permits: ShedPermit[];
-  lastDay: string; // the newest usable snapshot; every run reaches it or ended before it
-  // The row counts a walk resuming at `resumeFrom(lastDay)` has to seed its truncation window with.
-  counts: number[];
+  lastDay: string; // the newest usable snapshot
+  counts: number[]; // the window seed for a walk resuming at `resumeFrom(lastDay)`
 }
 
-// The walk with the git reading taken out: a fold over dated snapshots, in ascending order. Where
-// they come from is not its problem, which is what lets the windowing properties be tested against a
-// handful of days rather than against a 370 MB clone.
 export interface ShedFold {
   tracker: RunTracker;
   window: SnapshotWindow;
-  applyFrom: string; // "" reads the whole history; earlier snapshots are dropped unread
+  applyFrom: string; // "" reads the whole history
 }
 
-// `before` is the truncation window the walk starts holding, which a windowed walk takes from the
-// artifact it is updating: the first day it judges then sees the same neighbors a walk over the
-// whole history would have given it, without reading a day of history to find out what they were.
+// `before` seeds the window so the first day sees the neighbors a full-history walk would.
 export function startFold(
   applyFrom = "",
   before: readonly number[] = [],
@@ -886,8 +794,7 @@ export function startFold(
   };
 }
 
-// One day. A snapshot from before the window the artifact handed over is not read at all: judging it
-// would push its row count onto a window that has already been seeded past it.
+// An earlier snapshot would push its count onto a window already seeded past it.
 export function foldSnapshot(fold: ShedFold, snapshot: DatedSnapshot): void {
   if (snapshot.date < fold.applyFrom) {
     fold.window.stale += 1;
@@ -920,11 +827,7 @@ export function finishFold(fold: ShedFold): ShedWalk {
       corrected: tracker.corrected.has(job),
     });
   }
-  // The counts the next walk picks up with are the ones from before the day IT starts at, not from
-  // before the day this one stopped at: the two overlap by the renewal tolerance, and those days are
-  // judged again from the same window rather than taken on trust. A walk of its own window judges too
-  // few days to fill thirty, so what it was handed carries on past it.
-  // A walk that kept no snapshot at all has no day to resume from, and hands on what it was handed.
+  // The counts from before the day the next walk starts, since it re-judges the overlap.
   const resume = window.lastDate === "" ? "" : resumeFrom(window.lastDate);
   const counts = [
     ...window.seed,
@@ -932,17 +835,11 @@ export function finishFold(fold: ShedFold): ShedWalk {
       .filter((judged) => judged.date < resume)
       .map((judged) => judged.rows),
   ].slice(-TRUNCATION_NEIGHBORS);
-  // The day is the SNAPSHOT's, never the day the job ran: a feed that has published nothing since
-  // Tuesday leaves Tuesday behind, and Friday's run picks up from there rather than from Thursday.
+  // The snapshot's day, not the run's, so a quiet feed resumes from its last real day.
   return { permits, lastDay: window.lastDate, counts };
 }
 
-// Turns the snapshots `git cat-file --batch` is streaming into one record per shed permit, in the
-// order the feed first mentioned them. `sources` says which blob every commit carries and is what the
-// stream has to answer with, in that order and once per distinct blob. With `applyFrom` only the
-// snapshots from that day onward are folded, and `before` is the truncation window the artifact it is
-// updating carried away, which is what lets it judge that first day the same way a walk over the
-// whole history would.
+// The stream must answer `sources` in order, once per distinct blob.
 export async function readShedPermits(
   sources: readonly SnapshotSource[],
   stream: AsyncIterable<Uint8Array>,
@@ -950,8 +847,7 @@ export async function readShedPermits(
   before: readonly number[] = [],
 ): Promise<ShedWalk> {
   if (sources.length === 0) {
-    // Nothing upstream can report a failure of its own: a shell pipeline exits with the status of its
-    // last command, and an empty index reaches this far as a feed that published nothing at all.
+    // A pipeline exits with its last command's status, so upstream failures surface here.
     throw new Error(
       "the commit index names no DOB snapshot at all: the git half of the pipeline resolved" +
         " nothing, so there is no history to walk",
@@ -967,8 +863,7 @@ export async function readShedPermits(
   );
 
   const fold = startFold(applyFrom, before);
-  // A blob is parsed the first time a commit points at it and held only while a later commit still
-  // does, which for this history is never more than a handful at a time.
+  // Held only while a later commit still points at it.
   const parsed = new Map<string, ParsedSnapshot>();
   const blobs = readBlobs(stream, blobOrder);
   for (const [position, source] of sources.entries()) {

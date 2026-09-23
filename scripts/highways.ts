@@ -1,9 +1,4 @@
-// `bun run scripts/highways.ts`: fetches the lines walking near is unpleasant — limited-access
-// highways and elevated rail — and writes them as data/highways/nyc.bin (magic HWAY). A later phase
-// rasterizes them into an areal proximity field and turns nearness into a per-edge routing PENALTY
-// (the mirror of the discount POIs earn). Nuisance is areal, not path-bound — noise and grime carry
-// through the air regardless of the street grid — so these ship as raw polylines, not graph edges,
-// and are never routed. Layout: scripts/README.md.
+// Highways and elevated rail as raw polylines, not graph edges: their nuisance is areal.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -19,9 +14,7 @@ const HIGHWAY_DIR = join(DATA_DIR, "highways");
 const HIGHWAY_MAGIC = "HWAY";
 const HIGHWAY_FORMAT = 1;
 
-// A line is kept if its midpoint or either endpoint is on land — enough to drop the New Jersey and
-// Westchester spill the city bounding box reaches, without clipping a bridge deck that only grazes
-// the shoreline. The same test the path ingest uses.
+// Midpoint or either endpoint on land: drops out-of-state spill but keeps bridge decks.
 function onLandLine(
   line: NuisanceLine,
   onLand: (coord: Coord) => boolean,
@@ -46,8 +39,7 @@ export async function ingestHighways(
   const highways = kept.filter((line) => line.kind === "highway").length;
   const railLines = kept.length - highways;
 
-  // Each line is one open ring of a single-ring polygon record — the polygon blob's exact byte
-  // layout, so the shared encoder and the Rust polygon reader carry it with no new format.
+  // Each line is an open single-ring polygon, so the polygon blob format carries it unchanged.
   const bytes = encodePolygons(
     HIGHWAY_MAGIC,
     HIGHWAY_FORMAT,

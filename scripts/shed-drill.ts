@@ -1,24 +1,5 @@
-// `bun run shed-drill [job...]`: the append-only property of the shed artifact, measured
-// against the real feed rather than a fixture.
-//
-// `closed.bin` is only append-only if a record is a function of ITS OWN permit and the graph — if
-// what one permit places over depended on which other permits were in the run, then a daily job that
-// appends today's permits would have written yesterday's records differently, and a chain of updates
-// would not land on the bytes a full rebuild writes. So: build the record set from every permit,
-// build it again with one permit dropped, and compare every surviving record's (first, close,
-// confidence, spans), which is the whole of what the artifact stores. Only the dropped permit's own
-// records may differ.
-//
-// The coupling this is looking for is not hypothetical. Placement reads the tax lot, and the tax lot
-// is read from Socrata in batches of sorted keys: dropping a permit that is the only one to name its
-// BBL shifts every batch boundary after it, which reorders the parts of unrelated lots and — before
-// scripts/shed-parcels.ts sorted them — moved where their sheds started. Placement itself has been
-// the other half: it once anchored to a graph EDGE rather than to the pavement, so a rebuild that cut
-// a curb into different edges moved the anchor. That is why the drill re-runs the whole pipeline
-// below the permit walk, parcel fetch included, rather than re-placing the requests it already has.
-//
-// It reads public/routing/nyc.bin and the DOB snapshots package.json pipes in, so it is a by-hand
-// check next to `bun run check-sheds` after a graph change, not part of `bun test src`.
+// Append-only holds only if a record depends on its own permit alone: drop one, rebuild, compare.
+// Re-runs the parcel fetch too, since dropping a key shifts Socrata's sorted batch boundaries.
 
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -57,18 +38,14 @@ const GRAPH_PATH = join(
   "routing",
   "nyc.bin",
 );
-// A run this long on one street is a superblock frontage rather than a townhouse's.
-const LONG_RUN_METERS = 120;
-// What a mid-block lot fronts: one street, one ordinary building's worth of it, and no length the
-// placement had to throw away.
+const LONG_RUN_METERS = 120; // a superblock frontage on one street
 const MIDBLOCK_MIN_METERS = 15;
 const MIDBLOCK_MAX_METERS = 45;
 const MIDBLOCK_SLACK_METERS = 3;
 const SHAPES = ["corner", "midblock", "superblock", "overdeclared"] as const;
 type Shape = (typeof SHAPES)[number];
 
-// One record as the artifact stores it. Two runs agree exactly when every surviving record's digest
-// does.
+// Everything the artifact stores for a record.
 function digestOf(record: EncodedShed): string {
   const spans = record.spans
     .map(
@@ -95,13 +72,10 @@ function digestsByJob(records: readonly EncodedShed[]): Map<string, string[]> {
 interface RecordSet {
   digests: Map<string, string[]>;
   placements: Map<string, ShedPlacement[]>; // job -> one placement per interval
-  // What each reading resolved to on the tax map, so a record that moved can be told from an input
-  // that moved. The readings themselves are the same objects in every run, which is what lets this be
-  // keyed on them.
+  // Keyed by identity: the readings are the same objects in every run.
   inputs: Map<ShedAttributes, string>;
 }
 
-// The lot and building a reading was placed from, as bytes.
 function inputDigestOf(record: ShedRecord): string {
   const digest = createHash("sha256");
   for (const ring of [record.lot, record.footprint]) {
@@ -112,8 +86,6 @@ function inputDigestOf(record: ShedRecord): string {
   return `${record.street}|${record.linearFeet}|${record.lng},${record.lat}|${digest.digest("hex").slice(0, 16)}`;
 }
 
-// The whole of the build below the permit walk: the readings the permits need, the parcels those
-// readings resolve to, the placement of each, and the records that come out.
 async function recordSetOf(
   index: SidewalkIndex,
   graph: RoutingGraph,
@@ -162,11 +134,7 @@ async function recordSetOf(
   };
 }
 
-// Readings whose parcel geometry is not what the other run read. `.cache/` entries never expire and
-// are keyed by the batch they were fetched in, so a drop that shifts a batch boundary re-fetches part
-// of the key space — and if the city has published a new tax map since the rest of it was cached, the
-// two runs are reading different SOURCES and every comparison below is meaningless. This is what says
-// so, rather than letting it read as a placement that moved.
+// A shifted batch re-fetches, maybe from a newer tax map than the cached rest; that voids the run.
 function driftedInputs(
   baseline: ReadonlyMap<ShedAttributes, string>,
   dropped: ReadonlyMap<ShedAttributes, string>,
@@ -239,8 +207,6 @@ export function compareRecordSets(
   return { job, compared, changed, examples };
 }
 
-// How many distinct streets a placement's spans lie along, which is what tells a corner lot's two
-// frontages from one run down a single block.
 function streetsOf(graph: RoutingGraph, placement: ShedPlacement): number {
   const names = new Set<string>();
   for (const span of placement.spans) {
@@ -277,10 +243,7 @@ function shapeOf(graph: RoutingGraph, placement: ShedPlacement): Shape | null {
   }
 }
 
-// One permit per shape, each in a different borough — a job number's leading digit — so the four
-// drops exercise four different placements rather than four neighbors in the same block of the
-// feed. Within a shape the choice is the middle candidate by job number, which is arbitrary but
-// fixed, so a re-run drills the same permits.
+// A job number's leading digit is its borough; the middle candidate is arbitrary but stable.
 export function pickDrops(
   candidates: ReadonlyMap<Shape, readonly string[]>,
 ): Map<Shape, string> {
@@ -303,11 +266,7 @@ export function pickDrops(
   return picked;
 }
 
-// The permits whose removal actually moves the parcel read: ones naming a BIN and a BBL no other
-// permit names. Dropping one takes a key out of the sorted lists `fetchKeyed` batches, so every batch
-// after it is composed differently and unrelated lots come back in another order — which is the shape
-// the two batch-order bugs took. Dropping a permit that shares its keys leaves the parcel fetch
-// byte-identical and tests only the placement half, so the drill spends its runs on these.
+// Permits whose BIN and BBL no other permit names; only dropping these shifts the parcel batches.
 export function isolatingJobs(permits: readonly ShedPermit[]): Set<string> {
   const namers = new Map<string, Set<string>>();
   for (const permit of permits) {
@@ -348,8 +307,7 @@ function candidatesOf(
     SHAPES.map((shape) => [shape, []]),
   );
   for (const [job, ofJob] of placements) {
-    // A permit with more than one presence interval places twice, and the two can differ; the drill
-    // wants a permit whose one shape is unambiguous.
+    // Multiple intervals can place differently, leaving the shape ambiguous.
     if (ofJob.length !== 1 || !isolating.has(job)) {
       continue;
     }
@@ -439,6 +397,6 @@ export async function runDrill(chosen: readonly string[]): Promise<void> {
 }
 
 if (import.meta.main) {
-  // argv[2] is the commit index the pipeline hands every shed script; the jobs to drop follow it.
+  // argv[2] is the commit index the pipeline hands every shed script.
   await runDrill(process.argv.slice(3));
 }

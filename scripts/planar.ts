@@ -1,10 +1,5 @@
-// Planar geometry in a single equirectangular meter frame over New York. The city's latitude span
-// keeps the x-scale error under 1%, i.e. sub-decimeter over the 10-30 m distances that decide which
-// sidewalk a building fronts, so one frame for the whole city is enough and every distance below is
-// a plain Euclidean one.
-//
-// Polylines and rings are interleaved [x0, y0, x1, y1, ...] in meters. A ring is closed: its last
-// vertex repeats its first. Only what the sidewalk-shed placement needs lives here.
+// One equirectangular meter frame over New York: x-scale error stays under 1% across the city.
+// Polylines and rings are interleaved [x0, y0, x1, y1, ...]; a ring's last vertex repeats the first.
 
 const METERS_PER_DEGREE_LAT = 111_320;
 const REFERENCE_LAT = 40.7;
@@ -35,8 +30,7 @@ export function boundsOf(coords: Float64Array): Float64Array {
   return box;
 }
 
-// The gap between two boxes, 0 when they touch or overlap. A lower bound on the distance between
-// anything inside them, which is what makes it usable as a cheap reject.
+// 0 when the boxes touch; a lower bound on the distance between anything inside them.
 export function boxGap(left: Float64Array, right: Float64Array): number {
   const gapX = Math.max(0, Math.max(left[0] - right[2], right[0] - left[2]));
   const gapY = Math.max(0, Math.max(left[1] - right[3], right[1] - left[3]));
@@ -54,7 +48,7 @@ export function polylineLength(coords: Float64Array): number {
   return total;
 }
 
-// The signed area of a closed ring, positive when it winds counter-clockwise.
+// Positive when the ring winds counter-clockwise.
 export function ringSignedArea(ring: Float64Array): number {
   let total = 0;
   for (let at = 2; at < ring.length; at += 2) {
@@ -63,7 +57,6 @@ export function ringSignedArea(ring: Float64Array): number {
   return total / 2;
 }
 
-// The area centroid, which is what a building's "middle" means when the footprint is an L.
 export function ringCentroid(ring: Float64Array): { x: number; y: number } {
   let twiceArea = 0;
   let x = 0;
@@ -75,7 +68,7 @@ export function ringCentroid(ring: Float64Array): { x: number; y: number } {
     y += (ring[at - 1] + ring[at + 1]) * cross;
   }
   if (twiceArea === 0) {
-    return { x: ring[0], y: ring[1] }; // a degenerate ring has no area to weight by
+    return { x: ring[0], y: ring[1] };
   } else {
     return { x: x / (3 * twiceArea), y: y / (3 * twiceArea) };
   }
@@ -268,8 +261,7 @@ export function densifyRing(ring: Float64Array, step: number): Float64Array {
   return points;
 }
 
-// The unit outward normal at each sample of a counter-clockwise ring, taken across a window of
-// samples so a single jagged vertex does not flip the direction the wall faces.
+// Normals of a counter-clockwise ring, taken across a window so one jagged vertex can't flip them.
 export function outwardNormals(
   points: Float64Array,
   window: number,
@@ -288,7 +280,7 @@ export function outwardNormals(
   return normals;
 }
 
-// The point `along` meters from the start of a polyline, clamped to its ends.
+// Clamped to the polyline's ends.
 export function pointAt(
   coords: Float64Array,
   along: number,
@@ -310,10 +302,7 @@ export function pointAt(
   return { x: coords[0], y: coords[1] };
 }
 
-// Where a point lands on a polyline: how far along the closest point sits, how far away it is, the
-// closest point itself, and the unit direction the line runs there. The along-distance is what a
-// shed's span is measured in, and the direction is what tells which SIDE of the line the point fell
-// on, since the distance alone is unsigned.
+// The tangent tells which side the point fell on, since `distance` is unsigned.
 export interface LineProjection {
   along: number;
   distance: number;
@@ -361,8 +350,7 @@ export function projectToPolyline(
       into.distance = distance;
       into.x = closestX;
       into.y = closestY;
-      // A collapsed segment leaves the previous direction standing rather than a zero vector; the
-      // ingest drops anything shorter than a meter, so it is the degenerate-input guard.
+      // A collapsed segment keeps the previous direction rather than a zero vector.
       if (span > 0) {
         into.tangentX = deltaX / span;
         into.tangentY = deltaY / span;

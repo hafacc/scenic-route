@@ -1,43 +1,33 @@
-// A disk cache for the raw source reads: the network paging is the whole cost of a re-run,
-// everything downstream of it is seconds. Entries live in .cache/ (gitignored) and by default never
-// expire on their own — the sources move about once a year, so a re-run wants whatever it
-// read last time, not a fresher copy it did not ask for. A caller whose source does move — the GTFS
-// feeds, whose calendars run out — asks for a `maxAgeMs` and gets a re-read once its entry is older
-// than that.
+// Disk cache for raw source reads in .cache/; entries never expire unless the caller sets `maxAgeMs`.
 
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-// Also where a build input too big to hold in memory is cut up — see scripts/alcc.ts.
 export const CACHE_DIR = join(import.meta.dirname, "..", ".cache");
 
 const REFRESH =
   process.argv.includes("--refresh") || process.env.REFRESH === "1";
-// The opposite of a refresh: whatever is in .cache/ is used whatever its age, and a source with no
-// entry is an error rather than a download. For a run that must not touch the network.
+// Use any cached entry whatever its age; a missing entry is an error, not a download.
 const OFFLINE =
   process.argv.includes("--offline") || process.env.OFFLINE === "1";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export interface CacheOptions {
-  // How old an entry may be before the source is read again. Omitted, the entry never expires.
+  // Omitted, the entry never expires.
   maxAgeMs?: number | null;
 }
 
 export interface JsonCacheOptions extends CacheOptions {
-  // Suppresses the hit notice, for a read split into hundreds of cached batches that reports its own
-  // progress and would otherwise bury the build log.
   quiet?: boolean;
 }
 
-// "miss" covers both an absent entry and `--refresh`: read the source. "stale" is a usable entry the
-// caller's max age has passed, which reads the source too but says so.
+// "miss" includes `--refresh`; "stale" is past the caller's max age.
 export type CacheVerdict = "hit" | "stale" | "miss" | "unavailable";
 
 export interface CacheEntryAge {
-  // When the entry was written, or null when there is no entry.
+  // Null when there is no entry.
   writtenMs: number | null;
   nowMs: number;
   maxAgeMs: number | null;
@@ -45,7 +35,6 @@ export interface CacheEntryAge {
   offline: boolean;
 }
 
-// The expiry decision on its own, so it can be tested without a cache directory.
 export function cacheVerdict({
   writtenMs,
   nowMs,
@@ -64,7 +53,6 @@ export function cacheVerdict({
   }
 }
 
-// The verdict on a real entry, with how old it is for the notice a stale one prints.
 async function entryAge(
   path: string,
   maxAgeMs: number | null,
@@ -94,7 +82,7 @@ function offlineError(name: string, path: string): Error {
   );
 }
 
-// Wrapped, so a cached `null` is still told apart from a body that would not parse.
+// Wrapped, so a cached `null` is told apart from a body that would not parse.
 function parse<Value>(body: string): { value: Value } | null {
   try {
     return { value: JSON.parse(body) as Value };
@@ -108,10 +96,7 @@ function entryPath(name: string, key: string, extension: string): string {
   return join(CACHE_DIR, `${name}.${digest}.${extension}`);
 }
 
-// Renamed on, so a file is either whole or absent: these run to hundreds of megabytes, and an
-// interrupted write would otherwise leave a torn one behind. Exported because the build inputs cut
-// up beside the cache (scripts/alcc.ts) want the same guarantee for the same reason — a truncated
-// raster is read as a tile that would not decode rather than as an error.
+// Write then rename, so an interrupted write never leaves a torn file behind.
 export async function writeAtomic(
   path: string,
   contents: string | Uint8Array,
@@ -122,8 +107,7 @@ export async function writeAtomic(
   await rename(temporary, path);
 }
 
-// The key is the request itself — dataset plus query, or the Overpass QL — so changing what
-// is asked for lands on a different entry rather than silently reusing the old one.
+// The key is the request itself, so changing the query lands on a different entry.
 export async function cached<Value>(
   name: string,
   key: string,
@@ -133,7 +117,7 @@ export async function cached<Value>(
   const path = entryPath(name, key, "json");
   const { verdict, ageMs } = await entryAge(path, maxAgeMs);
 
-  // An entry that will not parse is a miss even when it is young enough to use.
+  // An entry that will not parse is a miss.
   const body =
     verdict === "hit" ? await readFile(path, "utf-8").catch(() => null) : null;
   const entry = body === null ? null : parse<Value>(body);
@@ -155,8 +139,7 @@ export async function cached<Value>(
   }
 }
 
-// The same cache for a source that is raw bytes rather than JSON — a raster the tiler reads off
-// disk itself — so the caller is handed the entry's path instead of its contents.
+// For raw bytes: returns the entry's path, not its contents.
 export async function cachedFile(
   name: string,
   key: string,

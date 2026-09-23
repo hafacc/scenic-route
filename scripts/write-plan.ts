@@ -1,11 +1,4 @@
-// `bun run build-tiles`, second step: writes the plan `tiler build` renders from — .build/plan.json,
-// build glue rather than an artifact, handed over fresh on every run. It emits and nothing else.
-// Which passes run at all is the tiler's decision, made pass by pass from stamps it computes over
-// the inputs each one reads; the passes themselves, the directories they own and the pyramids at
-// public/tiles/canopy/{z}/{x}/{y}.webp and the vector chunks at public/streets/{x}/{y}.bin are all
-// its side of the line. What is left here is what only TypeScript knows: the sun grid, the resolved
-// DEM, which committed sources each city has, and the hash of the tiler's own sources below. See
-// scripts/README.md.
+// Writes the plan `tiler build` renders from; which passes rerun is the tiler's decision.
 
 import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
@@ -25,31 +18,16 @@ const ROOT = join(import.meta.dirname, "..");
 const DATA_DIR = join(ROOT, "data");
 const PUBLIC_DIR = join(ROOT, "public");
 const TILE_DIR = join(PUBLIC_DIR, "tiles");
-// The measured LiDAR canopy pyramid, rendered from data/canopy/*.bin: the map's cover fill, blurred
-// and written as a covered fraction in alpha, which the client colors with the shared ramp.
 const CANOPY_TILE_DIR = join(TILE_DIR, "canopy");
-// The client-shaded genus dominance pyramid, rendered from data/trees/*.bin: four lossless data tiles
-// per position, each carrying three genera's local crown density in R/G/B. The WebGL overlay
-// (components/genus-gl-layer.tsx) colors them at render time.
 const GENUS_FIELD_TILE_DIR = join(TILE_DIR, "genus-field");
 const CHUNK_DIR = join(PUBLIC_DIR, "streets");
-// The shadow casters the client sweeps for itself past the baked pyramid's deepest level, cut from
-// the same footprints and crowns the shade pyramid rasterizes.
+// Shadow casters the client sweeps itself past the baked pyramid's deepest level.
 const CASTER_DIR = join(PUBLIC_DIR, "casters");
-// The commercial overlay's precomputed per-segment signals, one file per STCK chunk. Derived,
-// gitignored, like the chunks.
 const COMMERCIAL_DIR = join(PUBLIC_DIR, "commercial");
-// The qualifying-block centerlines the same pass emits, one file per city (magic CMLN), which the
-// graph proximity-bakes into the per-edge commercial discount.
 const COMMERCIAL_LINES_DIR = join(PUBLIC_DIR, "commercial-lines");
 const ROUTING_DIR = join(PUBLIC_DIR, "routing");
-// The graph pass's own cache: one directory of content-keyed entries per city, holding that city's
-// finished topology and one file per attribute column baked over it. Gitignored build glue like the
-// plan beside it — a build that finds it empty computes everything.
 const GRAPH_CACHE_DIR = join(ROOT, ".build", "graph-cache");
-// The graph inputs referenced by convention, `data/<kind>/<id>.bin`: they sit outside the manifest
-// because its versioned CityEntry schema would throw for existing cities if bumped, so the plan
-// names the ones actually on disk and the tiler resolves the same convention.
+// `data/<kind>/<id>.bin`, outside the manifest: bumping its schema would break existing cities.
 const CONVENTION_SOURCES = [
   "sidewalks",
   "ferries",
@@ -63,14 +41,8 @@ const CONVENTION_SOURCES = [
 ] as const;
 type ConventionSource = (typeof CONVENTION_SOURCES)[number];
 const MANIFEST_PATH = join(ROOT, "src", "tree-cover", "manifest.json");
-// The shed guard's plan (`bun run graph-inputs`): the same decisions, minus the DEM. It runs on
-// every push, where resolving San Francisco's mosaic would be a 1.77 GB download to describe a
-// block no durable key can depend on — the relief byte is baked over edges that are already final.
-// It is written somewhere else so a plan with no elevation can never be mistaken for one a build
-// should render from.
+// The shed guard's plan skips the 1.77 GB DEM and lands in a separate file so no build renders it.
 const KEY_SPACE = process.argv.includes("--key-space");
-// Handed to the tiler by a package.json script, which can name no temporary directory, so the plan
-// lands in a gitignored one of our own at the repo root.
 const PLAN_PATH = join(
   ROOT,
   ".build",
@@ -80,7 +52,6 @@ const PLAN_PATH = join(
 interface PlanCity {
   id: string;
   alleys: boolean;
-  // Omitted for a region held to the surveyed pair the tiler defaults to. See EXISTENCE_CEILINGS.
   existenceCeilings?: ExistenceCeilings;
   sources: ConventionSource[];
   shade?: {
@@ -88,13 +59,11 @@ interface PlanCity {
     maxShadowMeters: number;
     buckets: ReturnType<typeof computeShadeBuckets>;
   };
-  // Every survey this city's ground is read from, in the order the tiler resolves them: where two
-  // overlap, the first wins. Omitted for a city with no DEM at all.
+  // Where two surveys overlap, the first wins.
   elevation?: { crs: string; band: number; tiles: string[] }[];
 }
 
-// What the nine argv lists carried, in one document. Its schema is documented in scripts/README.md
-// and deserialized by crates/tiler/src/build.rs, which rejects unknown keys at every level.
+// crates/tiler/src/build.rs rejects unknown keys at every level.
 interface Plan {
   code: Record<string, string>;
   manifest: string;
@@ -124,22 +93,7 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-// The tiler crate file by file: repo-relative path -> the sha256 of its bytes — which the tiler
-// replaces with a hash of the token stream for every .rs file, so that a comment moves nothing. It
-// folds the whole map into every pass's stamp bar one, so an edit to the kernel invalidates the
-// pyramid the old one rendered — including an output whose FORMAT changed, which no input file
-// would have moved. Content, NOT mtime: a fresh checkout (CI) rewrites mtimes without changing a
-// byte, which would otherwise force a needless twenty-minute render and leave CI's cache of the
-// tiles unusable. The path is repo-relative and the map is keyed on it, so the hashes are the same
-// on a laptop and on a CI runner.
-//
-// A MAP rather than the one digest this used to be, because the shade pass names the modules it is
-// a function of — the pyramid is most of the build, and an edit to the graph is no reason to render
-// it again — and it can only hash those if the plan carries them apart.
-//
-// The `data/**` bytes used to be hashed here too, into one whole-build stamp. They are not any
-// more: the tiler hashes the inputs of each pass for itself, which is what lets one changed source
-// rerun one pass, and it does not read 168 MB through bun to find out.
+// Repo-relative path -> sha256 of content (not mtime), so a fresh CI checkout doesn't force a render.
 async function codeFiles(): Promise<Record<string, string>> {
   const files: Record<string, string> = {};
   for (const path of await tilerSources()) {
@@ -150,25 +104,7 @@ async function codeFiles(): Promise<Record<string, string>> {
   return files;
 }
 
-// The existence gate's two ceilings per region — the share of derived sidewalk km the gate may drop,
-// and the 90th-percentile share of one half-kilometer cell's street km it may leave with no pavement
-// — read by crates/tiler/src/graph.rs. A region absent from here is held to 0.30/0.30, which is what
-// a municipal sidewalk survey implies: where one exists, a side coming back silent really is evidence
-// that the STRT per-side bits were never stamped.
-//
-// The Bay Area has no such survey. Even after the pipeline learned to read OSM's `sidewalk=*` tags
-// off the road centerlines — which took the region from 10.9% to 47.2% of side-km with any statement
-// on them at all — 45% of East Bay streets still have nobody saying whether a pavement exists. That
-// is a hole in OpenStreetMap rather than a source we failed to read, so over this region the guards
-// were measuring the wrong thing rather than measuring a bad build.
-//
-// So its ceilings sit just over what it actually measures rather than at a round number, and a real
-// regression still trips them. Measured on the 2026-08-30 build: 0.357 dropped, and 0.84 at the 90th
-// percentile over the region's 1,294 half-kilometer cells. At 0.88 the cell ceiling no longer catches
-// a neighborhood quietly losing its pavement here — for this region it is a total-failure detector
-// and nothing finer. Read a later number against those two measurements rather than against the
-// ceilings: a few points is the drift of a year of OSM edits, and OSM gaining sidewalk statements
-// moves both DOWN, so an upward move of any size is worth opening.
+// Absent regions default to 0.30/0.30. SF has no sidewalk survey; set just above measured 0.357/0.84.
 interface ExistenceCeilings {
   droppedSidewalkFraction: number;
   cellDemotedShare: number;
@@ -178,24 +114,19 @@ const EXISTENCE_CEILINGS: Record<string, ExistenceCeilings> = {
   sf: { droppedSidewalkFraction: 0.39, cellDemotedShare: 0.88 },
 };
 
-// The two things the tiler cannot work out for itself, plus which committed sources this city has.
-// The sun grid is computed here because the client inverts the same module, and the DEM is resolved
-// here because fetching the mosaic is TypeScript's job.
+// The sun grid is computed here because the client inverts the same module.
 async function planCity(city: City): Promise<PlanCity> {
   const present = await Promise.all(
     CONVENTION_SOURCES.map(async (kind) =>
       (await fileExists(sourcePath(kind, `${city.id}.bin`))) ? kind : null,
     ),
   );
-  // One grid per city: a bin's sun position is synthesized at the city's own latitude, so two cities
-  // share neither what an index means nor how many indices exist. Empty when the year yields no
-  // above-horizon bin, and then the city gets no shade pyramid and no per-edge bake.
+  // Per city, since sun positions depend on latitude.
   const buckets = computeShadeBuckets(city.id);
   const mosaics = KEY_SPACE ? [] : await fetchElevationMosaics(city.id);
   return {
     id: city.id,
-    // The alley invariants assert New York's meaning of an alley; a city whose centerline has no such
-    // class says so rather than being asked about it.
+    // The alley invariants assert New York's meaning of an alley.
     alleys: city.streets.alleys ?? true,
     existenceCeilings: EXISTENCE_CEILINGS[city.id],
     sources: present.filter((kind): kind is ConventionSource => kind !== null),

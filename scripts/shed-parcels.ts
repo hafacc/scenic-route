@@ -1,15 +1,4 @@
-// The parcels a sidewalk-shed permit stands on: for every permit's BIN and BBL, the building
-// footprint and — the one that matters — the tax lot. A shed is built on the pavement at the
-// property line, so the lot boundary is what a shed runs along; the footprint only says which part
-// of a multi-part lot is in use. Three NYC Open Data sets: the building footprints (5zhs-2jue), the
-// DOF digital tax map (i38t-6if2), and the condominium table (p8u6-a6it), which is what a billing
-// BBL (lot 7501+) needs — it carries no polygon of its own, only the base lot it sits on.
-//
-// A key's parts are dissolved with polygon-clipping's union, but only when it has more than one:
-// the tax map and the footprint feed each give a key a single part almost always (39,830 of 39,905
-// lots, and every one of the 40,206 BINs, over the 8.5-year shed history), so the union is not a
-// shortcut past the common case — it is the 75-key tail where a lot's parts touch and their shared
-// edge would otherwise show up as a boundary a shed could be mapped onto.
+// A shed runs along the lot boundary at the property line; the footprint only says which part is used.
 
 import { union } from "polygon-clipping";
 import { COORD_SCALE } from "./geometry";
@@ -21,24 +10,15 @@ const LOT_DATASET = "i38t-6if2"; // DOF digital tax map
 const LOT_SELECT = "bbl,the_geom";
 const CONDO_DATASET = "p8u6-a6it"; // condominium billing lot -> the base lot it occupies
 const CONDO_SELECT = "condo_billing_bbl,condo_base_bbl";
-// Keys per request for the two reads that carry `the_geom`, against the 200 a row without geometry
-// is read at. Not a latency fix: a healthy server answers 200 BINs in 0.2 s and 200 lots in 0.3 s,
-// nowhere near the 90 s timeout. It is what a bad window costs — batches are cached one at a time,
-// so an endpoint that refuses to answer for a few minutes loses 50 keys rather than every key the
-// day brought, and the re-run resumes on the ones it never got. Fifty and not fewer because below
-// about that the response is all fixed overhead (0.1 s at both 25 and 50 keys), so a smaller batch
-// buys nothing and only multiplies the requests a full-history rebuild makes.
+// Batches cache one at a time, so small ones lose less to an outage; below ~50 it's all overhead.
 const GEOMETRY_BATCH_KEYS = 50;
 const BLOCK_DIGITS = 5;
 const LOT_DIGITS = 4;
 
-// A polygon boundary in lng/lat, counter-clockwise, first vertex repeated last. Holes are dropped:
-// a shed runs along the outside of a lot.
+// Counter-clockwise, first vertex repeated last; holes dropped since a shed runs along the outside.
 export type Ring = Float64Array; // [lng0, lat0, lng1, lat1, ...]
 
-// Every coordinate onto the 1e-6 degree grid (~0.11 m) every other blob in this repo uses. Applied
-// where the geometry is resolved rather than where it is drawn on, so the placement never sees a
-// coordinate finer than the pipeline's own grid and two runs over the same source agree exactly.
+// Snapped at resolution, not drawing, so two runs over the same source place identically.
 export function quantizeRing(ring: Ring): Ring {
   const snapped = new Float64Array(ring.length);
   for (let at = 0; at < ring.length; at++) {
@@ -47,14 +27,12 @@ export function quantizeRing(ring: Ring): Ring {
   return snapped;
 }
 
-// Every lot and footprint the permits touch, keyed the way the permits name them.
 export interface ShedParcels {
-  footprints: Map<string, Ring[]>; // BIN -> the building's parts
-  lots: Map<string, Ring[]>; // BBL -> the tax lot's parts
-  lotOfBin: Map<string, string>; // BIN -> the BBL the footprint feed reports, when the permit's own BBL has no polygon
+  footprints: Map<string, Ring[]>; // by BIN
+  lots: Map<string, Ring[]>; // by BBL
+  lotOfBin: Map<string, string>; // BIN -> BBL the footprint feed reports
 }
 
-// One part's boundary as Socrata hands it over: [lng, lat] pairs, closed.
 type Boundary = [number, number][];
 
 type Geometry =
@@ -104,7 +82,6 @@ export function bblOf(
   }
 }
 
-// Exterior rings only, one per part.
 function boundariesOf(geometry: Geometry | undefined): Boundary[] {
   if (geometry === undefined) {
     return [];
@@ -158,8 +135,6 @@ function reverse(ring: Ring): void {
   }
 }
 
-// GeoJSON boundaries arrive closed and the union's do too, but a source ring that is not is cheap
-// to close and expensive to debug downstream.
 function toRing(boundary: Boundary): Ring {
   const [firstLng, firstLat] = boundary[0];
   const [lastLng, lastLat] = boundary[boundary.length - 1];
@@ -181,11 +156,7 @@ function toRing(boundary: Boundary): Ring {
   return ring;
 }
 
-// Two parts of one key in a fixed order. Socrata does not promise a row order and does not keep one:
-// a key's parts come back in a different order depending on which other keys shared its batch, and
-// the union's output ring then starts at a different vertex, which moves the frontage arc and the
-// placement with it. Sorting the parts is what makes the same permit place the same way whatever else
-// was being read alongside it.
+// Socrata's row order varies with batch-mates, and part order moves the union's start vertex.
 function compareBoundaries(left: Boundary, right: Boundary): number {
   for (let vertex = 0; vertex < Math.min(left.length, right.length); vertex++) {
     for (const axis of [0, 1] as const) {
@@ -197,9 +168,7 @@ function compareBoundaries(left: Boundary, right: Boundary): number {
   return left.length - right.length;
 }
 
-// The parts dissolved into as few boundaries as they touch down to, or null when the clipper
-// rejects the input — the parts are degenerate often enough that a throw is not a reason to lose a
-// lot, only to keep its parts apart.
+// Unioned so a shared edge between parts isn't a boundary; null when the clipper rejects the input.
 function dissolve(boundaries: Boundary[]): Ring[] | null {
   try {
     const [first, ...rest] = [...boundaries]
@@ -306,8 +275,7 @@ export async function fetchShedParcels(
       for (const boundary of boundariesOf(row.the_geom)) {
         addBoundary(footprintParts, row.bin, boundary);
       }
-      // PLUTO's lot where the feed has one, else the base lot it maps the building to; some come
-      // back with a decimal tail ("1000160001.00000000").
+      // Some come back with a decimal tail ("1000160001.00000000").
       const reported = row.mappluto_bbl || row.base_bbl;
       if (reported && !lotOfBin.has(row.bin)) {
         lotOfBin.set(row.bin, reported.split(".")[0]);
@@ -315,18 +283,12 @@ export async function fetchShedParcels(
     }
   }
 
-  // Every lot the placement could read: the ones the permits name, and the ones their BINs report,
-  // which is what `lotFor` falls back to when the tax map has no polygon for a permit's own BBL.
-  // Both go through the same resolution below, because a reported lot is a condominium billing lot
-  // as often as a permit's own is — and resolving only the latter made a permit's fallback depend on
-  // whether some OTHER permit in the same run happened to name the same BBL.
+  // Reported lots are condo billing lots as often as named ones, so both need the condo resolution.
   const wanted = new Set([...bbls, ...lotOfBin.values()]);
   const lotParts = await fetchLotParts(wanted);
   const direct = lotParts.size;
 
-  // A BBL with no polygon in the tax map is usually a condominium billing lot, which is a billing
-  // fiction: the condo table names the tax lots it physically occupies, and the billing lot takes
-  // the union of their geometry.
+  // A BBL missing from the tax map is usually a condo billing lot; it takes its base lots' union.
   const missing = [...wanted].filter((bbl) => !lotParts.has(bbl));
   const condoRows = await NYC_OPEN_DATA.keyed<CondoRow>(
     CONDO_DATASET,

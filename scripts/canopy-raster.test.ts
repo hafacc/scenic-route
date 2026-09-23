@@ -10,7 +10,6 @@ import {
   UTM_10N,
 } from "./canopy-raster";
 
-// A mask laid out as rows of a string, "#" set, so a test reads as the shape it is about.
 function maskOf(rows: string[]): {
   mask: Uint8Array;
   width: number;
@@ -34,7 +33,6 @@ test("a single cell traces as its own square, wound the outer way", () => {
   expect(rings[0].length).toBe(8); // four corners, unclosed
 });
 
-// The union of what comes out has to be the mask itself, so a ring's area is the cell count.
 test("a ring encloses exactly the cells it was traced from", () => {
   const { mask, width, height } = maskOf([
     "......",
@@ -61,11 +59,10 @@ test("a hole comes back with the opposite winding and nests into its ring", () =
   const frame = polygons.find((polygon) => polygon.length === 2);
   expect(frame).toBeDefined();
   expect(ringDoubleArea((frame as Float64Array[])[1])).toBeLessThan(0);
-  expect(cells).toBe(17); // 16 of frame, 1 of pip: the hole is not counted as canopy
+  expect(cells).toBe(17); // 16 of frame, 1 of pip
 });
 
-// Two crowns that touch only at a corner are two crowns. Traced the other way round they would come
-// back as one polygon pinched to a point, which an even-odd fill has to guess at.
+// One polygon pinched to a point would leave an even-odd fill guessing.
 test("cells meeting at a corner trace as two rings, not one bowtie", () => {
   const { mask, width, height } = maskOf(["#..", ".#.", "..."]);
   const rings = traceRings(mask, width, height);
@@ -85,7 +82,6 @@ test("a diagonal staircase simplifies to its diagonal", () => {
   expect(rings.length).toBe(1);
   const simplified = simplifyRing(rings[0], 1);
   expect(simplified.length / 2).toBeLessThanOrEqual(4);
-  // and it still covers what it covered, to within the tolerance it was given
   expect(Math.abs(ringDoubleArea(simplified) / 2 - 30)).toBeLessThan(4);
 });
 
@@ -115,10 +111,7 @@ test("specks below the minimum are dropped, with their area counted out", () => 
   expect(droppedCells).toBe(1);
 });
 
-// Checked against a publisher's own georeferencing rather than against this code, and against the
-// same tile crates/tiler/src/heights.rs checks its forward projection with: the staged DEM tile
-// USGS_1M_10_x56y419 ties its upper-left pixel to UTM 10N (559994, 4190006), which PROJ places at
-// this longitude and latitude.
+// USGS_1M_10_x56y419 ties its upper-left pixel to UTM 10N (559994, 4190006); PROJ puts it here.
 test("the inverse projection agrees with a published tile", () => {
   const { lat, lng } = inverseTmerc(UTM_10N, 559_994, 4_190_006);
   expect(lng).toBeCloseTo(-122.3180159208427, 7);
@@ -150,8 +143,6 @@ test("the height tile is a float32 GeoTIFF tied at its own origin", () => {
   expect(view.getFloat32(strip + 20, true)).toBe(6);
 });
 
-// The box a raster window is cut from goes through the forward projection and the rings that come
-// back out of it go through the inverse, so the two have to be each other's undoing.
 test("the projection round-trips over the East Bay", () => {
   for (const [lng, lat] of [
     [-122.355, 37.632],

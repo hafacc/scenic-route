@@ -1,26 +1,4 @@
-// `bun run scripts/legacy.ts [city]`: fetches a city's register of long-standing businesses and
-// writes them as data/legacy/<id>.bin (magic LGCY) — the points the legacy-business overlay draws.
-// Layout: scripts/README.md.
-//
-// These are not the landmarks (designated BUILDINGS, scripts/landmarks.ts) and not the historic
-// districts (designated AREAS, scripts/historic.ts). They are living establishments: doors you can
-// still walk through and buy something from, which is a third thing and reads as one on the map.
-//
-// WHAT THIS IS NOT, and why it took a survey to get here. The obvious source — how long a business
-// has held a license — does not exist in any usable form, and that is measured rather than assumed:
-//
-//   - NYC's DCWP licenses cover regulated trades (home-improvement contractors, tobacco dealers,
-//     sightseeing guides), not diners or hardware stores, and nothing predates 1994 except 102
-//     sentinel rows dated 1900 — the file begins where the agency's digitization does.
-//   - The State Liquor Authority's `originalissuedate` has a statewide MINIMUM of 2017 and is 96%
-//     dated 2023 or later: licensing moved systems and "original issue" reset with it. The older
-//     list that carried deep dates is retired and answers 403. A NY liquor license does not survive
-//     a sale anyway, so even those dates measured the owner, not the business.
-//   - OpenStreetMap's `start_date` is on 212 of 46,396 NYC shop and food POIs, and 43 in SF.
-//
-// So the layer is built from CURATED REGISTERS instead, which is a different claim and a better one:
-// a body researched the business, checked the date and voted it on. What the map says is "on the
-// register", which is exactly what it knows.
+// Curated registers, since license dates (DCWP, SLA) don't reach back and OSM rarely has start_date.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -37,25 +15,17 @@ const LEGACY_DIR = join(DATA_DIR, "legacy");
 const LEGACY_MAGIC = "LGCY";
 const LEGACY_FORMAT = 1;
 
-// How long a business has to have been trading to be drawn. New York's register admits only
-// businesses of fifty years or more, so meeting San Francisco's in the middle — its own bar is
-// twenty to thirty — is what makes one dot mean the same thing in both cities.
+// New York's register floor, applied to SF's (20-30 years) so a dot means the same in both.
 const MIN_AGE_YEARS = 50;
 
 const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_ATTEMPTS = 3;
 const RETRY_BASE_MS = 2_000;
 
-// San Francisco's Legacy Business Registry, as the Office of Small Business publishes it behind its
-// own dashboard. Not on DataSF's Socrata catalog — searching for it there finds nothing — so this
-// reads the ArcGIS layer directly, the same way scripts/historic.ts reads the LPC's.
+// SF's Legacy Business Registry; not on DataSF's Socrata catalog, only this ArcGIS layer.
 const SF_SERVICE =
   "https://services.arcgis.com/Zs2aNLFN00jrS4gG/arcgis/rest/services/legacy_biz/FeatureServer/0/query";
-// New York State's Historic Business Preservation Registry. STATE, not city: New York City has no
-// register of its own, only a Council bill pending since 2018, and if it ever passes its businesses
-// land in this same layer. Entry is by nomination from a state legislator, so a business missing
-// from it has not been nominated — which is not the same as not being old, and is the one thing
-// this layer must not be read as saying.
+// NY State's Historic Business Preservation Registry (NYC has none); entry is by nomination only.
 const NY_SERVICE =
   "https://services.arcgis.com/1xFZPtKn1wKC6POA/arcgis/rest/services/Historic_Businesses_(view)/FeatureServer/0/query";
 
@@ -123,10 +93,7 @@ async function fetchAll(
   }
 }
 
-// A four-digit year out of whatever the register wrote down, which is what decides whether a business
-// is old enough to draw. San Francisco's field is free text and holds "1869", "Circa 1924" and
-// "1940s" alike, so the year is read out of the string rather than parsed from it. Only San
-// Francisco needs this: New York's register admits nothing under fifty years in the first place.
+// SF's field is free text ("1869", "Circa 1924", "1940s"), so the year is matched, not parsed.
 function yearIn(value: unknown, thisYear: number): number | null {
   const found = String(value ?? "").match(/\b(1[6-9]\d\d|20[0-2]\d)\b/);
   if (!found) {
@@ -135,10 +102,6 @@ function yearIn(value: unknown, thisYear: number): number | null {
   const year = Number.parseInt(found[1], 10);
   return year <= thisYear ? year : null;
 }
-
-// The label the overlay draws: the name and nothing else. The year decides whether a business is on
-// the map at all — fifty years is the whole entry condition — but it does not go in the label. A
-// screenful of dates reads as a database; the names read as a neighborhood.
 
 async function sfLegacy(
   land: LandContext,
@@ -153,8 +116,7 @@ async function sfLegacy(
   ]);
   const points: NamedPoint[] = [];
   for (const { attributes, geometry } of features) {
-    // The register lists a row per LOCATION, so a business with four shops is four dots, which is
-    // right for a map: each of them is a door you can walk to.
+    // One row per location, so a business with four shops is four dots.
     const name = String(
       attributes.Location_Business_Name || attributes.Business_Name || "",
     );
@@ -178,8 +140,6 @@ async function sfLegacy(
   return points;
 }
 
-// Takes the year and ignores it: New York's register admits nothing under fifty years, so there is
-// nothing left here to filter by. The signature matches San Francisco's so both are one source type.
 async function nycLegacy(land: LandContext): Promise<NamedPoint[]> {
   const features = await fetchAll("arcgis-ny-historic-business", NY_SERVICE, [
     "OBJECTID",
@@ -195,10 +155,7 @@ async function nycLegacy(land: LandContext): Promise<NamedPoint[]> {
     if (name.trim() === "" || !Number.isFinite(lat) || !Number.isFinite(lng)) {
       continue;
     }
-    // The register is statewide and every entry on it already meets the fifty years, so the city's
-    // own land mask is what cuts it down — the same test every other POI source is cut by, rather
-    // than a bounding box that would take in Nassau. The year is not read at all here: it is the
-    // register's entry condition, already met, and one row carries a zip code in that column.
+    // Statewide, so the land mask (a bbox would take in Nassau) cuts it; every entry is 50+ years.
     const point = { lat: lat as number, lng: lng as number, name: name.trim() };
     if (land.onLand(point)) {
       points.push(point);

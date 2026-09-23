@@ -1,9 +1,3 @@
-// `bun run scripts/tree-data-manifest.ts`: the manifest half of the tree-data ingest. It reads
-// .build/tree-data.json (what scripts/tree-data-fetch.ts encoded) and .build/ingest-report.json
-// (what `cargo run --release --bin tiler -- ingest` measured), takes the blobs the ingest filled in
-// place back off disk for their bytes and sha256, and writes the city's entry into
-// src/tree-cover/manifest.json. It spawns nothing: package.json sequences the three steps.
-
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -27,18 +21,14 @@ import {
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 
-// The ingest fills the canopy blob's height region and the street and path blobs' density regions
-// in place, so none of the three files on disk is the one the fetch half encoded.
+// Re-read: the ingest rewrote these blobs in place after the fetch half encoded them.
 async function readBlob(directory: string, file: string): Promise<Uint8Array> {
   return new Uint8Array(await readFile(join(DATA_DIR, directory, file)));
 }
 
 const started = performance.now();
 
-// `--city` is optional and only checked: the sidecar names the city the blobs belong to. Both are
-// named because `bun run x -- args` appends to the LAST command of a chain, so a flag meant for the
-// fetch half arrives here instead — the fetch takes its city and its refresh from the script entry
-// and REFRESH=1, and this rejects a `--city` that disagrees with what was actually ingested.
+// `bun run x -- args` hands flags to a chain's last command, i.e. here; `--city` is only checked.
 const { values } = parseArgs({
   options: {
     city: { type: "string" },

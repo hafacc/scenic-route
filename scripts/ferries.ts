@@ -1,13 +1,4 @@
-// `bun run scripts/ferries.ts --city <id>` (and, in the full pipeline, tree-data-fetch): downloads
-// one city's ferry GTFS feeds, collapses their whole schedule into one time-independent ferry graph,
-// and writes it as data/ferries/<id>.bin (magic FERR). It also freezes the raw feed zips under
-// data/ferries/ so a later time-of-day pass can re-derive from the exact feeds this build read.
-//
-// Time-independence: every trip is cut into consecutive-stop segments; a segment's crossing time is
-// the median trip-over-trip of (arrival at the next stop − departure at this one), and its wait is
-// half the median departure headway, capped at ten minutes. The two sum to the one rawTimeSeconds
-// the artifact carries — the number a later phase's discount multiplies. Nothing here touches the
-// routing graph: stops stay in geographic coordinates, unsnapped. Layout: scripts/README.md.
+// Segment time is the median crossing plus half the median headway, capped. See scripts/README.md.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -25,31 +16,15 @@ import { type LandContext, loadLandContext } from "./land";
 import type { Coord } from "./socrata";
 
 export interface FeedSource {
-  id: string; // namespaces stop ids, so one city's feeds' stop ids cannot collide
+  id: string; // namespaces stop ids within a city
   name: string;
-  zipFile: string; // the frozen raw feed, committed under data/ferries/
+  zipFile: string; // committed under data/ferries/
   url: string;
   cacheKey: string;
 }
 
-// Each city's feeds, all verified reachable. Nothing is ever read across two cities — a feed id only
-// has to be unique within its own city's list.
-//
-// New York: SI Ferry is NYC DOT's own download (behind an Akamai edge that needs a browser
-// User-Agent); NYC Ferry is Hornblower's feed served through Connexionz.
-//
-// San Francisco: WETA / SF Bay Ferry, published keyless and open under ODC-BY. The license is stated
-// only on https://sanfranciscobayferry.com/developers/ — the feed's own feed_info.feed_license
-// column is empty — so that page is the whole of the permission. This city is San Francisco plus the
-// East Bay, two land masses a pedestrian cannot walk between (nobody walks the Bay Bridge), so
-// unlike New York's, these boats are not scenery: they are the only crossing the router has.
-//
-// Golden Gate Transit's ferries are deliberately absent, for two independent reasons. Every one of
-// its five ferry routes serves Marin — Sausalito, Larkspur, Tiburon, Angel Island — which is outside
-// this city's land, so all it could contribute is another San Francisco pier and no crossing anyone
-// could walk off. And an exhaustive search turned up no license or terms of use for its feed
-// anywhere: no developer page, no feed_info.txt, nothing in its sitemap, where WETA's ODC-BY is
-// written down in plain words.
+// WETA's ODC-BY license is stated only at https://sanfranciscobayferry.com/developers/.
+// Golden Gate Transit is absent: it only serves Marin (off our land) and publishes no license.
 const CITY_FEEDS: Readonly<Record<string, readonly FeedSource[]>> = {
   nyc: [
     {
@@ -78,7 +53,6 @@ const CITY_FEEDS: Readonly<Record<string, readonly FeedSource[]>> = {
   ],
 };
 
-// The cities that have ferries at all, in the order the daily schedule job walks them.
 export const FERRY_CITIES: readonly string[] = Object.keys(CITY_FEEDS);
 
 export function feedsOf(cityId: string): readonly FeedSource[] {
@@ -96,27 +70,16 @@ const DATA_DIR = join(import.meta.dirname, "..", "data");
 const FERRY_DIR = join(DATA_DIR, "ferries");
 const FERRY_FORMAT = 2;
 const FERRY_MAGIC = "FERR";
-const NO_ROUTE_NAME = 0xffff; // a segment's routeNameId when no route name is known (defensive)
+const NO_ROUTE_NAME = 0xffff;
 const FERRY_HEADER_BYTES = 56;
 const FERRY_STOP_BYTES = 12;
 const FERRY_SEGMENT_BYTES = 20;
-const NO_GEOMETRY = 0xffffffff; // a segment's geometry offset when it is a straight A→B line
-const WAIT_CAP_SECONDS = 600; // half a headway is charged as wait, but never more than 10 minutes
-const KEY_SEPARATOR = "|"; // joins a stop pair into a segment key; a stop key has no NUL
-export const FERRY_ROUTE_TYPE = "4"; // GTFS route_type; the NYC Ferry feed also carries shuttle buses (3)
+const NO_GEOMETRY = 0xffffffff; // a straight line
+const WAIT_CAP_SECONDS = 600;
+const KEY_SEPARATOR = "|";
+export const FERRY_ROUTE_TYPE = "4"; // GTFS route_type; NYC Ferry also carries shuttle buses (3)
 
-// Stops dropped by GTFS stop_name, per city, before either artifact sees them — the FERR graph here
-// and the FSCH timetable in ferry-schedule.ts read the same list, so the two describe one network.
-// A name rather than a stop id because the same list has to hold for a feed that renumbers.
-//
-// New York: the Rockaway peninsula is not connected to the rest of the routable walking network (its
-// bridges' pedestrian status is unmodeled), so a ferry-only stub there routes nowhere. Revisit once
-// that connection exists — Phase 2's snapping should own this once it can see graph connectivity.
-//
-// San Francisco: four WETA terminals stand on land this city does not cover, so a boat to one of
-// them lands the router outside every source it has. Richmond is in Contra Costa County; South San
-// Francisco is in San Mateo County; Vallejo and Mare Island are both in Solano County. The city's
-// land is San Francisco plus the East Bay cities as far as San Leandro, and reaches none of them.
+// By name, to survive renumbering. Rockaway isn't walk-connected; the SF ones are off our land.
 const EXCLUDED_STOP_NAMES: Readonly<Record<string, ReadonlySet<string>>> = {
   nyc: new Set(["Rockaway"]),
   sf: new Set([
@@ -127,20 +90,13 @@ const EXCLUDED_STOP_NAMES: Readonly<Record<string, ReadonlySet<string>>> = {
   ]),
 };
 
-// Empty for a ferry city that excludes nothing, so only a city with a reason to drop a stop is
-// listed above.
 export function excludedStopNames(cityId: string): ReadonlySet<string> {
   return EXCLUDED_STOP_NAMES[cityId] ?? new Set<string>();
 }
 
-// A stop further than this from the city's land is warned about. Ferry terminals stand at the end of
-// piers and breakwaters, hundreds of meters out over water the land polygons do not include, so the
-// tolerance cannot be zero; 500 m clears every terminal in either city while still being far short
-// of the next town's waterfront.
+// Terminals sit on piers hundreds of meters out over water the land polygons omit.
 const LAND_TOLERANCE_METERS = 500;
-// `onLand` answers about a point, not a distance, so the neighborhood is sampled: rings of bearings
-// at a third, two thirds and the whole of the tolerance. At the widest ring the samples are 195 m
-// apart, finer than any shoreline that could hide a whole waterfront between two of them.
+// `onLand` tests a point, so the tolerance disc is sampled on rings of bearings.
 const LAND_PROBE_RINGS = 3;
 const LAND_PROBE_BEARINGS = 16;
 
@@ -167,24 +123,21 @@ function nearLand(stop: Coord, onLand: (coord: Coord) => boolean): boolean {
   }
 }
 
-// One consolidated stop, in geographic coordinates with its GTFS name — deliberately NOT snapped
-// to the routing graph (that is Phase 2). `key` is `${feed}:${stopId}`, unique across both feeds.
+// Unsnapped; `key` is `${feed}:${stopId}`.
 interface Stop extends Coord {
   key: string;
   name: string;
 }
 
-// One time-independent ferry segment: an unordered stop pair, the single combined crossing-plus-
-// wait time, and the drawing polyline (the shape sub-path between the two stops, else null for a
-// straight line). Oriented from `stopA` to `stopB`, the lexicographically smaller stop key first.
+// `stopA` is the lexicographically smaller key; null geometry is a straight line.
 interface Segment {
   stopA: string;
   stopB: string;
   rawTimeSeconds: number;
-  medianCrossingSeconds: number; // kept for the ingest log, not written to the artifact
-  headwaySeconds: number; // Infinity when the segment is served by single trips only
+  medianCrossingSeconds: number; // log only
+  headwaySeconds: number; // Infinity when served by single trips only
   geometry: Coord[] | null;
-  routeName: string | null; // the primary route's display name (most trips on this stop pair)
+  routeName: string | null; // the route with the most trips on this pair
 }
 
 export function toSeconds(clock: string): number | null {
@@ -216,11 +169,7 @@ const WEEKDAYS = [
   "sunday",
 ] as const;
 
-// The service_ids that run a regular week and whose date range covers the reference date. This
-// drops an expired or not-yet-started feed, and the all-zero-mask services (SI Ferry's `holiday`
-// and `threeboat`) that calendar_dates only substitutes in on specific dates — they are atypical,
-// so they do not shape the time-independent graph. calendar_dates is read only to confirm it adds
-// no otherwise-inactive regular service, which for both current feeds it does not.
+// Skips all-zero-mask services (SI Ferry's `holiday`, `threeboat`): they're atypical substitutions.
 function activeServices(feed: GtfsFeed, referenceDate: number): Set<string> {
   const active = new Set<string>();
   for (const row of feed.calendar) {
@@ -256,9 +205,7 @@ function groupBy<Row>(
   return groups;
 }
 
-// The index of the shape vertex nearest each stop, forced non-decreasing along the stop sequence so
-// a sub-path never runs backwards up the shape. shape_dist_traveled is empty in both feeds, so the
-// stops are projected by nearest vertex — coarse, but it is only for drawing the leg.
+// Nearest vertex, non-decreasing: shape_dist_traveled is empty in both feeds.
 function projectStops(stops: Coord[], shape: Coord[]): number[] {
   const indices: number[] = [];
   let floor = 0;
@@ -291,24 +238,14 @@ function dropRepeats(points: Coord[]): Coord[] {
   return unique;
 }
 
-// The one berthing maneuver trimmed by hand. A published shape carries the boat's move into its
-// berth as well as the crossing, and at Wall St/Pier 11 four of the seven shapes that call there
-// run 186 m north-west past the slip, reverse (178.9-179.9 degrees), and come back the last 70 m
-// into the pier. Drawn, that is a spike over South Street, and it is the only berthing maneuver in
-// the two feeds anyone has minded.
-//
-// Named rather than generalized on purpose: the sharpest genuine course change near a terminal
-// anywhere in either feed is 127.5 degrees at 100 m out (the East River line swinging into
-// Dumbo/Fulton Ferry), so a threshold that spared it would have little room, and a route doubling
-// back to serve two piers on one shore would look the same to it. The next pier that draws badly
-// gets its own line here, deliberately.
+// Shapes overshoot this slip and reverse into it; named, since a threshold would catch real turns.
 const SLIP_STOP_NAME = "Wall St/Pier 11";
-const SLIP_REVERSAL_DEGREES = 170; // the four shapes reverse by 178.9-179.9 here
-const SLIP_REACH_METERS = 100; // the whole maneuver lies within 71 m of the stop
+const SLIP_REVERSAL_DEGREES = 170; // the shapes reverse by 178.9-179.9 here
+const SLIP_REACH_METERS = 100; // the maneuver lies within 71 m of the stop
 
-// How far the course turns at `at`: 0 straight on, 180 straight back.
+// 0 straight on, 180 straight back.
 function turnDegrees(before: Coord, at: Coord, after: Coord): number {
-  const shrink = Math.cos((at.lat * Math.PI) / 180); // a degree of longitude is this much shorter here
+  const shrink = Math.cos((at.lat * Math.PI) / 180);
   const inX = (at.lng - before.lng) * shrink;
   const inY = at.lat - before.lat;
   const outX = (after.lng - at.lng) * shrink;
@@ -318,10 +255,7 @@ function turnDegrees(before: Coord, at: Coord, after: Coord): number {
   return Math.abs((Math.atan2(cross, dot) * 180) / Math.PI);
 }
 
-// Drops the maneuver's vertices off the `stopName` end, so the line runs from its last approach
-// vertex straight into the pier; a no-op at every other stop. The polyline still begins and ends at
-// its two stop coordinates, which the graph pass relies on — it substitutes the snapped walking
-// node for each end vertex, so an end that was not the stop would cost a real point.
+// Keeps the stop as the end vertex: the graph pass replaces it with the snapped walking node.
 function trimSlipAtEnd(points: Coord[], stopName: string): Coord[] {
   if (stopName !== SLIP_STOP_NAME) {
     return points;
@@ -355,18 +289,13 @@ function trimSlips(
   return trimSlipAtEnd([...tail].reverse(), startStop).reverse();
 }
 
-// The shared accumulators the two feeds fold into: the stops seen, the segment records, and the raw
-// crossing and departure samples each segment's time is later reduced from. departures nest a
-// `${fromStop} ${service}` variant per segment, so a headway gap is only ever taken within one
-// service and one direction — a weekday gap is never differenced against a weekend one.
 interface Accumulator {
   stops: Map<string, Stop>;
   segments: Map<string, Segment>;
   crossings: Map<string, number[]>;
+  // Keyed `${fromStop} ${service}`, so a headway gap never spans services or directions.
   departures: Map<string, Map<string, number[]>>;
-  // Per segment, the trip count each route (namespaced `${feed}:${routeId}`) contributes to it, so
-  // the primary route is the one serving the most trips. `routeNames` maps a route key to its
-  // display name (`route_long_name`, else `route_short_name`).
+  // Segment -> `${feed}:${routeId}` -> trip count.
   segmentRoutes: Map<string, Map<string, number>>;
   routeNames: Map<string, string>;
 }
@@ -377,12 +306,7 @@ interface FerryGraph {
   activeRoutes: number;
 }
 
-// One feed's contribution to the graph: its active trips cut into consecutive-stop segments, each
-// segment's crossing and departure samples accumulated, and one representative shape sub-path kept
-// per segment for drawing. Feeds are kept separate — a stop is `${feed}:${id}`, so the two
-// St. George berths are not fused here; that conflation is Phase 2's job. San Francisco's Ferry
-// Building is the same case inside a single feed: gates E, F and G are three stop_ids about 30 m
-// apart, and they stay three stops. Returns the active-route count so the ingest can log it.
+// Nearby stops (the two St. George berths, Ferry Building gates E-G) stay distinct here.
 function consolidate(
   feed: GtfsFeed,
   feedId: string,
@@ -405,8 +329,7 @@ function consolidate(
   const routeTypeOf = new Map(
     feed.routes.map((route) => [route.route_id, route.route_type]),
   );
-  // `route_long_name` reads as a real name in both feeds ("Staten Island Ferry", "East River");
-  // `route_short_name` is the bare code ("AS", "ER") or empty, so it is only a fallback.
+  // `route_short_name` is a bare code ("AS", "ER") or empty in both feeds.
   const routeDisplayOf = new Map(
     feed.routes.map((route) => [
       route.route_id,
@@ -436,7 +359,7 @@ function consolidate(
     }
     const route = routeOf.get(tripId);
     if (route === undefined || routeTypeOf.get(route) !== FERRY_ROUTE_TYPE) {
-      continue; // skip the feed's shuttle-bus routes; only ferries belong in the ferry graph
+      continue;
     }
     activeRoutes.add(route);
     const ordered = [...times].sort(
@@ -495,8 +418,6 @@ function consolidate(
         fromKey < toKey ? [fromKey, toKey] : [toKey, fromKey];
       const segmentKey = `${stopA}${KEY_SEPARATOR}${stopB}`;
 
-      // Tally this trip against the segment's route, so the segment can later pick the route that
-      // serves the most of its trips as its display name.
       const routeKey = `${feedId}:${route}`;
       routeNames.set(routeKey, routeDisplayOf.get(route) ?? "");
       let routeCounts = segmentRoutes.get(segmentKey);
@@ -526,8 +447,6 @@ function consolidate(
         variants.set(variantKey, [departure]);
       }
 
-      // The first trip to reach a segment with a usable shape sub-path fixes its drawing geometry;
-      // a straight leg (no shape) leaves it null until a later trip supplies one.
       const existing = segments.get(segmentKey);
       if (!existing?.geometry) {
         let geometry: Coord[] | null = null;
@@ -600,9 +519,6 @@ function buildGraph(
 
   for (const [segmentKey, segment] of accumulator.segments) {
     const medianCrossing = median(accumulator.crossings.get(segmentKey) ?? [0]);
-    // Pool every service's and direction's consecutive-departure gaps; their median is the
-    // segment's combined headway. A segment only ever served by single trips has no gap, so its
-    // wait falls back to the cap.
     const gaps: number[] = [];
     for (const times of accumulator.departures.get(segmentKey)?.values() ??
       []) {
@@ -617,8 +533,6 @@ function buildGraph(
     segment.rawTimeSeconds =
       medianCrossing + Math.min(headway / 2, WAIT_CAP_SECONDS);
 
-    // The primary route: the one serving the most of this segment's trips, ties broken by the
-    // smaller route key so the choice is deterministic across runs.
     const routeCounts = accumulator.segmentRoutes.get(segmentKey);
     let bestRouteKey: string | null = null;
     let bestCount = -1;
@@ -648,11 +562,7 @@ function buildGraph(
   };
 }
 
-// Writes the graph as FERR v2: a header, a stop table (quantized lng/lat + a name-table index), a
-// segment table (two stop indices, the raw time, a geometry pointer, and the primary route's name
-// id), a varint geometry blob, and a trailing name blob (stop names and route names together). All
-// little-endian, coordinates quantized to COORD_SCALE about the south-west origin, exactly as the
-// sibling sources. Layout: scripts/README.md.
+// Layout: scripts/README.md
 function encodeFerries(graph: FerryGraph): Uint8Array {
   const { stops, segments } = graph;
   const stopIndex = new Map(stops.map((stop, index) => [stop.key, index]));
@@ -676,8 +586,7 @@ function encodeFerries(graph: FerryGraph): Uint8Array {
     y: Math.round((lat - originLat) / COORD_SCALE),
   });
 
-  // The name blob holds the stop names and the route display names, deduped together and sorted, so
-  // a segment's routeNameId and a stop's name id both index one table.
+  // Stop and route names share one table.
   const routeNames = segments
     .map((segment) => segment.routeName)
     .filter((name): name is string => name !== null);
@@ -697,8 +606,6 @@ function encodeFerries(graph: FerryGraph): Uint8Array {
     stopView.setUint32(record + 8, nameIndex.get(stop.name) ?? 0, true);
   }
 
-  // The geometry blob: per segment that has a polyline, its vertices as zigzag-LEB128 varint
-  // deltas, the first pair absolute (from the origin) and the rest from the previous vertex.
   const geometryBytes: number[] = [];
   const geometryOffsets: number[] = [];
   const geometryCounts: number[] = [];
@@ -799,10 +706,7 @@ export interface FerrySource {
   sha256: string;
 }
 
-// Fetches the city's feeds (cached), freezes their raw zips under data/ferries/, consolidates them
-// into the time-independent graph and writes data/ferries/<id>.bin. Returns the file's stats.
-// Callable on its own (`bun run scripts/ferries.ts --city <id>`) and from the tree-data ingest's
-// fetch half.
+// Freezes the raw zips so a later pass can re-derive from the exact feeds this build read.
 export async function ingestFerries(cityId: string): Promise<FerrySource> {
   const started = performance.now();
   await mkdir(FERRY_DIR, { recursive: true });
@@ -817,14 +721,7 @@ export async function ingestFerries(cityId: string): Promise<FerrySource> {
 
   const graph = buildGraph(loaded, excludedStopNames(cityId));
 
-  // A kept terminal that stands off the city's land is one the graph pass will snap to whichever
-  // walking node happens to be nearest — which, across a strait, is the wrong shore, silently. This
-  // reports that rather than preventing it: an operator adding a service to a new town is news the
-  // exclusion list above should then be told about, not a reason to fail a build.
-  //
-  // And the land test is several services away — DataSF, Alameda GIS, CPAD and TIGERweb for `sf`,
-  // Socrata for `nyc` — while nothing but this warning reads it. One of them being unreachable costs
-  // the check and says so; it does not cost the artifact.
+  // An off-land terminal would snap to the wrong shore; warn only, since the land test is optional.
   let land: LandContext | null = null;
   try {
     land = await loadLandContext(cityId);
@@ -884,9 +781,7 @@ export async function ingestFerries(cityId: string): Promise<FerrySource> {
   };
 }
 
-// `--city` defaults to New York, the city that had ferries first. `--refresh` belongs to
-// scripts/cache.ts, which reads process.argv for itself; it is named here only so parseArgs does not
-// reject it.
+// `--refresh` is read by scripts/cache.ts; it's declared so parseArgs doesn't reject it.
 if (import.meta.main) {
   const { values } = parseArgs({
     options: { city: { type: "string" }, refresh: { type: "boolean" } },

@@ -1,5 +1,3 @@
-// Which OSM tags put a walking way underground, which is what the PATH and SWLK tunnel bit carries.
-
 import { expect, test } from "bun:test";
 import { tunneled } from "./overpass";
 
@@ -13,7 +11,7 @@ test("a way is in a tunnel when the tag says so, whatever value it says it with"
 
 test("only covered=yes is a roof all the way round", () => {
   expect(tunneled({ covered: "yes" })).toBe(true);
-  // An arcade or a colonnade is open along one side: sheltered from rain, not out of the sun.
+  // An arcade or colonnade is open along one side: sheltered from rain, not from sun.
   expect(tunneled({ covered: "arcade" })).toBe(false);
   expect(tunneled({ covered: "colonnade" })).toBe(false);
   expect(tunneled({ covered: "no" })).toBe(false);

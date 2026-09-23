@@ -1,22 +1,4 @@
-// `bun run update-search-index`: the SRCH artifact, one per city — every name a search box gets
-// typed at, in a form a device with no network can answer prefix queries against.
-//
-// Every input is already on disk. `data/places/<city>.jsonl` is the Overture read that
-// scripts/places.ts does, 309,968 named places in New York and 49,520 in San Francisco. The ADDR
-// file is read back as it shipped, and supplies the other kind of document: a STREET, one per (name,
-// place) pair, carrying its ordinal so a house number can be resolved afterwards out of that one
-// street's run. Addresses themselves are never tokenized — see src/search/search-format.ts for why
-// that is the decision the whole size of this file rests on.
-//
-// The rest are the names the app already ships and could not search: the routing graph's own street
-// names (the alleys, footbridges and park paths ADDR has no addresses on), the subway stations, and
-// the curated point sets — landmarks, public art, legacy businesses, outdoor dining. Each of those
-// had its own list and its own ranking, or no search at all; here they are documents like any other.
-//
-// Written to public/search/<city>.bin.gz and committed, like ADDR and the ferry timetable: nothing
-// in a build or a deploy writes it. Gzipped on disk because Pages serves .bin uncompressed.
-//
-// Layout: src/search/search-format.ts, and scripts/README.md.
+// Committed; no build writes it. Gzipped on disk because Pages serves .bin uncompressed.
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -67,52 +49,30 @@ const DATA_DIR = join(ROOT, "data");
 const PLACES_DIR = join(DATA_DIR, "places");
 const ADDRESS_DIR = join(ROOT, "public", "addresses");
 const GRAPH_DIR = join(ROOT, "public", "routing");
-// The curated point sets, read where the CLIENT reads them — public/<set>/<city>.bin, which the tile
-// build copies out of data/ and the deploy publishes — rather than from the data/ originals, which
-// are Git LFS. Those bytes are identical, so this is not about the contents: it is that the monthly
-// refresh job can fetch these off the deployed site as the graph beside them already is, and draw
-// nothing against the account's LFS bandwidth for files the site is serving anyway.
+// public/ copies, not the data/ LFS originals, so the refresh job can fetch them off the site.
 const POINT_DIR = join(ROOT, "public");
 const SEARCH_DIR = join(ROOT, "public", "search");
 
 const CITIES = ["nyc", "sf"] as const;
 
-// No value in the file needs more than five varint bytes.
 const MAX_VARINT_BYTES = 5;
 
-// The Hilbert grid the documents are ordered on: 2^16 cells across the city's own box, so a cell is
-// a few meters and the curve orders documents that share a doorway arbitrarily but adjacently.
+// Cells across the city's box, so a cell is a few meters.
 const HILBERT_SIZE = 1 << 16;
 
-// A slug carrying any of these as a WHOLE WORD. Overture writes a category as underscore-joined
-// words, and a substring test over them is how `gas_station` came to be ranked with Penn Station and
-// `marketing_agency` with the greengrocers: the words have to be matched as words.
+// Whole underscore-joined words: a substring test ranked `gas_station` with Penn Station.
 function slugWords(...words: readonly string[]): RegExp {
   return new RegExp(`(^|_)(${words.join("|")})(_|$)`);
 }
 
-// Exactly one of these slugs, for the tiers where a word is not specific enough to be safe: every
-// third slug in the corpus ends in `_station`, and one of them is a subway entrance.
+// Exact slugs, for tiers where a word is too broad: every third slug ends in `_station`.
 function slugs(...names: readonly string[]): RegExp {
   return new RegExp(`^(${names.join("|")})$`);
 }
 
-// How prominent a name is before anything about the query is known — what lets a subway station beat
-// a nail salon on an equal match, and the floor in the ranking is what still keeps the nail salon
-// findable by name. The first rule a category matches sets the byte; the tiers are
-// src/search/search-query.ts's §8 table, and they are judgment rather than measurement, which is
-// what makes them a byte in the file instead of a constant in the client.
-//
-// The tiers are spread further apart than they were, and the reason is the distance term they
-// multiply against: it swings four to one across a city, so a park a byte or two above a shop is a
-// park that whatever is nearest beats. A park now stands 1.8 to 1 over a place with no category,
-// which is more than distance can make of a kilometer and a half — enough that Prospect Park
-// outranks the storefront named after it, and short of a shop across town outranking the same shop
-// up the road, which is what distance is in the score for.
+// First match wins. Tiers are spread wide because the distance term they multiply swings 4:1.
 const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
-  // Where a journey ends. Named individually because `station` is also gas, radio, television,
-  // EV-charging and (through `stationery`) greeting cards — 1,711 of the 3,309 rows this tier used
-  // to hold.
+  // Named individually: `station` also matches gas, radio and EV-charging stations.
   {
     prominence: 240,
     slug: slugs(
@@ -127,8 +87,7 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
       "public_transportation",
     ),
   },
-  // Open space, which is the thing a walking map is for. Named individually because `^park` is also
-  // `parking` (1,675 rows) and `^garden` is also `gardener`.
+  // Named individually: `^park` also matches `parking`, `^garden` matches `gardener`.
   {
     prominence: 235,
     slug: slugs(
@@ -145,7 +104,6 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
       "pier",
     ),
   },
-  // Somewhere people set out to see.
   {
     prominence: 220,
     slug: slugWords(
@@ -172,8 +130,7 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
       "mountain_bike_trails",
     ),
   },
-  // Civic buildings, and only the real ones: `school` as a word is also the dance, driving, cooking
-  // and bartending schools, and `medical_center` is a walk-in clinic.
+  // Exact: `school` as a word includes driving schools, and `medical_center` is a walk-in clinic.
   {
     prominence: 170,
     slug: slugs(
@@ -199,13 +156,11 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
       "community_center",
     ),
   },
-  // A place of worship, which every denomination spells into its own slug.
   {
     prominence: 170,
     slug: slugWords("church", "cathedral", "synagogue", "mosque", "temple"),
   },
-  // The incorporated tier — an office that answers the phone, not a place anyone walks to. Ahead of
-  // the shops because a `wholesale_store` is one of these and reads as the other.
+  // Offices. Ahead of the shops because `wholesale_store` would otherwise match `store`.
   {
     prominence: 40,
     slug: slugWords(
@@ -234,7 +189,6 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
       "transfer",
     ),
   },
-  // Shops, restaurants and the rest of a high street.
   {
     prominence: 120,
     slug: slugWords(
@@ -269,54 +223,29 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
   },
 ];
 
-// The open space whose prominence a house number takes away, below. Not the museums and stadiums of
-// the tiers around it: those have a front door, and Overture gives them the right one.
+// Open-space tiers, which a house number demotes: it means a shop named after the park.
 const AREA_PROMINENCE: readonly number[] = [235, 195];
 
-// Everything the rules do not name: the named building, the gallery, the clinic — neither prominent
-// nor junk. `landmark_and_historical_building` lands here too, and is the reason this comment exists:
-// Overture files 3,688 New York rows under it, and a read of them is apartment blocks — "Thessalonia
-// Manor Apartments", "215 East Eighty One Street Condo" — not landmarks. It used to be the second
-// highest tier in the file.
+// Includes `landmark_and_historical_building` on purpose: in NYC it's mostly apartment blocks.
 const DEFAULT_PROMINENCE = 80;
 const STREET_PROMINENCE = 170;
 
-// The curated sets, which have no Overture category to be read off and so carry a tier of their own.
-// A station is what the transit tier above is for; a designated landmark sits just under the museums
-// because the register holds as many private houses as it does cathedrals; a business a city has
-// certified as fifty years old is a destination and a modest one; a sculpture is named, findable and
-// small. Dining points are restaurants and rank as the shops do.
 const STATION_PROMINENCE = 240;
-// A stop named after the corner it stands on rather than after a place: San Francisco files 182 of
-// its 217 Muni stops as "Judah St & 40th Ave", which is a curb with a sign on it and not where a
-// journey ends. New York names none of its stations this way. The same lesson as `gas_station` in
-// the tiers above — the name is what says which kind of thing this is.
+// Corner-named stops ("Judah St & 40th Ave", most Muni stops) are a curb, not a destination.
 const STOP_PROMINENCE = 150;
 const CORNER_NAME = /&/;
 const LANDMARK_PROMINENCE = 210;
 const LEGACY_PROMINENCE = 180;
 const ART_PROMINENCE = 150;
 const DINING_PROMINENCE = 120;
-// A part of the city rather than a thing in it. Ranked with the sculptures and the schools on
-// purpose: "Williamsburg" is what a reader types when nothing more precise will do, and it should
-// lead the shops named after it — which its coverage of the query does — without standing over the
-// park or the station a reader named exactly.
+// Below the park or station a reader named exactly.
 const NEIGHBORHOOD_PROMINENCE = 150;
 
-// How near two documents of one name have to be to be one place said twice. Overture holds the same
-// station, landmark and old shop the curated sets do, under the same name and a doorway or two away,
-// and the curated row is the one that keeps its tier. A block is about 80 m in New York, so this is
-// "the same place, wherever each source put its point" rather than "the same street".
+// Same name within this is one place across sources; an NYC block is about 80 m.
 const SAME_PLACE_METERS = 150;
-// How many of the dropped pairs are printed. Every one is counted; the log is a skim for whether the
-// rule is catching what it should, and thousands of lines is not a skim.
 const LOGGED_DUPLICATES = 25;
 
-// `hasNumber` is the only thing in the place file that speaks to how big a place is, and it speaks
-// by its absence: Overture takes an address from a business listing, so a park with a house number
-// on it is the shop that listed itself as one — which is exactly how a storefront called "prospect
-// park" on Meeker Avenue came to be ranked as though it were the 213 hectares in Brooklyn. It says
-// nothing about a museum or a station, so it is only read for the open-space tiers.
+// Overture takes addresses from business listings, so a park with a house number is a shop.
 export function prominenceOf(
   category: string | null,
   hasNumber: boolean,
@@ -334,9 +263,7 @@ export function prominenceOf(
   }
 }
 
-// One row of data/places/<city>-neighborhoods.jsonl. Spelled out here rather than imported from
-// scripts/places.ts for the same reason PlaceRow below is: that module opens DuckDB as it loads, and
-// this one only reads what it wrote.
+// Row types are redeclared, not imported: scripts/places.ts opens DuckDB on load.
 const NEIGHBORHOOD_SUFFIX = "-neighborhoods.jsonl";
 
 interface NeighborhoodRow {
@@ -345,28 +272,25 @@ interface NeighborhoodRow {
   lng: number;
 }
 
-// One row of data/places/<city>.jsonl.
 export interface PlaceRow {
   name: string;
   category: string | null;
   lat: number;
   lng: number;
-  street: string | null; // the ADDR file's spelling, or null where the place did not join
+  street: string | null; // the ADDR file's spelling
   houseNumber: HouseNumber | null;
 }
 
-// A document as the builder assembles it, before quantization and ordering. `tokens` is already
-// deduplicated, which is what makes one posting per (token, doc).
 export interface SearchDoc {
   name: string;
   kind: DocKind;
-  tokens: readonly string[]; // every spelling the document is findable under
+  tokens: readonly string[]; // deduplicated, so one posting per (token, doc)
   lat: number;
   lng: number;
-  prominence: number; // how much the name is worth before the query is known
+  prominence: number;
   category: string | null; // the Overture slug, or the routes a station serves
-  placeIndex: number; // into the ADDR place blob; -1 where the document has none
-  streetIndex: number; // into the ADDR street table; -1 where it names no street
+  placeIndex: number; // into the ADDR place blob, or -1
+  streetIndex: number; // into the ADDR street table, or -1
   number: HouseNumber | null;
 }
 
@@ -381,9 +305,7 @@ export interface EncodedSearch {
   postingBytes: number;
 }
 
-// The standard xy2d walk: at each level the quadrant contributes its share of the distance and the
-// remaining square is reflected so the curve stays continuous across it. Multiplied rather than
-// shifted, because a 16-level curve runs past 2^31.
+// Standard xy2d. Multiplied, not shifted, because a 16-level curve runs past 2^31.
 function hilbertIndex(cellX: number, cellY: number): number {
   let column = cellX;
   let row = cellY;
@@ -423,8 +345,6 @@ function quantize(docs: readonly SearchDoc[]): Quantized[] {
     west = Math.min(west, lng);
     east = Math.max(east, lng);
   }
-  // A city with no extent in one direction would divide by zero; a span of one grid cell is the same
-  // answer without the special case.
   const latSpan = Math.max(north - south, 1e-9);
   const lngSpan = Math.max(east - west, 1e-9);
   const cell = HILBERT_SIZE - 1;
@@ -440,9 +360,7 @@ function quantize(docs: readonly SearchDoc[]): Quantized[] {
   });
 }
 
-// Bytewise, which is the order the dictionary has to be written in: UTF-8 sorts as its code points
-// do, and JavaScript's own string comparison sorts as UTF-16 code UNITS, which puts the astral
-// planes before U+E000 and would leave a binary search unable to find them.
+// Bytewise: JS string comparison sorts by UTF-16 units, which misorders astral-plane characters.
 function compareTokens(left: Uint8Array, right: Uint8Array): number {
   const shared = Math.min(left.length, right.length);
   for (let index = 0; index < shared; index += 1) {
@@ -462,8 +380,6 @@ function sharedPrefix(left: Uint8Array, right: Uint8Array): number {
   return length;
 }
 
-// Groups the documents on the Hilbert curve, inverts them into posting lists and writes the whole
-// file. Pure, so a test builds a handful of documents by hand and reads them back.
 export function encodeSearch(docs: readonly SearchDoc[]): EncodedSearch {
   const ordered = quantize(docs).sort(
     (left, right) => left.order - right.order,
@@ -546,9 +462,7 @@ export function encodeSearch(docs: readonly SearchDoc[]): EncodedSearch {
       doc.number !== null,
     );
     offset += 1;
-    // The DISPLAY name's word count, which `tokens` is neither: it carries a street's other
-    // spellings, and it is deduplicated, so "Boutique Boutique" would go in as one word the query
-    // `boutique` covers whole rather than two it covers half of.
+    // The display name's word count; `tokens` is deduplicated and holds a street's other spellings.
     bytes[offset] = packTokenInfo(tokenize(doc.name).length, doc.placeIndex);
     offset += 1;
     bytes[offset] = doc.prominence;
@@ -578,8 +492,7 @@ export function encodeSearch(docs: readonly SearchDoc[]): EncodedSearch {
     }
   });
 
-  // The token entries and the postings are written into scratch buffers first, because the restart
-  // table sits in front of both and holds offsets into them.
+  // Scratch buffers first: the restart table precedes both and holds offsets into them.
   const entries = new Uint8Array(
     tokens.length * 4 * MAX_VARINT_BYTES + tailBytes,
   );
@@ -638,10 +551,8 @@ export function encodeSearch(docs: readonly SearchDoc[]): EncodedSearch {
   };
 }
 
-// A street of the ADDR file, ready to be a document: where its addresses average out to, and every
-// spelling of its name a reader might type.
 interface StreetDoc {
-  street: number; // the ordinal, which is the payload that reaches an address run later
+  street: number; // the ADDR ordinal
   name: string;
   tokens: string[];
   lat: number;
@@ -649,15 +560,10 @@ interface StreetDoc {
   placeIndex: number;
 }
 
-// Both spellings are indexed because the two cities write a numbered street four ways and only one
-// of them is stored: "5 AV" is what the file has, "5th Avenue" is what the client shows, and neither
-// contains "fifth". The lesson is the one rankStreetName already paid for.
+// "5 AV" is stored, "5th Avenue" shown, and neither contains "fifth", so all spellings are indexed.
 export function streetTokens(source: string, pretty: string): string[] {
   const tokens = new Set([...tokenize(source), ...tokenize(pretty)]);
   for (const token of [...tokens]) {
-    // The suffixed spelling too, and not only the bare digits: a street the routing graph names has
-    // no other, and the query side rebuilds these words from the DISPLAY name to tell which of them
-    // a query spelled out — so a name that shows an ordinal has to be findable under one.
     const value = ordinalValue(token);
     if (value !== null) {
       for (const word of ordinalWords(value)) {
@@ -668,9 +574,7 @@ export function streetTokens(source: string, pretty: string): string[] {
   return [...tokens];
 }
 
-// One document per (name, place) pair, positioned at the mean of its own addresses — the only
-// coordinate the file has for a street, and near enough for a distance term whose scale is
-// kilometers. A street with no addresses at all cannot be placed and is skipped.
+// Placed at the mean of its addresses, the only coordinate ADDR has for a street.
 function streetDocs(addresses: AddressIndex): StreetDoc[] {
   const docs: StreetDoc[] = [];
   const streetCount = addresses.starts.length - 1;
@@ -694,10 +598,7 @@ function streetDocs(addresses: AddressIndex): StreetDoc[] {
   return docs;
 }
 
-// A street the ROUTING GRAPH names and the address file does not: the alleys, the footbridges, the
-// paths through a park. 2,551 of them in New York and 701 in San Francisco — no house numbers, so no
-// ADDR ordinal and no address to resolve, but they are names the box answered before this index
-// existed and it would be a poor unification that lost them.
+// A street the routing graph names and ADDR doesn't: alleys, footbridges, park paths.
 export interface GraphStreet {
   name: string;
   tokens: string[];
@@ -705,26 +606,23 @@ export interface GraphStreet {
   lng: number;
 }
 
-// Which source keeps a name two of them hold. The curated sets lead because they carry the better
-// tier and the city's own spelling of it; dining trails Overture because a dining point is the same
-// restaurant with no category, no address and no borough.
+// Lower wins a shared name. Dining trails Overture, which has the same restaurants with more data.
 const CURATED_PRIORITY = 0;
 const OVERTURE_PRIORITY = 1;
 const DINING_PRIORITY = 2;
 
-// A named point from one of the sets the app already ships.
 export interface NamedPoint {
   name: string;
   lat: number;
   lng: number;
-  detail?: string; // rides in the category slot — a station's routes, indexed into the shared table
+  detail?: string; // rides in the category slot, e.g. a station's routes
 }
 
 export interface PointSet {
   kind: DocKind;
-  source: string; // which file, for the log — two sets are places, so the kind cannot say which lost
-  prominence: number; // the tier every point in the set is worth
-  priority: number; // which set survives when two of them name one place
+  source: string; // for the log
+  prominence: number;
+  priority: number;
   points: readonly NamedPoint[];
 }
 
@@ -732,10 +630,7 @@ function numberKey({ major, minor, suffix }: HouseNumber): string {
   return `${major}/${minor}/${suffix}`;
 }
 
-// Which of the streets of one name a joined place is on. scripts/places.ts merges New York's five
-// Court Streets to look a house number up, so what it writes down is a NAME and a number, and the
-// borough the place is labeled with is only recoverable by asking which of them has that house
-// nearest to the place. One name is the common case and answers without decoding anything.
+// places.ts joins by name only (NYC has five Court Streets); the nearest matching house decides.
 class StreetLookup {
   private readonly byName = new Map<string, number[]>();
   private readonly houses = new Map<
@@ -819,31 +714,24 @@ class StreetLookup {
 
 export interface Summary {
   places: number;
-  streets: number; // ADDR streets, which are the ones a house number can be resolved on
-  graphStreets: number; // names the routing graph carries and ADDR does not
-  points: number; // documents from the curated sets — stations, landmarks, art, legacy, dining
-  duplicates: number; // documents dropped as one place two sources both named
-  joined: number; // places that carry a street ordinal, so a result can be labeled with its address
+  streets: number;
+  graphStreets: number;
+  points: number;
+  duplicates: number;
+  joined: number;
   unplaced: number; // joined places whose street could not be told from its namesakes
-  bounded: number; // places whose borough came from the boundaries rather than from an address
-  homeless: number; // places no address and no boundary could place, so they read with no borough
-  untokenized: number; // names that are nothing but punctuation, so nothing can find them
-  longNames: number; // more words than the four bits of token count can hold
+  bounded: number; // borough from the boundaries rather than an address
+  homeless: number;
+  untokenized: number;
+  longNames: number; // more words than the four-bit token count can hold
 }
 
-// One of the city's own named parts — a New York borough — as the ADDR place it labels a result
-// with, and the test for whether a point is inside it.
 export interface PlaceArea {
   placeIndex: number;
   contains: (at: { lat: number; lng: number }) => boolean;
 }
 
-// The boroughs, as the places the address file names, for the 53,507 New York places that never
-// joined an address: parks, campuses, beaches — everything with a name and no front door. Nothing in
-// the Overture row says which borough one is in, so it comes from the city's own boundaries, which
-// is the same dataset (Socrata `gthc-hcne`) the land mask every ingest clips to is built from. A
-// city whose address file names no places (San Francisco is one place) gets none, and nothing
-// spatial runs for it.
+// Borough boundaries, for places with no address; Overture rows don't say which borough.
 export async function placeAreas(
   cityId: string,
   addresses: AddressIndex,
@@ -878,12 +766,7 @@ async function readAddresses(cityId: string): Promise<AddressIndex> {
   return decodeAddresses(gunzipSync(gzipped));
 }
 
-// Whether a set that is not on disk is a city that does not have one or a checkout that has not
-// built it. The city's own overlay list (src/cities.ts) settles it, because that list is authored
-// and is what the app offers: San Francisco publishes no outdoor-dining table and offers no
-// commercial layer, so its missing DINE file is the city. New York offering the layer and having no
-// file is a build that did not run, and that has to be loud — a set read as absent is two thousand
-// documents quietly missing from an index that still writes and still commits.
+// A missing file is fatal if the city offers the overlay: it means the build didn't run.
 async function pointFile(
   set: string,
   overlay: OverlayId,
@@ -906,7 +789,6 @@ async function pointFile(
   }
 }
 
-// One of the shared point blobs (LMRK, ARTW, LGCY, DINE), or null where this city has none.
 async function readPoints(
   directory: string,
   overlay: OverlayId,
@@ -920,8 +802,6 @@ async function readPoints(
   const { lats, lngs, names } = decodePois(file, magic);
   const points: NamedPoint[] = [];
   for (let point = 0; point < names.length; point += 1) {
-    // An unnamed artwork — 410 of New York's 1,498 — is a point on a map and nothing a search can
-    // reach, so it is not a document.
     if (names[point] !== "") {
       points.push({ name: names[point], lat: lats[point], lng: lngs[point] });
     }
@@ -929,9 +809,6 @@ async function readPoints(
   return points;
 }
 
-// The city's own named parts, out of the file scripts/places.ts writes beside the places: New York's
-// 368 and San Francisco's 95, from the divisions theme of the same Overture release the places come
-// from. A city whose places have not been read yet has none.
 async function neighborhoodPoints(
   cityId: string,
 ): Promise<NamedPoint[] | null> {
@@ -946,21 +823,7 @@ async function neighborhoodPoints(
     .map((line) => JSON.parse(line) as NeighborhoodRow);
 }
 
-// The subway stations, merged into one document per complex the way the overlay and the old station
-// search both merged them: a rider searching Times Sq means all ten routes, not the ten records the
-// feed files. The routes ride in the category slot, which is what lets a result still read
-// "14 St-Union Sq (4/5/6/L…)".
-//
-// Cut to the city's LAND, and the only point set here that has to be cut at all: the rail artifact
-// is deliberately the whole of each agency's network rather than the part standing on the region's
-// ground (scripts/subway-sf.ts), so the Bay Area's holds BART's Antioch, Berryessa and Milpitas.
-// Drawing them is the point; OFFERING them is not, because a search result is a destination and the
-// graph can only route to ground it was built over. Every other set here was clipped at its own
-// ingest, against these same polygons.
-//
-// The land and not the city's bounding rectangle, which is the wider thing and would still offer
-// five stations the graph does not reach: Daly City and Colma in San Mateo County, Orinda, Lafayette
-// and El Cerrito Plaza in Contra Costa.
+// Clipped to land: the rail artifact holds whole networks, and the graph can't route off its land.
 async function stationPoints(cityId: string): Promise<NamedPoint[] | null> {
   const file = await pointFile("subway", "subway", cityId);
   if (file === null) {
@@ -976,15 +839,11 @@ async function stationPoints(cityId: string): Promise<NamedPoint[] | null> {
         name: station.name,
         lat: station.lat,
         lng: station.lng,
-        // Absent rather than empty for a station whose feed named no route, so the category slot is
-        // "this document has none" instead of a blank string in the shared table.
         detail: serving === "" ? undefined : serving,
       };
     });
 }
 
-// Every set of named points the city ships, in the order that settles which of them keeps a name two
-// of them hold.
 async function citySets(cityId: string): Promise<PointSet[]> {
   const sets: PointSet[] = [];
   const add = (
@@ -1041,8 +900,6 @@ async function citySets(cityId: string): Promise<PointSet[]> {
     CURATED_PRIORITY,
     await neighborhoodPoints(cityId),
   );
-  // Outdoor dining is a restaurant like any other, so it is filed as a place — and behind Overture,
-  // which holds most of the same restaurants with a category and a front door.
   add(
     "place",
     "dining",
@@ -1053,10 +910,7 @@ async function citySets(cityId: string): Promise<PointSet[]> {
   return sets;
 }
 
-// The street names the routing graph carries, minus the ones ADDR already has: what is left is the
-// alleys, the footbridges and the park paths that have no addresses on them. The first edge carrying
-// a name decides where the name points, which is what the street search did, and walking the edges
-// in order makes that deterministic.
+// The first edge carrying a name decides where it points.
 async function graphStreets(
   cityId: string,
   addresses: AddressIndex,
@@ -1081,9 +935,7 @@ async function graphStreets(
   const seen = new Set<number>();
   const streets: GraphStreet[] = [];
   for (let edge = 0; edge < graph.edgeCount; edge += 1) {
-    // Only the pavement has a street name. A ferry edge is named after its route and a rail edge
-    // after its line or its station, so indexing every named edge put "A" and "Times Sq-42 St" in
-    // the street list, each pointing at a platform node nobody walks to.
+    // Ferry and rail edges are named after routes and stations, not streets.
     if (edgeKind(graph, edge) !== "sidewalk" && !graph.edgeGeomCount[edge]) {
       continue;
     }
@@ -1094,7 +946,7 @@ async function graphStreets(
     }
     seen.add(nameId);
     if (known.has(name.toUpperCase())) {
-      continue; // ADDR has this street, with addresses on it and a borough to label it with
+      continue;
     }
     const node = graph.edgeNodeA[edge];
     const pretty = prettifyStreetName(name);
@@ -1119,7 +971,6 @@ function metersApart(
   return Math.sqrt(north * north + east * east) * METERS_PER_DEGREE;
 }
 
-// A document and the source that produced it, before the sources are folded into one list.
 interface Candidate {
   doc: SearchDoc;
   source: string;
@@ -1130,18 +981,13 @@ function tokenKey(tokens: readonly string[]): string {
   return [...tokens].sort().join(" ");
 }
 
-// Everything the dropped document knew that the surviving one does not.
+// Fills only empty fields: a station's routes in the category slot must not become a slug.
 function inherit(kept: SearchDoc, dropped: SearchDoc): void {
-  // Two sources' opinions of how prominent one place is, and each tier is what its own source can
-  // vouch for rather than the whole truth: the bank named Bay Ridge stands in the neighborhood of
-  // that name, and the plaza called Nolan Park is a park. The higher of the two is what the one
-  // remaining document is worth.
   kept.prominence = Math.max(kept.prominence, dropped.prominence);
   if (kept.placeIndex < 0) {
     kept.placeIndex = dropped.placeIndex;
   }
-  // A district is not a bank and has no front door, whatever the shop that shares its name and its
-  // corner has: a neighborhood takes the borough it stands in and none of the rest.
+  // A neighborhood has no front door, whatever a namesake shop on its corner has.
   if (kept.kind !== "neighborhood") {
     if (kept.streetIndex < 0 && dropped.streetIndex >= 0) {
       kept.streetIndex = dropped.streetIndex;
@@ -1153,12 +999,7 @@ function inherit(kept: SearchDoc, dropped: SearchDoc): void {
   }
 }
 
-// One place is one document however many sources name it: an Overture row and a curated point that
-// share every word of their names and stand within SAME_PLACE_METERS are the same station, landmark
-// or fifty-year-old shop, and the one that stays is the one whose source knows more about it.
-//
-// Only ACROSS sources. Two Overture rows of one name a block apart are two branches of a chain at
-// least as often as they are one shop written down twice, and nothing here can tell those apart.
+// Only across sources: same-source namesakes nearby are as often chain branches as duplicates.
 function dedupe(candidates: readonly Candidate[]): {
   docs: SearchDoc[];
   dropped: string[];
@@ -1167,7 +1008,7 @@ function dedupe(candidates: readonly Candidate[]): {
   for (const candidate of candidates) {
     const key = tokenKey(candidate.doc.tokens);
     if (key === "") {
-      continue; // a name with no searchable word is nobody's duplicate
+      continue;
     }
     const group = byName.get(key);
     if (group === undefined) {
@@ -1199,10 +1040,6 @@ function dedupe(candidates: readonly Candidate[]): {
       if (winner === undefined) {
         kept.push(candidate);
       } else {
-        // What the loser knew and the winner does not: an Overture row carries a doorway, a borough
-        // and a category, and a curated point carries none of the three, so the survivor takes them.
-        // Only the empty fields — a station's routes ride in the category slot and are not an
-        // Overture slug to be overwritten by one.
         inherit(winner.doc, candidate.doc);
         duplicates.add(candidate.doc);
         dropped.push(
@@ -1220,16 +1057,12 @@ function dedupe(candidates: readonly Candidate[]): {
   };
 }
 
-// Everything the city has to say beyond its Overture places and its address file.
 export interface DocSources {
   areas?: readonly PlaceArea[];
   sets?: readonly PointSet[];
   streets?: readonly GraphStreet[];
 }
 
-// The documents of one city: every place, every street, and every named point the city ships. Pure,
-// so a test stands up a handful of addresses and a couple of Overture rows and checks which street a
-// place was filed under.
 export function buildDocs(
   rows: readonly PlaceRow[],
   addresses: AddressIndex,
@@ -1250,7 +1083,6 @@ export function buildDocs(
     untokenized: 0,
     longNames: 0,
   };
-  // Which borough a point with no address is in, which is all the boundaries are asked for.
   const boroughOf = (at: { lat: number; lng: number }): number =>
     areas.find(({ contains }) => contains(at))?.placeIndex ?? -1;
 
@@ -1264,9 +1096,7 @@ export function buildDocs(
     }
     summary.places += 1;
     const tokens = [...new Set(tokenize(row.name))];
-    // A name with no word in it is in no posting list, so nothing can search for it — and San
-    // Francisco files two, a bare "?" and Apple's private-use glyph, which reverse geocoding was
-    // then free to answer a dropped pin with. A document nothing can find is not a document.
+    // Unfindable, and reverse geocoding would otherwise answer a dropped pin with "?".
     if (tokens.length === 0) {
       summary.untokenized += 1;
       continue;
@@ -1277,8 +1107,6 @@ export function buildDocs(
     if (street !== null) {
       summary.joined += 1;
     }
-    // The borough is the street's where the place joined one, since that is the address's own
-    // answer, and the city's own boundaries where it did not.
     let placeIndex = -1;
     if (addresses.places.length > 0) {
       if (street !== null) {

@@ -1,23 +1,12 @@
-// The crown a tree shades the ground with, from its trunk diameter.
-//
-// Published relations, not invented: McPherson, van Doorn & Peper 2016, "Urban Tree Database and
-// Allometric Equations" (USDA Forest Service GTR-PSW-253, archive RDS-2016-0005). That work fitted
-// each of ~20 abundant species in each of sixteen CLIMATE REGIONS separately, and the region matters
-// as much as the species — so a city takes the curve fitted nearest to it, and the equation FORM
-// changes between regions too, which is why this is a tagged union rather than three coefficients.
-//
-// Each city's register carries no species (or too many to model), so its single most abundant street
-// species stands in for all of them. That is a real approximation and it only sizes the dots the
-// genus overlay draws; the cover field comes from measured canopy polygons and never from these.
+// Crown from trunk diameter, per McPherson, van Doorn & Peper 2016 (USDA GTR-PSW-253), whose fits
+// differ by climate region in both coefficients and equation form; only sizes the genus dots.
 
-// dbh is recorded in whole inches by both cities' registers, and every published equation takes
-// centimeters.
+// Registers record dbh in whole inches; the published equations take centimeters.
 export const CM_PER_INCH = 2.54;
 
 export type CrownAllometry =
   | {
-      // GTR-PSW-253's `loglogw1`: exp(a + b*ln(ln(dbh_cm + 1)) + mse/2). The trailing term is the
-      // Baskerville correction for the bias a log-space fit carries back into meters.
+      // GTR-PSW-253's `loglogw1`: exp(a + b*ln(ln(dbh_cm + 1)) + mse/2); mse/2 is Baskerville's.
       readonly form: "loglog";
       readonly a: number;
       readonly b: number;
@@ -25,8 +14,7 @@ export type CrownAllometry =
       readonly source: string;
     }
   | {
-      // GTR-PSW-253's `quad`: a + b*dbh_cm + c*dbh_cm^2. Not monotonic — the fitted curve turns over
-      // past the trunk sizes it was fitted on — so a caller must clamp dbh before asking.
+      // GTR-PSW-253's `quad`: a + b*dbh_cm + c*dbh_cm^2; turns over past the fitted trunk sizes.
       readonly form: "quad";
       readonly a: number;
       readonly b: number;
@@ -46,11 +34,7 @@ export function crownDiameterMeters(
         allometry.logBiasCorrection,
     );
   } else {
-    // Held at the vertex past it, because a downward quadratic starts SHRINKING the crown as the
-    // trunk grows. San Francisco's turns over at 101.5 cm — 40 inches — which is well inside the
-    // range of real street trees, so without this a 60 in London planetree was given the same 14.6 m
-    // of crown as a 20 in one. The fit says nothing about trunks past its own turning point; the
-    // honest reading of it is that the crown stops growing there, not that it reverses.
+    // Held at the vertex, since past it the crown shrinks; SF's is at a real 101.5 cm.
     const vertex = -allometry.b / (2 * allometry.c);
     const held = allometry.c < 0 ? Math.min(cm, vertex) : cm;
     return Math.max(
@@ -60,8 +44,7 @@ export function crownDiameterMeters(
   }
 }
 
-// New York: the NoEast region, whose reference city is Queens, so this is literally the city's own
-// street trees. London planetree, its most abundant street species, R² 0.94 over 53 trees.
+// NoEast region, fitted on Queens street trees; London planetree, R² 0.94 over 53 trees.
 export const NOEAST_LONDON_PLANE: CrownAllometry = {
   form: "loglog",
   a: -0.75195,
@@ -71,10 +54,7 @@ export const NOEAST_LONDON_PLANE: CrownAllometry = {
     "McPherson, van Doorn & Peper 2016 (USDA GTR-PSW-253), NoEast London planetree",
 };
 
-// San Francisco: the NoCalC region, fitted on Berkeley's street trees — across the bay, and the same
-// species. London planetree again, its most abundant, R² 0.95 over 69 trees. Checked against those
-// 69 measurements, this curve's median error is 1.26 m where New York's is 1.50 m, and the two
-// diverge most on big trunks: at 52 cm dbh it gives 14.9 m of crown against New York's 13.3 m.
+// NoCalC region, fitted on Berkeley street trees; London planetree, R² 0.95 over 69 trees.
 export const NOCALC_LONDON_PLANE: CrownAllometry = {
   form: "quad",
   a: 0.69918,

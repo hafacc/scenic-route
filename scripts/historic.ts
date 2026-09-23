@@ -1,29 +1,5 @@
-// `bun run scripts/historic.ts [city]`: fetches a city's designated historic districts and writes
-// them as data/historic/<id>.bin (magic HDST) — the district BOUNDARIES as polygons, drawn by the
-// historic-districts overlay and sampled per edge into the graph's historic-district discount.
-// Layout: scripts/README.md.
-//
-// These are whole neighborhoods a city has designated (Park Slope, Brooklyn Heights, Greenwich
-// Village; Jackson Square, Telegraph Hill, Alamo Square), not the individual landmarked buildings
-// scripts/landmarks.ts reads — a different source, a different artifact, areas rather than points.
-//
-// No two of these places share a source, and each publishes one that has to be picked past a decoy:
-//
-//   - **New York.** The geometry comes from the LPC's own ArcGIS FeatureServer, not from the Socrata
-//     dataset the city catalogs as "Historic Districts (Map)" (`xbvj-gfnw`): that one is a map
-//     visualization whose rows read back empty, and the table under it is in state-plane feet and
-//     missing 18 designated districts — a third of Park Slope's landmarked area among them.
-//
-//   - **San Francisco.** One Planning table holds every district ANY register recognizes, of which
-//     the city's own designations are the Article 10 / Article 11 subset `fetchSfDistricts` cuts.
-//     Its "Map of Historic Districts" (`y75h-nbt2`) is the same decoy `xbvj-gfnw` is, and the
-//     dedicated "Landmark Districts" table (`knm6-5ej6`) is three years stale and has no Article 11.
-//
-//   - **The East Bay**, the other half of the same region, is Oakland's alone — Berkeley publishes
-//     its districts as a PDF list of addresses and nothing else. Its two layers, and the third one
-//     deliberately left out, are in `scripts/alameda.ts`.
-//
-// scripts/README.md has all three comparisons.
+// NYC uses LPC's ArcGIS layer: Socrata's `xbvj-gfnw` reads back empty and misses 18 districts.
+// SF's `y75h-nbt2` is the same decoy, and `knm6-5ej6` is stale and lacks Article 11.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -42,30 +18,20 @@ const HISTORIC_DIR = join(DATA_DIR, "historic");
 const HISTORIC_MAGIC = "HDST";
 const HISTORIC_FORMAT = 1;
 
-// The LPC's Historic_Districts layer: every district it has designated, `maxRecordCount` 2000, native
-// CRS EPSG:3857, so every query asks for `outSR=4326`. The layer is designated-only — `STATUS_OF_`,
-// `LAST_ACTIO` and `CURRENT_` read DESIGNATED/DESIGNATED/Yes on all of it — so the read needs no
-// `where` beyond `1=1`. Districts merely calendared or under study are a separate service.
+// Designated-only, so `where` is `1=1`; native CRS is EPSG:3857, so queries ask for `outSR=4326`.
 const SERVICE =
   "https://services5.arcgis.com/Oos4pNA2538iVFA1/arcgis/rest/services/Historic_Districts/FeatureServer/0/query";
 const PAGE_SIZE = 500;
 const MAX_ATTEMPTS = 6;
 const RETRY_BASE_MS = 5_000; // longer than the shared ladder's: this service rate-limits
-// 159 districts at the last probe (2026-08-20). A floor, not an exact count: it catches a server-side
-// page cut that would pass for the end of the layer, but tolerates the LPC designating a few more.
+// A floor (159 at the last probe) that catches a server-side page cut passing for the end.
 const EXPECTED_DISTRICTS = 150;
 
-// SF Planning's "Historic Districts" table: 204 areas, every one any register or survey has
-// recognized, as WGS84 MultiPolygons — populated on all of them.
+// Holds every register's districts; only Article 10/11 are local designations.
 const SF_DATASET = "63x5-g3m4";
-// The two Planning Code articles, which is what "designated" means here: Article 10 landmark
-// districts and Article 11 downtown conservation districts. Without this the read would take in the
-// 180 National- and California-Register districts sharing the table, which carry no local
-// designation and no controls. The flag's value is the string "Listed" — `a10='Yes'` matches nothing
-// and would write a silently empty artifact.
+// The flag's value is the string "Listed"; `a10='Yes'` matches nothing.
 const SF_WHERE = "a10='Listed' OR a11='Listed'";
-// 16 Article 10 plus 7 Article 11 at the last probe (2026-08-22). A floor like New York's: the
-// shared reader tolerates 5% either way, so a new designation notes rather than fails.
+// 16 Article 10 plus 7 Article 11; the reader tolerates 5% either way.
 const SF_DISTRICTS = 23;
 
 type GeoJsonGeometry =
@@ -80,8 +46,7 @@ interface DistrictPage {
   features?: DistrictFeature[];
 }
 
-// One page's request URL, ordered by OBJECTID so `resultOffset` paging is stable: without an order
-// an ArcGIS layer may repeat or skip rows between pages.
+// Unordered, an ArcGIS layer may repeat or skip rows between `resultOffset` pages.
 function pageUrl(offset: number): string {
   const url = new URL(SERVICE);
   url.searchParams.set("where", "1=1");
@@ -119,8 +84,6 @@ async function fetchPage(url: string): Promise<DistrictPage> {
   }
 }
 
-// A feature's parts as lon/lat rings, a MultiPolygon's disjoint parts one polygon each. A ring of
-// fewer than four vertices is degenerate and dropped, and a part left with none is dropped with it.
 function partsOf(geometry: GeoJsonGeometry): Polygon[] {
   const parts =
     geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
@@ -133,21 +96,18 @@ function partsOf(geometry: GeoJsonGeometry): Polygon[] {
     .filter((part) => part.length > 0);
 }
 
-// A district is kept if any vertex of it is on land, as the industrial lots are: a boundary drawn
-// around a waterfront block runs out over the water, and the harbor districts (Governors Island,
-// Ellis Island, South Street Seaport; Northeast Waterfront) meet the coastline the land polygons
-// draw only at the shore. At the 2026-08-22 read no district in either city missed entirely.
+// Any vertex, not the centroid: harbor districts meet the drawn coastline only at the shore.
 function touchesLand(part: Polygon, onLand: LandContext["onLand"]): boolean {
   return part.some((ring) => ring.some(onLand));
 }
 
 interface Districts {
   polygons: Polygon[];
-  districts: number; // features kept, as against the polygon parts they expand to
-  offLand: number; // features every part of which missed the coastline
+  districts: number; // features, not polygon parts
+  offLand: number; // features with no part on land
 }
 
-// Appends a feature's on-land parts to `polygons`; false when every part missed the coastline.
+// Appends a feature's on-land parts to `polygons`; false when none is on land.
 function keepDistrict(
   geometry: GeoJsonGeometry,
   onLand: LandContext["onLand"],
@@ -158,8 +118,6 @@ function keepDistrict(
   return parts.length > 0;
 }
 
-// Pages the whole layer, each page cached by its request URL through scripts/cache.ts, so a re-run —
-// or a resume after a transient failure — serves the completed pages from disk.
 async function fetchNycDistricts(land: LandContext): Promise<Districts> {
   const polygons: Polygon[] = [];
   let fetched = 0;
@@ -201,8 +159,7 @@ interface SfDistrictRow {
   the_geom?: GeoJsonGeometry | null;
 }
 
-// `*` so a newly-read column is free after one refetch (the disk cache keys on the query);
-// SfDistrictRow reads only the geometry, since nothing downstream of the artifact names a district.
+// `*` keeps the query, and so the disk cache key, stable when a new column is read.
 async function fetchSfDistricts(land: LandContext): Promise<Districts> {
   const rows = await DATA_SF.dataset<SfDistrictRow>(
     SF_DATASET,
@@ -232,8 +189,6 @@ async function fetchCityDistricts(
   if (cityId === "nyc") {
     return await fetchNycDistricts(land);
   } else if (cityId === "sf") {
-    // Two halves, two registers: San Francisco's Planning table and Oakland's own survey and zoning
-    // map. Nothing downstream reads which half a district came from.
     const [city, eastBay] = await Promise.all([
       fetchSfDistricts(land),
       fetchEastBayHistoric(land),
@@ -244,24 +199,12 @@ async function fetchCityDistricts(
       offLand: city.offLand + eastBay.offLand,
     };
   } else {
-    // A city with no source throws rather than defaulting to another's, which would clip one city's
-    // districts against a foreign shoreline and write a silently empty artifact.
+    // Another city's districts clipped to this shoreline would write an empty artifact.
     throw new Error(`no historic-district source for ${cityId}`);
   }
 }
 
-// The districts as one shape per piece of ground rather than one per register entry. The overlay
-// fills each polygon separately at 45% alpha, so two polygons over the same block composite to about
-// 70% and the block reads as a darker, differently-colored district — which is what Oakland's do:
-// its two registers, the city's own survey of areas and the preservation zoning that overlays them,
-// describe the same blocks, and five of the eight zones sit almost exactly on a survey area. New
-// York nests districts inside their own expansions (Carnegie Hill inside Expanded Carnegie Hill) for
-// the same effect at a third of the area.
-//
-// Only appearance changes. The graph's discount is a length fraction over an OR of the polygons
-// (`contains_point` in crates/tiler/src/geometry.rs), which is this union already, so every edge
-// keeps the byte it had. Holes are what a union produces and both readers take them: the overlay
-// fills even-odd across a polygon's rings and the sampler counts them the same way.
+// Overlaps would composite darker under the overlay's alpha; the graph ORs them anyway.
 async function dissolve(polygons: readonly Polygon[]): Promise<Polygon[]> {
   const { union } = await import("polygon-clipping");
   const rings = polygons.map((polygon) =>

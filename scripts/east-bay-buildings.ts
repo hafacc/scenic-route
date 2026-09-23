@@ -1,19 +1,5 @@
-// The East Bay's buildings: Overture's footprints carrying heights measured off the 2021 county
-// LiDAR rather than the ones Overture publishes.
-//
-// None of these cities publishes a height. Overture has one for two thirds of the footprints, and
-// where it came from a machine-learning model rather than an OSM tag it caps out at 32.5 m — every
-// mid-rise flattened, Berkeley's Evans Hall given 25.5 m against a real 40. So the heights are
-// measured: scripts/lidar.ts fetches the point cloud, `tiler ndsm` bins it into a surface model and
-// takes the 75th percentile of the cells under each footprint, and this joins that reading back to
-// the footprint it was taken under and merges it with what Overture published.
-//
-// The footprints themselves are still Overture's — ODbL, the same license as the OSM footways
-// already shipped — read out of its GeoParquet the way scripts/places.ts reads the places theme:
-// every row carries its own bounding box, so naming the city's box reads only the byte ranges that
-// hold it. They are clipped to the same seven municipalities scripts/alameda.ts builds the rest of
-// this half of the city from, by Overture's own outlines for them rather than by the land mask,
-// because the mask is the ingest's and this runs before it.
+// Heights are measured off the 2021 LiDAR: Overture's machine-learned heights cap out at 32.5 m.
+// Footprints are Overture's (ODbL), clipped by its own outlines since the land mask comes later.
 
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -23,9 +9,7 @@ import type { HeightedBuilding } from "./geometry";
 import { EAST_BAY_WINDOW } from "./lidar";
 import type { Polygon } from "./overpass";
 
-// The release a local run reads, pinned rather than "latest" so a rebuild answers with the rows the
-// counts in scripts/README.md were measured against. Spelled the way scripts/places.ts spells it,
-// including the environment override the monthly refresh job passes.
+// Pinned so a rebuild reads the rows the counts in scripts/README.md were measured against.
 const PINNED_RELEASE = "2026-08-19.0";
 const OVERTURE_RELEASE = process.env.OVERTURE_RELEASE || PINNED_RELEASE;
 const OVERTURE_BUCKET = "s3://overturemaps-us-west-2/release";
@@ -33,14 +17,11 @@ const BUILDINGS_PARQUET = `${OVERTURE_BUCKET}/${OVERTURE_RELEASE}/theme=building
 const DIVISIONS_PARQUET = `${OVERTURE_BUCKET}/${OVERTURE_RELEASE}/theme=divisions/type=division_area/*.parquet`;
 
 const BUILD_DIR = join(import.meta.dirname, "..", ".build");
-// What the tiler is handed to sample under, and what it writes back. Build glue, gitignored: the
-// artifact these become is data/buildings/<city>.bin.
+// The tiler's input and output; gitignored build glue.
 export const FOOTPRINTS_FILE = join(BUILD_DIR, "east-bay-footprints.geojson");
 export const READINGS_FILE = join(BUILD_DIR, "east-bay-heights.json");
 
-// The municipalities the footprints are clipped to, by the name Overture files them under — the same
-// seven scripts/alameda.ts takes the land, the streets and the addresses from. Their outlines are
-// unioned, so a building on the line between two of them is one building and not two.
+// Unioned, so a building on the line between two of them is one building.
 const EAST_BAY_DIVISIONS = [
   "Albany",
   "Berkeley",
@@ -52,25 +33,17 @@ const EAST_BAY_DIVISIONS = [
 ];
 const DIVISION_SUBTYPE = "locality";
 
-// How far under a published height a measurement may land before the published one is believed
-// instead. The failure this exists for is a building that did not exist when the flight happened:
-// 1900 Broadway is an OSM-tagged 120.4 m and measures 10.7, and Forma is a tagged 73 and measures
-// 3.0 — both were construction sites in 2021. Real towers measure at 0.93 of their tag and better,
-// so nothing between the two populations is at risk. It applies ONLY to an OSM-sourced height: the
-// machine-learned ones are the reason to measure in the first place and never override a reading.
+// Towers built after the 2021 flight measure far under their OSM tag; real ones measure >= 0.93.
 const OSM_PATCH_RATIO = 0.7;
 
-// A footprint as Overture hands it over: its rings, whatever height it carries, and whether that
-// height is a surveyed tag or a model's guess.
 export interface Footprint {
   polygon: Polygon;
   name: string | null;
   heightMeters: number | null;
-  surveyed: boolean;
+  surveyed: boolean; // an OSM tag rather than a model's guess
 }
 
-// What `tiler ndsm` measured under one footprint. A missing reading is a footprint the surface model
-// held no cell for — a shed of a few square meters, or a building the flight did not reach.
+// From `tiler ndsm`; missing where the surface model held no cell under the footprint.
 export interface Reading {
   feature: number;
   roofMeters?: number;
@@ -87,8 +60,7 @@ function sqlText(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-// Prefiltered by intersection with the window rather than containment: a locality's own box can be
-// wider than the box asked for, and a containment test would drop it whole.
+// Intersection, not containment: a locality's box can be wider than the window.
 function outlineSql(): string {
   const names = EAST_BAY_DIVISIONS.map(sqlText).join(", ");
   return `SELECT geometry FROM read_parquet(${sqlText(DIVISIONS_PARQUET)})
@@ -100,9 +72,7 @@ function outlineSql(): string {
       AND bbox.ymin < ${EAST_BAY_WINDOW.north} AND bbox.ymax > ${EAST_BAY_WINDOW.south}`;
 }
 
-// Overture records which source each property came from. A height with a source entry of its own
-// naming a dataset other than OpenStreetMap is a model's — that is the whole ML population — and a
-// height with no such entry arrived with the OSM feature the building is built on.
+// A height with its own non-OSM source entry is a model's; one with none came with the OSM feature.
 function buildingsSql(): string {
   return `WITH outline AS (SELECT ST_Union_Agg(geometry) AS geometry FROM (${outlineSql()}))
     SELECT
@@ -133,8 +103,6 @@ async function connect(): Promise<DuckDBConnection> {
   return connection;
 }
 
-// A GeoJSON geometry's disjoint parts, each an outer ring then holes, in the {lat, lng} shape the
-// rest of the ingest reads polygons in.
 function toParts(geometry: GeoJsonPolygon): Polygon[] {
   const parts =
     geometry.type === "MultiPolygon"
@@ -145,8 +113,7 @@ function toParts(geometry: GeoJsonPolygon): Polygon[] {
   );
 }
 
-// Every footprint of the seven cities, one per disjoint part, cached against the query itself — so a
-// changed release or window lands on a different entry rather than reusing the old one.
+// One per disjoint part, cached against the query, so a changed release or window misses.
 export async function fetchFootprints(): Promise<Footprint[]> {
   const sql = buildingsSql();
   return await cached("east-bay-buildings", sql, async () => {
@@ -157,8 +124,7 @@ export async function fetchFootprints(): Promise<Footprint[]> {
       );
       const found = Number(outlines.getRowObjects()[0].found);
       if (found !== EAST_BAY_DIVISIONS.length) {
-        // Overture renames and re-classes divisions between releases. Silently clipping a whole
-        // city's buildings away is the failure this catches.
+        // Overture renames divisions between releases, which would silently drop a city.
         throw new Error(
           `${found} outlines found for ${EAST_BAY_DIVISIONS.length} named cities`,
         );
@@ -189,8 +155,7 @@ export async function fetchFootprints(): Promise<Footprint[]> {
   });
 }
 
-// The footprints as the tiler reads them: one Polygon feature per part, so a reading comes back on
-// the index it was asked for, and only the three properties the measurement pass looks at.
+// One feature per part, so a reading comes back on the index it was asked for.
 export async function writeFootprints(
   path: string,
   footprints: readonly Footprint[],
@@ -217,15 +182,13 @@ export async function writeFootprints(
 
 export interface Merged {
   buildings: HeightedBuilding[];
-  measured: number; // footprints the surface model answered for
-  published: number; // footprints Overture carried any height for
-  patched: number; // measurements an OSM tag overrode, the post-flight construction sites
-  dropped: number; // footprints with neither, which cast no shade and are not written
+  measured: number;
+  published: number;
+  patched: number;
+  dropped: number;
 }
 
-// The merge rule: the measurement wins, an OSM-sourced height patches it where the measurement is
-// under 70% of the tag, and a machine-learned height never overrides. A footprint with neither is
-// dropped — it is a shed of a few square meters, which is what the sampler misses.
+// Measurement wins; only an OSM tag can override it. A footprint with neither is a tiny shed.
 export function merge(
   footprints: readonly Footprint[],
   readings: readonly Reading[],
@@ -274,10 +237,7 @@ export function merge(
   return merged;
 }
 
-// What `tiler ndsm` measured, off disk: the ingest runs after the measurement, so a missing file is
-// a build run out of order rather than a city with no LiDAR, and saying so beats quietly writing
-// every footprint at the height Overture guessed for it. Separate from the ingest below so a caller
-// can find that out before paying for a footprint fetch.
+// A missing file is a build run out of order; separate so a caller checks before fetching.
 export async function readEastBayHeights(): Promise<Reading[]> {
   const readings = await readFile(READINGS_FILE, "utf-8").catch(() => {
     throw new Error(
@@ -287,7 +247,6 @@ export async function readEastBayHeights(): Promise<Reading[]> {
   return JSON.parse(readings) as Reading[];
 }
 
-// The East Bay's buildings, ready to encode.
 export async function fetchEastBayBuildings(
   readings: readonly Reading[],
 ): Promise<HeightedBuilding[]> {

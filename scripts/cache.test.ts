@@ -1,7 +1,3 @@
-// When a cached entry is used and when the source is read again. The GTFS feeds are the reason this
-// exists: an agency's zip carries a calendar that runs out, so a feed cached in August and still
-// used in September builds a timetable nobody runs.
-
 import { expect, test } from "bun:test";
 import { type CacheEntryAge, cacheVerdict } from "./cache";
 
@@ -59,8 +55,7 @@ test("offline with no entry is an error rather than a download", () => {
   expect(verdict({ offline: true, writtenMs: null })).toBe("unavailable");
 });
 
-// A clock that has gone backwards — a restored .cache/, a machine whose time was wrong — must not
-// read the source on every call.
+// A clock that went backwards (a restored .cache/) must not read the source on every call.
 test("an entry written in the future is used", () => {
   expect(verdict({ writtenMs: NOW_MS + MS_PER_DAY })).toBe("hit");
 });

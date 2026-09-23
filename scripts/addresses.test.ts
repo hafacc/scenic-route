@@ -1,9 +1,6 @@
 import { expect, test } from "bun:test";
 
-// The client reads ADDR with a decoder of its own, written from the doc comment in
-// src/search/address-format. This is a second one, written here rather than imported from the
-// encoder's own module, so a mistake mirrored into an encoder/decoder pair cannot pass by
-// round-tripping (DESIGN.md, "Repository traps").
+// A separate decoder, so a mistake mirrored into the encoder can't pass by round-tripping.
 import {
   ADDRESS_FORMAT,
   ADDRESS_MAGIC,
@@ -130,9 +127,7 @@ function streetOf({ streets }: Decoded, name: string, place: string) {
   );
 }
 
-// Two Queens addresses on one block, a Brooklyn number and a Staten Island one on streets that share
-// a name — New York has five Court Streets — with the streets and the numbers both out of order on
-// the way in.
+// Out of order on the way in; New York has five Court Streets.
 const NYC: readonly AddressRow[] = [
   row("COURT ST", "Brooklyn", "312", 40.68562, -73.99444),
   row("93 ST", "Queens", "25-11", 40.76415, -73.87622),
@@ -141,7 +136,6 @@ const NYC: readonly AddressRow[] = [
   row("COURT ST", "Brooklyn", "8", 40.69236, -73.99184),
 ];
 
-// San Francisco is one place, and a number there may carry a letter.
 const SF: readonly AddressRow[] = [
   row("IRVING ST", "", "269B", 37.7634, -122.4712),
   row("IRVING ST", "", "269", 37.7634, -122.4712),
@@ -168,15 +162,14 @@ test("one name in two boroughs is two streets sharing a name and nothing else", 
   const statenIsland = streetOf(decoded, "COURT ST", "Staten Island");
   expect(brooklyn?.nameIndex).toBe(statenIsland?.nameIndex ?? -1);
   expect(brooklyn?.placeIndex).not.toBe(statenIsland?.placeIndex ?? -1);
-  // Each run is its own: the deltas reset, so Staten Island's 3 is not read as Brooklyn's 8 minus 5.
+  // Deltas reset per run, so Staten Island's 3 is not read as Brooklyn's 8 minus 5.
   expect(statenIsland?.addresses).toEqual([
     { number: "3", lat: 40.62637, lng: -74.08046 },
   ]);
 });
 
 test("a hyphenated Queens number survives the round trip", () => {
-  // "25-07" comes back as "25-7": the format stores the minor part as a number, so the source's
-  // padding is not kept.
+  // "25-07" comes back as "25-7": the minor part is stored as a number.
   expect(
     streetOf(decode(encodeAddresses(NYC).bytes), "93 ST", "Queens"),
   ).toEqual({
@@ -200,7 +193,6 @@ test("a city that is one place writes no place blob", () => {
       place: "",
       nameIndex: 0,
       placeIndex: 0,
-      // A letter suffix sorts after the bare number and keeps its letter.
       addresses: [
         { number: "269", lat: 37.7634, lng: -122.4712 },
         { number: "269B", lat: 37.7634, lng: -122.4712 },
@@ -220,7 +212,7 @@ test("a row repeated at the same doorway is written once", () => {
 });
 
 test("the same number at another doorway is kept", () => {
-  // A meter apart is a meter apart: two entrances of one building, not one address listed twice.
+  // Two entrances of one building, not one address listed twice.
   const both = [
     ...NYC,
     row("COURT ST", "Brooklyn", "312", 40.68566, -73.99444),

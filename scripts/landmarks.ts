@@ -1,8 +1,3 @@
-// `bun run scripts/landmarks.ts [city]`: fetches a city's designated landmarks and writes them as
-// data/landmarks/<id>.bin (magic LMRK) — the historic/touristy POIs a later phase fans out over the
-// walking graph into a per-edge "passes a landmark" routing discount. Points, where the historic
-// districts beside them are areas. Layout: scripts/README.md.
-
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -21,8 +16,7 @@ const LANDMARK_FORMAT = 1;
 const LANDMARK_DATASET = "buis-pvji"; // LPC Individual Landmark Sites
 const LANDMARK_COUNT = 1_400; // a floor; ~1,532 designated sites at the last refresh
 
-// The WGS84 latitude/longitude columns are the representative point; `lpc_name` is the designated
-// name the overlay labels the dot with. The lot polygon (the_geom, in state-plane feet) is not read.
+// Latitude/longitude are WGS84; the_geom is state-plane feet and unread.
 interface LandmarkRow {
   latitude?: string;
   longitude?: string;
@@ -49,7 +43,7 @@ function toPoints(
 }
 
 async function nycLandmarks(land: LandContext): Promise<NamedPoint[]> {
-  // `*` so a newly-read column is free after one refetch (the disk cache keys on the query).
+  // `*` so reading a new column needs no refetch; the disk cache keys on the query.
   const rows = await NYC_OPEN_DATA.dataset<LandmarkRow>(
     LANDMARK_DATASET,
     { $select: "*" },
@@ -58,16 +52,10 @@ async function nycLandmarks(land: LandContext): Promise<NamedPoint[]> {
   return toPoints(rows, land.onLand);
 }
 
-// The city's own register of designated sites. A city with none passes null and simply has no
-// landmark discount, which is a decision its descriptor states rather than one this module infers
-// from a missing map entry.
 export type LandmarkSource = (land: LandContext) => Promise<NamedPoint[]>;
 
 export const NYC_LANDMARKS: LandmarkSource = nycLandmarks;
-// Two halves, and they are not the same kind of register: San Francisco's is its own Article 10
-// list, the East Bay's is the state inventory's federal and state designations, because neither
-// Oakland's local register nor Berkeley's is published as data at all. `scripts/alameda.ts` has what
-// that costs; the difference is visible on the map and is worth knowing about before reading it.
+// SF's Article 10 list; East Bay state/federal designations, as its local registers aren't data.
 export const SF_LANDMARKS: LandmarkSource = async (land) => {
   const [city, eastBay] = await Promise.all([
     fetchSfLandmarks(land.onLand),

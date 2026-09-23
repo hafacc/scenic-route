@@ -1,7 +1,4 @@
-// The seam between the two halves of the tree-data ingest: scripts/tree-data-fetch.ts fetches and
-// encodes, `cargo run --release --bin tiler -- ingest` measures the canopy heights and the cover
-// densities, and scripts/tree-data-manifest.ts writes src/tree-cover/manifest.json. package.json
-// sequences the three; this file is only the JSON they hand each other.
+// The JSON handed between tree-data-fetch, `tiler ingest` and tree-data-manifest.
 
 import { join } from "node:path";
 import type {
@@ -15,8 +12,7 @@ import type {
 
 const ROOT = join(import.meta.dirname, "..");
 
-// .build/ is gitignored build glue at the repo root, where `bun run build-tiles` also hands
-// plan.json over: a package.json script can name no temporary directory of the machine's.
+// In the repo: a package.json script can't name the machine's temporary directory.
 export const INGEST_PARAMS_PATH = join(ROOT, ".build", "ingest.json");
 export const INGEST_REPORT_PATH = join(ROOT, ".build", "ingest-report.json");
 export const SIDECAR_PATH = join(ROOT, ".build", "tree-data.json");
@@ -38,8 +34,6 @@ export const PERCENTILES: readonly Percentile[] = [
   "p99",
 ];
 
-// What `tiler ingest` reports a distribution as. The cuts come back as a map, because the labels
-// they are reported at are passed to it.
 export interface RawDistribution {
   min: number;
   max: number;
@@ -48,25 +42,20 @@ export interface RawDistribution {
   percentiles: Record<string, number>;
 }
 
-// .build/ingest-report.json: what `tiler ingest` reports back, once it has filled the canopy file's
-// height region from the LiDAR height model and the street and path files' density blobs from the
-// blurred canopy.
 export interface IngestReport {
-  // Absent when the params carried no `chm`; then every polygon keeps the 0 that reads as unknown.
+  // Absent without a `chm`; every polygon then keeps height 0, meaning unknown.
   heights?: {
     polygons: number;
     measured: number; // polygons the model had a cell for
-    skippedTiles: number; // CHM tiles whose LZW stream would not decode, all east of the city
+    skippedTiles: number; // CHM tiles whose LZW stream would not decode
   };
-  bounds: Bounds; // the sources, grown by the kernel's reach: what the pyramid covers
+  bounds: Bounds; // the sources grown by the kernel's reach
   draws: number;
-  landDensity: RawDistribution; // the cover over land: its mean is the sanity-check figure
+  landDensity: RawDistribution;
   streetDensity: RawDistribution;
-  pathDensity?: RawDistribution; // present only when a paths file was passed
+  pathDensity?: RawDistribution; // only when a paths file was passed
 }
 
-// .build/tree-data.json: what the manifest half needs from the fetch half, which is everything the
-// manifest records that is neither measured by the tiler nor read back off the blobs.
 export interface TreeDataSidecar {
   city: {
     id: string;
@@ -83,11 +72,10 @@ export interface TreeDataSidecar {
     canopySourceUrl: string;
     alleys: boolean;
   };
-  // The height model's credit, or null for a city with none.
   heightSource: { attribution: string; sourceUrl: string } | null;
   trees: SourceFile;
   land: SourceFile;
-  // The canopy blob's identity; its bytes and sha256 are taken after the ingest fills its heights.
+  // No bytes or sha256: the ingest rewrites the blob afterward.
   canopy: {
     file: string;
     format: number;
@@ -126,13 +114,12 @@ export interface TreeDataSidecar {
     coverSeed: number;
     genus: GenusTable;
   };
-  // The register's trees after the land clip: CityEntry.trees.
+  // After the land clip.
   cityTrees: number;
-  // Only for the summary log line.
   sidewalks: SourceFile;
 }
 
-// The manifest's key order is the ingest's, not whatever a map iterated in.
+// Key order follows PERCENTILES, not the report map's iteration order.
 export function distributionOf(raw: RawDistribution): Distribution {
   const percentiles = {} as Record<Percentile, number>;
   for (const percentile of PERCENTILES) {

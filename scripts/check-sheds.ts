@@ -1,20 +1,5 @@
-// `bun run check-sheds`: the deploy's guard on the one pairing nothing else can see. The routing
-// graph is built by the deploy and the shed artifact is committed, so the two travel separately —
-// and the artifact only means a graph whose durable key space its header names. A deploy whose graph
-// inputs moved without a `bun run build-sheds` in the same push does not put scaffolding down the
-// wrong street, it makes every shed on the map vanish, which is invisible until someone looks.
-//
-// The KEY SPACE and not the graph's bytes, which this compared until 2026-08: those carry f32 edge
-// lengths that macOS and Linux land a ulp apart, so an artifact placed on a laptop could never match
-// the graph a deploy builds, and the gate failed on a difference no shed can feel.
-//
-// This is the last point that holds both halves at once: the graph exists only after `bun run
-// build-tiles`, and the artifact is only ever read out of the checkout. So .github/workflows/build.yml
-// runs this between the tile build and the Pages upload, and a mismatch fails the deploy rather than
-// shipping one. Nothing catches it earlier: a push or a PR has no graph to compare against.
-//
-// Run by hand after any graph-input change — `bun run check-sheds [graph] [shed-dir]` — which is the
-// same check with the deploy's own defaults.
+// Fails the deploy if the committed shed artifact's key space doesn't match the built graph's,
+// which would silently blank every shed. Compares key space, not bytes: f32 lengths differ by OS.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -35,12 +20,10 @@ export async function checkSheds(
     readFile(join(shedDir, "open.bin")),
     readFile(join(shedDir, "closed.bin")),
   ]);
-  // Recomputed here in TypeScript from the graph the tiler wrote in Rust, so the two
-  // implementations of the key-space hash are compared against each other on every deploy as well.
+  // Recomputed in TypeScript, so this also checks the Rust key-space hash against this one.
   const { hash, keyHash } = loadGraphBytes(graphBytes);
 
-  // The client gates on what `version.json` states, not on anything it recomputes, so a version file
-  // that has drifted from the bytes beside it blanks the map exactly as a stale artifact would.
+  // The client trusts `version.json` without recomputing, so a drifted one blanks the map too.
   const version = await readFile(
     graphPath.replace(/\.bin$/, ".version.json"),
     "utf-8",

@@ -1,9 +1,6 @@
 import { expect, test } from "bun:test";
 
-// The street, caster and commercial chunk pyramids are keyed by x/y with no city in the path, so two
-// cities sharing a chunk would interleave their segments in one file with no error anywhere. That
-// held for New York and San Francisco by luck of geography; these pin it as a checked invariant
-// rather than a comment, because the city that breaks it is the one nobody thought about.
+// Chunk pyramids are keyed by x/y alone, so two cities sharing a chunk would silently interleave.
 import { overlappingCities } from "./manifest";
 
 const city = (
@@ -24,7 +21,6 @@ test("nyc and sf do not share a chunk", () => {
 });
 
 test("a neighbor that shares the grid is caught", () => {
-  // Oakland, immediately across the bay from San Francisco.
   expect(
     overlappingCities([
       city("sf", 37.7068, -122.5141, 37.8325, -122.3607),

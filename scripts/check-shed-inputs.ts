@@ -1,20 +1,4 @@
-// `bun run check-shed-inputs`: the land-time half of the shed guard, and the one that runs on every
-// push and pull request.
-//
-// `check-sheds` compares the committed artifact against a graph, which means it can only run where a
-// graph exists — the deploy, after a twenty-minute tile build. By then the change that broke the
-// pairing has been on `main` for however long it took someone to dispatch a deploy. This runs
-// instead on what the graph's DURABLE KEY SPACE is a function of (scripts/graph-inputs.ts), which
-// every checkout has: no LFS objects, no data blobs, and for the code half a fixture the tiler runs
-// over in a tenth of a second.
-//
-// It answers one question: were the sheds placed after the last change to anything that can move a
-// key? Not to anything that can move the graph — the two are very different sets, and the wider one
-// costs a re-place of every shed in the city for an edit to a color ramp. A yes is still not proof
-// the key space held (an input can change and cut the same edges), but the header is a hash gate, so
-// an artifact that cannot say it is current is one nobody can trust, and a re-place is two minutes.
-// `check-sheds` remains the stronger, later check: it compares against the graph CI actually built
-// rather than against what it was built from.
+// Checks sheds against the current key-space inputs; unlike `check-sheds`, needs no built graph.
 
 import { join } from "node:path";
 import {
@@ -31,9 +15,6 @@ const BLANKS =
   " every shed resolves to nothing on the map — silently, since the client blanks rather than" +
   " misplaces.";
 
-// The complaint, or null when the artifact is current. Split out from the file reading because it is
-// the whole of what this checks and the messages are the point. The two halves are reported apart:
-// which one moved says whether to go and look at a data blob or at the pipeline.
 export function shedInputsMismatch(
   recorded: ShedInputs | null,
   current: ShedInputs,

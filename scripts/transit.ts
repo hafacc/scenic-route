@@ -1,17 +1,4 @@
-// `bun run build-transit`: the rail TOPOLOGY the routing graph rides on, as data/transit/<city>.bin
-// (magic TRNS) — every station a train calls at, every route with the color and names its agency
-// publishes, and every stop PATTERN a route runs, carrying the ride seconds between one stop and the
-// next. The tiler turns that into station and platform nodes with board/ride/alight edges; the
-// timetable those edges depart against is a different artifact, rebuilt daily
-// (scripts/transit-schedule.ts).
-//
-// Same feeds and the same route types as the display ingests (scripts/subway.ts,
-// scripts/subway-sf.ts), through the same cache entries, so the network drawn on the map and the
-// network the router rides are one network. Nothing here is clipped to the city's land: rail is not
-// walked on, and cutting BART at the shoreline would sever the tube in the middle of the bay.
-//
-// Plain git, never LFS: it is tens of kilobytes and it is an input the tiler reads on every graph
-// build. Layout: scripts/README.md.
+// Not clipped to land: cutting BART at the shoreline would sever the tube mid-bay.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -47,8 +34,6 @@ import {
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 export const TRANSIT_DIR = join(DATA_DIR, "transit");
-// The display ingest's artifact, which is where the drawn track comes from; scripts/subway.ts and
-// scripts/subway-sf.ts write it out of the same feeds this reads.
 const SUBWAY_DIR = join(DATA_DIR, "subway");
 
 export const TRANSIT_MAGIC = "TRNS";
@@ -63,15 +48,12 @@ const SPLIT_FLAG = 2;
 const ENTRY_FLAG = 1;
 const EXIT_FLAG = 2;
 
-// A `sides` mask names the directions an entrance serves, bit d for GTFS `direction_id` d. Both is
-// also what a station whose platforms a rider can walk between gets: there is one way in.
+// A `sides` mask: bit d for GTFS `direction_id` d.
 export const NORTHBOUND_SIDE = 1;
 export const SOUTHBOUND_SIDE = 2;
 export const BOTH_SIDES = 3;
 
-// What a rider goes down, in the order the `kind` byte numbers them. The last covers every way in
-// that is a corridor rather than a descent — an easement through a building, a passage, a walkway,
-// an underpass or an overpass — because what they share is that the walk is the cost.
+// Indexed by the `kind` byte; "passage" covers every corridor, where the walk is the cost.
 export const ENTRANCE_KINDS = [
   "stair",
   "escalator",
@@ -82,85 +64,49 @@ export const ENTRANCE_KINDS = [
 ] as const;
 export type EntranceKind = (typeof ENTRANCE_KINDS)[number];
 
-// Joins the parts of a pattern key. NUL because a GTFS route id or stop name may carry any
-// printable character, spaces and punctuation included, but never this one.
+// NUL: a GTFS route id or stop name may carry any printable character.
 const KEY_SEPARATOR = "\u0000";
 
-// The GTFS defaults for a route that publishes no color, as the display ingests use them.
 const DEFAULT_ROUTE_COLOR = "FFFFFF";
 const DEFAULT_TEXT_COLOR = "000000";
 
-// How much of its own (route, direction)'s trips a stop pattern has to carry to be kept. A subway
-// route runs a handful of patterns that are the service — the full line, the express, the short
-// turn — and a long tail of one-offs: a train laying up at a yard, a single put-in, a work move.
-// The tail is not service anyone can plan a walk around, and every pattern kept costs a platform
-// node at each of its stops.
-//
-// Unlike the display ingest's service floor there is no empty band to aim at here: the shares run
-// continuously from a single trip upward, so the value is set by what it costs against what it
-// keeps. At 2% and the 2026 feeds New York drops 80 of its 218 patterns — together 1.3% of its
-// trips, and a third of the platform nodes, 6,357 down to 4,084 — the largest of them 12 trips of
-// the L in a day. San Francisco drops 15 of 96, carrying 0.45% of its trips. The busiest pattern of
-// a (route, direction) is kept whatever its share, so a route can never lose its whole service to
-// this: New York's FX runs two trips in the schedule and keeps both.
+// Min share of its (route, direction)'s trips a pattern needs; the busiest is always kept.
 const MIN_PATTERN_SHARE = 0.02;
 
-// One feed of a city's rail, cached under the key its display ingest already uses so the two read
-// one zip.
 export interface TransitFeedSource {
-  id: string; // namespaces stop and service ids, so two feeds' ids cannot collide
+  id: string; // namespaces stop and service ids across feeds
   name: string;
   url: string;
   cacheKey: string;
   routeTypes: ReadonlySet<string>;
-  // Prefixed onto the artifact's route id, matching the display ingest's, so a TRNS route and an
-  // SBWY route of the same line carry the same id.
+  // Matches the display ingest's prefix, so TRNS and SBWY ids agree.
   routePrefix: string;
-  // Which of the feed's route_ids are one route. BART splits every line into a northbound and a
-  // southbound route_id ("Yellow-N", "Yellow-S") that run one pair of rails under one color, so
-  // they are folded the way the map folds them; everywhere else a route_id is a route. A key that
-  // is not the route_id is the name the group shares, and becomes the route's short name — "Yellow"
-  // rather than whichever direction's row happened to come first.
+  // BART splits each line into "-N"/"-S" route_ids; a non-route_id key becomes the short name.
   groupKey: (row: GtfsRow) => string;
-  // Stations the feed models as bare curbside stops but which are actually underground, so the
-  // tiler charges the full descent to the platform rather than a step off the pavement. Only Muni
-  // needs one: it publishes no `parent_station`, no `location_type` and no entrances, so nothing in
-  // the feed separates the Market Street and Central Subway platforms from a stop on the tarmac.
+  // Muni publishes nothing that separates its subway platforms from curbside stops.
   underground: ReadonlySet<string>;
-  // The name to show a rider, where the feed's own is the platform's rather than the place's. Left
-  // out, a station is called whatever the feed calls it, which is what New York and BART want.
   displayName?: (feedName: string) => string;
-  // Where the feed's stations are actually entered, and which of them a rider cannot cross between
-  // inside. A feed with no source of either leaves this out and its stations are entered at their
-  // own point, which is what the graph did before entrances existed.
   entrances?: (feed: GtfsFeed) => Promise<FeedEntrances>;
 }
 
-// One way into a station as its agency publishes it, before the topology has resolved which of its
-// stations that is.
 export interface FeedEntrance extends Coord {
-  // The feed's own station id — the parent stop the agency lists the entrance against.
-  stationId: string;
+  stationId: string; // the feed's parent stop id
   kind: EntranceKind;
   entry: boolean;
   exit: boolean;
-  // Which platform it reaches, where the agency itself says so. `null` asks the right-hand rule
-  // below, which is the only answer New York has.
+  // `null` defers to the right-hand rule.
   sides: number | null;
 }
 
 export interface FeedEntrances {
   entrances: readonly FeedEntrance[];
-  // The feed's stations with no free crossover: a rider who goes down the wrong stair has to come
-  // back up, so the graph gives the station one node per direction.
+  // No free crossover, so the graph gives each direction its own node.
   split: ReadonlySet<string>;
 }
 
 const NO_UNDERGROUND: ReadonlySet<string> = new Set<string>();
 
-// The Muni stops that are underground, exactly as the feed names them: the Market Street subway
-// (Embarcadero to West Portal, both platforms of each), the Central Subway's three, and Forest
-// Hill's outbound platform, which the feed names without the "Metro" prefix its twin carries.
+// Exactly as the feed names them; Forest Hill's outbound platform lacks the "Metro" prefix.
 const MUNI_UNDERGROUND: ReadonlySet<string> = new Set([
   "Chinatown - Rose Pak Station",
   "Forest Hill Station Outbound",
@@ -185,7 +131,6 @@ const MUNI_UNDERGROUND: ReadonlySet<string> = new Set([
   "Yerba Buena/Moscone Station Southbound",
 ]);
 
-// What Muni writes on the end of a stop name to say which platform it is, after a slash or a space.
 const MUNI_PLATFORM_WORDS: ReadonlySet<string> = new Set([
   "downtown",
   "downtn",
@@ -199,10 +144,7 @@ const MUNI_PLATFORM_WORDS: ReadonlySet<string> = new Set([
 const METRO_PREFIX = "Metro ";
 const STATION_SUFFIX = " Station";
 
-// Muni names a stop for the platform it is — "Metro Castro Station/Downtown", "Van Ness Station
-// Outbound" — and the graph shows that name to a rider about to walk in, so what it carries is the
-// place: "Castro", "Van Ness". Matching still runs on the feed's own name, which is what the OSM
-// nodes, the complex join and the lane ids are all keyed by.
+// "Metro Castro Station/Downtown" -> "Castro". Display only; matching keys on the feed's name.
 export function muniStationName(feedName: string): string {
   let display = feedName.trim();
   if (display.startsWith(METRO_PREFIX)) {
@@ -222,9 +164,7 @@ export function muniStationName(feedName: string): string {
   return display.trim();
 }
 
-// The MTA's own name for what a rider goes down, mapped onto the kinds above. Anything with a
-// stair in it is a stair: the stair is what a walker who cannot use the escalator beside it gets,
-// and both cost the same descent.
+// Anything with a stair in it is a stair: it costs the same descent as the escalator beside it.
 const MTA_ENTRANCE_KINDS: Readonly<Record<string, EntranceKind>> = {
   Stair: "stair",
   "Stair/Escalator": "stair",
@@ -241,10 +181,7 @@ const MTA_ENTRANCE_KINDS: Readonly<Record<string, EntranceKind>> = {
   Overpass: "passage",
 };
 
-// "Subway Entrances and Exits: 2024", the MTA's published list of every way into the system:
-// 2,120 rows over 485 stations, each carrying the GTFS parent stop it belongs to, what kind of
-// entrance it is, whether a rider may enter and leave by it, and where it stands. It says nothing
-// about which platform it reaches — no dataset does — so that is left to the rule.
+// "Subway Entrances and Exits: 2024"; it says nothing about which platform an entrance reaches.
 const MTA_ENTRANCE_DATASET = "i9wp-a4ja";
 const MTA_ENTRANCE_ROWS = 2_120;
 
@@ -257,9 +194,7 @@ interface MtaEntranceRow {
   entrance_longitude?: string;
 }
 
-// The two curated files beside the artifact, each one id or one entrance per line, `#` to the end
-// of a line a comment. Committed rather than derived because their sources are gone: see the
-// header of each.
+// One entry per line, `#` comments.
 export function curatedLines(name: string): string[] {
   const text = readFileSync(join(TRANSIT_DIR, name), "utf-8");
   return text
@@ -268,9 +203,7 @@ export function curatedLines(name: string): string[] {
     .filter((line) => line !== "");
 }
 
-// An override's key: the station and the entrance point exactly as the MTA publishes it. Six
-// decimal places is ~0.1 m, finer than the dataset's own precision, so two entrances never collide
-// and an entrance the MTA moves simply stops matching and falls back to the rule.
+// Six decimals (~0.1 m) is finer than the dataset's precision, so entrances never collide.
 function entranceKey(stationId: string, lng: number, lat: number): string {
   return `${stationId} ${lng.toFixed(6)} ${lat.toFixed(6)}`;
 }
@@ -302,15 +235,11 @@ async function mtaEntrances(): Promise<FeedEntrances> {
     MTA_ENTRANCE_ROWS,
   );
   const overrides = parseSideOverrides("nyc-entrance-sides.txt");
-  // Every override has to find its entrance. The key is the MTA's own published point to six
-  // decimals, so a dataset that moves a stair by a meter silently drops the correction and the
-  // geometric rule — which was wrong about that stair, or there would be no line for it — takes it
-  // back. There is nothing to see in the output when that happens, so it is a failure here.
+  // A moved stair would silently drop its override, so every override must match.
   const matched = new Set<string>();
   const entrances: FeedEntrance[] = [];
   for (const row of rows) {
-    // A handful of rows name two stations, for an entrance a transfer complex shares. The complex
-    // is one node in the graph whichever of its members the door hangs off, so the first is enough.
+    // Some rows name two stations of one complex, which the graph makes one node anyway.
     const stationId = (row.gtfs_stop_id ?? "").split(";")[0].trim();
     const lat = Number(row.entrance_latitude);
     const lng = Number(row.entrance_longitude);
@@ -346,10 +275,7 @@ async function mtaEntrances(): Promise<FeedEntrances> {
   return { entrances, split: new Set(curatedLines("nyc-no-crossover.txt")) };
 }
 
-// BART names its entrances in the feed itself, as `location_type=2` stops hung off their station:
-// "B2 13th St and Broadway Entrance / Exit", "Elevator Entrance / Exit", "A2 John F Foran Fwy
-// (Ramp) Entrance / Exit". Every BART station has a paid mezzanine spanning both platforms, so no
-// entrance is ever one direction's alone and no station is split.
+// `location_type=2` stops; every BART mezzanine spans both platforms, so no station is split.
 async function bartEntrances(feed: GtfsFeed): Promise<FeedEntrances> {
   const entrances: FeedEntrance[] = [];
   for (const stop of feed.stops) {
@@ -384,29 +310,18 @@ async function bartEntrances(feed: GtfsFeed): Promise<FeedEntrances> {
   return { entrances, split: new Set<string>() };
 }
 
-// How far apart the two halves of one underground Muni station stand, at most: the feed carries a
-// stop per direction ("/Downtown", "/Outbound") and puts them at their own platform's end, which
-// under Market Street is most of a block apart.
+// Muni's per-direction stops of one station sit at their own platform ends, up to a block apart.
 const PLATFORM_ROW_METERS = 150;
 
-// How far an OSM node may stand from a station's platforms and still be a way into it. A Market
-// Street station's concourse runs the length of a block, so its far door is a long way from the
-// point the feed gives the platform.
+// A Market Street concourse runs a block, so its far door is far from the feed's platform point.
 const OSM_ENTRANCE_METERS = 150;
 
-// How far a node that NAMES its station may stand from it. A mapper who wrote the station down has
-// said what the distance can only guess at, so the cap is there to catch a stale name rather than
-// to decide the match: Montgomery's Sansome & Sutter head house is 153 m from the platform the feed
-// gives and is unarguably a way in.
+// Only catches a stale name: Montgomery's Sansome & Sutter door is 153 m from its platform.
 const NAMED_ENTRANCE_METERS = 300;
 
-// What OSM writes on a door nobody may walk through: one closed for construction, one a building's
-// tenants alone may use. Neither is a way into the station.
 const CLOSED_ACCESS: ReadonlySet<string> = new Set(["no", "private"]);
 
-// A margin on the box the OSM nodes are read in, and the hundredth of a degree the box is rounded
-// out to: the query is cached by its own text, and rounding keeps a stop moving a few meters from
-// re-fetching the city.
+// Rounded out, since the query is cached by its text and a stop moving meters shouldn't refetch.
 const ENTRANCE_BOX_MARGIN_DEGREES = 0.01;
 const ENTRANCE_BOX_STEP = 100;
 
@@ -435,20 +350,14 @@ function entranceBox(points: readonly Coord[]): {
   };
 }
 
-// One underground station as the topology will carry it: the feed splits a Metro station into a
-// stop per direction and the station table keeps them apart, so a door on the street is a way into
-// every one of them — the platforms share a mezzanine. `keys` are those stations' ids, exactly as
-// the station table keys them.
+// `keys` are the per-direction station-table ids sharing one mezzanine.
 export interface UndergroundStation {
   keys: readonly string[];
   names: readonly string[];
   points: readonly Coord[];
 }
 
-// The underground Metro stops, merged into stations the way the station table merges them (same
-// name within STATION_MERGE_METERS, keyed by the lowest member id), then the directions of one
-// station chained together on distance. Nothing in the feed says two stops are one station, which
-// is why this is where it is said.
+// Merged as the station table merges them, then directions chained on distance.
 function undergroundStations(feed: GtfsFeed): UndergroundStation[] {
   const platforms: (Coord & { key: string; name: string })[] = [];
   for (const stop of feed.stops) {
@@ -510,21 +419,13 @@ function osmEntranceKind(node: OsmStationEntrance): EntranceKind {
   }
 }
 
-// A mapper writes the station on a node as `station_name` — "Embarcadero Station", "Van Ness",
-// "Castro" — where they write it at all; the feed calls the same places "Metro Embarcadero
-// Station", "Van Ness Station Outbound", "Metro Castro Station/Downtown". Lowercased and with the
-// word "station" dropped, what the mapper wrote is a substring of what the feed wrote. The `name`
-// tag is not this: it is the corner the door stands on ("Market & 8th St").
+// OSM `station_name`, minus "station", is a substring of the feed's; `name` is the street corner.
 function namesStation(written: string, stationName: string): boolean {
   const wanted = written.toLowerCase().replaceAll("station", "").trim();
   return wanted !== "" && stationName.toLowerCase().includes(wanted);
 }
 
-// Each OSM node onto the station it is a way into: the one it names where it names one and that
-// station is within NAMED_ENTRANCE_METERS, otherwise the nearest within OSM_ENTRANCE_METERS. A door
-// a rider may not walk through is returned closed and a node in reach of nothing unmatched — in San
-// Francisco the unmatched are BART's own doors, which the graph already has from BART's feed. One
-// row per direction of the matched station, because the mezzanine is shared.
+// The named station wins over the nearest; in SF the unmatched are BART doors, already in its feed.
 export function matchStationEntrances(
   stations: readonly UndergroundStation[],
   nodes: readonly OsmStationEntrance[],
@@ -578,12 +479,7 @@ export function matchStationEntrances(
   return { entrances, unmatched, closed };
 }
 
-// Muni publishes no entrance at all — no `location_type`, no pathways, nothing — so the Metro's
-// underground stations are entered through OpenStreetMap's own `railway=subway_entrance` nodes.
-// Every Metro station has a mezzanine spanning both directions, so no door is one direction's
-// alone and no station is split. The four Market Street stations share a transfer complex with the
-// BART station under them, which the graph gives one node, so a door there joins the same node
-// whichever of the two it hangs off.
+// Muni publishes no entrances, so these come from OSM; every Metro mezzanine spans both directions.
 async function muniEntrances(feed: GtfsFeed): Promise<FeedEntrances> {
   const stations = undergroundStations(feed);
   const { south, west, north, east } = entranceBox(
@@ -624,9 +520,7 @@ async function muniEntrances(feed: GtfsFeed): Promise<FeedEntrances> {
   return { entrances, split: new Set<string>() };
 }
 
-// Each city's rail feeds. New York: the MTA's subway zip, route_type 1 (the subway proper) and 2
-// (the Staten Island Railway) — the two the map draws. San Francisco: Muni's rail, route_type 0
-// (the Metro lines and the F streetcar) and 5 (the cable cars), plus BART; no buses in either city.
+// route_type 0 light rail, 1 subway, 2 rail (Staten Island Railway), 5 cable car.
 const CITY_FEEDS: Readonly<Record<string, readonly TransitFeedSource[]>> = {
   nyc: [
     {
@@ -668,7 +562,6 @@ const CITY_FEEDS: Readonly<Record<string, readonly TransitFeedSource[]>> = {
   ],
 };
 
-// The cities that have rail at all, in the order the daily schedule job walks them.
 export const TRANSIT_CITIES: readonly string[] = Object.keys(CITY_FEEDS);
 
 export function feedsOf(cityId: string): readonly TransitFeedSource[] {
@@ -699,23 +592,15 @@ export async function loadFeeds(cityId: string): Promise<LoadedFeed[]> {
   return loaded;
 }
 
-// One station a train calls at: where a walker meets it, what a rider calls it, and whether it is
-// entered off the pavement or down a stair.
 export interface TransitStation extends Coord {
   name: string;
-  // The connected component of the feed's own transfers.txt this station is in, from 1, or 0 where
-  // the feed publishes no transfer between two different stations. Two stations sharing a non-zero
-  // id are one place to change trains at.
+  // transfers.txt component, from 1; 0 for none. Stations sharing an id are one transfer point.
   complex: number;
   surface: boolean;
-  // No free crossover: the two directions are two separate places to stand, so the graph gives the
-  // station a node per direction and an entrance only reaches the platform it was cut for. Never
-  // set on a station sharing a complex, where a change of train never reaches the street anyway.
+  // No free crossover; never set within a complex, where a transfer never reaches the street.
   split: boolean;
 }
 
-// One way into a station, placed. `station` indexes the station table, `sides` names the directions
-// whose platform it reaches (bit d for direction d, 3 for both) and `kind` indexes ENTRANCE_KINDS.
 export interface TransitEntrance extends Coord {
   station: number;
   sides: number;
@@ -724,8 +609,6 @@ export interface TransitEntrance extends Coord {
   exit: boolean;
 }
 
-// One route as its agency publishes it. `shortName` is what a rider says ("A", "N", "Yellow"),
-// `longName` the corridor.
 export interface TransitRoute {
   id: string;
   shortName: string;
@@ -734,24 +617,20 @@ export interface TransitRoute {
   textColor: Rgb;
 }
 
-// One trip on a pattern, for the timetable to depart against. `departure` is seconds from midnight
-// of the service day at the pattern's FIRST stop; a trip listed in frequencies.txt has a template
-// departure that no train keeps, which is why the schedule writer reads its bands instead.
 export interface PatternTrip {
   feedId: string;
   tripId: string;
   serviceKey: string; // `${feedId}:${serviceId}`
+  // Seconds after service-day midnight at the first stop; a frequencies.txt trip's is a template.
   departure: number;
 }
 
-// One ordered stop sequence a route runs in one direction: the stations in order, the cumulative
-// seconds from the first of them to each (the median over the trips running it), and those trips.
 export interface TransitPattern {
   laneId: number;
   routeIndex: number;
   direction: number;
   stops: readonly number[]; // indices into the station table
-  offsets: readonly number[]; // seconds from the first stop's departure, non-decreasing, [0] = 0
+  offsets: readonly number[]; // median seconds from the first stop, non-decreasing, [0] = 0
   trips: readonly PatternTrip[];
 }
 
@@ -762,7 +641,6 @@ export interface TransitTopology {
   patterns: readonly TransitPattern[];
 }
 
-// What the share rule threw away, for the ingest log.
 export interface PatternCounts {
   raw: number;
   kept: number;
@@ -779,11 +657,7 @@ function median(values: readonly number[]): number {
   }
 }
 
-// A pattern's stable id: FNV-1a over its route, direction and the NAMES of the stations it calls
-// at. The graph bakes these ids into its board edges and the daily timetable is keyed by them, so
-// the two artifacts are written days apart and have to agree without either reading the other —
-// names are what survives that, exactly as the ferry lanes are keyed by terminal name. A pattern
-// whose stops change gets a new id and simply has no timetable until the graph is rebuilt.
+// FNV-1a over station names, so the graph and a timetable built days later agree without sharing.
 export function laneIdOf(
   routeId: string,
   direction: number,
@@ -797,9 +671,7 @@ export function laneIdOf(
   return hash;
 }
 
-// A feed's routes of the kept types, folded onto their group key. The group's primary row — the
-// lowest route_id — supplies the names and colors, which for BART is the northbound half of a line
-// and for everyone else the route itself.
+// The lowest route_id in a group supplies its names and colors.
 function feedRoutes(
   feed: GtfsFeed,
   source: TransitFeedSource,
@@ -844,7 +716,6 @@ function feedRoutes(
   return routes;
 }
 
-// One station as a feed models it, before the same-name merge below.
 interface RawStation extends Coord {
   key: string; // `${feedId}:${stationId}`
   name: string;
@@ -852,13 +723,7 @@ interface RawStation extends Coord {
   surface: boolean;
 }
 
-// The stations one feed's kept trips call at. GTFS models a station as a parent stop with one child
-// platform per direction, so a stop's `parent_station` is the station and a stop without one stands
-// in for itself. A feed that publishes no parent anywhere has not said which of its stops are one
-// station, so its same-named stops within STATION_MERGE_METERS are chained into one (the display
-// ingest's own figure, measured there against Muni's stop pairs) — otherwise
-// every Muni intersection would be two stations a median apart and a rider changing direction would
-// have no station to change at.
+// A feed with no `parent_station` anywhere gets its same-named nearby stops merged into stations.
 function feedStations(
   feed: GtfsFeed,
   source: TransitFeedSource,
@@ -895,8 +760,7 @@ function feedStations(
       lng,
       name,
       complex: complexes.get(stationId) ?? 0,
-      // A feed that models its stops as stations is saying they are enclosed places with a way in;
-      // one that models nothing is describing the curb, apart from the platforms named above.
+      // A feed that models parent stations is describing enclosed places, not the curb.
       surface: !publishesParents && !source.underground.has(name),
     });
   }
@@ -908,9 +772,7 @@ function feedStations(
   }
 }
 
-// Same-named stops within STATION_MERGE_METERS chained into one station at their centroid, carrying
-// the lowest complex any member is in and underground if any member is. Single-link, so a terminal's
-// three curbs become one station.
+// Single-link, so a terminal's three curbs become one station.
 function mergeByName(
   stations: readonly RawStation[],
   stationOfStop: Map<string, string>,
@@ -921,8 +783,7 @@ function mergeByName(
     const ids = cluster
       .map(({ complex }) => complex)
       .filter((complex) => complex !== 0);
-    // The lowest member key, so the merged station's key does not depend on the order the feed
-    // listed its stops in.
+    // Lowest, so the key doesn't depend on feed order.
     const key = cluster.map(({ key: member }) => member).sort()[0];
     for (const member of cluster) {
       mergedKeyOf.set(member.key, key);
@@ -943,13 +804,9 @@ function mergeByName(
   return { stations: merged, stationOfStop: remapped };
 }
 
-// How far apart a BART station and a Muni station of the same name may stand and still be one place
-// to change trains at. 150 m is the length of a long concourse — Embarcadero's two sets of platforms
-// stand about that far apart — and short enough that two different corners never join.
+// A long concourse: Embarcadero's BART and Muni platforms are about this far apart.
 const NAMED_TRANSFER_METERS = 150;
 
-// Words that say what a place IS rather than which place it is, so one feed writing "Embarcadero
-// Station" and another "Embarcadero" are not two stations.
 const NAME_NOISE: ReadonlySet<string> = new Set([
   "station",
   "bart",
@@ -962,8 +819,7 @@ const NAME_NOISE: ReadonlySet<string> = new Set([
   "street",
 ]);
 
-// Which way the platform faces, written on the end of a Muni stop name. Stripped only from the end,
-// because a name can begin with one and mean it: BART calls a station Downtown Berkeley.
+// Stripped only from the end: BART has a Downtown Berkeley.
 const DIRECTION_WORDS: ReadonlySet<string> = new Set([
   "inbound",
   "outbound",
@@ -984,10 +840,7 @@ function nameTokens(name: string): string[] {
   return tokens;
 }
 
-// Do these two names describe the same place? One's words run inside the other's, in order and
-// unbroken: "Civic Center" inside "Civic Center/UN Plaza", "Glen Park" inside "San Jose
-// Ave/Glen Park Station". A shorter name that is genuinely a different place — 16th St against 24th
-// St — shares no such run, and the distance cap catches what is left.
+// True when one name's tokens run contiguously inside the other's.
 function namesAgree(
   left: readonly string[],
   right: readonly string[],
@@ -1005,14 +858,7 @@ function namesAgree(
   return false;
 }
 
-// One place to change at, across two agencies that never say so. A feed's own transfers.txt is the
-// agency's answer for its own stations and is left alone; what this adds is the join BETWEEN feeds,
-// which neither of San Francisco's publishes — BART and Muni share Embarcadero, Montgomery, Powell,
-// Civic Center, Glen Park and Balboa Park, and without this a rider changing there was sent up to
-// the pavement and back down again, ninety seconds each way and none of it sheltered.
-//
-// A station already in a complex brings the whole complex with it, and a pair in none is given the
-// next free id, so a feed that does publish its transfers keeps the numbering it had.
+// Cross-feed transfers, which neither SF feed publishes; a station brings its whole complex along.
 function joinNamedComplexes(
   stations: RawStation[],
   feedOfKey: ReadonlyMap<string, string>,
@@ -1094,7 +940,6 @@ function joinNamedComplexes(
   return joined;
 }
 
-// A trip's stop_times in stop_sequence order.
 function tripStopTimes(feed: GtfsFeed): Map<string, GtfsRow[]> {
   const byTrip = new Map<string, GtfsRow[]>();
   for (const row of feed.stopTimes) {
@@ -1113,7 +958,6 @@ function tripStopTimes(feed: GtfsFeed): Map<string, GtfsRow[]> {
   return byTrip;
 }
 
-// A pattern under construction: one offset sample per trip, kept until the median is taken.
 interface RawPattern {
   routeIndex: number;
   direction: number;
@@ -1123,8 +967,7 @@ interface RawPattern {
   trips: PatternTrip[];
 }
 
-// A step across the ground in meters, east and north, which is what a bearing and an entrance
-// offset are both measured in.
+// Meters east and north.
 export interface Bearing {
   east: number;
   north: number;
@@ -1157,23 +1000,15 @@ function normalize(vector: Bearing): Bearing | null {
   }
 }
 
-// The line a station's platforms lie along: a point ON the rails and the direction a direction-0
-// train runs there.
 export interface TrackAxis {
-  origin: Coord;
-  bearing: Bearing;
+  origin: Coord; // on the rails
+  bearing: Bearing; // the way a direction-0 train runs
 }
 
-// How far off the axis an entrance has to stand before the rule will name a side. Inside that it is
-// astride the tracks — a station house over the cut, a stair in the middle of a wide avenue — and
-// reaches both platforms.
+// Closer to the axis than this, an entrance is astride the tracks and reaches both platforms.
 const AMBIGUOUS_METERS = 8;
 
-// New York's railway runs right-handed, so a side platform lies under the pavement to the RIGHT of
-// its direction of travel and its stairs rise onto that pavement. The sign of the cross product of
-// the axis with the entrance's offset from it is therefore which platform the stair drops onto.
-// Nothing published says: this rule and the agency's own sign text
-// (data/transit/nyc-entrance-sides.txt) are the whole of what is known.
+// NYC runs right-handed, so a stair reaches the platform of the direction whose right it is on.
 export function sideMask(axis: TrackAxis, entrance: Coord): number {
   const offset = offsetMeters(axis.origin, entrance);
   const across =
@@ -1187,11 +1022,7 @@ export function sideMask(axis: TrackAxis, entrance: Coord): number {
   }
 }
 
-// Which way a direction-0 train runs through each station, as a unit vector, averaged over the
-// patterns calling there: a station the line curves through averages its two legs, and a terminal
-// takes the one neighbor it has. Coarse — it is a chord between two stops half a kilometer apart —
-// so it is only ever used to point the drawn track the right way round, and as the fallback axis
-// where nothing is drawn. `null` where no direction-0 pattern calls at all.
+// Coarse (a chord between neighboring stops), so only used to orient drawn track or as a fallback.
 function rideBearings(
   stations: readonly TransitStation[],
   patterns: readonly TransitPattern[],
@@ -1218,17 +1049,13 @@ function rideBearings(
   return sums.map(normalize);
 }
 
-// The drawn track of every route, keyed by the short and long names the routing artifact and the
-// display artifact both take from the feed's routes.txt — the SBWY blob carries no route id, and
-// those two together separate even New York's three `S` shuttles.
+// Keyed by short + long name: SBWY has no route id, and NYC has three `S` shuttles.
 export type RouteTracks = ReadonlyMap<string, readonly (readonly Coord[])[]>;
 
 export function routeKey(shortName: string, longName: string): string {
   return [shortName, longName].join(KEY_SEPARATOR);
 }
 
-// The city's drawn track, from the display artifact the map already ships. Empty — and the rule
-// falls back to the ride bearing through the station point — for a city that has none.
 export function readRouteTracks(cityId: string): RouteTracks {
   const path = join(SUBWAY_DIR, `${cityId}.bin`);
   if (!existsSync(path)) {
@@ -1263,21 +1090,11 @@ export function readRouteTracks(cityId: string): RouteTracks {
   return tracks;
 }
 
-// How much track the tangent is measured over, either side of the station. A GTFS shape puts its
-// vertices a few meters apart, so the one segment the station stands beside is mostly quantization
-// noise; 25 m is a platform's worth of rail, short enough to follow a curve through a station.
+// Each side of the station; a single GTFS shape segment is mostly quantization noise.
 const TANGENT_METERS = 25;
-// How far a station may stand from the drawn track and still be on it. A shape the display ingest
-// cut at the city edge can leave a station with a polyline that only passes within a kilometer, and
-// a perpendicular taken off that says nothing; past this the ride through the station point is the
-// honest answer.
 const MAX_TRACK_METERS = 150;
 
-// Where the rails run past a station: the nearest point on any of its routes' drawn lines, and the
-// chord of the track about it, turned to face the way a direction-0 train goes. This is what the
-// side rule measures from. The station's OWN point will not do — the feed puts Nevins St over the
-// northeastern pavement rather than between the tracks, which pushes both of its northeastern
-// stairs onto the wrong side of the station and into the ambiguous band.
+// Measured from the track, not the station point: the feed puts Nevins St over the sidewalk.
 function trackAxis(
   station: Coord,
   lines: readonly (readonly Coord[])[],
@@ -1328,8 +1145,6 @@ function trackAxis(
     const offset = offsetMeters(origin, point);
     return Math.hypot(offset.east, offset.north);
   };
-  // Outward along the polyline from the segment the station stands beside, until the vertex is a
-  // tangent's length away or the line runs out.
   const walk = (step: number): Coord => {
     let at = step < 0 ? bestVertex : bestVertex + 1;
     while (
@@ -1345,8 +1160,7 @@ function trackAxis(
   if (chord === null) {
     return null;
   }
-  // A drawn line is whichever direction its shape was published in, and both directions' shapes are
-  // drawn where they run apart, so the track says the axis and the ride says which end is north.
+  // A shape runs whichever way it was published, so the ride orients it.
   const forward = chord.east * ride.east + chord.north * ride.north >= 0;
   return {
     origin,
@@ -1354,10 +1168,6 @@ function trackAxis(
   };
 }
 
-// The drawn lines of every route calling at each station, which are the candidates its platforms
-// could lie along. Both directions' shapes are in there where the display ingest kept them, and the
-// nearest wins: a station stands beside its own track and not beside the express rails under the
-// next avenue.
 function drawnLinesByStation(
   stations: readonly TransitStation[],
   routes: readonly TransitRoute[],
@@ -1385,21 +1195,15 @@ function drawnLinesByStation(
   return perStation;
 }
 
-// What the placement made of the entrance sources, for the ingest log.
 export interface EntranceCounts {
-  // Station ids an entrance or a no-crossover flag names that the topology carries no station for:
-  // a station no kept pattern calls at, or one renamed since the source was published.
-  unmatched: string[];
-  dropped: number; // the entrances standing at those stations
-  split: number; // stations given a node per direction
-  // Flagged no-crossover but inside a transfer complex, which is one node whatever its members say.
+  unmatched: string[]; // station ids with no station in the topology
+  dropped: number; // entrances at those stations
+  split: number;
   splitInComplex: string[];
-  // Entrances sided against drawn track rather than against the ride through the station point.
   sidedByTrack: number;
 }
 
-// Every feed's entrances, read before the build so the build itself stays synchronous — the daily
-// timetable rebuilds the topology too, and it has no business reading a Socrata dataset to do it.
+// Separate from the build, which the daily timetable also runs and must stay synchronous.
 export async function loadEntrances(
   loaded: readonly LoadedFeed[],
 ): Promise<Map<string, FeedEntrances>> {
@@ -1413,8 +1217,7 @@ export async function loadEntrances(
   return byFeed;
 }
 
-// The entrances onto the built stations, and the split flags onto the stations themselves. Runs
-// after the patterns because the side rule is a sign against the northbound ride.
+// Runs after the patterns, since the side rule needs the direction-0 ride.
 function placeEntrances(
   loaded: readonly LoadedFeed[],
   byFeed: ReadonlyMap<string, FeedEntrances>,
@@ -1424,8 +1227,7 @@ function placeEntrances(
   patterns: readonly TransitPattern[],
   tracks: RouteTracks,
 ): { entrances: TransitEntrance[]; counts: EntranceCounts } {
-  // A complex id is set on every station its feed lists in transfers.txt, most of them only
-  // transferring to themselves, so what makes a station part of a complex is SHARING its id.
+  // Most transfers.txt stations transfer only to themselves; a complex means a shared id.
   const complexSize = new Map<number, number>();
   for (const { complex } of stations) {
     if (complex !== 0) {
@@ -1448,9 +1250,7 @@ function placeEntrances(
     }
   }
 
-  // Only a split station is ever asked which platform a stair drops onto, and there are 86 of them
-  // against 496 stations, so the nearest point on the track is looked up when one comes up rather
-  // than for the whole city.
+  // Lazy: only split stations (86 of 496) need an axis.
   const bearings = rideBearings(stations, patterns);
   const drawnFor = drawnLinesByStation(stations, routes, patterns, tracks);
   const axes = new Map<number, { axis: TrackAxis; drawn: boolean } | null>();
@@ -1486,8 +1286,6 @@ function placeEntrances(
         dropped += 1;
         continue;
       }
-      // A station a rider can cross between inside has one way in whichever stair they take, so the
-      // rule is only ever asked about a split one.
       const found = stations[index].split ? axisOf(index) : null;
       if (found?.drawn) {
         onTrack += 1;
@@ -1524,28 +1322,19 @@ function placeEntrances(
   };
 }
 
-// Every station, route and stop pattern the city's feeds describe. Both artifacts are built from
-// this one function, so the topology the graph is cut from and the timetable it departs against
-// cannot describe different patterns.
+// Shared by the topology and the timetable, so the two can't describe different patterns.
 export function buildTopology(
   loaded: readonly LoadedFeed[],
-  // The daily timetable passes 0: it emits bands for the lanes the COMMITTED topology carries, and a
-  // pattern this run would have thrown away is exactly the one whose trips it must still find.
+  // The timetable passes 0: it must find trips for every lane the committed topology carries.
   minPatternShare: number = MIN_PATTERN_SHARE,
-  // From `loadEntrances`. Left out — by the timetable, and by a city whose feeds publish none — the
-  // topology carries no entrance and no station is split.
   feedEntrances: ReadonlyMap<string, FeedEntrances> = new Map(),
-  // From `readRouteTracks`. Left out, an entrance is sided against the ride through the station
-  // point, which is coarser but never unavailable.
   tracks: RouteTracks = new Map(),
 ): {
   topology: TransitTopology;
   counts: PatternCounts;
   entranceCounts: EntranceCounts;
 } {
-  // Every feed's routes first and together, so the table can be ordered by id and a trip can be
-  // pointed at its place in it: the artifact has no display order to keep, unlike SBWY's route mask,
-  // and an id is steadier than the row order of a routes.txt.
+  // All feeds' routes first, so the table can be ordered by id.
   const feedRouteIds = new Map<string, Map<string, string>>();
   const collected: TransitRoute[] = [];
   for (const { source, feed } of loaded) {
@@ -1572,9 +1361,7 @@ export function buildTopology(
 
   let firstComplexId = 1;
   for (const { source, feed } of loaded) {
-    // Against this feed's own route ids and no other's: a route_id is unique within a feed and
-    // nowhere else, and Muni's bus routes are named exactly as BART's route_ids for four of its
-    // lines.
+    // Per feed: four Muni bus route_ids equal BART route_ids.
     const artifactOf = feedRouteIds.get(source.id) ?? new Map<string, string>();
     const routeOfTrip = new Map<string, number>();
     for (const trip of feed.trips) {
@@ -1583,8 +1370,7 @@ export function buildTopology(
         routeOfTrip.set(trip.trip_id, index);
       }
     }
-    // Two feeds in one file, so the second agency's complex ids start past the first's: a complex
-    // id means one place only within the feed that numbered it.
+    // Each feed's complex ids start past the previous feed's.
     const complexes = transferComplexes(feed, firstComplexId);
     firstComplexId = nextComplexId(complexes);
     const { stations, stationOfStop } = feedStations(
@@ -1600,8 +1386,7 @@ export function buildTopology(
     perFeed.push({ source, feed, routeOfTrip, stationOfStop });
   }
 
-  // Sorted south to north, then west to east, then by name — the order every other point source in
-  // this pipeline is written in.
+  // South to north, west to east, then name, like every other point source.
   rawStations.sort(
     (left, right) =>
       left.lat - right.lat ||
@@ -1663,24 +1448,18 @@ export function buildTopology(
         const stationKey = stationOfStop.get(row.stop_id);
         const index =
           stationKey === undefined ? undefined : stationIndexOf.get(stationKey);
-        // The DEPARTURE, not the arrival: a train that holds five minutes at a BART platform has
-        // not left, and a rider who reaches it during the dwell catches it. Offsets built off the
-        // arrival made that rider miss the train they were standing next to. Each ride then absorbs
-        // the dwell at its far end, which is where the time is actually spent.
+        // Departure, not arrival: a rider reaching the platform during a dwell still catches it.
         const at = toSeconds(row.departure_time || row.arrival_time);
         if (index === undefined || at === null) {
           broken = true;
           break;
         }
-        // A pattern calling twice in a row at what the merge made one station is one call: the
-        // second is the other curb of the same corner, and a platform node per call would let the
-        // router board a train it is already on.
+        // Two curbs merged into one station are one call, or the router could board its own train.
         if (index === stops[stops.length - 1]) {
           continue;
         }
         stops.push(index);
-        // The feed's own name, not the one a rider is shown: a lane id has to mean the same thing
-        // to a timetable built days later, and renaming a station for display must not move it.
+        // The feed's name, not the display name, so a display rename doesn't move the lane id.
         stopNames.push(rawStations[index].name);
         offsets.push(at - departure);
       }
@@ -1715,8 +1494,6 @@ export function buildTopology(
     }
   }
 
-  // The share rule, per (route, direction): a pattern earns its platform nodes by carrying a real
-  // share of the service, and the busiest pattern of a direction is kept whatever its share.
   const tripsPerDirection = new Map<string, number>();
   const busiest = new Map<string, number>();
   for (const pattern of raw.values()) {
@@ -1746,8 +1523,7 @@ export function buildTopology(
       continue;
     }
 
-    // Two trips can put two stops a second apart in either order, so the running maximum is what
-    // keeps a ride from running backwards.
+    // Medians of close stops can invert, so a running max keeps rides from going backwards.
     let running = 0;
     const offsets = pattern.samples.map((samples) => {
       running = Math.max(running, median(samples));
@@ -1758,13 +1534,10 @@ export function buildTopology(
       pattern.direction,
       pattern.stopNames,
     );
-    // Catches a hash collision and, with it, two patterns whose stations differ but whose station
-    // NAMES do not — the lane id is built from names, so those would be one lane to the timetable.
+    // Catches hash collisions and distinct patterns with identical station names.
     const seen = laneKeys.get(laneId);
     if (seen !== undefined && seen !== key) {
-      // Loud, and then on without this pattern: the daily job rebuilds the timetable from a feed
-      // that can change under it, and a collision that stopped the run would take every other city's
-      // schedule down with it. The lane the collision names keeps the pattern that claimed it first.
+      // Warn, not throw: failing would take every other city's daily schedule down too.
       const readable = (text: string): string =>
         text.replaceAll(KEY_SEPARATOR, " · ");
       console.warn(
@@ -1784,8 +1557,7 @@ export function buildTopology(
     });
   }
 
-  // Ordered by lane id, which the timetable orders by too: the ids are what the two artifacts share,
-  // and neither's order may depend on the other's tables.
+  // By lane id, as the timetable orders them.
   patterns.sort((left, right) => left.laneId - right.laneId);
 
   const { entrances, counts: entranceCounts } = placeEntrances(
@@ -1805,9 +1577,6 @@ export function buildTopology(
   };
 }
 
-// The TRNS blob: a header, three fixed-size tables, the pattern-stop varint blob and the name
-// table. Little-endian throughout; coordinates quantized to COORD_SCALE about a south-west origin,
-// exactly the shared codec.
 export function encodeTopology(topology: TransitTopology): Uint8Array {
   const { stations, entrances, routes, patterns } = topology;
   if (stations.length > 0xffff) {
@@ -1908,7 +1677,7 @@ export function encodeTopology(topology: TransitTopology): Uint8Array {
       record + 12,
       (entrance.entry ? ENTRY_FLAG : 0) | (entrance.exit ? EXIT_FLAG : 0),
     );
-    // The name slot a door's own wording would go in, which nothing writes yet.
+    // Entrance name slot, not yet written.
     entranceView.setUint16(record + 14, UNNAMED_ID, true);
   });
 
@@ -1988,8 +1757,7 @@ export function encodeTopology(topology: TransitTopology): Uint8Array {
   return bytes;
 }
 
-// The reader the Rust tiler's is written against, and what S3 reads to name a ride. `trips` comes
-// back empty: the artifact carries the topology, not the schedule.
+// `trips` comes back empty: the artifact carries no schedule.
 export function decodeTopology(bytes: Uint8Array): TransitTopology {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const magic = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]);
