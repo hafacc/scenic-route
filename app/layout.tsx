@@ -11,9 +11,7 @@ import {
 } from "../src/site";
 import "./globals.css";
 
-// This is also the root route's metadata: a page that sets `openGraph` or `alternates` replaces the
-// layout's whole object rather than merging into it, so app/page.tsx sets neither and this carries
-// the root's canonical and card itself.
+// Also the root page's metadata: a page setting `openGraph` or `alternates` replaces, not merges.
 export const metadata: Metadata = {
   ...pageMetadata({
     path: "",
@@ -21,8 +19,7 @@ export const metadata: Metadata = {
     description: SITE_DESCRIPTION,
     absoluteTitle: true,
   }),
-  // Relative metadata URLs resolve against this. Every one this app writes is already absolute, but
-  // Next warns without it and a future relative one would otherwise resolve against localhost.
+  // Next warns without it, and a relative metadata URL would otherwise resolve against localhost.
   metadataBase: new URL(SITE_ORIGIN),
   applicationName: SITE_NAME,
   // verification: { google: "<token from Search Console>" },
@@ -49,8 +46,7 @@ export default function RootLayout({
           {children}
         </ThemeProvider>
         <ServiceWorker />
-        {/* The app is a client-rendered map: the document a crawler is handed says almost nothing on
-            its own, so what the thing IS gets stated here, where it does not depend on JS running. */}
+        {/* The map is client-rendered, so this is what a crawler without JS learns about the app. */}
         <script
           type="application/ld+json"
           // biome-ignore lint/security/noDangerouslySetInnerHtml: a build-time constant, not input

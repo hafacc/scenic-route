@@ -1,7 +1,4 @@
-// The only document in the export that is prose rather than a map. Everything else the app shows is
-// drawn client-side onto a canvas, so this is the one page a reader without JavaScript — or a
-// crawler, or a link preview — can actually read. Server-rendered on purpose: no "use client" here,
-// and nothing on this page needs a browser.
+// Server-rendered on purpose: the one page a reader without JavaScript, or a crawler, can read.
 
 import type { Metadata } from "next";
 import { FiExternalLink, FiMapPin } from "react-icons/fi";
@@ -24,12 +21,7 @@ export const metadata: Metadata = pageMetadata({
     "What Scenic Route optimizes for, its four walking modes, where it works, and the open data behind every layer.",
 });
 
-// Name and color per mode, kept as a plain fact rather than a written description of what each mode
-// is for. Repeated here rather than read off MODES, because MODES cannot be imported into a server
-// component: it pulls in src/routing/factors.tsx, which is `"use client"`, and a client module
-// imported from the server is a reference proxy rather than the values. Keying the record by
-// `ModeId` — a type, so the import is erased — is what keeps the two in step: a fifth mode fails the
-// build here rather than quietly leaving this page listing four of five.
+// Not read off MODES: it imports a "use client" module, which a server component sees as a proxy.
 const MODE_COPY: Record<ModeId, { name: string; color: string }> = {
   naturalist: { name: "Naturalist", color: "#0d9488" },
   rain: { name: "Rain", color: "#0284c7" },
@@ -56,7 +48,7 @@ function SourceList({ sources }: { sources: readonly DataSource[] }) {
           {license === undefined ? (
             <span className="text-slate-500 dark:text-slate-400">{detail}</span>
           ) : (
-            // Relative, so it resolves under whatever base path the deploy injects.
+            // Relative, so it resolves under the base path the deploy injects.
             <a
               href={license}
               className="text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-700 dark:text-slate-400 dark:decoration-slate-600 dark:hover:text-slate-200"
@@ -166,8 +158,7 @@ export default function AboutPage() {
         </div>
       </section>
 
-      {/* Relative hrefs, as everywhere else in the app: the deploy sits under a basePath the code is
-          never told about, and a root-absolute link leaves the site. */}
+      {/* Relative: the deploy's basePath is unknown here, and a root-absolute href leaves the site. */}
       <nav className="mt-10 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-slate-200/60 pt-5 text-sm font-medium dark:border-slate-700/60">
         <a
           href={MODES_PAGE.href}
