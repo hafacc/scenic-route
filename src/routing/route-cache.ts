@@ -1,12 +1,4 @@
-// The optimal route is piecewise-constant in a single weight: each candidate path's cost is linear
-// in that weight, so the cheapest path changes only at discrete breakpoints, and any weight bracketed
-// by two samples that share a path provably yields that path — no recompute. That interval argument
-// is strictly one-dimensional, so with several scenic weights plus the gates the
-// cache brackets only the *active* slider: whichever single one moved since the last call. Moving
-// another slider or toggling a gate changes the fixed context the range was built against, so the old range
-// is dropped and a fresh one is started around the current slider — seeded with the just-computed
-// point, which is still valid because only the active slider moved. It reports whether the path
-// changed so the caller can skip redrawing an identical route.
+// The optimal path is piecewise-constant in one weight, so samples sharing a path bracket it; 1-D only.
 
 import {
   GATE_KEYS,
@@ -19,15 +11,11 @@ import type { RoutingGraph } from "./graph";
 import { findRoute, type RouteResult } from "./search";
 import type { Snap } from "./snap";
 
-// The numeric weights that a slider can move; the gates are discrete contexts, not axes. Read off
-// the cost model's own list rather than written out again: `sameWeights` reads this, so a slider
-// left out of it is one whose moves the cache cannot see, and it answers them with the previous
-// route.
+// Read off the cost model's list, since a missing slider's moves would silently return the old route.
 const AXES = WEIGHT_KEYS;
 type Axis = WeightKey;
 
-// Weights are quantized to this many decimals before caching, so slider values equal in intent match
-// despite float drift (0.01 has no exact binary form).
+// Quantized so slider values equal in intent match despite float drift.
 const WEIGHT_DECIMALS = 3;
 
 function quantize(weight: number): number {
@@ -43,10 +31,7 @@ function quantizeWeights(weights: RouteWeights): RouteWeights {
   return quantized;
 }
 
-// A switch that changed is not a bracketable axis and, more importantly, is not the same route. Read
-// off the two lists rather than written out here: this comparison decides whether the search runs at
-// all, so a switch missing from it is a control that silently does nothing. The planner's own flag is
-// in it for that reason — it asks for a walking route and a riding one from the same endpoints.
+// A missing switch would be a control that silently does nothing.
 const SWITCHES = [...GATE_KEYS, ...INTERNAL_FLAGS] as const;
 
 function sameGates(left: RouteWeights, right: RouteWeights): boolean {
@@ -78,13 +63,10 @@ interface Sample {
 
 export interface CachedRoute {
   result: RouteResult | null;
-  // false when the path is identical to the one the previous call returned, so the caller can leave
-  // the drawn route untouched.
   changed: boolean;
 }
 
-// One per live routing session. It keys off the endpoints and clears when they change, so the caller
-// only has to hold a stable instance.
+// Clears when the endpoints change, so the caller only needs a stable instance.
 export class RouteCache {
   private endpointsKey = "";
   private axis: Axis | null = null; // the slider the samples bracket; null when none is established
@@ -93,10 +75,7 @@ export class RouteCache {
   private lastResult: RouteResult | null = null;
   private lastSignature: string | null = null;
 
-  // The search is injected so tests can pass a deterministic stub. It is NOT a global `mock.module`
-  // on purpose: a module mock leaks across bun test files (findRoute is shared by the oracle tests),
-  // and its teardown is version- and order-dependent. Production constructs `new RouteCache()` and
-  // gets the real findRoute.
+  // Injected, not `mock.module`, since module mocks leak across bun test files.
   constructor(private readonly search: typeof findRoute = findRoute) {}
 
   route(
@@ -115,12 +94,10 @@ export class RouteCache {
       this.lastSignature = null;
     }
 
-    // Identical inputs re-render to the identical route: return it without touching the search.
     if (this.last !== null && sameWeights(current, this.last)) {
       return { result: this.lastResult, changed: false };
     }
 
-    // The active slider is whichever single weight moved since the last call, with the gates unchanged.
     // A first call, a toggled gate, or two weights moving at once has no single bracketable axis.
     let active: Axis | null = null;
     if (this.last !== null && sameGates(current, this.last)) {
@@ -131,13 +108,10 @@ export class RouteCache {
     }
 
     if (active === null) {
-      // No bracketable axis: drop the range and compute this point on its own.
       this.axis = null;
       this.samples = [];
     } else if (active !== this.axis) {
-      // Switched slider (or established the first axis): the old range brackets another slider, so
-      // drop it and seed the new one with the just-computed point. That point is still valid — only
-      // the active slider moved, so the context the new range brackets against is unchanged.
+      // The just-computed point is still valid, since only the active slider moved.
       this.axis = active;
       this.samples =
         this.last !== null && this.lastSignature !== null
@@ -170,9 +144,7 @@ export class RouteCache {
     return { result: sample.result, changed };
   }
 
-  // The route at the active axis's current weight, reusing a settled interval or computing and
-  // inserting a new sample. `weights` is the full current context the search runs on; only the active
-  // axis varies across the samples, so an interval bracketed by one path stays that path.
+  // Only the active axis varies across samples, so an interval bracketed by one path stays that path.
   private sampleFor(
     graph: RoutingGraph,
     start: Snap,

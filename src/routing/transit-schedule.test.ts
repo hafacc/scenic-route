@@ -1,7 +1,4 @@
-// The transit artifacts end to end: build both out of one hand-written feed (./transit.fixture), put
-// each through its own encoder, decode them with the readers the tiler and the client use, and ask
-// the questions the router asks — which patterns are real service, how long the ride between two
-// stops is, and when the next train leaves the platform you are standing on.
+// Both artifacts from one feed through their real encoders and decoders, asked what the router asks.
 
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -31,8 +28,7 @@ import {
 } from "./transit.fixture";
 import { decodeSchedule, resolveTimetable } from "./transit-schedule";
 
-// The fixtures below build their instants with the local Date constructor, so their timetables are
-// read in the runner's own zone.
+// Instants use the local Date constructor, so timetables are read in the runner's own zone.
 const LOCAL_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 // A lane id no pattern in the fixture's feeds hashes to.
@@ -49,7 +45,6 @@ function topology() {
   return buildTopology(fixtureFeeds());
 }
 
-// The record the client would fetch, from the feed the tiler's topology was cut from.
 function timetable(date: Date) {
   const bytes = encodeTimetable(
     buildTimetable(fixtureFeeds(), topology().topology),
@@ -66,10 +61,7 @@ test("the fixture's calendar assumptions hold", () => {
   expect(new Date(2026, 8, 5).getDay()).toBe(6); // Saturday
 });
 
-// The daily timetable is keyed to the graph that is DEPLOYED, so it emits bands for the lanes the
-// committed topology carries and reads the feeds with the share rule off. Rebuilding the topology
-// here instead meant a pattern that slipped under 2% today, or a station the agency renamed, left a
-// lane the graph can still board with no departures at all and nothing said about it.
+// Keyed to the deployed topology, so a lane the graph can board never silently lacks departures.
 test("the timetable covers exactly the committed topology's lanes", () => {
   const unfiltered = buildTopology(fixtureFeeds(), 0).topology;
   const committed = {
@@ -84,13 +76,12 @@ test("the timetable covers exactly the committed topology's lanes", () => {
   expect(built.patterns.map((pattern) => pattern.laneId).sort()).toEqual(
     committed.patterns.map((pattern) => pattern.laneId).sort(),
   );
-  // The working the share rule throws out of the graph is still a lane while the graph carries it.
+  // The working the share rule drops from the graph is still a lane while the graph carries it.
   expect(
     built.lanes.some(
       (lane) => built.patterns[lane.patternIndex].laneId === ONE_OFF_LANE,
     ),
   ).toBe(true);
-  // And a lane nothing runs gets no bands rather than a guess.
   expect(
     built.lanes.some(
       (lane) => built.patterns[lane.patternIndex].laneId === UNRUN_LANE,
@@ -115,9 +106,7 @@ test("a timetable is read in the city's zone, not the reader's", () => {
   );
   const { record } = decodeSchedule(bytes);
 
-  // One instant: 11:30 in New York, 08:30 in Los Angeles. The trunk's last weekday train leaves at
-  // 10:00, so a reader on the west coast handed New York's timetable in their own zone is offered a
-  // train that went an hour and a half ago.
+  // 11:30 in New York is 08:30 in Los Angeles; read in the viewer's zone, the 10:00 train would look live.
   const midMorning = new Date("2026-09-02T15:30:00Z");
   const east = resolveTimetable(record, midMorning, "America/New_York");
   const west = resolveTimetable(record, midMorning, "America/Los_Angeles");
@@ -126,8 +115,7 @@ test("a timetable is read in the city's zone, not the reader's", () => {
     FIRST_TRUNK_DEPARTURE + SECONDS_PER_DAY,
   );
 
-  // And the service DAY moves too: past midnight in New York is still the evening before in
-  // California, which is a different row of the calendar.
+  // Past midnight in New York is still the evening before in California, a different calendar row.
   const afterMidnight = new Date("2026-09-02T05:30:00Z");
   expect(shiftedDay(afterMidnight, 0, "America/New_York")).toBe(20260902);
   expect(shiftedDay(afterMidnight, 0, "America/Los_Angeles")).toBe(20260901);
@@ -146,7 +134,6 @@ test("the two curbs of one name are one station, and the underground one is not 
     "Delta",
   ]);
   const bay = built.stations[names.indexOf("Bay")];
-  // The centroid of the two curbs, so the station stands between them.
   expect(bay.lat).toBeCloseTo(40.7101, 4);
   expect(
     built.stations.every(
@@ -231,18 +218,15 @@ test("the next train is the next train, at every stop of the pattern", () => {
     departure: FIRST_TRUNK_DEPARTURE,
     wait: FIRST_TRUNK_DEPARTURE - wall,
   });
-  // Two stops along, the same train leaves five minutes later.
   expect(timing.board(TRUNK_LANE, 2, 0)).toEqual({
     departure: FIRST_TRUNK_DEPARTURE + TRUNK_OFFSETS[2],
     wait: FIRST_TRUNK_DEPARTURE + TRUNK_OFFSETS[2] - wall,
   });
-  // Walking there first catches a later train, not the same one.
   const elapsed = 18 * 60;
   expect(timing.board(TRUNK_LANE, 0, elapsed)).toEqual({
     departure: FIRST_TRUNK_DEPARTURE + 2 * TRUNK_HEADWAY,
     wait: FIRST_TRUNK_DEPARTURE + 2 * TRUNK_HEADWAY - wall - elapsed,
   });
-  // A stop the pattern does not have.
   expect(timing.board(TRUNK_LANE, 9, 0)).toBeNull();
 });
 
@@ -265,8 +249,7 @@ test("the last train of the band is the last train, and tomorrow's is tomorrow's
     departure: LAST_TRUNK_DEPARTURE,
     wait: LAST_TRUNK_DEPARTURE - wall,
   });
-  // Past it, the next weekday train is the next day's first — the three service days around the walk
-  // are what makes a walk near midnight work at all.
+  // The three service days around the walk are what make a walk near midnight work.
   expect(timing.board(TRUNK_LANE, 0, 10 * 60)).toEqual({
     departure: FIRST_TRUNK_DEPARTURE + 86_400,
     wait: FIRST_TRUNK_DEPARTURE + 86_400 - wall - 600,
@@ -276,9 +259,7 @@ test("the last train of the band is the last train, and tomorrow's is tomorrow's
 test("a holiday runs the Saturday service and nothing else", () => {
   expect(HOLIDAY).toBe(20260904);
   const timing = timetable(new Date(2026, 8, 4, 12, 0));
-  // The weekday-only branch ran yesterday and does not run again for days: no train at all.
   expect(timing.board(BRANCH_LANE, 0, 0)).toBeNull();
-  // The trunk runs on the Saturday timetable that the exception adds, whose last train is 10:00.
   expect(timing.board(TRUNK_LANE, 0, 0)).toEqual({
     departure: 8 * 3600 + 86_400,
     wait: 8 * 3600 + 86_400 - 12 * 3600,
@@ -294,11 +275,7 @@ test("a frequency-based service boards off its published headway", () => {
   });
 });
 
-// The standing San Francisco artifact, which holds two agencies in one record: BART's calendars run
-// into 2027 while Muni's ended on Friday 2026-08-28. A fallback that asked whether the RECORD had
-// run out would never fire for Muni, and every Muni Metro lane in the graph would have no departures
-// for the rest of the year. Read off the shipped file rather than a fixture, because the shape that
-// broke it is the one the agency publishes.
+// Muni's calendars ended 2026-08-28 while BART's run into 2027; read off the shipped file.
 test("a weekday past Muni's calendars still boards Muni, and BART resolves normally", () => {
   const bytes = new Uint8Array(
     readFileSync(
@@ -320,8 +297,7 @@ test("a weekday past Muni's calendars still boards Muni, and BART resolves norma
   expect(live.length).toBeGreaterThan(0); // BART, inside its own range
   expect(stale.length).toBeGreaterThan(0); // Muni, voted in past the end of its own
 
-  // Every lane those services run has a train that Friday lunchtime. The 37 Muni Metro lanes
-  // (J/K/L/M/N/T) are in here, beside the cable cars and the F.
+  // All 37 Muni Metro lanes (J/K/L/M/N/T) are in here, beside the cable cars and the F.
   const noon = new Date(Date.UTC(2026, 8, 4, 19, 0, 0)); // 12:00 PDT
   const table = resolveTimetable(record, noon, "America/Los_Angeles");
   const lanes = new Set(

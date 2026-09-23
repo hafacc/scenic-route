@@ -1,5 +1,4 @@
-// The page's end of the routing worker. A request a newer one overtakes is answered `stale`, which
-// resolves to null: the caller has already been superseded and drops the frame.
+// An overtaken request is answered `stale`, which resolves to null.
 
 import type { Plan } from "./alternatives";
 import { graphBuffer, type RoutingGraph } from "./graph";
@@ -47,13 +46,11 @@ interface WaypointsSettle {
 
 type Settle = RouteSettle | LoadSettle | PlanSettle | WaypointsSettle;
 
-// The worker as this client uses it, so a test can drive the same code over a fake one.
+// So a test can drive the same code over a fake worker.
 export interface RouterPort {
   postMessage(request: RouterRequest): void;
   onmessage: ((event: MessageEvent<RouterResponse>) => void) | null;
-  // A worker that never started (its chunk 404s after a deploy) and a reply that cannot be cloned
-  // both arrive here and nowhere else. Without them every request made after one stays pending for
-  // the life of the page, and the panel spins with nothing to say.
+  // A worker whose chunk 404s, or an uncloneable reply, lands only here; otherwise requests hang forever.
   onerror: ((event: unknown) => void) | null;
   onmessageerror: ((event: unknown) => void) | null;
 }
@@ -61,12 +58,10 @@ export interface RouterPort {
 export class RouterClient {
   private readonly port: RouterPort;
   private readonly pending = new Map<number, Settle>();
-  // Per city, and dropped again when its load fails, so a decode that ran out of memory is asked
-  // for again rather than remembered as done.
+  // Dropped when a load fails, so an out-of-memory decode is retried rather than remembered.
   private readonly loads = new Map<string, Promise<void>>();
   private nextId = 1;
-  // Set once the worker has failed. Nothing it is asked afterwards can be answered, so every later
-  // request is refused with the same error rather than left hanging.
+  // Once set, every later request is refused with the same error rather than left hanging.
   private dead: Error | null = null;
 
   constructor(port?: RouterPort) {
@@ -124,9 +119,7 @@ export class RouterClient {
     };
   }
 
-  // The bytes are cloned rather than fetched again; both decoders view their own copy in place.
-  // Resolves once the worker has decoded them, so a caller can wait rather than post a search at a
-  // city the worker never managed to load.
+  // Resolves once decoded, so a caller can wait rather than search a city that never loaded.
   load(cityId: string, graph: RoutingGraph): Promise<void> {
     const loading = this.loads.get(cityId);
     if (loading) {
@@ -160,8 +153,7 @@ export class RouterClient {
     return loaded;
   }
 
-  // Field by field rather than spread: a caller's request object may hang the whole decoded graph
-  // off itself, and every own property of it would be cloned across the thread boundary.
+  // Field by field, since a caller's request may hang the whole decoded graph off itself.
   route(request: RouteRequest): Promise<RouteReply | null> {
     const { cityId, clock, weights, start, dest } = request;
     return this.ask((id) => ({
@@ -175,8 +167,7 @@ export class RouterClient {
     }));
   }
 
-  // Resolves null where a newer plan overtook this one, as `route` does. `onPreview` is handed the
-  // max-scenic route as soon as it is found, which is what the map draws while the sweep runs.
+  // `onPreview` gets the max-scenic route as soon as it's found, for the map to draw early.
   plan(
     request: RouteRequest,
     onPreview: (result: RouteResult) => void,
@@ -191,8 +182,7 @@ export class RouterClient {
     });
   }
 
-  // The pins for the route on screen, priced against the fields only the worker has. Resolves null
-  // where a newer route's pins overtook these, as `route` does.
+  // Resolves null where a newer route's pins overtook these, as `route` does.
   waypoints(request: WaypointRequest): Promise<WaypointPlan | null> {
     const { cityId, clock, weights, steps } = request;
     if (this.dead) {
@@ -244,7 +234,6 @@ export class RouterClient {
     });
   }
 
-  // Every promise still waiting is rejected together: they were all waiting on the same worker.
   private die(error: Error): void {
     this.dead = error;
     const waiting = [...this.pending.values()];

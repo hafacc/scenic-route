@@ -12,12 +12,10 @@ import type { RouteResult, RouteStep } from "./search";
 
 const SCALE = 1e-6;
 
-// buildDirections reads edge geometry through the module-level path cache, which is keyed by edge id
-// only; another test file's synthetic graph can reuse the same ids, so reset it before each test.
+// The path cache is keyed by edge id only, and other test files' graphs reuse the same ids.
 beforeEach(clearEdgePathCache);
 
-// A minimal geometry-less graph: every edge is a straight line between two node coordinates, which
-// is all buildDirections needs (it reads step labels directly and only calls edgePath for bearings).
+// Straight edges between node coordinates are all buildDirections needs for bearings.
 function makeGraph(nodes: ReadonlyArray<[number, number]>): RoutingGraph {
   const count = nodes.length;
   const nodeQx = new Int32Array(count);
@@ -53,7 +51,6 @@ interface EdgeSpec {
   bStop?: string; // a ferry edge's terminal name at node b
 }
 
-// Build steps (and the geometry-less edge arrays they reference) walking a -> b along each spec.
 function makeResult(graph: RoutingGraph, specs: ReadonlyArray<EdgeSpec>) {
   const edgeCount = specs.length;
   const edgeNodeA = new Uint32Array(edgeCount);
@@ -61,8 +58,7 @@ function makeResult(graph: RoutingGraph, specs: ReadonlyArray<EdgeSpec>) {
   const edgeGeomOffset = new Uint32Array(edgeCount).fill(NO_GEOMETRY);
   const edgeGeomCount = new Uint16Array(edgeCount);
   const edgeDurationSeconds = new Uint16Array(edgeCount);
-  // buildRuns runs the ETA clock forward over the steps to pick each ferry's sailing, so the fixture
-  // owes it the fields rawSeconds reads: the kind byte, the length, and the island flags.
+  // buildRuns runs the ETA clock to pick sailings, so it needs what rawSeconds reads.
   const edgeLength = new Float32Array(edgeCount);
   const edgeKindSide = new Uint8Array(edgeCount);
   const kindByte: Record<EdgeKind, number> = {
@@ -75,8 +71,6 @@ function makeResult(graph: RoutingGraph, specs: ReadonlyArray<EdgeSpec>) {
     board: 6,
     ride: 7,
   };
-  // The name table and per-edge name id back edgeName(), which the ferry maneuver reads for its
-  // route; the ferry endpoint map carries the two terminal names per ferry edge.
   const NAME_NONE = 0xffff;
   const edgeNameId = new Uint16Array(edgeCount).fill(NAME_NONE);
   const names: string[] = [];
@@ -248,7 +242,7 @@ test("link steps are silent and paths follow", () => {
   expect(maneuvers[0].text).toBe(
     "Walk north on the east side of Stillwell Avenue",
   );
-  // The link's 8 m fold into the start run's length (120 + 8 goes to the run it touches).
+  // The link's 8 m fold into the run it touches (120 + 8).
   expect(maneuvers[1].text).toBe("Follow Boardwalk");
   expect(maneuvers[1].lengthMeters).toBe(200);
 });
@@ -363,13 +357,11 @@ test("linear crossings collapse into one walk maneuver", () => {
   });
   expect(collapsed.map((m) => m.kind)).toEqual(["start", "arrive"]);
   expect(collapsed[0].text).toBe("Walk north on the west side of 5th Avenue");
-  // The whole straight segment (both crossings + every walk run) folds into the one walk.
   expect(collapsed[0].lengthMeters).toBe(186);
   expect(collapsed[0].stepRange).toEqual([0, 5]);
 });
 
 test("a ferry leg becomes its own maneuver reporting the crossing time", () => {
-  // Walk east, ride the ferry northeast, walk east again to arrive.
   const graph = makeGraph([
     [40.7, -74.01], // 0
     [40.7, -74.0], // 1
@@ -414,21 +406,17 @@ test("a ferry leg becomes its own maneuver reporting the crossing time", () => {
     "arrive",
   ]);
   const ferry = maneuvers[1];
-  // The route ends in "Ferry" (so no doubled "ferry") and " Ferry Terminal" is stripped from the
-  // destination terminal — forward a -> b, so the destination is the node-b stop. The crossing time
-  // rides in durationSeconds, not the text (the panel renders it in the distance slot).
+  // No doubled "ferry", " Ferry Terminal" stripped; the crossing time rides in durationSeconds.
   expect(ferry.text).toBe("Take the Staten Island Ferry to St. George");
   expect(ferry.durationSeconds).toBe(1500);
-  // The ferry keeps its span as lengthMeters so nav-progress's along-route accounting stays intact.
+  // Kept so nav-progress's along-route accounting stays intact.
   expect(ferry.lengthMeters).toBe(2600);
   expect(ferry.stepRange).toEqual([1, 2]);
-  // The leg after the ferry starts a fresh walk rather than turning off the ferry's bearing.
   expect(maneuvers[2].text.startsWith("Walk")).toBe(true);
 });
 
 test("an action crossing survives collapsing", () => {
-  // North up 5th Ave (west) past two linear crossings, then cross E 21 St and turn left onto it — the
-  // final crossing is an action (the street+side changes across it), so it must survive collapsing.
+  // The final crossing changes street+side, so it's an action and must survive collapsing.
   const graph = makeGraph([
     [40.74, -73.99], // 0
     [40.741, -73.99], // 1
@@ -501,7 +489,6 @@ test("an action crossing survives collapsing", () => {
   const collapsed = buildDirections(graph, makeResult(graph, specs), {
     collapseLinearCrossings: true,
   });
-  // The two linear crossings fold away; only the action crossing and the turn remain.
   expect(collapsed.map((m) => m.kind)).toEqual([
     "start",
     "cross",
@@ -514,8 +501,7 @@ test("an action crossing survives collapsing", () => {
 });
 
 test("starts run forward and hold a passed POI inside its host", () => {
-  // North up 5th Ave (west side), cross E 20 St, continue north (suppressed), left onto E 21 St: the
-  // first fixture's route, so the maneuvers are start(111) / cross(38) / turn(90) / arrive.
+  // The first fixture's route: start(111) / cross(38) / turn(90) / arrive.
   const graph = makeGraph([
     [40.74, -73.99], // 0
     [40.741, -73.99], // 1
@@ -572,8 +558,7 @@ test("starts run forward and hold a passed POI inside its host", () => {
       alongMeters: 189,
       at: { lat: 40.742, lng: -73.9905 },
     },
-    // Anchored past the end of its host's span, which the splice has to pull back in: an entry out of
-    // order would cut navProgress's scan short.
+    // Anchored past its host's span, which the splice must pull back in.
     {
       name: "Worth Square",
       kind: "landmark",
@@ -601,7 +586,6 @@ test("starts run forward and hold a passed POI inside its host", () => {
   expect(maneuvers.map((m) => m.startMeters)).toEqual([
     0, 60, 111, 111, 149, 189, 239,
   ]);
-  // Every POI row sits within the span of the maneuver it was spliced into.
   let host = maneuvers[0];
   for (const maneuver of maneuvers) {
     if (maneuver.kind === "landmark" || maneuver.kind === "art") {

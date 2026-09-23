@@ -1,11 +1,8 @@
-// Which walks follow the clock. A route costed against a timetable or against the sun goes stale on
-// its own: the page has to re-cost it on every tick, or it goes on quoting a departure that has gone.
+// A route costed against a timetable or the sun must be re-costed every tick or it goes stale.
 
 import { expect, test } from "bun:test";
 import { followsRouteTime, type RouteTimeInputs } from "./contexts";
 
-// Nothing time-dependent at all: no sun preference, no shelter preference, scaffolding allowed where
-// it stands, and neither boats nor trains to catch.
 const STILL: RouteTimeInputs = {
   shade: 0,
   shelter: 0,

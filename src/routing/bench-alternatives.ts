@@ -1,12 +1,4 @@
-// What a plan costs on the real New York graph, through the engine the worker runs. Run with
-// `NODE_ENV=development bun run src/routing/bench-alternatives.ts`: the env points the shed, ferry
-// and transit readers at the local copies, without which shelter falls back to the canopy alone and
-// no board edge has a departure to wait for.
-//
-// It runs every mode twice, once with the subway toggle open and once shut, because the transit
-// credit is what the A* estimate costs when a city has rail: the credit is the sum of every ride's
-// shortcut, so at a low transit penalty it swamps the straight-line term and the search settles
-// what Dijkstra would. The two runs are that price, measured.
+// Run with `NODE_ENV=development bun run src/routing/bench-alternatives.ts` so readers use local artifacts.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -31,13 +23,10 @@ import { buildSnapIndex, snapPair } from "./snap";
 
 const PUBLIC_DIR = join(import.meta.dirname, "../../public");
 const GRAPH_PATH = join(PUBLIC_DIR, "routing/nyc.bin");
-// The graph's own identity, which the shed artifact is checked against: a made-up one is refused.
+// The shed artifact is checked against this, so a made-up one is refused.
 const VERSION_PATH = join(PUBLIC_DIR, "routing/nyc.version.json");
 const CITY = "nyc";
-// A weekday lunchtime in New York: the sheds stand, the boats run, the trains run and the sun is up.
-// It has to be a day the STANDING timetables cover — the daily job records the day each one took
-// effect, and an earlier day resolves to nothing without the history file beside it, which for the
-// rail schedule does not exist until the job has run twice.
+// Must be a day the standing timetables cover; earlier days need a history file that may not exist.
 const CLOCK = { tick: 0, dateMs: Date.UTC(2026, 8, 3, 16, 0, 0) };
 
 interface Trip {
@@ -102,8 +91,6 @@ console.log(`nyc.bin: ${graph.nodeCount} nodes, ${graph.edgeCount} edges\n`);
 const kilometers = (meters: number): string => (meters / 1000).toFixed(2);
 const minutes = (seconds: number): string => (seconds / 60).toFixed(1);
 
-// What a card that rides says it rides: the lines it takes, and the minutes it spends waiting for
-// and sitting on them. Empty for a card that walks the whole way.
 function ridden(result: RouteResult): string {
   const lines: string[] = [];
   for (const step of result.steps) {
@@ -202,10 +189,7 @@ for (const mode of MODES) {
   }
 }
 
-// The credit's own price, off the plan: one search each at no transit penalty and at the top of the
-// slider, on the longest trip, with the nodes each of them settled. Every scenic weight is zero here
-// rather than a mode's, deliberately — a mode that discounts a meter to near nothing has already
-// flattened the straight-line estimate, and this is about what the transit credit does to it.
+// Scenic weights are zero, since a mode that flattens the estimate would hide the transit credit's cost.
 const longest = TRIPS[2]; // Union Sq - Prospect Park, the longest of them
 const snapped = snapPair(graph, index, longest.from, longest.to);
 if (snapped.ok) {

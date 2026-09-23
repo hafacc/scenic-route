@@ -1,8 +1,4 @@
-// The SHED artifact: every sidewalk shed New York has permitted since 2017-12-28, as the graph edges
-// it stands on and the days it stood there. Written by scripts/shed-encode.ts; this is the only thing
-// that reads it. scripts/README.md has the layout (magic `SHED`, v2) — the open/closed split almost
-// every query is "today" pays for, and why a span names its edge by the graph's durable key rather
-// than by its position, resolved per query. DESIGN.md, "Sidewalk sheds", is why any of that is so.
+// Reads the SHED artifact from scripts/shed-encode.ts; layout in scripts/README.md, rationale in DESIGN.md.
 
 import { activeCity, type City } from "../cities";
 import { rainTau } from "../shade/phenology";
@@ -16,34 +12,21 @@ import {
   sunAt,
 } from "./shade";
 
-// How high the deck stands, which the permit feed does not carry and nothing measures: 4 m is the
-// middle of the range DOB leaves — it requires 8 ft of clearance and typical decks run 12-15 ft.
-// It sets the length of the shadow the deck throws (src/tiles/sweep.ts).
+// Unmeasured; DOB requires 8 ft of clearance and typical decks run 12-15 ft.
 export const DECK_HEIGHT_METERS = 4;
 
-// What a span with no measured depth falls back to. The pipeline measures the pavement its deck
-// stands on for every span it can (scripts/shed-map.ts), and the whole feed's median comes out at
-// 3.7 m; 4 m was the flat assumption this replaced, and it is close enough to that median to stay
-// the answer where there is nothing to measure.
+// The measured feed's median is 3.7 m.
 export const DEFAULT_DECK_DEPTH_METERS = 4;
 
-// The narrowest deck that can be BUILT, which is not the narrowest that can be measured. The code
-// wants a clear path of 5 ft under a shed (BC 3307.6.2, and BC 3307.6.3 has the deck cover the whole
-// pavement bar 18 in at the curb), the frame's posts and their bracing stand outside that path either
-// side, and 8 ft is where the standard shed frame starts. So a measurement under it is a lot line or
-// a curb estimate that is off rather than a sliver of a shed, and the correction belongs to the
-// MEASUREMENT: the band, the shadow it throws and the shade it holds all take the corrected number.
+// BC 3307.6.2 and the standard 8 ft frame make this the narrowest buildable deck; less is mismeasured.
 export const MIN_DECK_DEPTH_METERS = 2.4;
 
-// What the pipeline measured across the pavement, or the fallback where it could not — which is
-// where the building line is, since the measurement ran from it.
+// The fallback sits at the building line, since the measurement ran from it.
 export function measuredDepth(depth: number): number {
   return depth > 0 ? depth : DEFAULT_DECK_DEPTH_METERS;
 }
 
-// One span's depth as a reader should use it: the measurement, floored at what can be built. The
-// extra goes OUTWARD, over what the graph took for roadway — the lot line the measurement started
-// from is evidence and the curb is a fixed inset off a centerline, so the curb is the one to move.
+// The extra goes outward, since the curb is only an inset off a centerline while the lot line is evidence.
 export function deckDepth(depth: number): number {
   return Math.max(MIN_DECK_DEPTH_METERS, measuredDepth(depth));
 }
@@ -60,16 +43,10 @@ const SIDE_MASK = 0x7;
 const MILLISECONDS_PER_DAY = 86_400_000;
 const EPOCH_MS = Date.UTC(2017, 11, 28); // the first DOB snapshot; every day number counts from here
 
-// The epoch as the date picker's "YYYY-MM-DD": the earliest day the map has scaffolding for, and so
-// the earliest one worth offering.
+// The earliest day the map has scaffolding for, as the date picker's "YYYY-MM-DD".
 export const SHED_EPOCH_DAY = new Date(EPOCH_MS).toISOString().slice(0, 10);
 
-// Where the day's artifact comes from: `public/sheds/` on `main`, which the daily job
-// (.github/workflows/sheds.yml) commits the three files to, read over raw.githubusercontent.com
-// rather than out of the deploy — DESIGN.md, "Sidewalk sheds", for why not same-origin. In
-// development it stays on the local `public/sheds/`, as every other artifact a dev server reads does,
-// and that is also the only way to see a pipeline change before it is pushed. NEXT_PUBLIC_SHED_BASE
-// overrides either way.
+// Read from `main` over raw.githubusercontent.com (DESIGN.md says why); local in development.
 const SHED_MAIN_URL =
   "https://raw.githubusercontent.com/hafaio/scenic-route/main/public/sheds";
 const SHED_BASE =
@@ -82,21 +59,16 @@ export const SHED_URLS = {
   index: `${SHED_BASE}/index.bin`,
 } as const;
 
-// A stretch of one edge a shed stands over, as the fractions of the edge's length it runs between.
-// `edge` is the graph position the artifact's durable key resolved to, or -1 when this graph has no
-// edge by that name — a source segment the rebuild dropped or changed enough to break the key.
+// `edge` is -1 when this graph has no edge by the artifact's durable key.
 export interface ShedSpan {
   edge: number;
   t0: number;
   t1: number;
-  // How deep the deck runs ACROSS the pavement here, in meters: the pipeline measured the building
-  // line off the tax lot and the curb off the graph's own sidewalk offset (scripts/README.md). 0
-  // where it could measure neither, which every reader turns into the fallback depth.
+  // Meters across the pavement; 0 where unmeasured, which readers turn into the fallback.
   depth: number;
 }
 
-// One shed over one presence interval. A permit that came down and went back up is two of these
-// sharing geometry — the intervals are disjoint, so no day sees the same shed twice.
+// A permit that came down and went back up is two of these with disjoint intervals.
 export interface Shed {
   first: number; // day number of the first day it stood
   close: number | null; // day number of the last, or null while it is still up
@@ -104,17 +76,13 @@ export interface Shed {
   spans: ShedSpan[];
 }
 
-// One of the two record files, held as its undecoded bytes: a suffix read is the point of the format,
-// so records are walked per query rather than decoded up front.
+// Kept as bytes, since the suffix read walks records per query.
 interface ShedFile {
   bytes: Uint8Array;
   count: number;
   spanCount: number;
   firstDay: number; // the day the file's delta chain starts from — the first record's own day
-  // Where the records start. The header carries its own length because both files end theirs with
-  // state for the daily job — `closed.bin` the row counts it picks the DOB's feed back up with,
-  // `open.bin` the job numbers naming its records — which nothing here reads and which are none of
-  // the client's business beyond skipping them.
+  // Both files end their headers with daily-job state the client skips.
   records: number;
 }
 
@@ -123,16 +91,13 @@ export interface ShedHistory {
   lastDay: number; // the newest usable DOB snapshot the artifact was built through
   open: ShedFile;
   closed: ShedFile;
-  // The month index over closed.bin, ascending: per calendar month that has a record in it, the
-  // month's first day, the byte offset of the first record closing on or after it, and that record's
-  // absolute close day.
+  // Per month with a record: its first day, the first record closing on or after it, and that close day.
   months: Uint16Array;
   offsets: Uint32Array;
   closeDays: Uint16Array;
 }
 
-// The day number a Date falls on, by its LOCAL calendar date: a shed's dates are New York calendar
-// days, and the viewer of a New York map is reading them in that calendar.
+// By local calendar date, since sheds' dates are New York calendar days.
 export function shedDay(date: Date): number {
   const midnight = Date.UTC(
     date.getFullYear(),
@@ -164,8 +129,7 @@ function decodeFile(buffer: ArrayBuffer, closed: boolean): ShedFile {
   };
 }
 
-// The 64-bit key-space hash as the hex routing/version.json carries, read as its two halves so
-// nothing here needs BigInt.
+// Read as two halves so nothing needs BigInt.
 function decodeGraphKeyHash(view: DataView): string {
   const low = view.getUint32(16, true);
   const high = view.getUint32(20, true);
@@ -213,9 +177,7 @@ export function decodeSheds(
   };
 }
 
-// One record's spans, still named by durable key: `edge` holds the key until `resolveSpans` swaps in
-// this graph's position for it. The source-id delta chain restarts at every record — a chain running
-// across records would make the suffix read below impossible and drift the ids instead of failing.
+// The source-id delta chain restarts every record, or the suffix read would be impossible.
 function readSpans(bytes: Uint8Array, cursor: Cursor): ShedSpan[] {
   const count = readUnsignedVarint(bytes, cursor);
   const spans: ShedSpan[] = new Array(count);
@@ -237,10 +199,7 @@ function readSpans(bytes: Uint8Array, cursor: Cursor): ShedSpan[] {
   return spans;
 }
 
-// The sheds still standing, filtered to those already up on `day`. The file is in job-number order,
-// not day order — the order the job numbers in its header run in, which is how the daily job knows
-// which record is whose — so the first-day deltas are signed and every record is walked. It holds
-// ~7,500 of them; the size that made the seek worth building is all in `closed.bin`.
+// In job-number order, so the first-day deltas are signed and every record is walked.
 function openOn(file: ShedFile, day: number): Shed[] {
   const standing: Shed[] = [];
   const cursor: Cursor = { offset: file.records };
@@ -257,9 +216,7 @@ function openOn(file: ShedFile, day: number): Shed[] {
   return standing;
 }
 
-// Where a scan of closed.bin for `day` starts: the last index entry at or before `day`'s month, or
-// the head of the file when `day` predates the index. The entry's close day is the one the chain
-// re-bases from — replaying the file to rebuild it would cost exactly what the index exists to save.
+// The index states the close day to re-base from, so the file needn't be replayed.
 function seek(
   history: ShedHistory,
   day: number,
@@ -287,16 +244,13 @@ function seek(
   }
 }
 
-// The sheds that have come down, filtered to those standing on `day`. Walks the suffix from the seek
-// point: everything before it closed too early to matter, and the records after it are in close-day
-// order, so only the ones that also went up in time survive the filter.
+// Records after the seek point are in close-day order, so only a suffix is walked.
 function closedOn(history: ShedHistory, day: number): Shed[] {
   const { bytes } = history.closed;
   const start = seek(history, day);
   const cursor: Cursor = { offset: start.offset };
   const standing: Shed[] = [];
-  // The record AT the seek point is the one whose absolute close day the index states, so its own
-  // delta is what that value replaces; every record after it chains from there as usual.
+  // The record at the seek point has the index's absolute close day; later ones chain from it.
   let close = start.closeDay;
   let chained = false;
   while (cursor.offset < bytes.length) {
@@ -317,9 +271,7 @@ function closedOn(history: ShedHistory, day: number): Shed[] {
   return standing;
 }
 
-// Turns every span's durable key into this graph's edge position, in one pass over the graph's key
-// column. A key the graph does not carry leaves its span at -1 rather than dropping it, so a caller
-// that counts spans still sees the shed; every consumer skips a negative edge.
+// An unknown key leaves the span at -1 rather than dropping it; every consumer skips negatives.
 function resolveSpans(graph: RoutingGraph, sheds: readonly Shed[]): void {
   const wanted = new Map<number, number>();
   for (const shed of sheds) {
@@ -347,25 +299,12 @@ function resolveSpans(graph: RoutingGraph, sheds: readonly Shed[]): void {
   }
 }
 
-// Whether the artifact names edges in THIS graph. A durable key survives a rebuild but does not
-// promise to mean the same edge across one: a conflation fix left 2,284 of 302,985 keys naming an
-// edge a median 26 m from the one they had named. So the gate is the whole KEY SPACE — every
-// `(source id, side, ordinal)` the graph carries, hashed — rather than any single key. Ordinals are
-// handed out 0..n-1 within a `(source id, side)`, so a source segment that splits into a different
-// number of edges moves the set, and an artifact placed against another set resolves nothing at all:
-// bare pavement is a failure anyone can see, scaffolding down the wrong street is not.
-//
-// The GRAPH'S BYTES are not the gate, and were until 2026-08. They carry f32 edge lengths that the
-// geodesic and offset maths land a ulp apart on macOS/aarch64 and on Linux/x86_64, so an artifact
-// placed on a laptop could never match the graph a deploy builds — a blank map over a difference no
-// shed can feel. The key space is integers all the way down.
+// Gated on the whole key space: single keys can move (2,284 did) and f32 bytes differ by platform.
 function sameGraph(graph: RoutingGraph, history: ShedHistory): boolean {
   return graph.keyHash === history.graphKeyHash;
 }
 
-// Every shed standing on `day`, both halves together, with their spans resolved onto `graph`. None
-// of them when the artifact was placed against a different graph, which is what the display layer,
-// the router and the shadow caster all go quiet on.
+// None when placed against a different graph.
 export function shedsOn(
   graph: RoutingGraph,
   history: ShedHistory,
@@ -379,21 +318,12 @@ export function shedsOn(
   return standing;
 }
 
-// What a day's sheds add up to on one edge.
 export interface EdgeDeck {
   covered: number; // the share of the edge standing under a deck, 0..1
   depth: number; // how deep that deck runs across the pavement, meters; 0 where none was measured
 }
 
-// Every decked edge on `day`, by edge id. Sheds overlap — about a tenth of the touched edges are
-// covered past their own length by concurrent permits — so the covered share is clamped, and the
-// depth is the mean of the spans' own weighted by the length each contributes, which is what makes
-// one long shed on a wide pavement outweigh a stub of a narrow one beside it. A span the artifact
-// measured no depth for is left out of that mean rather than pulling it toward a stand-in, and an
-// edge with no measured span at all reads 0, for a reader to fall back on as it sees fit.
-//
-// A placement's confidence weights neither: the cost model prices what might be overhead, and being
-// unsure of a deck is a reason to steer clear of it rather than to discount it.
+// Covered share is clamped; depth is length-weighted over measured spans; confidence weights neither.
 export function shedCoverage(
   graph: RoutingGraph,
   history: ShedHistory,
@@ -417,7 +347,7 @@ export function shedCoverage(
     }
   }
   for (const [edge, deck] of decks) {
-    // The weighted mean, taken before the clamp so a doubly covered edge is not thinned by it.
+    // Taken before the clamp so a doubly covered edge isn't thinned.
     const weight = measured.get(edge) ?? 0;
     deck.depth = weight > 0 ? deck.depth / weight : 0;
     deck.covered = Math.min(1, deck.covered);
@@ -425,12 +355,7 @@ export function shedCoverage(
   return decks;
 }
 
-// A day's scaffolding as the cost model reads it: one byte per graph edge, on the same 0-254 ceiling
-// the graph's own attribute bytes use. Coverage feeds discounts (the shade composite and the shelter
-// factor), so it has to stay strictly under 1 or a meter under a deck could cost nothing and the
-// search would wander. It carries the day's rain tau too, since the shelter factor is the deck and the
-// canopy together and only the client knows the date, and the sun across the walk, since how much of
-// its own sidewalk a deck still shades depends on where the sun is and which way the street runs.
+// Coverage stays under 1 or a decked meter could cost nothing and the search would wander.
 export interface ShedField {
   coverage: Uint8Array; // per edge, 0-254: the share of it standing under a deck
   depth: Float32Array; // per decked edge, how deep its deck runs across the pavement, meters
@@ -444,26 +369,17 @@ export interface ShedField {
 const COVERAGE_CEILING = 254;
 const DEGREES = Math.PI / 180;
 
-// The sun elevation below which a deck's shadow is taken as flat on the ground: at 0.5 deg the
-// translate is already 458 m, ~100x the deck's depth, and the shade attribute is 0 at night anyway.
-// Clamping rather than dividing by tan(0) keeps the translate finite, so a sun exactly along a street
-// stays 0 across it instead of going NaN.
+// At 0.5° the translate is already 458 m; clamping keeps a sun along the street at 0 instead of NaN.
 const MIN_ELEVATION_DEG = 0.5;
 
-// What a deck still shades once the sun has slid its shadow clear across the sidewalk. A bare slab
-// would let all the light in, but a real shed has a solid fascia along its street edge and posts and
-// debris netting between them, so oblique light is cut more than the slab model says. Small on
-// purpose: it only bites at a low sun across the street, where the sun's own intensity has already
-// gone with it.
+// A real shed's fascia, posts and netting still cut oblique light; bites only at a low sun.
 export const SHED_OBLIQUE_FLOOR = 0.15;
 
 function quantizeCoverage(fraction: number): number {
   return Math.min(COVERAGE_CEILING, Math.round(fraction * 255));
 }
 
-// The way a decked edge runs, in radians clockwise from north. A sidewalk edge runs corner to corner
-// and can bend, so this is its segments' mean direction weighted by length — taken on doubled angles,
-// because a street has no forward end and the two halves of a bend would otherwise cancel out.
+// Length-weighted mean on doubled angles, since a street has no forward end.
 function edgeBearing(graph: RoutingGraph, edge: number): number {
   const { lngs, lats } = edgePath(graph, edge);
   let sumSin = 0;
@@ -480,14 +396,11 @@ function edgeBearing(graph: RoutingGraph, edge: number): number {
   return Math.atan2(sumSin, sumCos) / 2;
 }
 
-// Point a field's sun schedule at a departure instant. Its own function because which sheds stand
-// moves with the DAY while the sun moves with the clock: an hour-slider step has to re-aim the sun,
-// and rebuilding the coverage and the bearings for it would cost ~10 ms of work that did not change.
+// Separate so an hour-slider step re-aims the sun without ~10 ms of rebuilding coverage.
 export function setShedSun(
   field: ShedField,
   date: Date,
-  // Threaded rather than read off the active city, which the worker never sets: there it is
-  // whichever city happens to be first, and the sun would be aimed over that one.
+  // Threaded because the worker never sets the active city.
   forCity: City = activeCity(),
 ): void {
   for (let bucket = 0; bucket < SCHEDULE_BUCKETS; bucket++) {
@@ -502,7 +415,6 @@ export function setShedSun(
   }
 }
 
-// The day's coverage as the cost model reads it, over the graph it was placed against.
 export function shedField(
   graph: RoutingGraph,
   decks: ReadonlyMap<number, EdgeDeck>,
@@ -535,19 +447,7 @@ export function shedField(
   return field;
 }
 
-// The share of an edge a deck actually shades at this point in the walk: its coverage, damped by how
-// far the sun has slid the deck's shadow off the sidewalk it stands over.
-//
-// A deck is a floating opaque slab, not a tunnel. Trace a ray back toward the sun from a point under
-// one and the point is lit as soon as that ray has moved further ACROSS the sidewalk than the deck is
-// deep — which is why only the across-street component of the translate counts. A sun running ALONG
-// the street slides the shadow down the shed's own length, tens of meters of it, so the deck stays
-// shaded to a far lower elevation than one across the street does. A single elevation threshold
-// cannot say that; the angle between the sun and the street is what decides it.
-//
-// The depth it is measured against is the edge's own, so a 6 m deck on a Midtown avenue holds its
-// shade to a lower sun than a 2 m one on a side street — which is the same number the band is drawn
-// at. The zero coverage exits first, so an undecked edge never divides by its empty depth.
+// Lit once the sun's across-street translate exceeds the deck's depth, so along-street sun keeps it shaded.
 export function shedShade(
   field: ShedField,
   edge: number,
@@ -567,13 +467,7 @@ export function shedShade(
   }
 }
 
-// Build the graph's scaffolding field for a date. The canopy half of shelter needs no artifact, so it
-// lands first and a slow or failed fetch leaves the shelter slider working on trees alone rather than
-// inert; the sheds standing that day replace it once they arrive.
-//
-// A stale artifact throws rather than resolving to nothing quietly: the field is already seeded, so
-// the caller's catch leaves routing working on trees alone, and the mismatch is the one thing here
-// worth saying out loud. The other two readers have no such channel and simply draw nothing.
+// Seeds the canopy half first so a failed fetch leaves shelter on trees alone; a stale artifact throws.
 export async function computeEdgeSheds(
   graph: RoutingGraph,
   date: Date,

@@ -1,6 +1,4 @@
-// Pure and synchronous over an injected search, so it runs on the main thread and in the worker.
-// The sweep steps `minMultiplier` rather than the weight scale, which is a cliff: Times Sq to Battery
-// is the identical route at t = 0, 0.25 and 0.5.
+// The sweep steps `minMultiplier`, not the weight scale, which is a cliff: t = 0 to 0.5 can be one route.
 
 import {
   GATE_KEYS,
@@ -11,40 +9,29 @@ import {
 import type { FactorKey } from "./factors";
 import type { RouteResult } from "./search";
 
-// How far apart two routes have to run, on average, to count as different walks. Measured against
-// the 0.35-Jaccard selection it replaces, over the engine bench's six New York trips at four modes:
-// agreement rises the lower this goes — 12 of those 24 plans pick the same cards at 30 m, 9 at 50 m,
-// 7 at 100 m — because a Jaccard over 40 m cells is a permissive test that two routes parting for a
-// couple of blocks already cleared. What stops it going lower is the floor: the two pavements of one
-// street are 12-19 m apart in New York and must stay one route, so this keeps 2.5x over the widest.
+// A street's two pavements are 12-19 m apart in NYC and must stay one route; this is 2.5x the widest.
 export const DIFFERENT_METERS = 50;
 
 const MAX_CARDS = 4;
-// Held still while the sweep scales the rest. Shade because the bracket is exact only while the
-// moving-sun term is a path constant; transit because it is a PENALTY, and a sweep that scales it
-// toward zero makes its own baseline the most train-happy route there is — when what the baseline is
-// for is the fastest walk to compare the scenic ones against.
+// Shade: the bracket is exact only while the sun term is a path constant; transit: it's a penalty.
 const FIXED_FACTORS: ReadonlySet<FactorKey> = new Set<FactorKey>([
   "shade",
   "hill",
   "transit",
 ]);
 
-// Eight searches between them, per the plan's budget.
 const SWEEP_STEPS = 5;
 const BREAKPOINT_SEARCHES = 4;
 // Lead on a factor, as a share of its graph max, that paints a card in that factor's color.
 const COLOR_MARGIN = 0.15;
 
-// How finely each route is walked before the distances are taken. Well under the separation the
-// threshold is set at, so the mean over the samples is the arc-length integral it stands for.
+// Well under DIFFERENT_METERS, so the sample mean approximates the arc-length integral.
 const SAMPLE_METERS = 20;
 const METERS_PER_DEGREE_LAT = 111_320;
 
 export interface PlannedRoute {
   result: RouteResult;
-  // Absolute, not a share: weight times the seconds spent on the attribute, summed over the mode's
-  // discounts. A trip that spends most of its time getting there earns only what it walks.
+  // Absolute, not a share, so a trip spent mostly getting there earns only what it walks.
   scenicScore: number;
   // Null where nothing stands out, or where the mode asks for one factor: the UI ramps instead.
   colorFactor: FactorKey | null;
@@ -54,25 +41,20 @@ export interface Plan {
   routes: PlannedRoute[];
   bestByFactor: Partial<Record<FactorKey, number>>;
   searches: number;
-  // Abandoned partway because the caller had something newer to answer. Its routes are empty.
   superseded: boolean;
 }
 
 export interface PlanInput {
   weights: RouteWeights;
-  // One A* at these weights; the caller has already fixed the endpoints, clock and contexts.
   search: (weights: RouteWeights) => RouteResult | null;
   minMultiplier: (weights: RouteWeights) => number;
   factorMax?: Partial<Record<FactorKey, number>>; // graph max per factor; missing reads as 1
   onCandidate?: (result: RouteResult) => void; // per distinct route as it is found, R_max first
-  // Asked between searches, and answering true abandons the plan. The await is the point of it as
-  // much as the answer: a worker learns of a newer request only when it lets the event loop run,
-  // so a plan that never yields cannot find out that it is already stale.
+  // The await matters: a worker only learns of a newer request when it yields to the event loop.
   superseded?: () => Promise<boolean>;
 }
 
-// Most scenic first, most direct last — the end the owner cares about is the one read first. One
-// place, because the owner wants to try other orders.
+// One place, because the owner wants to try other orders.
 export function CARD_ORDER(left: PlannedRoute, right: PlannedRoute): number {
   return (
     right.scenicScore - left.scenicScore ||
@@ -80,9 +62,7 @@ export function CARD_ORDER(left: PlannedRoute, right: PlannedRoute): number {
   );
 }
 
-// A route in a local equirectangular frame: meters east and north of the reference latitude. Flat
-// earth over a city is exact enough for a separation measured in tens of meters, and it is the frame
-// every distance below is taken in.
+// Flat earth over a city is exact enough at tens of meters.
 interface Polyline {
   east: Float64Array;
   north: Float64Array;
@@ -104,9 +84,7 @@ export function projectRoute(
   return { east, north };
 }
 
-// The line walked at `SAMPLE_METERS` by arc length, both ends included, so each sample stands for
-// the same length of route and their mean is an average over the route rather than over its
-// vertices — a straight mile and a switchback of the same length weigh alike.
+// Samples by arc length, so a straight mile and a switchback of the same length weigh alike.
 function densify(line: Polyline): Polyline {
   const { east, north } = line;
   const count = east.length;
@@ -145,8 +123,6 @@ function densify(line: Polyline): Polyline {
   return { east: sampleEast, north: sampleNorth };
 }
 
-// The distance from one point to one segment of `line`, the foot of the perpendicular clamped to
-// the segment's ends.
 function segmentDistance(
   east: number,
   north: number,
@@ -175,16 +151,7 @@ function segmentDistance(
   );
 }
 
-// The mean over `samples` of the distance to the nearest point of `line`, or POSITIVE_INFINITY as
-// soon as the running mean passes `limit` — the only caller that passes one is asking whether two
-// routes are different walks, which a mean already over the floor answers without the figure.
-//
-// Two things keep the inner scan affordable. The box test rejects every segment further off than
-// the best so far on a subtraction; and the scan starts from the segment the PREVIOUS sample was
-// nearest to, which for samples walked in order along a route is nearly always this one's too, so
-// the box test has a tight bound to reject against from the first segment on. Neither changes the
-// answer: the seed is an upper bound on the minimum, and the box test only drops segments that
-// cannot beat it.
+// Seeds from the previous sample's nearest segment and box-tests; neither changes the answer.
 function meanDistance(
   samples: Polyline,
   line: Polyline,
@@ -237,10 +204,7 @@ function meanDistance(
   return total / count;
 }
 
-// How far apart two routes run, in meters: the mean over one route of the distance to the other,
-// both ways round, averaged. Symmetric by construction, 0 for a route against itself, and — being
-// an arc-length mean of a perpendicular offset — the area between the two lines divided by their
-// length, with no intersections to find and no polygon to close.
+// Symmetric, and equal to the area between the two lines over their length.
 export function routeDistanceMeters(
   left: RouteResult,
   right: RouteResult,
@@ -254,15 +218,12 @@ export function routeDistanceMeters(
   );
 }
 
-// A route as the planner holds it for comparison: its own vertices, and the samples taken along it.
 interface Sampled {
   line: Polyline;
   samples: Polyline;
 }
 
-// `limit` is what the answer is being compared against, and is returned as POSITIVE_INFINITY once
-// the two halves prove the average is over it: either half at twice the limit settles it on its own,
-// and once the first is in, what the second must reach to settle it is whatever is left.
+// Returns POSITIVE_INFINITY once the two halves prove the average exceeds `limit`.
 function lineDistanceMeters(
   left: Sampled,
   right: Sampled,
@@ -278,8 +239,7 @@ function lineDistanceMeters(
 
 const SCENIC: ReadonlySet<FactorKey> = new Set<FactorKey>(SCENIC_KEYS);
 
-// Every switch the sweep must hold fixed and key its memo on: the reader's gates and the planner's
-// own rail flag, which it moves itself below.
+// The reader's gates and the planner's own rail flag, which it moves itself below.
 const SWITCHES: readonly (keyof RouteWeights)[] = [
   ...GATE_KEYS,
   ...INTERNAL_FLAGS,
@@ -298,17 +258,12 @@ function factorMean(result: RouteResult, key: FactorKey): number | null {
   return means[key] ?? null;
 }
 
-// The attribute's seconds, which is the same sum before it was made a share.
 function factorSeconds(result: RouteResult, key: FactorKey): number {
   const totals: Partial<Record<FactorKey, number>> = result.factorSeconds;
   return totals[key] ?? 0;
 }
 
-// How many legs a route rides, trains and boats counted apart. What the reader chooses between is a
-// walk, a ride, a connection and a boat — not the A against the C — so one subway ride is the same
-// trip as any other whatever line it is, and two rides the same as any other two. Routes that ride
-// alike fall through to the ground between them; routes that do not are different cards however
-// close they run, a walk and the same walk with a train in the middle of it included.
+// Counts legs, not lines: one subway ride is the same trip as any other, whatever line it is.
 export function rideSignature(result: RouteResult): string {
   const { rides, ferries } = result;
   return `${rides.length}:${ferries.length}`;
@@ -320,15 +275,10 @@ interface Pooled extends Sampled {
   index: number; // its place in the pool, which is its row in the separation cache
 }
 
-// How far apart two pooled routes run, taken once and kept. A pair costs a walk down both
-// polylines, and the selection below asks for the same pairs over and over.
+// Cached, since a pair costs a walk down both polylines and selection asks the same pairs repeatedly.
 interface Separation {
-  // The figure itself, which the card search needs to pick the set that runs widest apart. Floored
-  // at DIFFERENT_METERS for a pair that rides differently, so the objective still prefers the
-  // geometrically widest pair among routes that are all distinct.
+  // Floored at DIFFERENT_METERS for pairs that ride differently, so the widest distinct pair still wins.
   meters(left: Pooled, right: Pooled): number;
-  // Whether the two are different trips: a different count of rides settles it, and so does a pair
-  // already over the floor, without a figure.
   differ(left: Pooled, right: Pooled): boolean;
 }
 
@@ -379,10 +329,7 @@ function separationCache(): Separation {
   };
 }
 
-// Which candidates are worth a card at all, as indices into the pool and in its order: a route is
-// dropped as soon as another is both no slower and no less scenic, with one of the two strict, since
-// a reader offered the better one is never also wanting this. Routes equal on both keys are the same
-// offer twice, and the earlier one stands for them.
+// Routes equal on both keys are the same offer twice, and the earlier one stands for them.
 export function undominated(
   travelSeconds: readonly number[],
   scenicScores: readonly number[],
@@ -407,27 +354,15 @@ export function undominated(
   return kept;
 }
 
-// Last-plan instrumentation, for the bench: the candidates dropped as dominated, and the partial
-// sets the search below actually looked at against the number a plain enumeration of every set would
-// have. All of them accumulate until the reader zeroes them.
+// Accumulates until the reader zeroes it.
 export const selectionDiagnostics = { dominated: 0, visited: 0, enumerated: 0 };
 
-// The set of cards, exactly, as indices into a pool whose route 0 is the max-scenic one and is
-// always kept: the largest number of cards whose closest pair still clears the floor, and of those
-// the set whose closest pair runs furthest apart, shortest total walk breaking the tie.
-// Furthest-from-chosen is greedy, and its first pick can block a better pair behind it, so the sets
-// are searched rather than built up: depth-first, extending only by a candidate that is a different
-// walk from every card already picked, and abandoning a branch the moment it can no longer beat the
-// best set held — either because it cannot grow that long, or because its closest pair is already
-// nearer than that set's and only closes further. Exported for the test that holds it against an
-// enumeration of every set.
+// Searched depth-first, not built greedily, since a greedy first pick can block a better pair.
 export function selectCards(
   separations: readonly Float64Array[],
   travelSeconds: readonly number[],
 ): number[] {
   const count = separations.length;
-  // Whether two routes are different walks is a property of the pair, so it is settled here once
-  // and the search below only reads it.
   const compatible: boolean[][] = [];
   for (let left = 0; left < count; left++) {
     const row: boolean[] = [];
@@ -594,7 +529,6 @@ export async function planRoutes(input: PlanInput): Promise<Plan> {
     return { routes: [], bestByFactor: {}, searches, superseded };
   }
 
-  // What the back-off axes may move.
   const scenic = factorKeys(weights).filter(
     (key) => !FIXED_FACTORS.has(key) && weights[key] !== 0,
   );
@@ -607,9 +541,7 @@ export async function planRoutes(input: PlanInput): Promise<Plan> {
   };
 
   const zeroRoute = await run(scaled(0));
-  // The baseline still carries the mode's transit penalty, which can leave it walking from a station
-  // it should have stayed on the train past. The trip with nothing priced at all is the quickest one
-  // there is, and it is the card the reader reaches for when none of the scenery is worth the time.
+  // The baseline's transit penalty can leave it walking from a station, so also ask with nothing priced.
   await run({ ...scaled(0), transit: 0 });
 
   // A mode of penalties alone moves the bound not at all, so the weight scale is stepped instead.
@@ -629,8 +561,6 @@ export async function planRoutes(input: PlanInput): Promise<Plan> {
   }
   samples.push({ scale: 1, route: maxRoute });
 
-  // The least scenic route that is still a different walk: bracketed by the sweep, then bisected
-  // into the pool, where it stands as a candidate like any other.
   if (zeroRoute !== null) {
     let low = 0;
     let high = -1;
@@ -655,13 +585,7 @@ export async function planRoutes(input: PlanInput): Promise<Plan> {
     }
   }
 
-  // A factor that was not binding returns the max-scenic route again; expected, and cheap. The
-  // transit penalty earns a drop of its own even though the sweep holds it still: dropping it is how
-  // the route that rides gets asked for.
-  //
-  // Nothing is asked BETWEEN 0 and the mode's weight: a fixed path's cost is affine in one weight, so
-  // the cheapest cost over the paths is concave in it, and a route that wins at both ends of the
-  // interval wins at every point of it.
+  // A path's cost is affine in one weight, so a route winning at both ends of an interval wins throughout.
   const dropAxes: FactorKey[] =
     weights.transit === 0 ? scenic : [...scenic, "transit"];
   for (const key of dropAxes) {
@@ -670,11 +594,7 @@ export async function planRoutes(input: PlanInput): Promise<Plan> {
   if (!weights.allowSheds) {
     await run({ ...weights, allowSheds: true });
   }
-  // A mode that prices no ride at all — Rain, for which a train is shelter — rides every trip the
-  // rail is quicker on, and the sweep would never think to ask what walking looks like, since
-  // backing a weight of zero off changes nothing. So the walk is asked for outright, the way the
-  // shed gate above is. Only when the chosen route does ride: otherwise the answer is the route we
-  // already have, for a search.
+  // A mode pricing no ride (Rain) never backs off into walking, so ask for the walk outright.
   if (
     weights.transit === 0 &&
     weights.allowTransit &&
@@ -682,10 +602,7 @@ export async function planRoutes(input: PlanInput): Promise<Plan> {
   ) {
     await run({ ...weights, allowTransit: false });
   }
-  // And whatever the chosen route rides — a boat as readily as a train — the walk that stays on the
-  // surface the whole way is a card worth offering, which no back-off axis can reach: barring a
-  // crossing is a switch, not a weight. Asked outright, as the two above are, and only when the
-  // route does ride, since otherwise the answer is the route already in the pool.
+  // Barring a crossing is a switch, not a weight, so no back-off axis reaches the surface-only walk.
   if (
     maxRoute.result.steps.some(
       (step) => step.kind === "ferry" || step.kind === "ride",
@@ -695,7 +612,6 @@ export async function planRoutes(input: PlanInput): Promise<Plan> {
   }
 
   if (superseded) {
-    // Nothing downstream is worth the work: the caller is about to draw another plan's cards.
     return { routes: [], bestByFactor: {}, searches, superseded };
   }
 
@@ -710,8 +626,6 @@ export async function planRoutes(input: PlanInput): Promise<Plan> {
     }
     return total;
   });
-  // Selection chooses between what is left once the dominated candidates are gone, so a card it
-  // could have spent on a route nothing recommends goes to one that differs on its own terms.
   const survivors = undominated(
     pool.map((pooled) => pooled.result.travelSeconds),
     scenicScores,

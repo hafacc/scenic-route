@@ -1,19 +1,6 @@
-// Prettify a raw CSCL street label ("W 60 ST") into display form ("West 60th Street"). The graph
-// ships names uppercased-as-published; presentation stays in TypeScript, so this is the one place
-// that knows the abbreviations. Kept deliberately small: the fixed token map covers the types that
-// actually occur, a leading directional expands, and a number right before a type is ordinalized.
+// Prettifies a raw CSCL label ("W 60 ST") into "West 60th Street"; the graph ships names as published.
 
-// Uppercase street-type abbreviation -> expanded word.
-//
-// Two abbreviation traditions are in here, because two of them are published. New York and San
-// Francisco write AVE, BLVD, TER, PKWY, CIR; Alameda County writes AV, BL, TE, PW, CI for the same
-// words, and 1,131 of the East Bay's 4,500 streets end in AV alone — left out, most of a region's
-// street names would read "Ashby Av".
-//
-// Only the county spellings that occur in NO New York or San Francisco street name are here, which
-// is why its CRES, CV, PK and PT are missing: those four DO occur in New York, meaning the same
-// words, and expanding them would rewrite twenty-six of its names and the committed search index
-// built over them for a cosmetic gain in a city this change is not about.
+// Includes Alameda County's AV, BL etc.; its CRES, CV, PK and PT also occur in NYC, so they're left out.
 const TYPE_WORDS: Readonly<Record<string, string>> = {
   ST: "Street",
   AVE: "Avenue",
@@ -48,8 +35,7 @@ const TYPE_WORDS: Readonly<Record<string, string>> = {
   CM: "Common",
 };
 
-// Leading directional letter -> expanded word (only expanded in the first token, so "AVE N" stays
-// "Avenue N" while "W 60 ST" becomes "West ...").
+// Expanded only in the first token, so "AVE N" stays "Avenue N" while "W 60 ST" becomes "West ...".
 const DIRECTIONAL_WORDS: Readonly<Record<string, string>> = {
   W: "West",
   E: "East",
@@ -57,7 +43,6 @@ const DIRECTIONAL_WORDS: Readonly<Record<string, string>> = {
   S: "South",
 };
 
-// Connector words kept lowercase when they are not the first token ("Avenue of the Americas").
 const SMALL_WORDS: ReadonlySet<string> = new Set([
   "of",
   "the",
@@ -104,7 +89,6 @@ export function prettifyStreetName(label: string): string {
     if (upper in TYPE_WORDS) {
       return TYPE_WORDS[upper];
     }
-    // A connector word stays lowercase unless it leads the name.
     if (index > 0 && SMALL_WORDS.has(token.toLowerCase())) {
       return token.toLowerCase();
     }

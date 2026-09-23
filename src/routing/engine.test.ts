@@ -1,5 +1,4 @@
-// The oracle is `findRoute` itself, since the engine runs the same search: a weaker route out of
-// the worker would otherwise be invisible, because the panel draws whatever comes back.
+// The oracle is `findRoute` itself, since the panel draws whatever the worker returns.
 
 import { expect, test } from "bun:test";
 import { type Plan, planRoutes } from "./alternatives";
@@ -11,12 +10,10 @@ import { clearEdgePathCache } from "./graph";
 import type { RouteRequest, RouterRequest, RouterResponse } from "./protocol";
 import { findRoute, type RouteResult } from "./search";
 
-// A real `City` must exist for this id: the engine reads the pier wait and the shade bins off one.
-// Every weight vector below leaves the route-time fields off, so no artifact is ever fetched.
+// The engine reads the pier wait and shade bins off a real City; no weights here fetch an artifact.
 const CITY = "nyc";
 const CLOCK = { tick: 0, dateMs: Date.UTC(2026, 5, 21, 16, 0, 0) };
 
-// Two ways round: the direct middle street, and a leafier detour a high tree weight makes cheaper.
 const graph = buildGraph(
   [
     { lat: 40.75, lng: -73.99 }, // 0 start
@@ -75,13 +72,12 @@ test("the cached route is findRoute, and reports when the path moved", async () 
       seen.push(signature(cached.result));
     }
   }
-  // Neither path is reported twice in a row: that is what stops the panel redrawing on a nudge.
+  // Neither path is reported twice in a row, which stops the panel redrawing on a nudge.
   expect(seen.length).toBeGreaterThan(1);
   expect(new Set(seen).size).toBe(seen.length);
 });
 
-// The searcher the cache was handed, which is the only way to see that it kept the engine's own one:
-// the bare `findRoute` answers the same routes, without the label reuse or the network estimate.
+// The only way to see it kept the engine's searcher: bare `findRoute` answers the same routes.
 function cacheSearcher(engine: RoutingEngine): unknown {
   return (engine as unknown as { cache: { search: unknown } }).cache.search;
 }
@@ -187,11 +183,9 @@ test("a drag coalesces to the frame the cursor is on", async () => {
     ["result", 3],
   ]);
   const [, , solved] = worker.sent;
-  // The last frame's endpoint, not one of the two it overtook.
   expect(solved.type === "result" && solved.result?.dest.edge).toBe(1);
 });
 
-// Strong enough that the detour wins at full weight and the street at zero: a breakpoint to find.
 const PLAN_WEIGHTS = weights(1, 0, false);
 
 function planMessage(id: number): RouterRequest {
@@ -202,7 +196,6 @@ function planMessage(id: number): RouterRequest {
   };
 }
 
-// The same plan over a bare `findRoute`: the oracle for both the stream and the finished set.
 async function expectedPlan(): Promise<{
   plan: Plan;
   candidates: RouteResult[];
@@ -225,8 +218,6 @@ test("a plan previews its max-scenic route and closes with the planned set", asy
   const worker = fakeWorker();
   await worker.receive(planMessage(4));
 
-  // One preview, whatever the sweep searched: the map draws the max-scenic route while the rest is
-  // still being found, and the alternatives ride back with the plan that settles which are cards.
   expect(worker.sent.map((response) => response.type)).toEqual([
     "preview",
     "done",
@@ -250,16 +241,13 @@ test("only the newest of several queued plans is planned", async () => {
   ];
   await Promise.all(inFlight);
   expect(worker.sent[0]).toEqual({ type: "stale", id: 1 });
-  // Nothing of the superseded plan ran: every message after it belongs to the newer one.
   expect(worker.sent.slice(1).every((response) => response.id === 2)).toBe(
     true,
   );
   expect(worker.sent.at(-1)?.type).toBe("done");
 });
 
-// A plan already running when a newer one arrives. The dispatcher learns of the newer request only
-// when the plan lets the event loop run, which it does between searches and no more often than its
-// own breath — so the first search here has to outlast one.
+// The dispatcher only sees the newer request when the plan yields, so the first search must outlast one.
 test("a plan a newer one overtakes stops where it is", async () => {
   const sent: RouterResponse[] = [];
   let searches = 0;
@@ -269,9 +257,7 @@ test("a plan a newer one overtakes stops where it is", async () => {
       if (searches === 1) {
         void dispatch.receive(planMessage(2));
         const until = performance.now() + 40;
-        while (performance.now() < until) {
-          // The plan's first search, long enough that the next one asks whether it is still wanted.
-        }
+        while (performance.now() < until) {}
       }
       return super.search(...args);
     }
@@ -284,12 +270,10 @@ test("a plan a newer one overtakes stops where it is", async () => {
     sent.filter((response) => response.id === 1).map((one) => one.type),
   ).toEqual(["preview", "stale"]);
   expect(sent.at(-1)).toMatchObject({ type: "done", id: 2 });
-  // The overtaken plan stopped at its second search; a whole one takes ten on this fixture.
+  // A whole plan takes ten searches on this fixture.
   expect(searches).toBeLessThan(2 + 10);
 });
 
-// The same, for the frame the reader is actually watching: a dragged endpoint retires the plan of a
-// walk they have already moved, rather than waiting out its sixteen searches behind it.
 test("a plan a drag frame overtakes stops where it is", async () => {
   const sent: RouterResponse[] = [];
   let searches = 0;
@@ -299,9 +283,7 @@ test("a plan a drag frame overtakes stops where it is", async () => {
       if (searches === 1) {
         void dispatch.receive(dragMessage(2, 2, 2));
         const until = performance.now() + 40;
-        while (performance.now() < until) {
-          // Long enough that the plan's next search asks whether it is still wanted.
-        }
+        while (performance.now() < until) {}
       }
       return super.search(...args);
     }
@@ -323,9 +305,6 @@ test("a request for a city with no graph is an error, not a crash", async () => 
   expect(worker.sent.map((response) => response.type)).toEqual(["error"]);
 });
 
-// The load is the one request the page cannot see fail any other way. A worker that could not decode
-// the bytes — out of memory on a phone — used to say nothing at all, and everything queued behind it
-// waited on a city it had never loaded.
 test("a graph the worker cannot decode is reported, and so is what queued behind it", async () => {
   const sent: RouterResponse[] = [];
   const dispatch = createDispatch(new RoutingEngine(), (response) =>

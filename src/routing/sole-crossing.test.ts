@@ -1,26 +1,4 @@
-// What the router does when the boat is the ONLY way across.
-//
-// New York's ferries compete with bridges: bar them, or miss the last one, and the walk is longer.
-// The Bay Area's do not. San Francisco and the East Bay are two land masses with no walking edge
-// between them — nobody walks the Bay Bridge — so every ferry edge there is a cut edge of the
-// graph, and three of the router's behaviors that never mattered before decide whether a crossing
-// works at all:
-//
-//   - the search has to FIND it, with an A* heuristic that scales straight-line distance by the
-//     least seconds a walked meter can cost. A boat crosses twelve kilometers in twenty-five
-//     minutes, which is five times walking pace, so the walking estimate alone would exceed the
-//     true cost and the heuristic would be inadmissible. The bounded ferry credit is what repairs
-//     that, and this is the shape it has to survive.
-//
-//   - once the last boat has gone, the edge costs Infinity, and there is then no path at all. The
-//     answer has to be no route — promptly, and without a walk over the water.
-//
-//   - the same when a boat exists but is further off than the ninety-minute wait cap, which for
-//     SF Bay Ferry is the whole of the night: the real timetable's last sailing to Oakland leaves
-//     at 21:20 and the first at 07:05, so a walk planned at two in the morning has no crossing.
-//
-// The graph is synthetic (src/routing/ferry.fixture.ts) because "the two halves are joined by one
-// scheduled boat and nothing else" is a statement about the graph, not about anyone's geometry.
+// In the Bay every ferry edge is a cut edge, so the ferry credit and the boat's hours decide routing.
 
 import { expect, test } from "bun:test";
 import { buildTimetable, encodeTimetable } from "../../scripts/ferry-schedule";
@@ -30,16 +8,13 @@ import { decodeSchedule, resolveTimetable } from "./ferry-schedule";
 import type { RoutingGraph } from "./graph";
 import { findRoute, type RouteResult } from "./search";
 
-// The fixtures below build their instants with the local Date constructor, so their timetables are
-// read in the runner's own zone.
+// Instants use the local Date constructor, so timetables are read in the runner's own zone.
 const LOCAL_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 const WEST_TERMINAL = "West Ferry Building";
 const EAST_TERMINAL = "East Ferry Terminal";
 
-// Two land masses joined by one ferry. The west chain is nodes 0-2 and the east chain 3-5; the only
-// edge between them is the ferry 2 -> 3, which is roughly the Ferry Building to Jack London Square
-// both in bearing and in span.
+// The only edge between the chains is the ferry 2 -> 3, roughly Ferry Building to Jack London Square.
 const WEST_END = 0;
 const EAST_END = 5;
 const FERRY_EDGE = 2;
@@ -71,8 +46,7 @@ graph.ferryEndpointNames = new Map([
 const start = snapAtNode(graph, WEST_END, WEST_WALK);
 const dest = snapAtNode(graph, EAST_END, EAST_WALK);
 
-// SF Bay Ferry's real weekday pattern between the Ferry Building and Oakland, as the committed
-// timetable reads it: sailings from 07:05 to 21:20 and nothing overnight.
+// SF Bay Ferry's real weekday Oakland sailings: 07:05 to 21:20, nothing overnight.
 const SAILINGS = [
   "07:05",
   "08:20",
@@ -147,7 +121,6 @@ function feedOf(sailings: readonly string[]): GtfsFeed {
   };
 }
 
-// The timetable in effect at a wall clock on 2026-08-12, a Wednesday.
 function departingAt(clock: string): RoutingGraph {
   const built = buildTimetable([
     { source: { id: "t" } as never, feed: feedOf(SAILINGS) },
@@ -170,17 +143,14 @@ test("a crossing solves in service hours, walk then boat then walk", () => {
   expect(result).not.toBeNull();
   const kinds = (result?.steps ?? []).map((step) => step.kind);
   expect(kinds.filter((kind) => kind === "ferry")).toHaveLength(1);
-  // Walking on both sides of the one boat, which is what makes it a crossing rather than a pier
-  // the route happens to end at.
+  // Walking on both sides makes the boat a crossing, not a pier the route ends at.
   const boat = kinds.indexOf("ferry");
   expect(boat).toBeGreaterThan(0);
   expect(boat).toBeLessThan(kinds.length - 1);
 });
 
 test("the wait for the boat is in the reported time", () => {
-  // The walk to the pier is the same in both — about an hour — so the difference is the pier. A
-  // 06:00 departure reaches it in time for the 07:05; a 09:00 one arrives just after the 09:35 has
-  // gone and stands there until 11:20.
+  // The walk to the pier is about an hour; 06:00 catches the 07:05, 09:00 just misses the 09:35.
   const early = findRoute(departingAt("06:00"), start, dest, routeWeights);
   const late = findRoute(departingAt("09:00"), start, dest, routeWeights);
   expect(early).not.toBeNull();
@@ -199,19 +169,12 @@ test("the wait for the boat is in the reported time", () => {
 });
 
 test("after the last boat there is no route at all rather than a walk over the water", () => {
-  // 22:30, past the 21:20 sailing; the next is 07:05, eight and a half hours off.
   const result = findRoute(departingAt("22:30"), start, dest, routeWeights);
   expect(result).toBeNull();
 });
 
 test("the wait cap is measured at the pier, not at the front door", () => {
-  // The one boat everything below turns on is the 07:05, and the walk to the pier is about an hour.
-  //
-  // Leaving at 04:30 reaches the pier around 05:30 — ninety-five minutes to wait, past the cap, so
-  // there is no crossing. Leaving fifteen minutes later reaches it at 05:45 and waits eighty, and
-  // the same boat is now reachable. Which is the point: the cap is a bound on standing about, so it
-  // is charged from the arrival at the terminal rather than from the departure instant, and a walk
-  // long enough to close the gap is a walk that catches the boat.
+  // The wait cap runs from arrival at the pier, so leaving 15 minutes later brings the 07:05 within it.
   expect(findRoute(departingAt("04:30"), start, dest, routeWeights)).toBeNull();
   expect(
     findRoute(departingAt("04:45"), start, dest, routeWeights),
@@ -229,26 +192,20 @@ test("barring ferries leaves the two halves unreachable rather than walkable", (
 });
 
 test("the search terminates on an unreachable destination without exploring for ever", () => {
-  // The A* heuristic's ferry credit is built at zero wait, so it still promises a shortcut across
-  // water no boat will carry anyone over tonight. A search that took that promise literally would
-  // keep reopening pier nodes; this pins that it settles and answers.
+  // The zero-wait ferry credit still promises a shortcut, so this pins that the search settles promptly.
   const started = performance.now();
   expect(findRoute(departingAt("02:00"), start, dest, routeWeights)).toBeNull();
   expect(performance.now() - started).toBeLessThan(1000);
 });
 
 test("the pier wait a region will bear is the region's own", () => {
-  // 04:30 reaches the pier ninety-five minutes before the 07:05 — past New York's default, which is
-  // set by a ferry that runs all night beside a bridge. Here the boat is the only way over, so the
-  // same wait is the difference between a trip and a refusal, and the region says how long it will
-  // stand about.
+  // New York's default cap is set by an all-night ferry beside a bridge; here the region sets its own.
   const bay = departingAt("04:30");
   expect(findRoute(bay, start, dest, routeWeights)).toBeNull();
 
   bay.maxFerryWaitSeconds = 150 * 60;
   expect(findRoute(bay, start, dest, routeWeights)).not.toBeNull();
 
-  // The bound moved rather than lifting: a wait past the region's own cap is still refused.
   bay.maxFerryWaitSeconds = 60 * 60;
   expect(findRoute(bay, start, dest, routeWeights)).toBeNull();
 });

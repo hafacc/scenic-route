@@ -1,21 +1,4 @@
-// The daily update (scripts/update-sheds.ts), over a feed small enough to reason about.
-//
-// The job keeps no state outside the artifact, so everything it does rests on three things being
-// true of it: that its records are in an order the DOB's own CSVs can reproduce, that a record it
-// carries forward untouched is one no later snapshot could have changed, and that the truncation
-// window it hands on is the one the next run would have found for itself. Those are the properties
-// pinned here, and the one they add up to — that the artifact is a function of the day it was built
-// through and of nothing else, so an update from any starting point lands on a full rebuild's bytes.
-// Running after a long silence and running twice in one day are corollaries. Cron is best-effort,
-// GitHub switches a schedule off after sixty days of repository quiet, and the DOB's own feed has 74
-// gaps in it, so "diff against yesterday" is not something this job is allowed to assume.
-//
-// Checked against a synthetic feed rather than the real one, which is a 370 MB clone and a two-minute
-// walk. `scripts/shed-permits.ts` exposes the fold with the git reading taken out, so the days can
-// just be handed to it: a permit that vanishes for a week and comes back inside the renewal tolerance,
-// one that really comes down, one that comes back long after it did with a length the feed has
-// corrected in the meantime, one that comes down between the two runs, one first seen in the last few
-// days, a day the feed publishes nothing at all, and a truncated write.
+// Cron skips and DOB feed gaps mean updates can't assume yesterday; any start must match a full rebuild.
 
 import { expect, test } from "bun:test";
 import {
@@ -64,15 +47,12 @@ function isoDay(day: number): string {
   return new Date(START_MS + day * DAY_MS).toISOString().slice(0, 10);
 }
 
-// The feed's own day 0 is 2020-01-01 and the artifact counts from 2017-12-28, so a day number read
-// back out of a header has to come back through the calendar.
+// The feed's day 0 is 2020-01-01 but the artifact's is 2017-12-28.
 function feedDay(shedDay: number): number {
   return shedDay - shedDayOf(isoDay(0));
 }
 
-// Every permit the feed carries, named here for what it does to the walk. `open.bin` names its
-// records by job number, so the feed's own have to be shaped like the DOB's: a nine-digit BIS number
-// for the first, which the artifact has to be able to name too, and DOB NOW numbers for the rest.
+// Job numbers shaped like the DOB's: a nine-digit BIS number first, then DOB NOW numbers.
 const PERMITS = [
   "always",
   "brief",
@@ -108,7 +88,6 @@ function rowFor(job: string, feet: number): SnapshotRow {
   };
 }
 
-// Which permits the feed carries on a given day, or nothing at all on the day it publishes nothing.
 function snapshotFor(day: number): DatedSnapshot | null {
   if (day === SILENT_DAY) {
     return null;
@@ -136,9 +115,7 @@ function snapshotFor(day: number): DatedSnapshot | null {
   }
   const rows = new Map<string, SnapshotRow>();
   for (const name of names) {
-    // The feed corrects one standing permit's length halfway through, which the walk has to carry
-    // forward, and gives another a new one only after an earlier stint of its has closed — which is
-    // the correction a record already in `closed.bin` must NOT move with.
+    // A correction must carry forward into a standing permit, but not into an already-closed stint.
     const corrected =
       (name === "always" && day >= 40) || (name === "returning" && day >= 100);
     rows.set(jobFor(name), rowFor(jobFor(name), corrected ? 88 : 40));
@@ -148,9 +125,7 @@ function snapshotFor(day: number): DatedSnapshot | null {
 
 const feed = Array.from({ length: DAYS }, (_, day) => snapshotFor(day));
 
-// The permits the feed mentions between `from` and `through`, in the artifact's own order, with the
-// truncation window the walk carries away. `from` is "" for a walk over the whole feed and a day for
-// the window an update reads, and `before` is the window the artifact it is updating handed over.
+// `from` is "" for the whole feed; `before` is the window the updated artifact handed over.
 function walk(through: number, from = "", before: number[] = []): ShedWalk {
   const fold = startFold(from, before);
   for (const snapshot of feed.slice(0, through + 1)) {
@@ -163,9 +138,7 @@ function walk(through: number, from = "", before: number[] = []): ShedWalk {
   return walked;
 }
 
-// A reading's spans, standing in for the tax map and the placement: two per record, derived from the
-// street and the length, so a record placed from a corrected reading can be told from one that kept
-// the reading its own stint ended under.
+// Two spans per record, derived from street and length, so a corrected reading's placement is visible.
 function coverageOf(attributes: ShedAttributes): {
   spans: {
     sourceId: number;
@@ -197,7 +170,6 @@ function coverageOf(attributes: ShedAttributes): {
   };
 }
 
-// The artifact a full rebuild would write for the feed up to `through`.
 function build(through: number) {
   const { permits, counts } = walk(through);
   const day = shedDayOf(isoDay(through));
@@ -209,9 +181,6 @@ function build(through: number) {
   );
 }
 
-// The artifact after an update from `from` to `through`, which is what the daily job does: the same
-// window, the same seeded truncation rule, and a parcel read for every permit the artifact has never
-// placed and every one whose reading the feed has corrected since.
 function update(from: ReturnType<typeof build>, through: number) {
   const artifact = decodeShedArtifact(from.open, from.closed);
   const reached = feedDay(artifact.lastDay);
@@ -238,7 +207,6 @@ function update(from: ReturnType<typeof build>, through: number) {
   );
 }
 
-// An interval as the feed's own days, without the reading frozen on it.
 function days(intervals: readonly ShedInterval[]) {
   return intervals.map(({ first, last, open }) => ({ first, last, open }));
 }
@@ -248,9 +216,7 @@ test("the synthetic feed carries the traps it is meant to", () => {
     walk(DAYS - 1).permits.map((permit) => [permit.job, permit]),
   );
 
-  // A day the feed publishes nothing is not a day every shed came down, and a truncated write is
-  // dropped rather than believed — either read literally would close every standing permit. The
-  // truncation rule sees only the thirty days BEFORE each one, and still catches this.
+  // Read literally, a silent day or a truncated write would close every standing permit.
   expect(days(byJob.get(jobFor("always"))?.runs ?? [])).toEqual([
     { first: isoDay(0), last: isoDay(DAYS - 1), open: true },
   ]);
@@ -261,14 +227,11 @@ test("the synthetic feed carries the traps it is meant to", () => {
   expect(
     days(mergeIntervals(byJob.get(jobFor("flapping"))?.runs ?? [])),
   ).toEqual([{ first: isoDay(0), last: isoDay(DAYS - 1), open: true }]);
-  // A permit that really did come down stays down, and one that came back far later is two sheds.
   expect(days(mergeIntervals(byJob.get(jobFor("brief"))?.runs ?? []))).toEqual([
     { first: isoDay(0), last: isoDay(10), open: false },
   ]);
   const returning = mergeIntervals(byJob.get(jobFor("returning"))?.runs ?? []);
   expect(returning).toHaveLength(2);
-  // The correction to a permit's length is the one the record ends up with, and the one an interval
-  // that had already ended when it arrived does NOT.
   expect(byJob.get(jobFor("always"))?.linearFeet).toBe(88);
   expect(byJob.get(jobFor("returning"))?.linearFeet).toBe(88);
   expect(returning.map((interval) => interval.attributes.linearFeet)).toEqual([
@@ -277,8 +240,7 @@ test("the synthetic feed carries the traps it is meant to", () => {
 });
 
 test("open.bin names every standing permit, in job order", () => {
-  // The load-bearing property: the update reads which record belongs to which permit out of the
-  // file, and the feed's own answer only has to agree with it.
+  // The update reads record ownership from the file; the feed only has to agree.
   const through = DAYS - 1;
   const { permits } = walk(through);
   const day = shedDayOf(isoDay(through));
@@ -294,13 +256,12 @@ test("open.bin names every standing permit, in job order", () => {
   expect(artifact.open).toHaveLength(standing.length);
   for (const [order, permit] of standing.entries()) {
     const { spans, confidence } = coverageOf(permit);
-    // Both shapes of job number survive the round trip through the header's delta chain.
+    // Both job-number shapes survive the header's delta chain.
     expect(artifact.open[order].job).toBe(permit.job);
     expect(artifact.open[order].spans).toEqual(spans);
     expect(artifact.open[order].confidence).toBe(confidence);
   }
   expect(artifact.open.map((record) => record.job)).toContain("104416464");
-  // And every record in the file is one an interval reaching the last few days put there.
   for (const permit of permits) {
     const provisional = mergeIntervals(permit.runs).filter((interval) =>
       isProvisional(shedDayOf(interval.last), day),
@@ -310,9 +271,7 @@ test("open.bin names every standing permit, in job order", () => {
 });
 
 test("a standing permit open.bin does not name stops the run", () => {
-  // The names are the mapping now, so the feed's own answer is free to be a check — and this is the
-  // case it exists for: a record missing from the file would otherwise be placed again as if it were
-  // new, with the first day the replay window can see rather than the one it really went up.
+  // A record missing from the file would otherwise be re-placed as new, with the wrong first day.
   const artifact = decodeShedArtifact(
     build(DAYS - 1).open,
     build(DAYS - 1).closed,
@@ -327,11 +286,7 @@ test("a standing permit open.bin does not name stops the run", () => {
   ).toThrow(jobFor("flapping"));
 });
 
-// THE invariant, and the reason for both pieces of state the artifact carries: what the job writes
-// is a function of the day it is built through and nothing else. Not of when it last ran, not of how
-// far back the replay that produced it started. The real feed says the same thing — a 300-day, a
-// 177-day, a 60-day and a 29-day chain of daily `update-sheds` runs all land on the same bytes as a
-// full `build-sheds` — but that takes a 370 MB clone and half an hour, and this takes a millisecond.
+// The real feed agrees (300-, 177-, 60- and 29-day chains), but that takes a 370 MB clone.
 test("an update lands on a full rebuild wherever the replay started", () => {
   const rebuilt = build(DAYS - 1);
 
@@ -345,10 +300,7 @@ test("an update lands on a full rebuild wherever the replay started", () => {
 });
 
 test("the truncation window travels in the artifact", () => {
-  // A run picks the feed up a fortnight behind the day it reached, so the first day it judges is the
-  // one the artifact's window was cut off before. Point that at the feed's truncated write: judged
-  // against its thirty neighbors it is dropped, and judged against nothing at all — which is what a
-  // walk that had to rediscover its own window would start with — it is believed.
+  // The truncated write is dropped against its thirty neighbors but believed against none.
   const artifact = decodeShedArtifact(
     build(TRUNCATED_DAY + MERGE_TOLERANCE_DAYS - 1).open,
     build(TRUNCATED_DAY + MERGE_TOLERANCE_DAYS - 1).closed,
@@ -412,7 +364,7 @@ test("closed.bin is only ever appended to", () => {
 
   expect(grown.closed.length).toBeGreaterThan(before.closed.length);
   expect(grown.closed.slice(0, before.closed.length)).toEqual(before.closed);
-  // Which is only sound because nothing already down can close again later.
+  // Sound only because nothing already down can close again later.
   const oldest = before.closed.map((record) => record.close as number);
   for (const record of grown.closed.slice(before.closed.length)) {
     expect(record.close as number).toBeGreaterThan(Math.max(...oldest));
@@ -429,8 +381,6 @@ test("a permit that comes back long after it came down is a second record", () =
   ) as ShedPermit;
   const intervals = mergeIntervals(returning.runs);
 
-  // Two records, each placed from the reading its own stint ended under: the feed gave this permit a
-  // new length when it came back, and the stint that had already closed keeps the old one.
   expect(intervals).toHaveLength(2);
   const records = [...artifact.open, ...artifact.closed];
   for (const interval of intervals) {
@@ -451,18 +401,14 @@ test("an artifact is only extended against the graph it names", () => {
   );
 
   expect(shedGraphMismatch(artifact, GRAPH_HASH)).toBeNull();
-  // The client resolves nothing against another graph, so a deploy that moved a graph input without
-  // a re-place shows bare pavement. What must not happen next is the daily job carrying these
-  // records forward under the new hash: that would put every one of them on whatever edge its key
-  // now names, which is the failure the key design exists to rule out.
+  // Carrying records forward under a new hash would put them on whatever edge their keys now name.
   const other = shedGraphMismatch(artifact, "0123456789abcdef");
   expect(other).toContain(GRAPH_HASH);
   expect(other).toContain("0123456789abcdef");
 });
 
 test("a deployed graph this checkout cannot read skips the day", async () => {
-  // The daily job commits the two timetables alongside the artifact, so a site that has not caught up
-  // with a graph format change must cost a day of sheds and not a day of departures.
+  // The daily job commits the timetables too, so a format lag must cost sheds, not departures.
   const originalFetch = globalThis.fetch;
   const originalError = console.error;
   const logged: string[] = [];

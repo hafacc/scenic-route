@@ -1,6 +1,4 @@
-// A worker resolves a relative fetch against the chunk directory it was served from rather than the
-// deploy root, so the page hands the routing worker its own base. On the page the base is never set
-// and artifact paths are used exactly as written.
+// A worker resolves relative fetches against its chunk directory, so the page hands it the deploy base.
 
 let base: string | null = null;
 

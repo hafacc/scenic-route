@@ -11,10 +11,7 @@ import { findRoute, type RouteResult } from "./search";
 import { constantShadeField, type ShadeField } from "./shade";
 import { haversineMeters, type Snap } from "./snap";
 
-// Oracle for the signed sun/shade axis. The reference optimum is a self-contained Dijkstra over
-// effective seconds — not findRoute — so a mocked ./search elsewhere can't substitute it. The edge
-// attribute is the already-decoded signed value (positive = sunlit, negative = shaded), wrapped in a
-// constant (time-invariant) shade field as computeEdgeShade's field is for a fixed sun position.
+// The oracle is its own Dijkstra, not findRoute, so a mocked ./search elsewhere can't substitute it.
 
 const SCALE = 1e-6;
 const NAME_NONE = 0xffff;
@@ -36,8 +33,7 @@ const noPref = (over: Partial<RouteWeights> = {}): RouteWeights => ({
   transit: 0,
   allowFerries: false,
   allowSheds: true,
-  // The fixture draws no rail, so nothing can board it, and no crossing edges, which leaves the
-  // crossing gate free either way — stated because omitting it would read as "avoid crossings".
+  // Stated because omitting it would read as "avoid crossings".
   allowTransit: false,
   allowCrossings: true,
   ...over,
@@ -48,7 +44,6 @@ interface NodeSpec {
   lng: number;
 }
 
-// A walking edge's signed shade attribute in (-1, 1); positive is net sunlit, negative shaded.
 interface EdgeAttrs {
   shade?: number;
 }
@@ -165,8 +160,7 @@ function snapAtNode(graph: RoutingGraph, node: number, walkEdge: number): Snap {
   };
 }
 
-// The reference optimum: a plain Dijkstra over effective seconds with findRoute's virtual-source and
-// virtual-goal partial-edge semantics.
+// Mirrors findRoute's virtual-source and virtual-goal partial-edge semantics.
 function dijkstraCost(
   graph: RoutingGraph,
   start: Snap,
@@ -272,7 +266,7 @@ function diamond(
 }
 
 function upperTaken(result: RouteResult | null): boolean {
-  // The upper path uses edges 1 and 2 (node 1); the lower uses edges 3 and 4 (node 2).
+  // The upper path uses edges 1 and 2; the lower uses edges 3 and 4.
   return (result?.steps ?? []).some(
     (step) => step.edge === 1 || step.edge === 2,
   );
@@ -283,7 +277,6 @@ test("a positive shade weight discounts sunlit edges and penalizes shaded ones",
   const sunlit = 1; // 0 -> 1, attr +0.5
   const shaded = 3; // 0 -> 2, attr -0.5
   const preferSun = noPref({ shade: 0.75 });
-  // Prefer-sun: the sunlit edge falls below 1 (a discount), the shaded edge rises above 1 (a penalty).
   expect(edgeMultiplier(graph, sunlit, preferSun)).toBeCloseTo(
     1 - 0.75 * 0.5,
     6,
@@ -301,7 +294,6 @@ test("a negative shade weight flips: it discounts shaded edges and penalizes sun
   const sunlit = 1;
   const shaded = 3;
   const preferShade = noPref({ shade: -0.75 });
-  // Prefer-shade: signs invert — the shaded edge is discounted, the sunlit edge penalized.
   expect(edgeMultiplier(graph, shaded, preferShade)).toBeCloseTo(
     1 - 0.75 * 0.5,
     6,
@@ -315,8 +307,7 @@ test("a negative shade weight flips: it discounts shaded edges and penalizes sun
 });
 
 test("findRoute matches the Dijkstra optimum across both shade signs", () => {
-  // The upper path is sunlit, the lower shaded; sweeping the signed weight makes each route optimal in
-  // some regime, so agreement with the oracle exercises admissibility on both signs.
+  // Each route wins in some regime, so agreement with the oracle exercises admissibility on both signs.
   const { graph, start, dest } = diamond({ shade: 0.7 }, { shade: -0.7 });
   const grid = [-1, -0.5, 0, 0.5, 1];
   let combinations = 0;
@@ -333,30 +324,23 @@ test("findRoute matches the Dijkstra optimum across both shade signs", () => {
 });
 
 test("the signed shade weight steers the route toward sun or shade", () => {
-  // The upper path bows out far (a genuine detour) and is fully sunlit; the lower is the short shaded
-  // way. Prefer-sun should tip onto the longer sunlit detour; prefer-shade must never take it.
   const { graph, start, dest } = diamond(
     { shade: 0.9 },
     { shade: -0.9 },
     0.0028, // upper bows far out — the longer path
     0.0002, // lower stays near the straight line — the shorter path
   );
-  // No preference: the shorter lower path wins on distance alone.
   expect(upperTaken(findRoute(graph, start, dest, noPref()))).toBe(false);
-  // Full prefer-sun makes the sunlit detour worth it.
   expect(upperTaken(findRoute(graph, start, dest, noPref({ shade: 1 })))).toBe(
     true,
   );
-  // Full prefer-shade keeps the short shaded path.
   expect(upperTaken(findRoute(graph, start, dest, noPref({ shade: -1 })))).toBe(
     false,
   );
 });
 
 test("the sun advancing over a long walk flips a late route decision", () => {
-  // A long stem into a symmetric fork: 0 -> 1 (a ~1.3 km walk, ~900 s) then either the upper branch
-  // (1 -> 2 -> 4) or the lower (1 -> 3 -> 4), equal length so shade alone decides. The fork is reached
-  // ~900 s in, long after the departure instant.
+  // Equal-length branches so shade alone decides; the fork is reached ~900 s after departure.
   const nodes: NodeSpec[] = [
     { lat: 0, lng: 0 }, // 0 start
     { lat: 0, lng: 0.015 }, // 1 fork
@@ -379,9 +363,7 @@ test("the sun advancing over a long walk flips a late route decision", () => {
   const upperEdges = new Set([1, 2]);
   const lowerEdges = new Set([3, 4]);
 
-  // At departure the upper branch is sunlit; the sun flips it after FLIP_SECONDS, well before the fork
-  // is reached. A prefer-sun walker who ignored elapsed time would take the upper branch; one who
-  // advances the sun by the ~900 s it takes to reach the fork should take the now-sunlit lower branch.
+  // The sun flips the branches at FLIP_SECONDS, well before the ~900 s walk reaches the fork.
   const FLIP_SECONDS = 500;
   const attrOf = (edge: number, elapsedSeconds: number): number => {
     const upperSunlit = elapsedSeconds < FLIP_SECONDS;
@@ -398,7 +380,6 @@ test("the sun advancing over a long walk flips a late route decision", () => {
     intensityAt: () => 0.5,
     maxAbs: 0.5,
   };
-  // The departure snapshot frozen for the whole walk — the old, single-sun-position behavior.
   const departure = constantShadeField(
     Float32Array.from(edges, (_edge, index) => attrOf(index, 0)),
   );
@@ -417,7 +398,7 @@ test("the sun advancing over a long walk flips a late route decision", () => {
 });
 
 test("minMultiplier stays strictly positive at the weight extremes", () => {
-  // The field's maxAbs at the decode ceiling 127/128, weight at either extreme: the floor is 1/128 > 0.
+  // maxAbs at the decode ceiling 127/128 leaves a floor of 1/128 > 0 at either extreme.
   const { graph } = diamond({ shade: 0 }, { shade: 0 });
   graph.shade = constantShadeField(new Float32Array([127 / 128]));
   for (const shade of [1, -1]) {

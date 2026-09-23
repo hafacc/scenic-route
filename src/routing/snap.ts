@@ -1,8 +1,4 @@
-// Snapping a lat/lng to the graph. A uniform grid over edge bounding boxes finds the nearby
-// edges; each is projected to find the closest point, its along-distance, and its component. The
-// per-component candidate rule keeps a start on an isolated park path routable (both ends fall
-// back to the surrounding street component together) and makes a cross-harbor query fail
-// honestly rather than snapping across the water.
+// Best snap per component, so park-path starts stay routable and cross-harbor queries fail honestly.
 
 import { edgeKind, edgePath, isTransitEdge, type RoutingGraph } from "./graph";
 
@@ -11,7 +7,7 @@ export const SNAP_RADIUS_METERS = 300;
 const METERS_PER_DEGREE_LAT = 111_320;
 const TARGET_CELL_METERS = 250;
 const EARTH_RADIUS_METERS = 6_371_000;
-// Cell coordinates never reach this, so packing two of them into one key never collides.
+// Cell coordinates never reach this, so packed keys never collide.
 const CELL_KEY_STRIDE = 1 << 20;
 
 export interface SnapIndex {
@@ -35,7 +31,6 @@ function cellKey(cellX: number, cellY: number): number {
 
 export function buildSnapIndex(graph: RoutingGraph): SnapIndex {
   const metersPerUnitLat = graph.scale * METERS_PER_DEGREE_LAT;
-  // A representative latitude for the whole grid; the exact cell size is not load-bearing.
   const referenceLat = (graph.originLat + 0.25) * (Math.PI / 180);
   const metersPerUnitLng = metersPerUnitLat * Math.cos(referenceLat);
   const cellUnitsX = Math.max(
@@ -54,11 +49,7 @@ export function buildSnapIndex(graph: RoutingGraph): SnapIndex {
   const buckets = new Map<number, number[]>();
   const cursor = { offset: 0 };
   for (let edge = 0; edge < graph.edgeCount; edge++) {
-    // You never start a walk mid-crosswalk, on a corner link, aboard a ferry or on a platform, so
-    // those kinds are left out of the index entirely — the geometry-less ones (crossings, links,
-    // straight ferries and every transit edge) would also have no polyline to index. Leaving the
-    // transit kinds out is also what keeps a walker from ever being snapped onto a station or a
-    // platform node: a snap names an edge, so an edge nothing indexes is a node nothing reaches.
+    // Crossings, links, ferries and transit aren't indexed, so no walk snaps onto one.
     const kind = edgeKind(graph, edge);
     if (
       kind === "crossing" ||
@@ -69,7 +60,7 @@ export function buildSnapIndex(graph: RoutingGraph): SnapIndex {
       continue;
     }
     cursor.offset = graph.edgeGeomOffset[edge];
-    // Geometry is origin-anchored: the first delta is the absolute quantized position.
+    // The first delta is the absolute quantized position.
     let quantizedX = 0;
     let quantizedY = 0;
     let minX = Number.POSITIVE_INFINITY;
@@ -140,9 +131,7 @@ function haversineMeters(
   return 2 * EARTH_RADIUS_METERS * Math.asin(Math.min(1, Math.sqrt(inner)));
 }
 
-// Project the query point onto an edge polyline in a local equirectangular frame centered on the
-// point, returning the closest point, its along-distance scaled to the edge's geodesic length,
-// and the perpendicular distance.
+// Along-distance is scaled to the edge's geodesic length.
 function projectToEdge(
   graph: RoutingGraph,
   edge: number,
@@ -213,8 +202,7 @@ function projectToEdge(
   };
 }
 
-// The best snap in every component reachable within the radius, searched in expanding rings so a
-// dense query point stops early.
+// Expanding rings, so a dense query point stops early.
 export function snapCandidates(
   graph: RoutingGraph,
   index: SnapIndex,
@@ -235,7 +223,6 @@ export function snapCandidates(
         cellY <= centerCellY + ring;
         cellY++
       ) {
-        // Only the newly reached perimeter of this ring.
         const onRing =
           Math.abs(cellX - centerCellX) === ring ||
           Math.abs(cellY - centerCellY) === ring;
@@ -255,9 +242,7 @@ export function snapCandidates(
           if (projection.distanceMeters > SNAP_RADIUS_METERS) {
             continue;
           }
-          // A street's two sidewalks now carry their own baked, offset geometry ~13 m apart, so the
-          // nearest edge already is the physically nearer side — no cross-product side filter, just
-          // the least-distance candidate per component (crossing and link kinds are not indexed).
+          // Each sidewalk has its own offset geometry, so the nearest edge is the nearer side.
           const component = graph.nodeComponent[graph.edgeNodeA[edge]];
           const incumbent = best.get(component);
           if (
@@ -283,7 +268,6 @@ export type SnapPair =
   | { ok: true; start: Snap; dest: Snap }
   | { ok: false; reason: "startTooFar" | "destTooFar" | "disconnected" };
 
-// Pick the component that serves both ends with the least total snap distance.
 export function snapPair(
   graph: RoutingGraph,
   index: SnapIndex,

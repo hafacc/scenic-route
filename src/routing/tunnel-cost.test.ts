@@ -1,7 +1,4 @@
-// What the graph's tunnel bit costs. A tunnel is two claims about a walked meter at once — there is a
-// roof over it, and no sun reaches it — so the questions here are whether both hold wherever the cost
-// model reads them (the multiplier, the A* bound, the chips a routed trip reports), and whether the
-// shelter ceiling a tunnel alone can reach still leaves the heuristic a lower bound.
+// A tunnel claims both a roof and no sun; both must hold everywhere the cost model reads them.
 
 import { expect, test } from "bun:test";
 import {
@@ -23,8 +20,7 @@ import type { RoutingGraph } from "./graph";
 import { findRoute } from "./search";
 import type { ShadeField } from "./shade";
 
-// The sun's strength by half-hour of the walk, dimming toward dusk. More than one bin, because a
-// tunnel has to read dark at each of them and not just at the departure instant.
+// Several bins, so a tunnel must read dark at each, not just at departure.
 const SUN_BY_BIN = [0.9, 0.7, 0.4, 0];
 const BIN_SECONDS = 1800;
 const PEAK_SUN = 0.9;
@@ -52,9 +48,7 @@ const noPref = (over: Partial<RouteWeights> = {}): RouteWeights => ({
   ...over,
 });
 
-// A shade field whose sun sets over the walk, so an edge's attribute depends on when it is reached.
-// `sunlit` is each edge's signed share of that sun, the baked figure the tunnel override has to beat:
-// every edge here is baked fully sunlit, so a dark tunnel can only be the bit doing the work.
+// Every edge is baked fully sunlit, so a dark tunnel can only be the bit's doing.
 function duskField(sunlit: Float32Array): ShadeField {
   const intensityAt = (elapsedSeconds: number): number =>
     SUN_BY_BIN[
@@ -68,10 +62,7 @@ function duskField(sunlit: Float32Array): ShadeField {
   };
 }
 
-// Three edges of pavement in a line, the middle one underground. Each is about 111 m, so the whole
-// walk takes some four minutes and stays inside the first sun bin — the arithmetic the chips are
-// checked against is then the plain one, and the several-bins question is asked of the attribute
-// directly below.
+// Each edge is ~111 m, so the whole walk stays inside the first sun bin.
 const NODES: NodeSpec[] = [
   { lat: 0, lng: 0 },
   { lat: 0.001, lng: 0 },
@@ -94,10 +85,8 @@ test("a tunnel is sheltered whole, in a city with no scaffolding feed at all", (
   const graph = tunnelGraph();
   expect(graph.sheds ?? null).toBeNull();
   expect(shelterAttrOf(graph, TUNNEL_EDGE, 0)).toBe(TUNNEL_SHELTER);
-  // Under the ceiling, so a meter of tunnel is cheap rather than free at the top of the slider.
   expect(TUNNEL_SHELTER).toBeLessThan(1);
   expect(shelterAttrOf(graph, 0, 0)).toBe(0);
-  // A tunnel is not a bridge deck, and nothing about the bit may read as one.
   expect(graph.edgeBridge[TUNNEL_EDGE]).toBe(0);
 });
 
@@ -108,17 +97,15 @@ test("no sun reaches a tunnel at any point in the walk", () => {
     const attr = shadeAttrOf(graph, TUNNEL_EDGE, elapsed, 0);
     expect(attr).toBe(-shade.intensityAt(elapsed));
     expect(Math.max(0, attr)).toBe(0); // the sun exposure the chip is a mean of
-    // The pavement either side is baked identically, so the sign is the bit and nothing else.
+    // The pavement either side is baked identically, so the sign is the bit's alone.
     expect(shadeAttrOf(graph, 0, elapsed, 0)).toBe(shade.intensityAt(elapsed));
-    // Full shade is the bottom of the range the A* shade bound is built from, never below it.
     expect(Math.abs(attr)).toBeLessThanOrEqual(shade.maxAbs);
   }
 });
 
 test("the shelter bound rises to meet a tunnel, and only where there is one", () => {
   expect(maxShelter(tunnelGraph())).toBe(TUNNEL_SHELTER);
-  // The same graph with the bit clear: a city with nothing underground and no shed feed shelters
-  // nobody, and its heuristic keeps the authority a raised bound would cost it.
+  // Without the bit, the heuristic keeps the authority a raised bound would cost it.
   expect(maxShelter(tunnelGraph(false))).toBe(0);
 });
 
@@ -149,8 +136,6 @@ test("a trip through a tunnel reports it on the shelter and sun chips", () => {
   );
   expect(route).not.toBeNull();
   expect(route?.steps.map((step) => step.edge)).toEqual([0, 1, 2]);
-  // One of the three equal edges is roofed and dark: a third of the seconds under cover, two thirds
-  // of the meters in the sun.
   expect(route?.factors.shelter).toBeCloseTo(TUNNEL_SHELTER / 3, 6);
   expect(route?.factors.shade).toBeCloseTo(2 / 3, 6);
   expect(route?.factors.bridge).toBe(0);

@@ -1,11 +1,4 @@
-// GRPH v12 bytes from a plain description of a graph, so a test can ask the decoder about the
-// layout the Rust writer lays down rather than about one it wrote itself. The tiler is the only
-// other writer of this format, and the two meet at the section directory: both append through one
-// helper that pads onto an 8-byte boundary and records the (offset, byteLength) entry, so neither
-// can drift from the other on padding.
-//
-// Everything the graph derives — the CSR, the mid-roadway node flags, the three edge-id lists, the
-// column maxima — is built here from the edges, exactly as the tiler builds it.
+// GRPH v12 bytes built the way the tiler builds them, so tests exercise the Rust writer's layout.
 
 import {
   FORMAT_VERSION,
@@ -14,8 +7,7 @@ import {
   NO_SOURCE_ID,
 } from "./graph";
 
-// 64 fixed bytes then a 48-entry directory, each entry (offset, byteLength, column tag). Its own copy
-// of the figures, bound to the reader's by the check the reader makes on header byte 6.
+// Its own copy of the figures, bound to the reader's by the check on header byte 6.
 const HEADER_BYTES = 640;
 const DIRECTORY_AT = 64;
 const DIRECTORY_ENTRY_BYTES = 12;
@@ -30,8 +22,6 @@ const KIND_BOARD = 6;
 const KIND_RIDE = 7;
 const TUNNEL_FLAG = 0x10;
 
-// The sections in the order the directory lists them, which is the order both writers append them
-// and the order the reader takes them.
 const SECTIONS = [
   "nodeQx",
   "nodeQy",
@@ -84,8 +74,7 @@ export interface EdgeSpec {
   kind: number;
   side?: number;
   length: number;
-  // Quantized vertices, in the same units as a node's. Absent means no geometry: the straight line
-  // between the two endpoints, which is what the sentinel says.
+  // Quantized, in a node's units; absent means the straight line between the endpoints.
   geometry?: readonly (readonly [number, number])[];
   nameId?: number;
   durationSeconds?: number; // a ferry's or a transit edge's; a walking kind carries 0
@@ -130,19 +119,14 @@ export interface GraphSpec {
     stop: number;
   }[];
   ride?: readonly { edge: number; route: number }[];
-  // Per street door the street it opens onto: a name id and a side label, as the tiler reads them
-  // off the walking edge the door was cut into.
   doors?: readonly { edge: number; street: number; side: number }[];
-  // Sections to leave out of the file, standing in for a graph written before that column was
-  // baked. Its directory entry stays, zeroed, so every later section is still where it was.
+  // Stands in for a graph written before that column; its directory entry stays, zeroed.
   omit?: readonly GraphSection[];
-  // Two sections whose directory entries trade places, standing in for a writer that appended them
-  // in the other order. Where they are the same size, position alone cannot tell them apart.
+  // Stands in for a writer that appended them in the other order.
   swap?: readonly [GraphSection, GraphSection];
 }
 
-// FNV-1a 32 over the section's name, the tag its directory entry carries. The reader's own copy of
-// this is in ./graph, and the tiler's is in crates/tiler/src/graph.rs.
+// Mirrors ./graph and crates/tiler/src/graph.rs.
 function columnTag(name: string): number {
   let hash = 0x811c9dc5;
   for (let index = 0; index < name.length; index += 1) {
@@ -168,8 +152,6 @@ function writeVarint(out: number[], value: number): void {
   } while (rest !== 0);
 }
 
-// The geometry blob and the two columns that index it: each edge's vertices delta-encoded, the
-// first from the graph origin and the rest from the vertex before.
 function encodeGeometry(edges: readonly EdgeSpec[]): {
   blob: Uint8Array;
   offsets: Uint32Array;
@@ -197,7 +179,6 @@ function encodeGeometry(edges: readonly EdgeSpec[]): {
   return { blob: Uint8Array.from(blob), offsets, counts };
 }
 
-// A u32 count, (count + 1) byte offsets bracketing each name, then the UTF-8 blob.
 function encodeNames(names: readonly string[]): Uint8Array {
   const blob = new TextEncoder().encode(names.join(""));
   const table = new Uint8Array(4 + 4 * (names.length + 1) + blob.length);
@@ -281,7 +262,6 @@ function encodeTransitTables(spec: GraphSpec): Uint8Array {
   return table;
 }
 
-// The half-edge lists: every node's incident edges, ascending, as the tiler's CSR holds them.
 function buildAdjacency(spec: GraphSpec): {
   csr: Uint32Array;
   adjacency: Uint32Array;
@@ -448,8 +428,7 @@ export function encodeGraph(spec: GraphSpec): ArrayBuffer {
   view.setUint32(40, spec.componentCount ?? 1, true);
   view.setUint32(44, directory.length, true);
 
-  // A column the file leaves out has no maximum either: that is what makes an absent section read
-  // as a graph written before the bake rather than as one whose slider is simply off.
+  // A missing column has no maximum, so it reads as pre-bake rather than as a slider that's off.
   const greatest = (section: GraphSection): number =>
     omitted.has(section)
       ? 0
