@@ -234,7 +234,7 @@
       "trees": 298771,
       "updated": "2026-09-15",
       "attribution": "SF Public Works street trees via DataSF; Oakland Public Tree Inventory; City of Berkeley street trees (Arborwell survey), frozen copy",
-      "sourceUrl": "https://data.sfgov.org/d/tkzw-k3nq",
+      "sourceUrl": "https://data.sf.gov/d/tkzw-k3nq",
       "field": {
         "trees": {
           "file": "sf.bin",
@@ -261,7 +261,7 @@
           "measuredHeights": 569178,
           "updated": "2026-09-15",
           "attribution": "Urban tree canopy © SF Planning (2013 Urban Forest Plan); Canopy © EBRPD / CAL FIRE / Tukman Geospatial (ALCC 1 m LiDAR)",
-          "sourceUrl": "https://data.sfgov.org/d/ni2e-vpbg",
+          "sourceUrl": "https://data.sf.gov/d/ni2e-vpbg",
           "heightAttribution": "Elevation © USGS 3DEP / NASA WERK (CC0); Canopy heights © EBRPD / CAL FIRE / Tukman Geospatial (ALCC 1 m LiDAR CHM)",
           "heightSourceUrl": "https://nationaldataplatform.org/stac/collections/nasa-werk-dem-ca-sanfrancisco-1-b23"
         },
@@ -405,7 +405,7 @@
         },
         "updated": "2026-09-15",
         "attribution": "SF basemap street centerlines via DataSF; Alameda County Street Centerlines via Alameda County GIS",
-        "sourceUrl": "https://data.sfgov.org/d/3psu-pn9h"
+        "sourceUrl": "https://data.sf.gov/d/3psu-pn9h"
       },
       "paths": {
         "file": "sf.bin",

@@ -49,7 +49,7 @@ for address in $(addresses); do
 done
 
 # Whether AWS us-east-1 is reachable at all from here, which separates "this host refuses us" from
-# "this path is broken". Deliberately not another Socrata deployment: data.sfgov.org resolves to the
+# "this path is broken". Deliberately not another Socrata deployment: data.sf.gov resolves to the
 # very same load balancer and would prove nothing.
 echo "control (s3 us-east-1):"
 curl -s -o /dev/null --max-time 15 -w "$FORMAT" https://s3.amazonaws.com
