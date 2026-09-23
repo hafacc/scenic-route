@@ -18,7 +18,7 @@ import type { SubwayParams, TileCoords } from "./protocol";
 import type { TileRenderer } from "./renderer";
 import { splinePath } from "./spline";
 
-// The subway overlay: the MTA's 93 drawn shape variants in the colours the feed publishes, and a
+// The subway overlay: the MTA's 93 drawn shape variants in the colors the feed publishes, and a
 // marker at each place they stop — 444 of them in New York, 217 in San Francisco, after the records
 // naming one place twice are merged (../subway/format). From z15 the marker is the bullets of the
 // routes calling there rather than a dot. The machinery is the ferry layer's (./polylines, ./spline,
@@ -33,7 +33,7 @@ const LINE_WIDTH_PX = 2;
 // The gap between one lane and the next, in CSS pixels, and the zoom it is held at (below which it
 // becomes a ground distance — see laneSpacingPx). Wider than the ferries' 2.5 px because the
 // bundles are: a 0.5 px gap between 2 px strokes reads as one fat band once four of them are
-// stacked, where 1 px keeps each route's colour its own. At z15 (3.6 m/px at 40.75°) the Lexington
+// stacked, where 1 px keeps each route's color its own. At z15 (3.6 m/px at 40.75°) the Lexington
 // trunk's three lanes span 9 px, about the 30 m width of Lexington Av itself; the ten-route stack at
 // Atlantic Av spans 27 px, about the width of that junction's own street footprint.
 const LANE_SPACING_PX = 3;
@@ -41,7 +41,7 @@ const LANE_FULL_ZOOM = 15;
 
 // The grid the local route set is counted over. 40 m is wider than the two tracks of one trunk are
 // apart and narrower than the ~80 m between the avenues a parallel route would run under, so a cell
-// holds a trunk and not its neighbour. Measured over the whole file: 10,763 cells, of which 95% hold
+// holds a trunk and not its neighbor. Measured over the whole file: 10,763 cells, of which 95% hold
 // four routes or fewer and three hold ten.
 const TRUNK_CELL_M = 40;
 // How far a route takes to slide from one lane to the next where the set around it changes. Under
@@ -53,7 +53,7 @@ const STATION_MIN_ZOOM = 13;
 const STATION_LABEL_ZOOM = 15;
 const STATION_BASE_RADIUS_PX = 2.5;
 const STATION_LABEL_COLOR = "#ffffff"; // over the dark outline ./labels strokes, legible on either theme
-// What a station serving routes of more than one colour is ringed in — Times Sq is not any one
+// What a station serving routes of more than one color is ringed in — Times Sq is not any one
 // line — and what a line whose route the file does not name falls back to.
 const NEUTRAL_COLOR = "#334155"; // slate-700
 
@@ -70,7 +70,7 @@ const BULLETS_PER_ROW = 4;
 const BULLET_GAP_PX = 1.5;
 const BULLET_OUTLINE = "#ffffff"; // parts touching bullets, and lifts a dark one off a dark map
 // A bullet at BULLET_ZOOM, growing 2 px a zoom. 12 px is the smallest a two-letter name still reads
-// in, which is what San Francisco's cable cars need: CA, PH and PM publish the same colour as the F,
+// in, which is what San Francisco's cable cars need: CA, PH and PM publish the same color as the F,
 // so a plain disc would leave four routes looking alike.
 const BULLET_BASE_DIAMETER_PX = 12;
 const BULLET_MAX_DIAMETER_PX = 16;
@@ -84,8 +84,8 @@ const BULLET_PAIR_TEXT_SIZE = 0.6;
 // A diamond is a narrower box than a circle of the same width, so its name gets less room.
 const DIAMOND_TEXT_WIDTH = 0.58;
 // Longer than this and the short name is a word rather than a legend, so the bullet is left plain
-// and its colour carries the route. That is what BART wants: its four routes are *named* "Yellow",
-// "Green", "Red" and "Blue" and published in exactly those colours, so the disc is the name. It also
+// and its color carries the route. That is what BART wants: its four routes are *named* "Yellow",
+// "Green", "Red" and "Blue" and published in exactly those colors, so the disc is the name. It also
 // leaves the Staten Island Railway ("SIR") a plain navy disc, the only route on the island. Every
 // other route in either city is one or two characters once the express diamonds are folded in.
 const BULLET_MAX_TEXT_CHARS = 2;
@@ -116,7 +116,7 @@ interface Subway {
   bullets: RouteBullet[];
   // Per marker, the routes calling there, in the feed's own route order.
   stationRoutes: number[][];
-  // Per marker, the colour of its dot's ring below BULLET_ZOOM — see stationRing.
+  // Per marker, the color of its dot's ring below BULLET_ZOOM — see stationRing.
   rings: string[];
   names: string[];
   lngs: Float64Array;
@@ -166,9 +166,9 @@ function routeBullets(routes: readonly SubwayRoute[]): RouteBullet[] {
   });
 }
 
-// A station's ring takes its routes' colour when they all publish the same one — which is what the
+// A station's ring takes its routes' color when they all publish the same one — which is what the
 // system's trunks look like, the 4/5/6 all green — and the neutral otherwise, because a station on
-// two trunks is not either of their colours. 179 of New York's 444 markers serve one route alone.
+// two trunks is not either of their colors. 179 of New York's 444 markers serve one route alone.
 function stationRing(
   station: SubwayStation,
   routes: readonly SubwayRoute[],
@@ -184,7 +184,7 @@ function stationRing(
 export function decodeSubwayTiles(buffer: ArrayBuffer): Subway {
   const { routes, lines, stations: records } = decodeSubway(buffer);
   // One marker per place, not per record: New York spreads a complex over several records, and San
-  // Francisco's feeds file a stop once per kerb. Which records are one place is the MTA's own answer
+  // Francisco's feeds file a stop once per curb. Which records are one place is the MTA's own answer
   // where the feed gives one and a geometric guess where it does not — see ../subway/format.
   const stations = mergeStations(records);
   const midLat = stations.length
@@ -264,7 +264,7 @@ function bulletDiameter(zoom: number): number {
 
 interface BulletBlock {
   diameter: number;
-  pitch: number; // one bullet's centre to the next
+  pitch: number; // one bullet's center to the next
   rows: number;
   halfWidth: number;
   halfHeight: number;
@@ -346,8 +346,8 @@ function bulletPath(
   }
 }
 
-// The routes calling at one marker, as a block of bullets centred on it: the coloured disc with the
-// route's own name inside in its own text colour, which is what route_text_color is published for.
+// The routes calling at one marker, as a block of bullets centered on it: the colored disc with the
+// route's own name inside in its own text color, which is what route_text_color is published for.
 function drawBullets(
   context: OffscreenCanvasRenderingContext2D,
   subway: Subway,
@@ -371,7 +371,7 @@ function drawBullets(
       row * BULLETS_PER_ROW,
       (row + 1) * BULLETS_PER_ROW,
     );
-    // Each row is centred in its own right, so a last row of one or two sits under the middle of
+    // Each row is centered in its own right, so a last row of one or two sits under the middle of
     // the ones above rather than hanging off the left of the block.
     const left = markerX - (inRow.length * pitch - BULLET_GAP_PX) / 2 + radius;
     const centerY = markerY - halfHeight + radius + row * pitch;
@@ -445,9 +445,9 @@ function drawLines(
   }
 }
 
-// Below BULLET_ZOOM a station is a white disc ringed in its routes' colour, the symbol the MTA's own
+// Below BULLET_ZOOM a station is a white disc ringed in its routes' color, the symbol the MTA's own
 // map uses; from BULLET_ZOOM it is the routes themselves. Either way it is the one thing on the
-// layer whose colours are the MTA's rather than the theme's, so it has to read over a dark map and a
+// layer whose colors are the MTA's rather than the theme's, so it has to read over a dark map and a
 // light one alike. Below STATION_MIN_ZOOM there is no marker at all: at z12 91 of New York's
 // markers sit within 6 px of another and at z11 156 do, so they stop being stations and become a
 // smear over the lines that already say where the system runs. At z13 that is down to 4.
@@ -549,7 +549,7 @@ function draw(
 
   drawLines(context, subway, coords, cellX0, cellX1, cellY0, cellY1);
   if (zoom >= STATION_MIN_ZOOM) {
-    // One cell wider than the tile, because a marker centred just outside it still reaches in: a
+    // One cell wider than the tile, because a marker centered just outside it still reaches in: a
     // twelve-route block is 47 px, 170 m at z15, where a cell is 1.1 km. Both halves of a block
     // straddling a seam are then drawn at the same world position by each side and line up.
     drawStations(

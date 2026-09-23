@@ -3,18 +3,18 @@
 // historic-districts overlay and sampled per edge into the graph's historic-district discount.
 // Layout: scripts/README.md.
 //
-// These are whole neighbourhoods a city has designated (Park Slope, Brooklyn Heights, Greenwich
+// These are whole neighborhoods a city has designated (Park Slope, Brooklyn Heights, Greenwich
 // Village; Jackson Square, Telegraph Hill, Alamo Square), not the individual landmarked buildings
 // scripts/landmarks.ts reads — a different source, a different artifact, areas rather than points.
 //
 // No two of these places share a source, and each publishes one that has to be picked past a decoy:
 //
 //   - **New York.** The geometry comes from the LPC's own ArcGIS FeatureServer, not from the Socrata
-//     dataset the city catalogues as "Historic Districts (Map)" (`xbvj-gfnw`): that one is a map
+//     dataset the city catalogs as "Historic Districts (Map)" (`xbvj-gfnw`): that one is a map
 //     visualization whose rows read back empty, and the table under it is in state-plane feet and
 //     missing 18 designated districts — a third of Park Slope's landmarked area among them.
 //
-//   - **San Francisco.** One Planning table holds every district ANY register recognises, of which
+//   - **San Francisco.** One Planning table holds every district ANY register recognizes, of which
 //     the city's own designations are the Article 10 / Article 11 subset `fetchSfDistricts` cuts.
 //     Its "Map of Historic Districts" (`y75h-nbt2`) is the same decoy `xbvj-gfnw` is, and the
 //     dedicated "Landmark Districts" table (`knm6-5ej6`) is three years stale and has no Article 11.
@@ -56,7 +56,7 @@ const RETRY_BASE_MS = 5_000; // longer than the shared ladder's: this service ra
 const EXPECTED_DISTRICTS = 150;
 
 // SF Planning's "Historic Districts" table: 204 areas, every one any register or survey has
-// recognised, as WGS84 MultiPolygons — populated on all of them.
+// recognized, as WGS84 MultiPolygons — populated on all of them.
 const SF_DATASET = "63x5-g3m4";
 // The two Planning Code articles, which is what "designated" means here: Article 10 landmark
 // districts and Article 11 downtown conservation districts. Without this the read would take in the
@@ -134,7 +134,7 @@ function partsOf(geometry: GeoJsonGeometry): Polygon[] {
 }
 
 // A district is kept if any vertex of it is on land, as the industrial lots are: a boundary drawn
-// around a waterfront block runs out over the water, and the harbour districts (Governors Island,
+// around a waterfront block runs out over the water, and the harbor districts (Governors Island,
 // Ellis Island, South Street Seaport; Northeast Waterfront) meet the coastline the land polygons
 // draw only at the shore. At the 2026-08-22 read no district in either city missed entirely.
 function touchesLand(part: Polygon, onLand: LandContext["onLand"]): boolean {
@@ -252,7 +252,7 @@ async function fetchCityDistricts(
 
 // The districts as one shape per piece of ground rather than one per register entry. The overlay
 // fills each polygon separately at 45% alpha, so two polygons over the same block composite to about
-// 70% and the block reads as a darker, differently-coloured district — which is what Oakland's do:
+// 70% and the block reads as a darker, differently-colored district — which is what Oakland's do:
 // its two registers, the city's own survey of areas and the preservation zoning that overlays them,
 // describe the same blocks, and five of the eight zones sit almost exactly on a survey area. New
 // York nests districts inside their own expansions (Carnegie Hill inside Expanded Carnegie Hill) for

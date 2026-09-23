@@ -9,7 +9,7 @@ const CHUNK_FORMAT = 4;
 const SIDES = 2; // density bytes per street vertex: left sidewalk then right, interleaved
 const METERS_PER_DECIMETER = 0.1;
 
-// One block-length CSCL centreline, decoded. The full segment shape: geometry, the per-vertex canopy
+// One block-length CSCL centerline, decoded. The full segment shape: geometry, the per-vertex canopy
 // densities (both sidewalks, left then right, interleaved), and half the distance between the two
 // sidewalks. An overlay that only wants geometry keeps lngs/lats and lets the rest be collected.
 export interface StreetSegment {
@@ -18,8 +18,8 @@ export interface StreetSegment {
   // The canopy cover at each vertex, 0..255 for a covered fraction of 0..1: both sidewalks, left then
   // right, interleaved. A segment with no offset carries the same value in both.
   densities: Uint8Array;
-  // Half the distance between the two sidewalks, in metres. Zero for a path or a boardwalk, which *is*
-  // the walking surface and is drawn as a single line on its centreline.
+  // Half the distance between the two sidewalks, in meters. Zero for a path or a boardwalk, which *is*
+  // the walking surface and is drawn as a single line on its centerline.
   offsetMeters: number;
   // An OSM path whose whole component the routing graph dropped, so no route can reach it. Drawing it
   // would offer a walk the router will never return. Always false for a street.
@@ -47,7 +47,7 @@ function readVarint(bytes: Uint8Array, cursor: { offset: number }): number {
 // Decode one STCK v4 street chunk into its full segments. Header: magic "STCK", version u16 at 4, the
 // body offset u16 at 6, the segment count u32 at 8, the stranded bitmap's offset u32 at 12, then the
 // origin lng/lat and scale as f64 at 16, 24 and 32. Each segment is a u16 vertex count, a byte at +2
-// giving the sidewalk offset in decimetres, then zigzag-varint delta lng/lat per vertex, then
+// giving the sidewalk offset in decimeters, then zigzag-varint delta lng/lat per vertex, then
 // SIDES * vertices density bytes. The bitmap trails the segments, one bit each in their own order.
 export function decodeStreetChunk(buffer: ArrayBuffer): StreetSegment[] {
   const bytes = new Uint8Array(buffer);

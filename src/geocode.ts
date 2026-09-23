@@ -1,7 +1,7 @@
 import { activeCity, cityById } from "./cities";
 import {
   reverseNameIndex,
-  searchCentre,
+  searchCenter,
   searchNameIndex,
 } from "./search/name-search";
 import type { IndexHit, ReverseHit } from "./search/protocol";
@@ -76,7 +76,7 @@ function reverseResultType(kind: ReverseHit["kind"]): string {
 //
 // Answered from the city's own address file and name index (src/search/reverse.ts), which is to say
 // with no network at all: the nearest house number, or the name of whatever the point is standing
-// on, or — where the number is too far off to be this point's — the street, the neighbourhood, or
+// on, or — where the number is too far off to be this point's — the street, the neighborhood, or
 // nothing. A point the city has nothing near enough to name is answered with null, and the caller
 // keeps whatever it already put on the pin. Nothing is ever invented: every answer is a row of a
 // file, at the coordinates the city published for it.
@@ -170,22 +170,22 @@ export async function searchPlaces(
   if (!trimmed) {
     return [];
   }
-  // The map centre is part of the answer, not just of its order: the name index ranks by distance
+  // The map center is part of the answer, not just of its order: the name index ranks by distance
   // from it, so the same query at two ends of the city is two different lists. Rounded to ~1 km, the
   // scale the distance term works at, so panning a block does not throw the cache away.
-  const centre =
-    searchCentre(cityId) ?? (cityById(cityId) ?? activeCity()).center;
-  const near = `${centre.lat.toFixed(2)},${centre.lng.toFixed(2)}`;
+  const center =
+    searchCenter(cityId) ?? (cityById(cityId) ?? activeCity()).center;
+  const near = `${center.lat.toFixed(2)},${center.lng.toFixed(2)}`;
   const cacheKey = `${cityId}|${trimmed}@${near}`;
   const cached = searchCache.get(cacheKey);
   if (cached) {
     return cached;
   }
-  // Ranked from the map centre: it is what the reader is looking at, and it needs no permission.
+  // Ranked from the map center: it is what the reader is looking at, and it needs no permission.
   const indexHits = await searchNameIndex({
     cityId,
     text: trimmed,
-    centre,
+    center,
     limit: MAX_LOCAL_RESULTS,
   });
   const results: GeocodeResult[] = [];
@@ -254,7 +254,7 @@ export interface SharedDestination {
 // the other, so a door wins wherever among the parts it sits, and the first part to find anything at
 // all is what is offered when no part names one.
 //
-// `cancelled` is asked between searches because each one warms the worker for its city: a lookup
+// `canceled` is asked between searches because each one warms the worker for its city: a lookup
 // left running after the reader has moved to another city would drag the index back to this one.
 export async function resolveSharedQuery(
   text: string,
@@ -263,11 +263,11 @@ export async function resolveSharedQuery(
     query: string,
     cityId: string,
   ) => Promise<GeocodeResult[]> = searchAddress,
-  cancelled: () => boolean = () => false,
+  canceled: () => boolean = () => false,
 ): Promise<SharedDestination | null> {
   let named: SharedDestination | null = null;
   for (const query of sharedQueries(text)) {
-    if (cancelled()) {
+    if (canceled()) {
       return null;
     }
     const results = await search(query, cityId);
@@ -279,5 +279,5 @@ export async function resolveSharedQuery(
       named = { query, results, exact: null };
     }
   }
-  return cancelled() ? null : named;
+  return canceled() ? null : named;
 }

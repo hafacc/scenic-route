@@ -1,4 +1,4 @@
-// The synthetic routing graph the transit tests are run over: one straight kilometre of pavement
+// The synthetic routing graph the transit tests are run over: one straight kilometer of pavement
 // with a two-station line beside it, and a hand-written timetable for that line.
 //
 // Written as GRPH BYTES and decoded, rather than assembled as an object the way the ferry
@@ -52,19 +52,19 @@ export const EAST_STATION = "East Street";
 export const ROUTE_SHORT_NAME = "Q";
 export const ROUTE_LONG_NAME = "Cross-town Local";
 
-// A kilometre and a bit of pavement, so the walk is ~900 s: long enough that a 180 s ride plus the
+// A kilometer and a bit of pavement, so the walk is ~900 s: long enough that a 180 s ride plus the
 // walks into and out of its two stations beats it outright — with room to spare for a trip that
 // starts part way along and has to come back — and short enough that the same ride at the top of the
 // transit slider does not.
 const EAST_X = 14_000;
-// The line runs a hundred metres off the pavement, which is far enough that the two routes cover
+// The line runs a hundred meters off the pavement, which is far enough that the two routes cover
 // different ground: the planner tells its cards apart by the cells they cross, and a line drawn on
 // top of the street it parallels would read as the same walk.
 const STATION_Y = 900;
 export const SIDEWALK_COVER = 0.5;
 
 // The two ends are deliberately different kinds of stop: the west is a station with a way in, the
-// east a kerbside stop the tiler bakes the shorter walk for, which is the only mark of the feed's
+// east a curbside stop the tiler bakes the shorter walk for, which is the only mark of the feed's
 // surface flag the graph keeps. Each carries its own base plus the walk out to the pavement, as the
 // tiler bakes it (crates/tiler/src/graph.rs), and it is taking that walk back off that tells the two
 // bases apart.
@@ -414,7 +414,7 @@ export function snapAtNode(
 // corner; the station has one node per direction, and the doors are what tell them apart: the two
 // on the east pavement reach the uptown platform, the lift on the west pavement the downtown one.
 // A rider who wants a train has to be on the right pavement, which is the whole point of the split.
-const AVENUE_HALF = 400; // ~34 m off the centre line: one pavement each side
+const AVENUE_HALF = 400; // ~34 m off the center line: one pavement each side
 const SPLIT_DOOR_Y = 600; // the doors, ~67 m north of the crossing
 const SPLIT_EXIT_Y = 200; // the exit-only door, nearer the crossing than the two-way one
 const SPLIT_NORTH_Y = 18_000; // ~2 km up the line, where the next station is
@@ -833,12 +833,12 @@ export function splitTimetable(date: Date): TransitTimetable {
   return resolveTimetable(record, date, FIXTURE_TIME_ZONE);
 }
 
-// A station with a two-way door on each pavement of an avenue, and the only crossing two kilometres
+// A station with a two-way door on each pavement of an avenue, and the only crossing two kilometers
 // south of it: walking round is an hour and walking down one stair and up the other is four minutes.
 // On one station node that is what a router does — the station becomes a free underpass — so this is
 // the fixture that says the way in and the way out are different nodes. Two lines meet here as well,
 // which is the other half of the same question: a change of train still has to be possible.
-const UNDERPASS_HALF = 400; // ~34 m off the centre line: one pavement each side
+const UNDERPASS_HALF = 400; // ~34 m off the center line: one pavement each side
 const UNDERPASS_SOUTH = -20_000; // the crossing, ~2.2 km down the avenue
 const UNDERPASS_NORTH = 20_000; // and the next station, as far the other way
 

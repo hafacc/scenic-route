@@ -1,5 +1,5 @@
 //! Where the sidewalks are, and which way the street runs there. Nobody walks down the middle
-//! of the road, so the field is sampled twice per vertex, once either side of the centreline —
+//! of the road, so the field is sampled twice per vertex, once either side of the centerline —
 //! and no usable sidewalk dataset exists to sample it on. See scripts/README.md.
 
 use crate::geometry::Bearing;
@@ -10,7 +10,7 @@ const STREET: u8 = 1;
 const BRIDGE: u8 = 3;
 const TUNNEL: u8 = 4;
 const ALLEY: u8 = 10;
-// The chunk carries the offset in a byte of decimetres, so a wider roadway than this could not
+// The chunk carries the offset in a byte of decimeters, so a wider roadway than this could not
 // be drawn where it was sampled. Four CSCL segments in the city claim one.
 const MAX_OFFSET_METERS: f64 = 25.5;
 
@@ -19,8 +19,8 @@ const MAX_OFFSET_METERS: f64 = 25.5;
 // also writes are for the router (Phase 2) and are read there, not here.
 pub const FLAG_NON_VEHICULAR: u8 = 1 << 1;
 
-/// Half the roadway plus the curb-to-sidewalk inset: where the two sidewalk lines sit, in metres
-/// either side of the centreline. Zero for the road types that *are* the walking surface — a
+/// Half the roadway plus the curb-to-sidewalk inset: where the two sidewalk lines sit, in meters
+/// either side of the centerline. Zero for the road types that *are* the walking surface — a
 /// boardwalk, a path, a step street — and for any non-vehicular deck (the Brooklyn Bridge
 /// promenade is itself the walking surface), which carry no width and are sampled once, on the
 /// line. A vehicular bridge or tunnel has sidewalks like a street does, so it is offset by width.
@@ -39,10 +39,10 @@ pub fn half_offset_meters(road_type: u8, flags: u8, width_feet: u8, inset_meters
     }
 }
 
-/// The unit tangent at every vertex of one segment, in metre space: the central difference of
-/// its neighbours, one-sided at the ends. The geometry is densified to 25 m, so a plain
+/// The unit tangent at every vertex of one segment, in meter space: the central difference of
+/// its neighbors, one-sided at the ends. The geometry is densified to 25 m, so a plain
 /// difference is a good local tangent — but CSCL's own vertices can sit closer together than the
-/// 0.1 m the coordinates are quantized to, and a neighbour that collapses onto this vertex would
+/// 0.1 m the coordinates are quantized to, and a neighbor that collapses onto this vertex would
 /// leave the kernel with no direction at all. So the difference is taken over the nearest
 /// *distinct* vertices on either side.
 pub fn bearings(xs: &[f64], ys: &[f64]) -> Vec<Bearing> {
@@ -60,8 +60,8 @@ pub fn bearings(xs: &[f64], ys: &[f64]) -> Vec<Bearing> {
             let delta_x = xs[ahead] - xs[back];
             let delta_y = ys[ahead] - ys[back];
             let length = delta_x.hypot(delta_y);
-            // No distinct neighbour to point at: the whole segment has collapsed onto one
-            // quantized point. The ingest drops anything shorter than a metre, so this is
+            // No distinct neighbor to point at: the whole segment has collapsed onto one
+            // quantized point. The ingest drops anything shorter than a meter, so this is
             // unreachable; it is here so a degenerate file cannot put a NaN in the field.
             if length > 0.0 {
                 Bearing {
@@ -79,7 +79,7 @@ pub fn bearings(xs: &[f64], ys: &[f64]) -> Vec<Bearing> {
 }
 
 /// The unit normal pointing at the *left* sidewalk: 90 degrees counter-clockwise of the
-/// direction of travel, in a metre space whose y runs north. Left and right follow the
+/// direction of travel, in a meter space whose y runs north. Left and right follow the
 /// digitization direction, which is CSCL's own `l_`/`r_` convention.
 pub fn left_normal(bearing: Bearing) -> (f64, f64) {
     (-bearing.along_y, bearing.along_x)

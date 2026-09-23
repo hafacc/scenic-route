@@ -212,9 +212,9 @@ function dijkstraCost(
     for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
       const edge = graph.adjacency[slot];
       const relaxed = distance[node] + effSeconds(graph, edge, weights);
-      const neighbour = otherEnd(graph, edge, node);
-      if (relaxed < distance[neighbour]) {
-        distance[neighbour] = relaxed;
+      const neighbor = otherEnd(graph, edge, node);
+      if (relaxed < distance[neighbor]) {
+        distance[neighbor] = relaxed;
       }
     }
   }
@@ -398,7 +398,7 @@ test("the sun advancing over a long walk flips a late route decision", () => {
     intensityAt: () => 0.5,
     maxAbs: 0.5,
   };
-  // The departure snapshot frozen for the whole walk — the old, single-sun-position behaviour.
+  // The departure snapshot frozen for the whole walk — the old, single-sun-position behavior.
   const departure = constantShadeField(
     Float32Array.from(edges, (_edge, index) => attrOf(index, 0)),
   );

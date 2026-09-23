@@ -4,7 +4,7 @@ import { decodePoints, poiRenderer } from "./poi";
 import type { PoiParams } from "./protocol";
 
 // Label placement used to be greedy per tile, over a candidate window that differed from tile to
-// tile: a label near a shared edge could lose to a competitor one neighbour saw and the other did
+// tile: a label near a shared edge could lose to a competitor one neighbor saw and the other did
 // not, and be drawn by one tile only — half a name, cut mid-glyph at the seam. These pin the
 // property that fixes it: placement is a whole-city decision, so every tile a label reaches into
 // draws it at the same world position.

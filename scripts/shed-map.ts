@@ -80,28 +80,28 @@ const GRID_CELL_METERS = 150;
 const CELL_KEY_OFFSET = 1 << 20;
 const CELL_KEY_STRIDE = 1 << 21;
 
-// How deep the deck is: the pavement's own width less a margin at the kerb, since no dataset New York
-// publishes carries a sidewalk width. The kerb comes out of the graph's offset byte and the building
+// How deep the deck is: the pavement's own width less a margin at the curb, since no dataset New York
+// publishes carries a sidewalk width. The curb comes out of the graph's offset byte and the building
 // line off the tax lot the frontage is already measured against, so the width is the lot line's
 // signed offset from the baked polyline plus the inset. DESIGN.md, "Where a shed actually stands",
 // for why those two lines and what the measurement is worth.
-const SIDEWALK_INSET_METERS = 2; // the manifest's streets.sidewalkInsetMeters, kerb to the baked line
-// A shed's deck stops short of the kerb rather than overhanging the gutter — DOB wants the roadway
+const SIDEWALK_INSET_METERS = 2; // the manifest's streets.sidewalkInsetMeters, curb to the baked line
+// A shed's deck stops short of the curb rather than overhanging the gutter — DOB wants the roadway
 // clear, and a foot is what the drawings leave.
-const KERB_MARGIN_METERS = 0.3;
+const CURB_MARGIN_METERS = 0.3;
 // The lot's street wall runs parallel to the pavement, so its samples sit at one distance and the
 // side lot lines running back off it climb away. Only samples this near the closest one are the
 // street wall.
 const STREET_WALL_BAND_METERS = 2;
 // What the measurement is clamped into; DESIGN.md, "Where a shed actually stands", for the
 // distribution it was read off and why the tail is clamped rather than discarded. The floor is the
-// encoding's own — a depth rounds to decimetres and 0 decimetres is the byte meaning "not measured" —
+// encoding's own — a depth rounds to decimeters and 0 decimeters is the byte meaning "not measured" —
 // so what CANNOT be built is floored by the reader instead (MIN_DECK_DEPTH_METERS in
-// src/routing/sheds.ts), the only side that knows where the kerb was put.
+// src/routing/sheds.ts), the only side that knows where the curb was put.
 const MIN_DECK_DEPTH_METERS = 0.1;
 const MAX_DECK_DEPTH_METERS = 8;
 
-// Every sidewalk edge of the routing graph as a polyline in the metre frame, with a uniform grid
+// Every sidewalk edge of the routing graph as a polyline in the meter frame, with a uniform grid
 // over their bounding boxes and the incidence the wrap walk steps through.
 export interface SidewalkIndex {
   graph: RoutingGraph;
@@ -238,7 +238,7 @@ export interface ShedSpan {
   t0: number;
   t1: number;
   meters: number;
-  // The deck's depth here, building line to just short of the kerb, in metres — NaN where this run
+  // The deck's depth here, building line to just short of the curb, in meters — NaN where this run
   // has no lot boundary behind it to measure against and the shed has none anywhere else either.
   depthMeters: number;
 }
@@ -249,7 +249,7 @@ export interface ShedPlacement {
   geometrySource: "lot" | "building" | "none";
   primaryEdge: number | null;
   oppositeEdge: number | null;
-  primaryDistance: number; // frontage geometry to the chosen sidewalk, metres
+  primaryDistance: number; // frontage geometry to the chosen sidewalk, meters
   oppositeDistance: number; // and to the sidewalk across the street
   sideMargin: number; // gap to the next-nearest same-name frontage candidate
   frontageMeters: number; // the length of the lot's arc on the permit's street
@@ -281,7 +281,7 @@ interface Arc {
 interface Shadow extends Arc {
   distance: number;
   // The lot's street wall as a SIGNED offset from the sidewalk's baked polyline, positive away from
-  // the roadway. It takes either sign: the polyline sits a fixed inset out from the kerb, so on a
+  // the roadway. It takes either sign: the polyline sits a fixed inset out from the curb, so on a
   // pavement narrower than twice that inset the lot line falls on the roadway side of it. NaN when
   // nothing here reads as a street wall.
   offset: number;
@@ -430,7 +430,7 @@ function medianOf(scratch: Float64Array, count: number): number {
 // The stretch of one sidewalk a lot stands behind: the along-interval its boundary SWEEPS out from
 // the lot's closest approach to that sidewalk, walked sample by sample and stopped where the
 // boundary leaves. Not the interval from the first facing sample to the last, which is a different
-// thing wherever a lot reaches the same pavement twice — an arcade arm beside a neighbour's
+// thing wherever a lot reaches the same pavement twice — an arcade arm beside a neighbor's
 // building, a U around a rear yard, a corner lot whose second arm projects onto the far end of the
 // same edge — because the pavement in between is somebody else's and a min-to-max span takes it.
 // Null when no sample is kept at all.
@@ -505,7 +505,7 @@ function frontageShadows(
       continue;
     }
     // The side the sidewalk was baked to, which is the side its building line is on: a sidewalk
-    // polyline is the centreline pushed to its geometry-left unless the flag says right.
+    // polyline is the centerline pushed to its geometry-left unless the flag says right.
     const outward = edgeGeometryRight(index.graph, edge) ? -1 : 1;
     let nearest = Number.POSITIVE_INFINITY;
     for (let sample = 0; sample < alongs.length; sample++) {
@@ -522,16 +522,16 @@ function frontageShadows(
         outward *
         (projection.tangentX * (pointY - projection.y) -
           projection.tangentY * (pointX - projection.x));
-      const towardsX = projection.x - pointX;
-      const towardsY = projection.y - pointY;
-      const reach = Math.hypot(towardsX, towardsY);
+      const towardX = projection.x - pointX;
+      const towardY = projection.y - pointY;
+      const reach = Math.hypot(towardX, towardY);
       // A lot line running along the sidewalk itself has an offset vector that is numerical noise
       // rather than a direction, so such a point is frontage by construction.
       facings[sample] =
         reach < 0.5
           ? 1
-          : (towardsX * normals[sample * 2] +
-              towardsY * normals[sample * 2 + 1]) /
+          : (towardX * normals[sample * 2] +
+              towardY * normals[sample * 2 + 1]) /
             reach;
     }
     if (nearest > MAX_FRONTAGE_METERS) {
@@ -566,7 +566,7 @@ function frontageShadows(
         (sample) => distances[sample] <= depth,
       ) as Arc);
     // The median rather than the nearest sample: a stoop, a bay or a quantized corner reaches a
-    // metre past the wall, and a shed follows the wall.
+    // meter past the wall, and a shed follows the wall.
     shadows.set(edge, {
       low: arc.low,
       high: arc.high,
@@ -650,13 +650,13 @@ function pointToPolylineDistance(
 }
 
 // How deep the deck standing on one sidewalk is: the pavement from the lot's street wall out to the
-// kerb, less the margin the deck stops short by. NaN where there is no wall behind this run at all —
+// curb, less the margin the deck stops short by. NaN where there is no wall behind this run at all —
 // the walk wrapped onto a street the lot does not front.
 function deckDepth(shadow: Shadow | undefined): number {
   if (shadow === undefined || !Number.isFinite(shadow.offset)) {
     return Number.NaN;
   }
-  const depth = SIDEWALK_INSET_METERS + shadow.offset - KERB_MARGIN_METERS;
+  const depth = SIDEWALK_INSET_METERS + shadow.offset - CURB_MARGIN_METERS;
   return Math.min(
     MAX_DECK_DEPTH_METERS,
     Math.max(MIN_DECK_DEPTH_METERS, depth),
@@ -684,7 +684,7 @@ function fillDepths(spans: ShedSpan[]): number {
 // named by the sidewalk edge carrying it and how far along that edge it falls.
 //
 // The frontage ARCS are ranked, not the edges: the nearest point of the pavement is the same place
-// whichever edge happens to be holding it, and a rebuild re-cuts one kerb into different edges. See
+// whichever edge happens to be holding it, and a rebuild re-cuts one curb into different edges. See
 // DESIGN.md, "Where a shed actually stands", for what ranking edges did instead.
 interface Seat {
   edge: number;
@@ -839,8 +839,8 @@ export function placeShed(
   }
   // Where on that frontage the structure sits: the point of it nearest the building being worked on,
   // or nearest the middle of the lot when the feed names no building.
-  const centre = ringCentroid(footprint ?? frontage);
-  const seat = seatOf(index, seeds, centre.x, centre.y);
+  const center = ringCentroid(footprint ?? frontage);
+  const seat = seatOf(index, seeds, center.x, center.y);
   const primary = seat.edge;
   result.frontageMeters = frontageMeters;
   result.nameScore = scores.get(primary) ?? 0;
@@ -892,7 +892,7 @@ export function placeShed(
   } else if (target > frontageMeters) {
     // The overrun goes on the rest of the lot's own frontage and nowhere else, walked round the
     // property's own corner where the pavement is joined and spilled onto it where it is not — the
-    // network dead-ends pavement at every kerb, so a corner a shed genuinely turns is often no step
+    // network dead-ends pavement at every curb, so a corner a shed genuinely turns is often no step
     // at all. Whatever will not fit on the lot is dropped; DESIGN.md, "Where a shed actually stands".
     const stranded = growSpans(
       index,
@@ -1002,7 +1002,7 @@ export function confidenceOf(result: ShedPlacement): number {
 
 // Extend the shed along the sidewalk network from both ends of the run; returns the leftover.
 //
-// Half the length goes each way, so a shed sits centred on the building it belongs to rather than
+// Half the length goes each way, so a shed sits centered on the building it belongs to rather than
 // hanging off one end of it. A run that hits the end of the block on one side then spends what is
 // left on the other, which is why the two directions are walked twice each.
 function growSpans(
@@ -1033,7 +1033,7 @@ function growSpans(
   return leftover;
 }
 
-// Spend `budget` metres running one way from `primary`; returns what could not be spent.
+// Spend `budget` meters running one way from `primary`; returns what could not be spent.
 function walk(
   index: SidewalkIndex,
   spans: Map<number, Arc>,
@@ -1118,14 +1118,14 @@ function spend(
 // along that street.
 //
 // A step over one crossing or link, onto a sidewalk of the same street and the same side, was built
-// and measured before this. A block face's pavement stops at every kerb in this network — 152,629
+// and measured before this. A block face's pavement stops at every curb in this network — 152,629
 // sidewalk ends have no other sidewalk on them, against 54 in the derived network it replaced — so
 // a walk that only steps sidewalk to sidewalk stops dead at the first corner, and the step across
 // lifted placed length on corner lots from 86.33% of claimed to 95.28%. It is REJECTED all the
 // same: what it stepped onto was the next block, over a side street's roadway, in front of
 // buildings whose permit this is not. Scaffolding stands on the lot it was pulled for, so the
 // length it used to find is dropped instead. The same measurement says the lot's own frontage is a
-// single walkable piece for 98.40% of lots, so those kerbs almost never cut one lot's frontage in
+// single walkable piece for 98.40% of lots, so those curbs almost never cut one lot's frontage in
 // two; where they do, the recovery pass spends the stranded run on the piece the walk cannot reach.
 function nextSidewalk(
   index: SidewalkIndex,
@@ -1249,7 +1249,7 @@ function placeOnSeeds(
       existing === undefined ||
       existing.high - existing.low < MIN_SPAN_METERS
     ) {
-      // Untouched frontage: centre the new run on the point of it nearest the anchor, so a spill
+      // Untouched frontage: center the new run on the point of it nearest the anchor, so a spill
       // lands at the near end of the arc rather than in the middle of the block.
       const width = Math.min(remaining, arc.high - arc.low);
       const projection = projectToPolyline(
@@ -1258,11 +1258,11 @@ function placeOnSeeds(
         anchor.y,
         newProjection(),
       );
-      const centre = Math.min(
+      const center = Math.min(
         Math.max(projection.along, arc.low + width / 2),
         arc.high - width / 2,
       );
-      spans.set(edge, { low: centre - width / 2, high: centre + width / 2 });
+      spans.set(edge, { low: center - width / 2, high: center + width / 2 });
       remaining -= width;
     } else {
       const before = Math.min(Math.max(0, existing.low - arc.low), remaining);

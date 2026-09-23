@@ -16,8 +16,8 @@ import { themeName } from "./theme";
 import type { Cursor } from "./varint";
 
 // A line overlay: the committed highway/rail nuisance lines (magic HWAY) or the ferry route segments
-// (magic FERR), drawn as coloured canvas polylines at every zoom. The ferries additionally take
-// their route's colour, a lane of their own over the water they share with another route, and a
+// (magic FERR), drawn as colored canvas polylines at every zoom. The ferries additionally take
+// their route's color, a lane of their own over the water they share with another route, and a
 // spline through their vertices — see ./ferry-routes, ./polylines and ./spline.
 
 const TILE_SIZE = 256;
@@ -46,11 +46,11 @@ const LANE_BLEND_M = 400;
 const LANE_SPACING_PX = 2.5;
 const LANE_FULL_ZOOM = 14;
 
-// A ferry crossing's drawing: the route's colour, the lane it takes at each of its vertices, and
+// A ferry crossing's drawing: the route's color, the lane it takes at each of its vertices, and
 // the perpendicular that lane is measured along so the ribbons read as parallel rather than
 // repainting each other.
 interface Ribbon {
-  color: string | null; // null where the route is unknown, so the layer's own colour stands in
+  color: string | null; // null where the route is unknown, so the layer's own color stands in
   // Per vertex, in lane widths, multiplied by the zoom's lane width at draw time rather than baked
   // in here. Zero where the crossing has the water to itself, which is 60% of New York's vertices.
   lanes: Float64Array;

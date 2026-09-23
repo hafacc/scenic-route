@@ -65,7 +65,7 @@ export default function CityDialog({
     <Sheet
       onClose={onClose}
       closeLabel="Close region picker"
-      labelledBy="city-title"
+      labeledBy="city-title"
       width="md:max-w-md"
     >
       <div className="flex shrink-0 items-start justify-between gap-3">

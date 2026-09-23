@@ -1,6 +1,6 @@
 // The street network as the encoders and the tiler want it, independent of the city it came from.
-// Each city's centreline publishes its own columns under its own names, but what a STRT record needs
-// is the same everywhere: a durable id, a walkability kind, a kerb-to-kerb width to offset the
+// Each city's centerline publishes its own columns under its own names, but what a STRT record needs
+// is the same everywhere: a durable id, a walkability kind, a curb-to-curb width to offset the
 // pavement by, and a densified polyline. A city ingest maps its rows onto this and nothing below it
 // knows which city it read.
 
@@ -34,7 +34,7 @@ export const FLAG_TUNNEL = 1 << 3;
 export interface Segment {
   physicalId: number; // the city's own durable id for the row (CSCL physicalid, SF cnn)
   roadType: RoadType;
-  streetWidth: number; // feet, kerb to kerb, 0 unknown — the sidewalk offset comes from this
+  streetWidth: number; // feet, curb to curb, 0 unknown — the sidewalk offset comes from this
   postedSpeed: number; // mph, 0 unknown
   flags: number; // FLAG_* bits
   name: string; // trimmed, "" when the row carries none

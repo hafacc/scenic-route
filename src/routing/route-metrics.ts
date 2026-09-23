@@ -15,8 +15,8 @@ import { haversineMeters } from "./snap";
 const METERS_PER_DEGREE_LAT = 111_320;
 
 // How far a walker may go between the two crossings and still have them read as one reversal. A
-// street's own two crossings at one corner sit 0 m apart (they share the far kerb node); the widest
-// case that still reads as "and straight back" is the corner wrap, a few metres of pavement.
+// street's own two crossings at one corner sit 0 m apart (they share the far curb node); the widest
+// case that still reads as "and straight back" is the corner wrap, a few meters of pavement.
 export const REVERSAL_GAP_METERS = 20;
 // How anti-parallel the second crossing has to be to count as going back the way you came: -0.7 is
 // 135 degrees, so the two legs of a corner (a right angle, cosine 0) are never a reversal.
@@ -31,7 +31,7 @@ export interface CrossingReversal {
   crossedMeters: number; // the two crossings' own lengths, i.e. what the reversal cost
   at: { lat: number; lng: number }; // where the first crossing starts, for a failure message
   // Was there another way? True when the network joins the reversal's two ends by some path of no
-  // more than the metres the reversal itself spent, with those two crossings taken out. A reversal
+  // more than the meters the reversal itself spent, with those two crossings taken out. A reversal
   // that is avoidable was BOUGHT — the cost model paid two crossings for greener pavement. One that
   // is not was FORCED: the two pavement ends are not joined and going into the road is the only way
   // round. This is the distinction the graph cannot make on its own, and it is the whole reason this
@@ -39,9 +39,9 @@ export interface CrossingReversal {
   avoidable: boolean;
 }
 
-// Is `to` within `budget` metres of `from` through the network with `banned` taken out? A Dijkstra
+// Is `to` within `budget` meters of `from` through the network with `banned` taken out? A Dijkstra
 // bounded by the budget, so it walks a corner's worth of edges and stops — the frontier never grows
-// past a few dozen nodes at the tens of metres a reversal costs.
+// past a few dozen nodes at the tens of meters a reversal costs.
 function reachableWithout(
   graph: RoutingGraph,
   from: number,
@@ -77,17 +77,17 @@ function reachableWithout(
         continue; // the way round a reversal is a walk, never a ride
       }
       const relaxed = distance + graph.edgeLength[edge];
-      const neighbour = otherEnd(graph, edge, node);
-      if (relaxed <= budget && relaxed < (best.get(neighbour) ?? Infinity)) {
-        best.set(neighbour, relaxed);
-        frontier.push(neighbour);
+      const neighbor = otherEnd(graph, edge, node);
+      if (relaxed <= budget && relaxed < (best.get(neighbor) ?? Infinity)) {
+        best.set(neighbor, relaxed);
+        frontier.push(neighbor);
       }
     }
   }
   return false;
 }
 
-// The unit direction of a step's travel, in a local metre frame.
+// The unit direction of a step's travel, in a local meter frame.
 function stepDirection(
   graph: RoutingGraph,
   edge: number,
@@ -195,7 +195,7 @@ export function longestCrossingRun(result: RouteResult): number {
   return longest;
 }
 
-// Walked metres over the straight line between the two ends. Measured between the *snapped* points
+// Walked meters over the straight line between the two ends. Measured between the *snapped* points
 // rather than the requested ones, so it reports what the router did and not how far the query was
 // from the pavement. Ferry and rail spans are excluded from the numerator, being no part of a walk
 // (the sampling suite bars both, so for it this is the whole trip); a zero-length straight line has

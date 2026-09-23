@@ -32,7 +32,7 @@ function spanKey(span: EncodedSpan): number {
 
 export const FRACTION_SCALE = 255; // t0/t1 are a fraction of the edge, and 255 is exactly 1.0
 export const CONFIDENCE_CEILING = 254; // as the graph's cover and scenic bytes, so a client attribute stays under 1
-// The deck's depth in DECIMETRES, which a byte carries to 25.5 m against a placement that refuses
+// The deck's depth in DECIMETERS, which a byte carries to 25.5 m against a placement that refuses
 // anything past 8. 0 is not a depth of zero, it is "the placement could not measure one here".
 export const DEPTH_SCALE = 10;
 export const DEPTH_CEILING = 255;
@@ -46,7 +46,7 @@ export interface EncodedSpan {
   ordinal: number; // 0-255, separating the several edges one source segment becomes
   t0: number; // 0..255
   t1: number; // 0..255
-  depth: number; // the deck's depth in decimetres, 0 where it could not be measured
+  depth: number; // the deck's depth in decimeters, 0 where it could not be measured
 }
 
 // One (permit, presence interval) pair: which permit it is, when it stood, how much to trust it, and

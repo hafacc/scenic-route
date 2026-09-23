@@ -32,7 +32,7 @@ interface Point {
 interface City {
   index: SearchIndex;
   addresses: AddressIndex;
-  centre: Point;
+  center: Point;
 }
 
 function artifact(name: string): Uint8Array {
@@ -41,7 +41,7 @@ function artifact(name: string): Uint8Array {
   );
 }
 
-// The centre a city opens on when nothing has said otherwise, derived the way src/cities.ts derives
+// The center a city opens on when nothing has said otherwise, derived the way src/cities.ts derives
 // it, so a bounds change moves both together.
 function load(cityId: string): City {
   const bounds = manifest.cities.find(({ id }) => id === cityId)?.bounds;
@@ -51,7 +51,7 @@ function load(cityId: string): City {
   return {
     index: decodeSearchIndex(artifact(`search/${cityId}.bin.gz`)),
     addresses: decodeAddresses(artifact(`addresses/${cityId}.bin.gz`)),
-    centre: {
+    center: {
       lat: (bounds.north + bounds.south) / 2,
       lng: (bounds.east + bounds.west) / 2,
     },
@@ -84,7 +84,7 @@ const ASKED = 8;
 interface Golden {
   query: string;
   from: Point;
-  // The name the leading row must carry, spelt exactly as the artifact spells it.
+  // The name the leading row must carry, spelled exactly as the artifact spells it.
   name: string;
   // Where that answer really is, and how far the row may be from it. A street is one point standing
   // for its whole length, so its tolerance is loose where a shop's is a block.
@@ -135,7 +135,7 @@ const NYC_GOLDEN: readonly Golden[] = [
   },
   {
     query: "Prospect Park",
-    from: nyc.centre,
+    from: nyc.center,
     name: "Prospect Park",
     at: { lat: 40.6602, lng: -73.96895 },
     within: 2000,
@@ -144,7 +144,7 @@ const NYC_GOLDEN: readonly Golden[] = [
   },
   {
     query: "prosepct park",
-    from: nyc.centre,
+    from: nyc.center,
     name: "Prospect Park",
     at: { lat: 40.6602, lng: -73.96895 },
     within: 2000,
@@ -153,16 +153,16 @@ const NYC_GOLDEN: readonly Golden[] = [
   },
   {
     query: "Williamsburg",
-    from: nyc.centre,
+    from: nyc.center,
     name: "Williamsburg",
     at: { lat: 40.71462, lng: -73.95345 },
     within: 1000,
     kind: "neighborhood",
-    why: "the neighbourhood, which is the hole that made a network geocoder look necessary",
+    why: "the neighborhood, which is the hole that made a network geocoder look necessary",
   },
   {
     query: "312 Court St",
-    from: nyc.centre,
+    from: nyc.center,
     name: "312 Court Street",
     at: { lat: 40.68351, lng: -73.99551 },
     within: 150,
@@ -172,17 +172,17 @@ const NYC_GOLDEN: readonly Golden[] = [
   },
   {
     query: "312 corut st",
-    from: nyc.centre,
+    from: nyc.center,
     name: "312 Court Street",
     at: { lat: 40.68351, lng: -73.99551 },
     within: 150,
     kind: "street",
     exact: true,
-    why: "a street spelt wrongly still opens its doors",
+    why: "a street spelled wrongly still opens its doors",
   },
   {
     query: "Katz's Delicatessen E Houston St",
-    from: nyc.centre,
+    from: nyc.center,
     name: "Katz's Delicatessen",
     at: { lat: 40.72227, lng: -73.98741 },
     within: 150,
@@ -200,7 +200,7 @@ const NYC_GOLDEN: readonly Golden[] = [
   },
   {
     query: "katzs delicatesen e houston st",
-    from: nyc.centre,
+    from: nyc.center,
     name: "Katz's Delicatessen",
     at: { lat: 40.72227, lng: -73.98741 },
     within: 150,
@@ -209,7 +209,7 @@ const NYC_GOLDEN: readonly Golden[] = [
   },
   {
     query: "Peter Luger",
-    from: nyc.centre,
+    from: nyc.center,
     name: "Peter Luger Steak House",
     at: { lat: 40.70984, lng: -73.96256 },
     within: 150,
@@ -218,12 +218,12 @@ const NYC_GOLDEN: readonly Golden[] = [
   },
   {
     query: "peter lugar",
-    from: nyc.centre,
+    from: nyc.center,
     name: "Peter Luger Steak House",
     at: { lat: 40.70984, lng: -73.96256 },
     within: 150,
     kind: "place",
-    why: "and so does half a name spelt as it sounds",
+    why: "and so does half a name spelled as it sounds",
   },
   {
     query: "fifth avenue",
@@ -241,14 +241,14 @@ const NYC_GOLDEN: readonly Golden[] = [
     at: { lat: 40.77037, lng: -73.96849 },
     within: 6000,
     kind: "street",
-    why: "and the spelt-out name answers before it is finished",
+    why: "and the spelled-out name answers before it is finished",
   },
 ];
 
 const SF_GOLDEN: readonly Golden[] = [
   {
     query: "Ferry Building",
-    from: sf.centre,
+    from: sf.center,
     name: "Ferry Building",
     at: { lat: 37.79576, lng: -122.39352 },
     within: 200,
@@ -289,7 +289,7 @@ function check(city: City, golden: Golden): void {
   const { query, from, name, at, within, kind, exact, why } = golden;
   const [top] = searchCity(city.index, city.addresses, {
     text: query,
-    centre: from,
+    center: from,
     limit: ASKED,
   });
   expect(top, `"${query}" answered nothing — ${why}`).toBeDefined();
@@ -314,12 +314,12 @@ for (const golden of SF_GOLDEN) {
 
 // The other direction: a point, not a name. A document the index cannot be searched for must not be
 // what a dropped pin is called either — San Francisco shipped a place named for Apple's private-use
-// glyph, sitting on this corner, and it beat the door seven metres further away.
-test("the map centre picks the branch, not the city", () => {
+// glyph, sitting on this corner, and it beat the door seven meters further away.
+test("the map center picks the branch, not the city", () => {
   const branch = (from: Point): Point => {
     const [top] = searchCity(nyc.index, nyc.addresses, {
       text: "shake sh",
-      centre: from,
+      center: from,
       limit: ASKED,
     });
     expect(top.name).toBe("Shake Shack");

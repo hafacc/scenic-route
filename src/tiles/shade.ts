@@ -16,7 +16,7 @@ import { drawRamped } from "./theme-gl";
 
 // The baked shade pyramids, magnified through src/tiles/magnify.ts rather than by the browser and
 // composited here rather than stacked. A shade tile carries only the fraction of light its pixel has
-// lost; the shadow's colour is the palette's and is applied on the way onto the tile (./theme-gl.ts).
+// lost; the shadow's color is the palette's and is applied on the way onto the tile (./theme-gl.ts).
 //
 // Building shadows and tree shadows are baked as two pyramids over the same ground, and both are read
 // here so the one shade layer can composite them per pixel. Two Leaflet layers would source-over
@@ -70,7 +70,7 @@ export function compositeAlpha(
   intensity: number,
 ): number {
   const baked = MAX_SHADE_ALPHA * intensity;
-  // A full shadow quantises UP to the alpha lattice, so a baked alpha can land a step above the scale
+  // A full shadow quantizes UP to the alpha lattice, so a baked alpha can land a step above the scale
   // it was baked at; the cross term reads both capped there, or it would over-subtract and leave the
   // composite lighter than the source it started from.
   const both =
@@ -81,7 +81,7 @@ export function compositeAlpha(
 }
 
 // The two patches merged into the one the tile is drawn from. Only alpha carries anything: the
-// pyramids' colour plane is dead weight left over from when the slate was baked, and is not read.
+// pyramids' color plane is dead weight left over from when the slate was baked, and is not read.
 function merge(
   buildings: OffscreenCanvas | null,
   trees: OffscreenCanvas | null,
@@ -129,7 +129,7 @@ async function bakedPatch(
   ]);
   // Either pyramid missing entirely is fatal to the tile, not just the building one: drawing the
   // canopy's shadows alone over ground whose buildings did not arrive puts a sunlit street where a
-  // tower stands. A neighbour that failed while the centre tile arrived only costs the resample a
+  // tower stands. A neighbor that failed while the center tile arrived only costs the resample a
   // little context at the edge.
   if (
     (!buildings.patch && buildings.failed) ||

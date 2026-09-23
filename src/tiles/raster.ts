@@ -4,7 +4,7 @@
 // the map's largest resident cost is not the data behind it but the pixels: a route plus five
 // overlays at a phone's pixel ratio held a quarter of a gigabyte of canvas standing still, and six
 // pans took it past half a gigabyte — enough for iOS to kill the tab, which is what walking with
-// directions open does, since every fix recentres the map and sweeps fresh tiles into every layer.
+// directions open does, since every fix recenters the map and sweeps fresh tiles into every layer.
 
 // A pixel ratio of 3 costs nine device pixels per CSS pixel; capping at 2 gives back 56 % of the
 // bytes for a raster whose labels are still drawn above the display resolution of the text.

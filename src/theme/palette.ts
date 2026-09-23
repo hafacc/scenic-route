@@ -1,8 +1,8 @@
-// The map's colour, in one place.
+// The map's color, in one place.
 //
 // The raster overlays ship VALUES rather than pictures: a canopy tile carries the covered fraction
 // of ground under trees, an elevation tile carries height, relief and land cover, a shade tile
-// carries the fraction of light a pixel has lost. None of them carries a colour. What those values
+// carries the fraction of light a pixel has lost. None of them carries a color. What those values
 // look like is decided here and applied by one shader (src/tiles/theme-gl.ts) as the tile is drawn,
 // which is what makes a palette a value rather than a rebuild.
 //
@@ -23,31 +23,31 @@ export interface Rgb {
 // shader is told rather than knowing.
 export type Channel = "red" | "green" | "alpha";
 
-// How one overlay's values are coloured. Everything the shader needs and nothing about how the tile
-// was made: a colour ramp the value picks a point on, an opacity curve, and optionally a second
-// channel that shades the colour it picked.
+// How one overlay's values are colored. Everything the shader needs and nothing about how the tile
+// was made: a color ramp the value picks a point on, an opacity curve, and optionally a second
+// channel that shades the color it picked.
 export interface Ramp {
-  // Low to high, at most STOPS_LIMIT of them. A single stop is a flat colour the value only sets the
+  // Low to high, at most STOPS_LIMIT of them. A single stop is a flat color the value only sets the
   // opacity of.
   stops: readonly Rgb[];
-  value: Channel; // picks the colour
+  value: Channel; // picks the color
   // The value the ramp saturates at, on the channel's own 0..1 — the ramp is spread over the part of
   // the range the city occupies rather than the whole of it.
   valueFull: number;
-  alpha: Channel; // sets the opacity, often the same channel as the colour
+  alpha: Channel; // sets the opacity, often the same channel as the color
   alphaFull: number;
-  // Exponent on the normalised value. Below 1 it is concave, which spends the opacity budget on the
+  // Exponent on the normalized value. Below 1 it is concave, which spends the opacity budget on the
   // low end — where a faint signal still means something and would otherwise be crushed.
   alphaCurve: number;
   maxAlpha: number; // 0..1, the opacity a saturated value reaches
-  relief: Channel | null; // multiplies the colour, for a layer that carries its own shading
+  relief: Channel | null; // multiplies the color, for a layer that carries its own shading
   reliefScale: number; // what that channel is multiplied back out by
 }
 
 // The most stops the shader's uniform array holds. Raising it is a shader edit as well as this one.
 export const STOPS_LIMIT = 8;
 
-// Splits a "#rrggbb" literal into channels. Colours are authored as hex because that is how they
+// Splits a "#rrggbb" literal into channels. Colors are authored as hex because that is how they
 // are read, compared and pasted between here and a design tool; everything that draws wants numbers.
 export function hexToRgb(hex: string): Rgb {
   return {
@@ -71,7 +71,7 @@ function stops(...hexes: string[]): readonly Rgb[] {
 // that disappeared. Its faint end still has to lift off the ground, though, and the faint end is
 // most of the city, so it starts well clear of black rather than at the darkest teal.
 //
-// The night ramp is also a good deal greyer than the day one at the same lightness. Saturation reads
+// The night ramp is also a good deal grayer than the day one at the same lightness. Saturation reads
 // far stronger against a dark ground than a light one, and Tailwind's teals — picked to hold their
 // own on white — come out as neon on a night map, which is a lot of shouting for a field that covers
 // most of the city.
@@ -178,7 +178,7 @@ function paletteFor(theme: ThemeName): Palette {
       reliefScale: 1.15,
     },
     // The fraction of light lost in alpha, already scaled by the sun's intensity when the pyramid was
-    // baked (crates/tiler/src/shade.rs). One colour, so the value only sets how much of it there is.
+    // baked (crates/tiler/src/shade.rs). One color, so the value only sets how much of it there is.
     shade: {
       // A cool slate on paper, and a blue-black at night — a shadow has to be darker than the
       // ground it falls on, and the night ground is already darker than the daytime slate.
@@ -201,7 +201,7 @@ export const PALETTES: Record<ThemeName, Palette> = {
 };
 
 // The street lines' opacity against the field's. On paper a 2 px line has far less area to make its
-// colour with than the field under it, so it takes a little more to hold its own. At night it takes
+// color with than the field under it, so it takes a little more to hold its own. At night it takes
 // LESS: a light line on a dark ground already reads as the lit thing, and given the day figure it
 // blooms into a neon scribble over the whole city.
 export const ROAD_OPACITY: Record<ThemeName, number> = {
@@ -209,7 +209,7 @@ export const ROAD_OPACITY: Record<ThemeName, number> = {
   dark: 0.9,
 };
 
-// One point on a ramp: the colour a value picks, and how much of it there is. The shader computes
+// One point on a ramp: the color a value picks, and how much of it there is. The shader computes
 // exactly this per pixel; this is for the parts of the app that draw a ramp in CSS rather than in a
 // tile — the canopy street lines and the elevation key.
 export function rampAt(
@@ -235,7 +235,7 @@ export function rampAt(
   };
 }
 
-// One stop of a ramp as CSS, for the keys that swatch a ramped overlay with a single colour off it.
+// One stop of a ramp as CSS, for the keys that swatch a ramped overlay with a single color off it.
 export function rgbCss({ red, green, blue }: Rgb): string {
   return `rgb(${Math.round(red)} ${Math.round(green)} ${Math.round(blue)})`;
 }

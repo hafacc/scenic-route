@@ -1,7 +1,7 @@
 // The deploy's guard (scripts/check-sheds.ts), which is the only thing that ever sees the routing
 // graph and the committed shed artifact at once. The graph is built by the deploy and the artifact
 // travels in the checkout, so a refresh that rebuilds one without re-placing the other ships a map
-// with no scaffolding on it at all — the gate's own correct behaviour, and silent.
+// with no scaffolding on it at all — the gate's own correct behavior, and silent.
 //
 // What the artifact has to agree with is the graph's DURABLE KEY SPACE, so the graphs here are real
 // GRPH bytes rather than stand-in blobs: the two things worth pinning are that a rebuild which moved

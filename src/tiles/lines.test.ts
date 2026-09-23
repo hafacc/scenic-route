@@ -237,7 +237,7 @@ function drawTile(
   }));
 }
 
-test("neighbouring tiles draw a crossing at the same world position", () => {
+test("neighboring tiles draw a crossing at the same world position", () => {
   const zoom = 15;
   const data = decodeLines(
     encodeFerr([crossing("East River", zoom, 0)]),
@@ -343,12 +343,12 @@ test("a crossing takes a lane only over the water it shares", () => {
   };
   // Over the shared water one of them holds the published line and the other is a lane off it, so
   // the two are not drawn on top of another. Which of the two takes the lane is the lane order's to
-  // decide (see laneOrder in ./polylines), so this reads the gap and not the colour.
+  // decide (see laneOrder in ./polylines), so this reads the gap and not the color.
   expect(Math.max(offAt("#00839c", 0), offAt("#ff6b00", 0))).toBeGreaterThan(2);
   expect(offAt("#00839c", points.length - 1)).toBeLessThan(0.5);
 });
 
-test("a route takes its operator's colour, and an unknown one the layer's", () => {
+test("a route takes its operator's color, and an unknown one the layer's", () => {
   const zoom = 15;
   const data = decodeLines(
     encodeFerr([
@@ -364,7 +364,7 @@ test("a route takes its operator's colour, and an unknown one the layer's", () =
   expect(strokes).toEqual(new Set(["#00839c", params.color.light]));
 });
 
-test("highway lines keep their corners and the layer's own colour", () => {
+test("highway lines keep their corners and the layer's own color", () => {
   const zoom = 15;
   const { points } = crossing("unused", zoom, 0);
   const data = decodeLines(encodeHway(points), "hway");

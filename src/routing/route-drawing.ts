@@ -20,7 +20,7 @@ import { haversineMeters, type Snap } from "./snap";
 // sidewalk's baked offset already runs corner-to-corner on its own side, and a crossing or link is
 // the straight corner-to-corner line edgePath synthesizes, so there is no draw-time offset to apply.
 // A ride is the exception, and the reason `mode` is not a boolean: it has no geometry of its own and
-// borrows the agency's drawn track (../subway/tracks), which it wears in the line's own colour.
+// borrows the agency's drawn track (../subway/tracks), which it wears in the line's own color.
 export interface DrawStep {
   lngs: Float64Array;
   lats: Float64Array;
@@ -28,7 +28,7 @@ export interface DrawStep {
 }
 
 // A white disc at each station the route stops being carried at: where it gets on, where it changes
-// and where it gets off, in the colour of the line boarded there.
+// and where it gets off, in the color of the line boarded there.
 export interface StationDot {
   lat: number;
   lng: number;
@@ -41,8 +41,8 @@ export interface RouteDrawing {
   badge: { lat: number; lng: number } | null;
 }
 
-// A transfer's two platforms are metres apart, so the alight dot and the board dot that follows it
-// are one station: the second wins, in the colour of the line the reader is getting onto.
+// A transfer's two platforms are meters apart, so the alight dot and the board dot that follows it
+// are one station: the second wins, in the color of the line the reader is getting onto.
 const TRANSFER_METERS = 150;
 
 // The a -> b along-distance bounds this step actually walked, so the end edges are trimmed at the

@@ -133,7 +133,7 @@ test("a timetable is read in the city's zone, not the reader's", () => {
   expect(shiftedDay(afterMidnight, 0, "America/Los_Angeles")).toBe(20260901);
 });
 
-test("the two kerbs of one name are one station, and the underground one is not surface", () => {
+test("the two curbs of one name are one station, and the underground one is not surface", () => {
   const { topology: built } = topology();
   const names = built.stations.map((station) => station.name);
   expect(names).toEqual([
@@ -146,7 +146,7 @@ test("the two kerbs of one name are one station, and the underground one is not 
     "Delta",
   ]);
   const bay = built.stations[names.indexOf("Bay")];
-  // The centroid of the two kerbs, so the station stands between them.
+  // The centroid of the two curbs, so the station stands between them.
   expect(bay.lat).toBeCloseTo(40.7101, 4);
   expect(
     built.stations.every(

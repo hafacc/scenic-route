@@ -12,7 +12,7 @@ import { PeekBar, type PeekNext } from "./maneuvers";
 // nothing that holds it, so the box, the slim bar it shrinks to and the two endpoint fields live
 // here and each deck arranges its own contents inside them.
 
-// Full-width and centred on small screens; on sm+ it is a tall panel, so it right-aligns rather
+// Full-width and centered on small screens; on sm+ it is a tall panel, so it right-aligns rather
 // than covering the middle of the map.
 export const PANEL_WRAPPER =
   "fixed bottom-0 left-1/2 z-[1000] w-full max-w-md -translate-x-1/2 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:left-auto sm:right-4 sm:translate-x-0 sm:px-0";
@@ -150,8 +150,8 @@ export function EndpointFields({
     return fields;
   } else {
     return (
-      // Centred on the seam between the two boxes and hung half outside them, into the card's own
-      // padding: it sits clear of each field's own buttons, which are centred in their rows.
+      // Centered on the seam between the two boxes and hung half outside them, into the card's own
+      // padding: it sits clear of each field's own buttons, which are centered in their rows.
       <div className="relative space-y-2">
         {fields}
         <button

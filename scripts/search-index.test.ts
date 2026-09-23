@@ -173,7 +173,7 @@ test("the numbered street a query spells out is the one that comes back", () => 
   const found = (text: string) =>
     searchNames(index, {
       text,
-      centre: { lat: 40.748, lng: -73.986 },
+      center: { lat: 40.748, lng: -73.986 },
       limit: 5,
     }).map((hit) => hit.name);
   expect(found("fifth avenue")[0]).toBe("5th Avenue");
@@ -462,7 +462,7 @@ test("a document's token count is the words of its name, however often one repea
   // answer to it.
   const found = searchNames(index, {
     text: "boutique",
-    centre: BROOKLYN,
+    center: BROOKLYN,
     limit: 5,
   });
   const textOf = (name: string): number =>

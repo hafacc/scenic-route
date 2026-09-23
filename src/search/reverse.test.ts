@@ -60,7 +60,7 @@ interface Named {
   // Where the reader tapped, and what is there.
   at: Point;
   what: string;
-  // The name the answer must carry, spelt as the artifact spells it. Null with no `kind` beside it is
+  // The name the answer must carry, spelled as the artifact spells it. Null with no `kind` beside it is
   // the case where the honest answer is nothing at all; null WITH one asks only that something real
   // was found, for a spot where which of several tenants Overture filed is not a promise worth
   // freezing into a test.
@@ -118,11 +118,11 @@ const NYC_NAMED: readonly Named[] = [
     at: { lat: 40.66, lng: -74.05 },
     what: "open water in the Upper Bay",
     name: null,
-    why: "the honest answer in the middle of the harbour is nothing at all",
+    why: "the honest answer in the middle of the harbor is nothing at all",
   },
   {
     at: { lat: 40.4, lng: -73.8 },
-    what: "the Atlantic, twenty kilometres out",
+    what: "the Atlantic, twenty kilometers out",
     name: null,
     why: "and off the map entirely it is still nothing, never a distant door",
   },
@@ -258,7 +258,7 @@ test("no house number is ever invented", () => {
     checked.push(hit.name);
     const [found] = searchCity(nyc.index, nyc.addresses, {
       text: hit.name,
-      centre: hit,
+      center: hit,
       limit: 1,
     });
     expect(found?.exact, `${hit.name} is not a number the file has`).toBe(true);

@@ -18,8 +18,8 @@ export interface QueryMessage {
   type: "query";
   id: number;
   text: string;
-  // Where results are measured from: what the map is centred on.
-  centre: { lat: number; lng: number };
+  // Where results are measured from: what the map is centered on.
+  center: { lat: number; lng: number };
   limit: number;
 }
 

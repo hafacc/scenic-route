@@ -1,5 +1,5 @@
 // Cost is effective seconds: an edge's raw travel time times a product of scenic factors. Each
-// walked metre is discounted toward a floor by the tree cover, the landmarks and public art it
+// walked meter is discounted toward a floor by the tree cover, the landmarks and public art it
 // passes, the nice commercial frontage it runs along, the designated historic district it runs
 // inside, the open water it crosses on a bridge deck, and the shelter overhead (a factor
 // 1 - w*attr per element) and made dearer by a nearby highway or elevated rail and by the
@@ -9,7 +9,7 @@
 // signed (attr positive = net sunlit, negative = net shaded, for the sun at the moment the edge is
 // reached): w > 0 discounts sun and penalizes shade, w < 0 flips it, w = 0 is neutral. Every
 // unsigned attribute byte is at most its graph-wide max, which the ingest clamps below 1, so every
-// discount factor stays positive and the product never reaches 0 — no metre is ever free, so the
+// discount factor stays positive and the product never reaches 0 — no meter is ever free, so the
 // search never wanders. The A* heuristic scales straight-line distance by `minMultiplier`, the product
 // of each discount at its max (the penalty only raises cost, and the shade factor at its per-edge
 // lower bound 1 - |w|*maxAbsAttr): a lower bound on any edge's multiplier, so the estimate never
@@ -23,7 +23,7 @@
 // `transitCredit`.
 // Scaffolding rides on top of that: a deck's share of an edge is sheltered from rain outright and
 // shaded for as long as the sun has not slid its shadow off the sidewalk, whether or not the toggle
-// bars scaffolding — a deck you were told to avoid is still overhead. Barring it adds a flat per-metre
+// bars scaffolding — a deck you were told to avoid is still overhead. Barring it adds a flat per-meter
 // penalty on the decked share, which only raises the multiplier, so the heuristic still bounds it.
 // A tunnel asserts both outright: sheltered to the byte ceiling every other attribute is clamped to,
 // and in full shade at every instant. That is more shelter than a deck and a crown together reach, so
@@ -116,7 +116,7 @@ export const DEFAULT_MAX_TRANSIT_WAIT_SECONDS = 30 * 60;
 export const MAX_TREE_WEIGHT = 1;
 export const DEFAULT_TREE_WEIGHT = 0.8;
 // A ferry costs FERRY_FLOOR of its duration at w = 1 (never free, so the search cannot loop a ferry
-// for a heuristic credit). Defaults low — a stronger default over-favours ferries into odd detours.
+// for a heuristic credit). Defaults low — a stronger default over-favors ferries into odd detours.
 export const MAX_FERRY_WEIGHT = 1;
 export const DEFAULT_FERRY_WEIGHT = 0.1;
 export const FERRY_FLOOR = 1e-3;
@@ -196,7 +196,7 @@ export const DEFAULT_COMMERCIAL_WEIGHT = 0.1;
 // A discount for walking inside a designated historic district. Parity with the landmark, art and
 // commercial discounts, deliberately: it is the same kind of preference, and no measurement yet says
 // otherwise. Note the attribute is close to binary — an interior sidewalk reads the 254 ceiling and
-// only a boundary edge reads a part — so at w = 1 an in-district metre is nearly free and the
+// only a boundary edge reads a part — so at w = 1 an in-district meter is nearly free and the
 // heuristic floor nearly collapses. That is in-family (tree cover does it too) and admissible, since
 // the byte ceiling keeps maxHistoric < 1; it is a reason to move this on measurements rather than to
 // pre-inflate the maximum the way industrial's was.
@@ -206,7 +206,7 @@ export const DEFAULT_HISTORIC_WEIGHT = 0.1;
 // Brooklyn Bridge, not the viaduct over the rail yard, which the graph's structure flag alone
 // cannot tell apart and the bake's land mask does. Same family and same default as the two above:
 // a taste, on no measurement yet. The attribute is near-binary (a mid-span edge reads the 254
-// ceiling), so at w = 1 a metre over water is nearly free and the A* floor nearly collapses —
+// ceiling), so at w = 1 a meter over water is nearly free and the A* floor nearly collapses —
 // in-family with tree cover and historic, and admissible while the ceiling keeps maxBridge < 1.
 export const MAX_BRIDGE_WEIGHT = 1;
 export const DEFAULT_BRIDGE_WEIGHT = 0.1;
@@ -241,12 +241,12 @@ export const DEFAULT_SHADE_WEIGHT = 0;
 export const MAX_SHELTER_WEIGHT = 1;
 export const DEFAULT_SHELTER_WEIGHT = 0;
 
-// What a tunnel shelters, as a share of a walked metre. The byte ceiling every baked discount
+// What a tunnel shelters, as a share of a walked meter. The byte ceiling every baked discount
 // attribute is clamped to rather than a flat 1, so the shelter factor keeps a positive floor and no
-// metre of the network is ever free — the invariant at the top of this file.
+// meter of the network is ever free — the invariant at the top of this file.
 export const TUNNEL_SHELTER = 254 / 255;
 
-// What a metre under a deck costs while scaffolding is barred, as a multiple of walking it. Dodging
+// What a meter under a deck costs while scaffolding is barred, as a multiple of walking it. Dodging
 // scaffolding means crossing the street, and you cannot cross mid-block, so the real detour is
 // corner-cross-back: up to about a block (~160 m) to miss maybe 40 m of deck. That breaks even near
 // 4x, so this sits far enough above it that the detour is taken whenever one exists. Finite on
@@ -279,8 +279,8 @@ export const INTERNAL_FLAGS = ["allowTransit"] as const;
 
 export type InternalFlag = (typeof INTERNAL_FLAGS)[number];
 
-// The factors that DISCOUNT a walked metre (a `1 - w*attr` term in `edgeMultiplier`) rather than
-// price it (`1 + w*attr`). `ferry` is in neither: it discounts a crossing's seconds, not a metre.
+// The factors that DISCOUNT a walked meter (a `1 - w*attr` term in `edgeMultiplier`) rather than
+// price it (`1 + w*attr`). `ferry` is in neither: it discounts a crossing's seconds, not a meter.
 export const DISCOUNT_KEYS = [
   "tree",
   "landmark",
@@ -294,8 +294,8 @@ export const DISCOUNT_KEYS = [
 
 export type DiscountKey = (typeof DISCOUNT_KEYS)[number];
 
-// What a card can say a route HAS: the metre discounts, plus the boat — whose discount is on a
-// crossing's seconds rather than on a metre, and which is scenery all the same.
+// What a card can say a route HAS: the meter discounts, plus the boat — whose discount is on a
+// crossing's seconds rather than on a meter, and which is scenery all the same.
 export const SCENIC_KEYS = [...DISCOUNT_KEYS, "ferry"] as const;
 
 export type ScenicKey = (typeof SCENIC_KEYS)[number];
@@ -358,7 +358,7 @@ export interface RouteWeights {
   // False skips every board edge, so no route gets on a train. Not a reader's switch: the planner
   // turns it off for one candidate so a mode that prices no ride at all still offers the walk.
   allowTransit: boolean;
-  allowSheds: boolean; // false routes around scaffolding, at a large per-metre penalty
+  allowSheds: boolean; // false routes around scaffolding, at a large per-meter penalty
   // Whether the route may spend crossings freely to reach what it is looking for. False — the
   // default — prices every crossing far above what it takes to walk, which is what stops a route
   // zigzagging across a street to chase the shady side and straight back. See
@@ -413,7 +413,7 @@ export function shadeAttrOf(
   }
 }
 
-// How much of a walked metre of this edge has something over it in the rain: the deck outright, plus
+// How much of a walked meter of this edge has something over it in the rain: the deck outright, plus
 // the crowns over the share with no deck under them. Both are fractions of the edge's length, so this
 // is a union of coverage rather than a stack of opacities, and the `1 - shed` is the assumption that
 // the two are spread independently along the edge.
@@ -454,7 +454,7 @@ export function maxShelter(graph: RoutingGraph): number {
 // The walking multiplier: the tree-cover, landmark, art, commercial, historic-district and
 // bridge-over-water discounts (each 1 - w*attr) and the signed sun/shade factor (1 - w*attr, attr and w both signed) times the
 // nuisance penalty (1 + w*attr). At every weight 0 this is 1 (the shortest path); a shaded,
-// landmarked metre far from any highway approaches the floor. No per-factor clip is needed — each unsigned attribute is <= its graph max, and
+// landmarked meter far from any highway approaches the floor. No per-factor clip is needed — each unsigned attribute is <= its graph max, and
 // the shade factor is >= its `minMultiplier` term 1 - |w|*maxAbsAttr, so the product stays positive.
 // `elapsedSeconds` is how far into the walk the edge is reached; the shade field advances the sun by it,
 // so the same edge costs differently early vs late in a long route. It defaults to the departure instant.
@@ -505,15 +505,15 @@ export function edgeMultiplier(
   if (weights.allowSheds) {
     return scenic;
   } else {
-    // Charged per metre, not per edge: a deck over a tenth of an edge must not price the whole of it.
-    // The decked share costs an undiscounted metre plus the whole penalty however sure the placement
+    // Charged per meter, not per edge: a deck over a tenth of an edge must not price the whole of it.
+    // The decked share costs an undiscounted meter plus the whole penalty however sure the placement
     // is — a shed that might be there is a reason to walk elsewhere, not a reason to walk under it —
     // and the bare share is costed as the bare sidewalk it is.
     return scenic * (1 - shed) + shed + SHED_AVOID_PENALTY * shed;
   }
 }
 
-// The least a walked metre's multiplier can be: the product of each discount at the graph's max
+// The least a walked meter's multiplier can be: the product of each discount at the graph's max
 // attribute (the penalty only raises cost, so its minimum factor is 1). A lower bound on every edge's
 // multiplier — possibly loose, since one edge need not max every discount at once — so the A* heuristic
 // that scales straight-line distance by it never overestimates. Positive because each max < 1.
@@ -557,7 +557,7 @@ export function discountMax(graph: RoutingGraph, key: DiscountKey): number {
   }
 }
 
-// The wait this edge owes, charged where a walker steps off the kerb and nowhere else. A divided
+// The wait this edge owes, charged where a walker steps off the curb and nowhere else. A divided
 // street is several crossing edges chained through its islands, so `fromNode` — the node the walker
 // enters by — is what separates the start of a crossing from its continuation.
 export function crossingWait(
@@ -575,7 +575,7 @@ export function crossingWait(
 // the next sailing out of that terminal plus its crossing. Infinity once the day's last boat has gone,
 // which is what drops the edge out of the search rather than pricing a walk to a dark terminal.
 // Without a timetable loaded it is the graph's baked crossing-plus-average-wait figure, which is
-// direction- and time-independent — the behaviour before FSCH existed.
+// direction- and time-independent — the behavior before FSCH existed.
 export function ferrySeconds(
   graph: RoutingGraph,
   edge: number,
@@ -673,7 +673,7 @@ export function rawSeconds(
 }
 
 // The seconds to walk one whole edge, entered at `fromNode`. A partial walk — the two end edges of
-// a route — is not this: it is its own length at the same seconds per metre.
+// a route — is not this: it is its own length at the same seconds per meter.
 function walkedSeconds(
   graph: RoutingGraph,
   edge: number,
@@ -785,14 +785,14 @@ export function crossingPrice(
     : crossingWait(graph, edge, fromNode) * CROSSING_AVOID_MULTIPLE;
 }
 
-// The least seconds a walked metre can cost — the min multiplier over walking speed. The A* heuristic
+// The least seconds a walked meter can cost — the min multiplier over walking speed. The A* heuristic
 // scales straight-line distance by this: a lower bound on remaining walking time.
 export function walkSecondsCoeff(
   graph: RoutingGraph,
   weights: RouteWeights,
 ): number {
   // Divided by the fastest speed any edge in the graph can be walked at, which a gentle descent puts
-  // above the flat 1.3 m/s — so this stays a LOWER bound on the seconds a metre costs, which is all
+  // above the flat 1.3 m/s — so this stays a LOWER bound on the seconds a meter costs, which is all
   // the heuristic needs.
   return (
     minMultiplier(graph, weights) /
@@ -883,12 +883,12 @@ export function ferryCredit(
   return credit;
 }
 
-// The least seconds ANY metre of the network can cost, whatever it is travelled by. The two credits
+// The least seconds ANY meter of the network can cost, whatever it is traveled by. The two credits
 // above are sums over every ferry or transit edge in the city, and at a low transit penalty they
 // swamp `coeff × straight-line` everywhere: the estimate goes to zero and A* settles for what
 // Dijkstra would. So the caller takes the larger of the credited estimate and `floor × straight`,
 // which is a lower bound on the trip in its own right — a path is at least as long as the straight
-// line, and no metre of it is cheaper than this.
+// line, and no meter of it is cheaper than this.
 //
 // A board edge that spans anything is in it too, at the boarding constant over its length: the wait
 // on top of that is at least zero, so the constant alone bounds the edge below. Most board edges
@@ -901,7 +901,7 @@ export function heuristicFloor(
   let floor = walkSecondsCoeff(graph, weights);
   if (weights.allowFerries) {
     // Per ferry rather than from the baked figure: that one has the average wait fused into the
-    // crossing, and a boat boarded with no wait costs less per metre than it.
+    // crossing, and a boat boarded with no wait costs less per meter than it.
     const discount = ferryCrossingDiscount(weights);
     for (const edge of graph.ferryEdges) {
       const length = graph.edgeLength[edge];
@@ -917,8 +917,8 @@ export function heuristicFloor(
     const multiplier = transitMultiplier(weights);
     floor = Math.min(
       floor,
-      graph.minRideSecPerMetre * multiplier,
-      graph.minAccessSecPerMetre,
+      graph.minRideSecPerMeter * multiplier,
+      graph.minAccessSecPerMeter,
     );
     for (const edge of graph.boardEdges) {
       const length = graph.edgeLength[edge];

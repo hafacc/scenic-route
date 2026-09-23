@@ -184,9 +184,9 @@ function answers(
     index: ReturnType<typeof decodeSearchIndex>;
   },
   text: string,
-  centre = DOWNTOWN,
+  center = DOWNTOWN,
 ): CityHit[] {
-  return searchCity(city.index, city.addresses, { text, centre, limit: 5 });
+  return searchCity(city.index, city.addresses, { text, center, limit: 5 });
 }
 
 // A house number and nothing else: the street rows the same query matches are not addresses.
@@ -196,9 +196,9 @@ function doors(
     index: ReturnType<typeof decodeSearchIndex>;
   },
   text: string,
-  centre = DOWNTOWN,
+  center = DOWNTOWN,
 ): CityHit[] {
-  return answers(city, text, centre).filter((hit) => hit.exact !== null);
+  return answers(city, text, center).filter((hit) => hit.exact !== null);
 }
 
 test("a house number the file has is the answer, at its own coordinates", () => {
@@ -223,7 +223,7 @@ test("a number past the end of the street is not answered at all", () => {
 
 // The whole reason a street is a name and a place: one of these is in Brooklyn and one is not, and
 // picking either on the reader's behalf would be picking wrong half the time with no sign of it.
-test("a name several streets share answers with every one of them, each labelled", () => {
+test("a name several streets share answers with every one of them, each labeled", () => {
   const hits = doors(NYC_CITY, "312 Court St");
   expect(hits.map(line).sort()).toEqual([
     "312 Court Street, Brooklyn",
@@ -247,7 +247,7 @@ test("a place name on its own is not stripped", () => {
   expect(doors(NYC_CITY, "312 Brooklyn")).toEqual([]);
 });
 
-test("the map centre decides which of them comes first", () => {
+test("the map center decides which of them comes first", () => {
   expect(
     doors(NYC_CITY, "312 Court St", { lat: 40.64, lng: -74.08 })[0].label,
   ).toBe("Staten Island");
@@ -289,7 +289,7 @@ test("a Queens hyphenated number is one number, not two", () => {
   expect(hit.lng).toBeCloseTo(-73.9101, 5);
 });
 
-test("the block number decides which neighbour is nearest, not the digits after it", () => {
+test("the block number decides which neighbor is nearest, not the digits after it", () => {
   const [hit] = doors(NYC_CITY, "12-38 31st Av");
   expect(line(hit)).toBe("12-40 31st Avenue, Queens");
   expect(hit.exact).toBe(false);

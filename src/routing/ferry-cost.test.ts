@@ -63,9 +63,9 @@ function dijkstraCost(
     for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
       const edge = graph.adjacency[slot];
       const relaxed = distance[node] + effSeconds(graph, edge, routeWeights);
-      const neighbour = otherEnd(graph, edge, node);
-      if (relaxed < distance[neighbour]) {
-        distance[neighbour] = relaxed;
+      const neighbor = otherEnd(graph, edge, node);
+      if (relaxed < distance[neighbor]) {
+        distance[neighbor] = relaxed;
       }
     }
   }
@@ -383,7 +383,7 @@ test("the sole crossing is optimal, and barring it leaves no route", () => {
         treeWeight,
         ferryWeight,
       );
-      // A twelve-kilometre boat against a 1.3 m/s walking bound is the widest gap the ferry credit
+      // A twelve-kilometer boat against a 1.3 m/s walking bound is the widest gap the ferry credit
       // has to close; over-estimate here and the search would settle for something worse or, with
       // nothing worse to settle for, wander.
       expect(Math.abs(cost - optimum), label).toBeLessThan(1e-3);
@@ -508,10 +508,10 @@ function costsTo(
     settled[node] = 1;
     for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
       const edge = graph.adjacency[slot];
-      const neighbour = otherEnd(graph, edge, node);
+      const neighbor = otherEnd(graph, edge, node);
       const relaxed = distance[node] + effSeconds(graph, edge, routeWeights);
-      if (relaxed < distance[neighbour]) {
-        distance[neighbour] = relaxed;
+      if (relaxed < distance[neighbor]) {
+        distance[neighbor] = relaxed;
       }
     }
   }

@@ -79,7 +79,7 @@ interface RoutePanelProps {
   // nothing: every one of these was a live slider in San Francisco costing an attribute that is 0
   // on all 102,659 of its edges.
   //
-  // A slider whose data is absent greys out rather than disappearing, which is what the hill slider
+  // A slider whose data is absent grays out rather than disappearing, which is what the hill slider
   // already did — "not here" reads as a fact about the city, where a control that vanishes reads as
   // a bug. The two gates are hidden instead: a toggle is a claim that both of its states are
   // reachable, and in a city with no ferries at all it has nothing to say.
@@ -150,7 +150,7 @@ interface FactorState {
   available?: boolean;
   disabled?: boolean;
   // Set when the data this factor prices exists but did not load. The control goes dead like
-  // `disabled` does, with the reason said out loud: a slider the reader did not grey themselves is
+  // `disabled` does, with the reason said out loud: a slider the reader did not gray themselves is
   // otherwise just a control that has stopped working, and the route beside it is quietly priced
   // without the thing the slider claims to be asking for.
   lost?: string;
@@ -243,7 +243,7 @@ export default function RoutePanel({
   const { factorOrder, hiddenFactors, hiddenGates } = useSettings();
   const hidden = new Set(hiddenFactors);
   const hiddenGate = new Set(hiddenGates);
-  // Each gate's own colour when it is on, which is the layer's where it has one.
+  // Each gate's own color when it is on, which is the layer's where it has one.
   const gateTint: Record<GateKey, string> = {
     allowFerries: "text-blue-600 dark:text-blue-400",
     allowSheds: "text-orange-600 dark:text-orange-400",
@@ -351,7 +351,7 @@ export default function RoutePanel({
       return factor ? [{ ...factor, ...factorState[key] }] : [];
     },
   );
-  // A factor the city has no data for is dropped outright rather than greyed. It would cost nothing
+  // A factor the city has no data for is dropped outright rather than grayed. It would cost nothing
   // and mean nothing here, and a disabled control still claims the city has the thing. A factor the
   // reader has hidden in Settings goes the same way, though its weight keeps pricing the route.
   // Filtered once, at the source, so the sliders, the collapsed peek row and the summary chips cannot
@@ -360,7 +360,7 @@ export default function RoutePanel({
   const factors = offered.filter((factor) => !hidden.has(factor.key));
   // Hiding is about the panel, not the route: a hidden factor at a non-zero weight is still bending
   // the line on the map, and nothing else on screen would say so. A factor the panel would have
-  // greyed out is not — a closed gate has taken its edges out of the graph, and lost data is priced
+  // grayed out is not — a closed gate has taken its edges out of the graph, and lost data is priced
   // as nothing — so counting one would name an influence that is not there.
   const hiddenApplying =
     offered.filter(
@@ -397,7 +397,7 @@ export default function RoutePanel({
       factor.key !== "transit",
   );
   // A factor whose data is missing AND which the reader has asked for: the route on screen is not
-  // the route they asked for, and the greyed slider saying so is folded away behind "Scenery".
+  // the route they asked for, and the grayed slider saying so is folded away behind "Scenery".
   const ignoredFactors = factors.filter(
     (factor) => factor.lost !== undefined && factor.weight !== 0,
   );

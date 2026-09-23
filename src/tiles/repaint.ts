@@ -1,7 +1,7 @@
 // When the browser reclaims a canvas's backing store the tile keeps its place on the map and its
 // loaded flag, so nothing ever asks for it again — and a tile whose control was transferred to the
 // worker cannot even be read back to notice. The canvas's own events are the only signal, and
-// cancelling the loss is what makes the restore come at all: an uncancelled loss is permanent.
+// canceling the loss is what makes the restore come at all: an uncanceled loss is permanent.
 // components/genus-gl-layer.tsx has held the WebGL half of this contract since it was written.
 
 // Returns the detach, which must run when the tile goes away: the listener holds the canvas and the

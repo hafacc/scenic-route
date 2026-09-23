@@ -8,7 +8,7 @@ import { repaintOnRestore } from "./repaint";
 // pixels reclaimed (./repaint). Subclasses paint through `watch`.
 
 // Every one of these on the map, so a theme flip can hand them all back their tiles: what they draw
-// in is a colour per theme, and Leaflet keeps a drawn tile forever otherwise. The same repaint
+// in is a color per theme, and Leaflet keeps a drawn tile forever otherwise. The same repaint
 // ./layer.ts does for the worker's layers.
 const grids = new Set<CanvasGrid>();
 

@@ -269,7 +269,7 @@ function drawTile(
   }));
 }
 
-test("neighbouring tiles draw a line at the same world position", () => {
+test("neighboring tiles draw a line at the same world position", () => {
   const zoom = 16;
   const data = decodeSubwayTiles(
     encodeSbwy(
@@ -289,7 +289,7 @@ test("neighbouring tiles draw a line at the same world position", () => {
   }
 });
 
-test("routes take the colour the feed publishes for them", () => {
+test("routes take the color the feed publishes for them", () => {
   const zoom = 16;
   const data = decodeSubwayTiles(
     encodeSbwy(
@@ -361,7 +361,7 @@ test("stations are drawn as markers only once the map can separate them", () => 
   expect(markers(12)).toBe(0);
 });
 
-// The point of the bullets: a marker says which routes call, in each route's own colour, with the
+// The point of the bullets: a marker says which routes call, in each route's own color, with the
 // name the rider reads on the train inside it.
 test("a station's marker becomes its routes' bullets once they fit", () => {
   const zoom = 16;

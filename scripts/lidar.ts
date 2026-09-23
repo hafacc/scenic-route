@@ -32,8 +32,8 @@ const PROGRESS_NODES = 25;
 const EARTH_RADIUS_METERS = 6_378_137.0;
 const MERCATOR_HALF_WIDTH_METERS = 20_037_508.342_789_244;
 
-// The one true metre of ground a 3857 metre stands for shrinks with the cosine of the latitude, and
-// the walk's spacing test is in true metres. At 37.8 N the two differ by 21%, which is a whole
+// The one true meter of ground a 3857 meter stands for shrinks with the cosine of the latitude, and
+// the walk's spacing test is in true meters. At 37.8 N the two differ by 21%, which is a whole
 // octree level.
 function mercatorScale(lat: number): number {
   return 1 / Math.cos((lat * Math.PI) / 180);
@@ -78,7 +78,7 @@ export interface LidarWindow {
 export interface LidarSource {
   // Every EPT index whose flight reaches the city, queried and unioned. Their cubes overlap on
   // paper and their coverage does not, so a window inside one index's stated bounds can hold none
-  // of its points and all of a neighbour's.
+  // of its points and all of a neighbor's.
   eptRoots: string[];
   // The staged 1 m bare-earth DEM the ground comes from. Which of its 10 km tiles are wanted is
   // derived from the window, and the project's own link list decides which of those exist: the
@@ -92,7 +92,7 @@ export interface LidarSource {
   sourceUrl: string;
 }
 
-// The point spacing the octree walk stops at, in true metres of ground. Every level down costs
+// The point spacing the octree walk stops at, in true meters of ground. Every level down costs
 // about 3.8x the bytes; measured against the level below it over 343 downtown buildings, the
 // per-building height it yields differs by 0.74 m mean absolute, which no shade computation can
 // see. Half of it — one more level — is what the spike checks its node counts against.
@@ -123,7 +123,7 @@ export const OAKLAND_TEST_WINDOW: LidarWindow = {
 
 // The contiguous bayshore run this city's East Bay half is built from — Albany, Berkeley,
 // Emeryville, Oakland, Piedmont, Alameda and San Leandro — as Overture's own outlines for them
-// bound it, plus a few hundred metres. The south edge is Oakland airport and Bay Farm Island, the
+// bound it, plus a few hundred meters. The south edge is Oakland airport and Bay Farm Island, the
 // east edge the ridge above the Oakland hills. Written down rather than derived at run time so the
 // walk, the ground tiles it names and the cache entries under both are the same on every run.
 export const EAST_BAY_WINDOW: LidarWindow = {
@@ -174,7 +174,7 @@ async function walkNodes(
   const cubeEdge = cubeMaxX - cubeX;
   const [minX, minY] = mercator(window.west, window.south);
   const [maxX, maxY] = mercator(window.east, window.north);
-  // The window's own latitude, so the spacing test is in true metres at the ground being flown.
+  // The window's own latitude, so the spacing test is in true meters at the ground being flown.
   const spacing =
     spacingMeters * mercatorScale((window.south + window.north) / 2);
 

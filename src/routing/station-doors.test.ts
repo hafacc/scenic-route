@@ -270,7 +270,7 @@ test("a station is a way in and a way out, and not a way through the block", () 
 // pavement for the price of a wait — eight minutes against the hour the avenue charges. The
 // platform's own pair is what closes that, the board landing on the boarding node and the alight
 // leaving the arrival node, so the shortest way across a platform is a ride of at least one stop.
-// What the router is left with here is a real one: two kilometres down the east pavement, the A line
+// What the router is left with here is a real one: two kilometers down the east pavement, the A line
 // north one stop, and up the middle station's west stair.
 test("boarding a train and stepping straight off it is not a way through either", () => {
   const graph = underpassGraph();

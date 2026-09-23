@@ -73,14 +73,14 @@ function graphOf(nodeCount: number, edges: EdgeSpec[]): RoutingGraph {
   } as unknown as RoutingGraph;
 }
 
-// kerb 0 -> kerb 1 across one roadway, with pavement running off each kerb.
+// curb 0 -> curb 1 across one roadway, with pavement running off each curb.
 const PLAIN = graphOf(4, [
   { a: 2, b: 0, crossing: false, meters: 30 },
   { a: 0, b: 1, crossing: true, meters: 12 },
   { a: 1, b: 3, crossing: false, meters: 30 },
 ]);
 
-// kerb 0 -> island 4 -> island 5 -> kerb 1: one crossing drawn as three chained ways.
+// curb 0 -> island 4 -> island 5 -> curb 1: one crossing drawn as three chained ways.
 const DIVIDED = graphOf(6, [
   { a: 2, b: 0, crossing: false, meters: 30 },
   { a: 0, b: 4, crossing: true, meters: 10 },
@@ -89,14 +89,14 @@ const DIVIDED = graphOf(6, [
   { a: 1, b: 3, crossing: false, meters: 30 },
 ]);
 
-test("a kerb is pavement and an island is mid-roadway", () => {
-  expect(DIVIDED.nodeMidRoadway[0]).toBe(0); // kerb: a sidewalk runs off it
+test("a curb is pavement and an island is mid-roadway", () => {
+  expect(DIVIDED.nodeMidRoadway[0]).toBe(0); // curb: a sidewalk runs off it
   expect(DIVIDED.nodeMidRoadway[4]).toBe(1); // island: every edge on it is a crossing
   expect(DIVIDED.nodeMidRoadway[5]).toBe(1);
   expect(PLAIN.nodeMidRoadway[0]).toBe(0);
 });
 
-test("stepping off the kerb costs one wait, walking the pavement costs none", () => {
+test("stepping off the curb costs one wait, walking the pavement costs none", () => {
   expect(crossingWait(PLAIN, 1, 0)).toBe(CROSSING_SECONDS);
   expect(crossingWait(PLAIN, 1, 1)).toBe(CROSSING_SECONDS); // crossed the other way
   expect(crossingWait(PLAIN, 0, 2)).toBe(0);
@@ -161,7 +161,7 @@ test("a divided street is priced once, not once per carriageway", () => {
   expect(total).toBe(CROSSING_SECONDS * CROSSING_AVOID_MULTIPLE);
 });
 
-// The whole mechanism: a path cost has no memory, so "and straight back" cannot be recognised — but
+// The whole mechanism: a path cost has no memory, so "and straight back" cannot be recognized — but
 // an undone crossing pays the price twice for no progress, which is what makes it stop being worth
 // buying. This is the arithmetic that has to hold for that to work.
 test("crossing and crossing back costs twice, so a zigzag has to earn twice", () => {

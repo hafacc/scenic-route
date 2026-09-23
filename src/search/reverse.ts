@@ -25,7 +25,7 @@
 // it; a point with nothing near enough is answered with null, and the caller keeps saying "Dropped
 // pin". The number found is never the number nearest to what a reader expects — it is the nearest
 // real one, and when it is too far to claim the point is at it, the answer drops to the street, to
-// the neighbourhood, or to nothing.
+// the neighborhood, or to nothing.
 
 import { COORD_SCALE, formatHouseNumber } from "./address-format";
 import { type AddressIndex, streetAddresses } from "./addresses";
@@ -42,13 +42,13 @@ const METERS_PER_UNIT_LAT = METERS_PER_DEGREE_LAT / COORD_SCALE;
 
 // How far a house number is allowed to be from the point and still be what the point is called. A
 // New York block is about 80 m long and 275 m across, and an address point sits inside its building,
-// so a pin dropped on a building is within a few tens of metres of its own number. Past this the
+// so a pin dropped on a building is within a few tens of meters of its own number. Past this the
 // number belongs to a different building and the answer drops to the street.
 const AT_ADDRESS_METERS = 60;
 
 // And how far the STREET reaches, once the number has been given up on. A point in the middle of a
 // block interior, in a yard, or on a pier at the end of one is genuinely near the street it is
-// reached from; a point a quarter of a kilometre from every address in the city is not.
+// reached from; a point a quarter of a kilometer from every address in the city is not.
 const NEAR_STREET_METERS = 250;
 
 // What a name covers, as a function of how prominent the index made it: 20 m for an office nobody
@@ -61,19 +61,19 @@ const MAX_PROMINENCE = 255;
 
 // The head start a name gets over whatever else is near the point, at the top of the prominence
 // scale. Every source files a place as one point, so a tap on the Empire State Building lands a few
-// metres from the tower and a few metres from the valuation firm on its fourth floor; without this
-// the firm wins by a metre it did not earn. Forty metres is about half a New York block — enough to
+// meters from the tower and a few meters from the valuation firm on its fourth floor; without this
+// the firm wins by a meter it did not earn. Forty meters is about half a New York block — enough to
 // carry a landmark over the office in it, and far too little to carry a park over the house you are
 // standing at.
 const NAME_HEAD_START = 40;
 
 // How far a name may be and still be worth saying at all, once nothing owns the point outright. A
-// pier, a bridge deck or a marsh is named after what it is near, and three hundred metres is about
+// pier, a bridge deck or a marsh is named after what it is near, and three hundred meters is about
 // as far as "near" carries on foot — past it a point in open water starts being named after an
 // office on the far shore.
 const NEAR_NAME_METERS = 300;
 
-// And the last thing there is to say: which part of the city this is. A neighbourhood is filed at its
+// And the last thing there is to say: which part of the city this is. A neighborhood is filed at its
 // middle and covers a good deal around it, so this is loose on purpose — but it is loose enough that
 // the answer is only ever offered as "near", never as a place the point is at.
 const NEAR_NEIGHBORHOOD_METERS = 1000;
@@ -87,7 +87,7 @@ export interface ReverseHit {
   name: string; // "605 E 14th St", "Katz's Delicatessen"
   // The line under the name, as the search box builds it: the door and the borough for something the
   // point is at, and the borough alone for something it is merely near — a house number under a name
-  // the point is a hundred metres from would be placing the pin at a door it is nowhere near.
+  // the point is a hundred meters from would be placing the pin at a door it is nowhere near.
   label: string; // "Manhattan", "205 E Houston St, Manhattan", or ""
   lat: number; // where the named thing is, which is not the point that was asked about
   lng: number;
@@ -109,7 +109,7 @@ function nameRadius(prominence: number): number {
   return NAME_RADIUS_FLOOR + NAME_RADIUS_SPAN * share * share;
 }
 
-// The same curve, for the head start: an office gets a metre of it, a shop nine, a park thirty-four.
+// The same curve, for the head start: an office gets a meter of it, a shop nine, a park thirty-four.
 function headStart(prominence: number): number {
   const share = prominence / MAX_PROMINENCE;
   return NAME_HEAD_START * share * share;
@@ -196,16 +196,16 @@ interface NearestNames {
   // The best name to call the point: among the documents whose ground it is standing on, the one
   // nearest to it once each has been given its head start.
   owner: { doc: number; meters: number; rank: number } | null;
-  // The nearest named thing of any kind, however small, and the nearest neighbourhood: the two
+  // The nearest named thing of any kind, however small, and the nearest neighborhood: the two
   // answers left when nothing owns the point.
   nearest: { doc: number; meters: number } | null;
   neighborhood: { doc: number; meters: number } | null;
 }
 
-// One pass over the document table. Streets and neighbourhoods are left out of the first two answers
+// One pass over the document table. Streets and neighborhoods are left out of the first two answers
 // for the same reason: each is filed at the mean of the ground it covers, so how far Broadway's point
 // or Bushwick's point is from a pin says nothing about how far Broadway or Bushwick is. The address
-// search above answers a street properly, and a neighbourhood is only ever offered as the last thing
+// search above answers a street properly, and a neighborhood is only ever offered as the last thing
 // there is to say.
 function nearestNames(
   index: SearchIndex,
@@ -287,7 +287,7 @@ function documentHit(
 
 // What is near the point, once nothing owns it: the street the nearest number is on, with no number,
 // or a name near enough that "near" still means something on foot, whichever is nearer — an
-// expressway two hundred metres off is a worse thing to call a spot in Van Cortlandt Park than the
+// expressway two hundred meters off is a worse thing to call a spot in Van Cortlandt Park than the
 // park's own boathouse. Failing both, which part of the city this is. Failing that, nothing.
 function nearbyHit(
   index: SearchIndex,
@@ -326,7 +326,7 @@ function nearbyHit(
 }
 
 // What to call a point. Null where the city has nothing near enough to name it with, which is the
-// honest answer for the middle of the harbour and for a point in another city altogether.
+// honest answer for the middle of the harbor and for a point in another city altogether.
 export function reverseCity(
   index: SearchIndex,
   addresses: AddressIndex,

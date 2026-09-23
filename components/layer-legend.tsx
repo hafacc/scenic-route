@@ -9,7 +9,7 @@ import {
 } from "../src/overlays/registry";
 import { useMapTheme } from "./use-map-theme";
 
-// The key for a map carrying overlays: which added colour is which layer. One colour per row, taken
+// The key for a map carrying overlays: which added color is which layer. One color per row, taken
 // from what that layer actually paints with, so the key cannot come to disagree with the map under
 // it. Deliberately inert — the layers menu is where a layer is turned off, and a key that also
 // toggled would be a second, half-hidden copy of it.

@@ -6,8 +6,8 @@ import {
 } from "protomaps-leaflet";
 import { type Flavor, VOYAGER } from "./flavor";
 
-// How the basemap is DRAWN, as against what colour it is drawn in (./flavor.ts). Protomaps' defaults
-// are a sober cartographic style; Voyager is not, and two of its habits are what make it recognisable
+// How the basemap is DRAWN, as against what color it is drawn in (./flavor.ts). Protomaps' defaults
+// are a sober cartographic style; Voyager is not, and two of its habits are what make it recognizable
 // at the zooms this app is used at.
 //
 // Both adjustments are applied on top of Protomaps' own rules rather than replacing them, so the
@@ -21,7 +21,7 @@ const ROAD_WIDTH = 1.45;
 
 // Voyager labels far more streets than Protomaps does — at z15 over midtown it names roughly twice as
 // many. Its rules gate street names on zoom, so dropping that gate two levels is what closes the gap.
-// This can only reach as far as the DATA does: a street with no name in the tile cannot be labelled,
+// This can only reach as far as the DATA does: a street with no name in the tile cannot be labeled,
 // however early the rule fires.
 const LABEL_ZOOM_SHIFT = 2;
 
@@ -44,7 +44,7 @@ function scaled(width: unknown, factor: number): Width | undefined {
 // `kind_detail`, and in this app's zoom range the only one with anything to draw is the finer of the
 // two — the county lines, which in New York are the borough lines, running straight through the
 // middle of the city and saying nothing to someone deciding which street to walk down. (Measured:
-// with boundaries coloured red and nothing filtered, no line appears over the Hudson at z11 or z13,
+// with boundaries colored red and nothing filtered, no line appears over the Hudson at z11 or z13,
 // so the New York / New Jersey line is not in these tiles at these zooms either way.) A walking map
 // of one city has no use for either, so neither is drawn.
 export function basemapPaintRules(flavor: Flavor = VOYAGER): PaintRule[] {

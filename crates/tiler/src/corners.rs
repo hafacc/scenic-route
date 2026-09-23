@@ -16,7 +16,7 @@ const RADIUS_MAX_METERS: f64 = 30.0;
 const SINE_FLOOR: f64 = 0.25;
 
 /// One end of a base edge as it leaves a node: which edge, whether this is its `a` end, the
-/// departure bearing in the local metre frame (`atan2(north, east)`), and whether the edge is a
+/// departure bearing in the local meter frame (`atan2(north, east)`), and whether the edge is a
 /// path surface rather than a street with sidewalks.
 pub struct EdgeEnd {
     pub edge: u32,
@@ -138,7 +138,7 @@ mod tests {
     use super::*;
     use std::f64::consts::{FRAC_PI_2, PI};
 
-    // A metre frame close to New York's, so the tests exercise the real conversion path.
+    // A meter frame close to New York's, so the tests exercise the real conversion path.
     const MPU_LNG: f64 = 0.0843;
     const MPU_LAT: f64 = 0.1113;
 

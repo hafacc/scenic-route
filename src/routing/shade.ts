@@ -12,7 +12,7 @@
 // shadows at the far end differ from those at the start. So `computeEdgeShade` does not resolve one sun
 // position — it builds a `ShadeField`, a schedule of blended bins across ELAPSED WALKING TIME from the
 // departure instant. The router asks the field for an edge's attribute at the elapsed time it reaches
-// that edge, so a metre walked an hour in is costed against the sun an hour later. Below the horizon at
+// that edge, so a meter walked an hour in is costed against the sun an hour later. Below the horizon at
 // some elapsed time there is no shade to bias, so the field returns 0 there; a departure already past
 // sunset yields no field at all. The bin selection mirrors components/shade-layer.tsx (both via
 // src/shade/sun.ts), so the router agrees with the shade overlay at the departure instant.
@@ -53,7 +53,7 @@ const binUrl = (cityId: string, index: number): string =>
   `routing/shade/${cityId}/${index}.bin`;
 
 // suncalc@2.0.1, as the shade overlay consumes it: altitude/azimuth as the layer's currentSun reads
-// them, azimuth a compass bearing normalised to [0, 360).
+// them, azimuth a compass bearing normalized to [0, 360).
 const sun = SunCalc as unknown as {
   getPosition: (
     date: Date,
@@ -334,9 +334,9 @@ export function loadShadeBin(
 // uses so both agree on which bin a time maps to. Degrees; azimuth a compass bearing in [0, 360).
 export function sunAt(
   date: Date,
-  centre: { lat: number; lng: number } = activeCity().center,
+  center: { lat: number; lng: number } = activeCity().center,
 ): { elevation: number; azimuth: number } {
-  const { lat, lng } = centre;
+  const { lat, lng } = center;
   const position = sun.getPosition(date, lat, lng);
   return {
     elevation: position.altitude,
@@ -360,13 +360,13 @@ function selectBlend(
   bins: ShadeBin[],
   elevation: number,
   azimuth: number,
-  centreLat: number,
+  centerLat: number,
 ): ShadeBlend | null {
   if (elevation <= HORIZON_DEG) {
     return null;
   }
-  const declination = declinationOf(elevation, azimuth, centreLat);
-  const hourAngle = hourAngleOf(elevation, azimuth, centreLat, declination);
+  const declination = declinationOf(elevation, azimuth, centerLat);
+  const hourAngle = hourAngleOf(elevation, azimuth, centerLat, declination);
   const season = seasonBand(declination);
   const inBand = bins.filter((bin) => bin.season === season);
   const candidates = inBand.length > 0 ? inBand : bins;

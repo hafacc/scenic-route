@@ -5,7 +5,7 @@
 // elevation) envelope, is the one that scrubs without jitter.
 //
 // A shadow depends only on where the sun is, and (declination, hourAngle) fixes that exactly, so each
-// bin's sun position is SYNTHESISED straight from its grid cell — no year sweep, no astronomy library
+// bin's sun position is SYNTHESIZED straight from its grid cell — no year sweep, no astronomy library
 // here. The shade pass does the geometry; this does the trig.
 
 import {
@@ -30,7 +30,7 @@ export const SHADE_MAX_SHADOW_METERS = 500;
 interface ShadeBucket {
   season: number; // the declination band [0, SEASON_BANDS) this bin sits in — its season key
   hourAngle: number; // the sun's hour angle (degrees, 0 at solar noon) — its time-of-day key
-  elevation: number; // the synthesised sun elevation for (season, hourAngle), degrees
+  elevation: number; // the synthesized sun elevation for (season, hourAngle), degrees
   azimuth: number; // and azimuth (compass, clockwise from north), degrees
   intensity: number; // solar intensity ~sin(elevation); scales the shade darkness
   samples: SunSample[];
@@ -62,7 +62,7 @@ function positionOf(
 }
 
 // The bins: for each declination band, the sun position at the band's central declination stepped
-// across the daytime hour angles. The band centre stands for every date in the band (identical
+// across the daytime hour angles. The band center stands for every date in the band (identical
 // shadows), and the hour steps run from just after sunrise to just before sunset.
 //
 // PER CITY, and not only because the numbers differ. The (season, hourAngle) keys are latitude-free
@@ -74,7 +74,7 @@ export function computeShadeBuckets(cityId: string): ShadeBucket[] {
   if (!city) {
     throw new Error(`no city ${cityId} in the manifest`);
   }
-  const centreLat = (city.bounds.north + city.bounds.south) / 2;
+  const centerLat = (city.bounds.north + city.bounds.south) / 2;
 
   const buckets: ShadeBucket[] = [];
   const bandWidth = (2 * DECL_MAX_DEG) / SEASON_BANDS;
@@ -83,7 +83,7 @@ export function computeShadeBuckets(cityId: string): ShadeBucket[] {
     // The hour angle at sunrise/sunset for this declination (cos H = -tan φ tan δ); the sweep stays
     // inside it, and the horizon check below trims the last partial step.
     const cosSunset =
-      -Math.tan(centreLat * DEGREES) * Math.tan(declination * DEGREES);
+      -Math.tan(centerLat * DEGREES) * Math.tan(declination * DEGREES);
     const maxHourAngle =
       Math.abs(cosSunset) >= 1
         ? cosSunset < 0
@@ -93,7 +93,7 @@ export function computeShadeBuckets(cityId: string): ShadeBucket[] {
     const steps = Math.floor(maxHourAngle / HOUR_ANGLE_STEP_DEG);
     for (let step = -steps; step <= steps; step++) {
       const hourAngle = step * HOUR_ANGLE_STEP_DEG;
-      const position = positionOf(declination, hourAngle, centreLat);
+      const position = positionOf(declination, hourAngle, centerLat);
       if (position.elevation <= HORIZON_DEG) {
         continue;
       }

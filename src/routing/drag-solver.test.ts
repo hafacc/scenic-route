@@ -238,9 +238,9 @@ function dijkstraCost(
     for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
       const edge = graph.adjacency[slot];
       const relaxed = distance[node] + effSeconds(graph, edge, routeWeights);
-      const neighbour = otherEnd(graph, edge, node);
-      if (relaxed < distance[neighbour]) {
-        distance[neighbour] = relaxed;
+      const neighbor = otherEnd(graph, edge, node);
+      if (relaxed < distance[neighbor]) {
+        distance[neighbor] = relaxed;
       }
     }
   }

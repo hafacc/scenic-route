@@ -7,7 +7,7 @@ import { centroid, clusterByName, STATION_MERGE_METERS } from "./subway-format";
 
 const LAT = 37.79;
 const LNG = -122.4;
-// A degree of latitude is about 111 km, so this is metres.
+// A degree of latitude is about 111 km, so this is meters.
 const DEGREES_PER_METER = 1 / 111_320;
 
 function stop(
@@ -20,7 +20,7 @@ function stop(
 const names = (clusters: { name: string }[][]): string[][] =>
   clusters.map((cluster) => cluster.map((point) => point.name));
 
-test("same-named kerbs a median apart are one station", () => {
+test("same-named curbs a median apart are one station", () => {
   const clusters = clusterByName([
     stop("Church & Duboce", 0),
     stop("Church & Duboce", 30),
@@ -28,7 +28,7 @@ test("same-named kerbs a median apart are one station", () => {
   expect(names(clusters)).toEqual([["Church & Duboce", "Church & Duboce"]]);
 });
 
-test("a row of kerbs chains through its members", () => {
+test("a row of curbs chains through its members", () => {
   // Single-link: the ends are 180 m apart, further than the threshold, and still one station.
   const clusters = clusterByName([
     stop("Embarcadero", 0),

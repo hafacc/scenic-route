@@ -46,7 +46,7 @@ interface RouteLayerProps {
   // The line under the pointer, drawn as the chosen one is while it is; null on the way out.
   onHoverLine?: (index: number | null) => void;
   dest: { lat: number; lng: number } | null; // the tapped/searched destination
-  // The colour the destination teardrop wears, from a deck with an accent; null keeps the green one.
+  // The color the destination teardrop wears, from a deck with an accent; null keeps the green one.
   markerColor: string | null;
   start: { lat: number; lng: number } | null; // the snapped start, for the dot
   dragging: boolean; // an endpoint is being dragged; reframe zooms out only, never in
@@ -75,13 +75,13 @@ const DRAG_AUTOPAN_PADDING: [number, number] = [80, 80];
 
 // The line reads as a route ribbon: ~4.5 px at z16, growing with zoom like the street layer, drawn
 // as a neutral slate core inside a white casing. A neutral route reads clearly over the canopy — or
-// any future overlay — without competing with its colour, and the white halo lifts it off the map.
+// any future overlay — without competing with its color, and the white halo lifts it off the map.
 const WIDTH_AT_Z16 = 4.5;
 const WIDTH_PER_ZOOM = 1.3;
 const MIN_WIDTH = 2.5;
 const CASING_EXTRA = 3; // white halo, ~1.5 px each side
 
-export const ROUTE_COLOR = "#334155"; // slate-700: a neutral route that reads over any overlay colour
+export const ROUTE_COLOR = "#334155"; // slate-700: a neutral route that reads over any overlay color
 const CASING_COLOR = "#ffffff";
 const CONNECTOR_COLOR = "#94a3b8"; // slate-400
 const CONNECTOR_MIN_METERS = 15; // draw the dashed tapped->snapped link only past this gap
@@ -126,8 +126,8 @@ class RouteGrid extends CanvasGrid {
     return tile;
   }
 
-  // Casing across every step of a band first, then the coloured lines, so the round joins meet
-  // seamlessly rather than each step's casing overpainting its neighbour's fill. Bands paint in
+  // Casing across every step of a band first, then the colored lines, so the round joins meet
+  // seamlessly rather than each step's casing overpainting its neighbor's fill. Bands paint in
   // order, so the selected line — last — lies over the rest.
   private draw(context: CanvasRenderingContext2D, coords: L.Coords): void {
     const map = this._map;
@@ -150,7 +150,7 @@ class RouteGrid extends CanvasGrid {
       const width = base * band.width;
       const walkPath = new Path2D();
       const ferryPath = new Path2D();
-      // One path per line ridden: a trip that changes trains is two colours, and each has to be
+      // One path per line ridden: a trip that changes trains is two colors, and each has to be
       // cased and stroked whole so its joins meet.
       const ridePaths = new Map<string, Path2D>();
       for (const step of band.steps) {
@@ -255,8 +255,8 @@ function badgeIcon(line: RouteLine): L.DivIcon {
   });
 }
 
-// One white disc ringed in the line's colour, at a station the reader gets on, changes or gets off
-// at. Minted per colour rather than per stop: a trip calls at two or three of them and they all
+// One white disc ringed in the line's color, at a station the reader gets on, changes or gets off
+// at. Minted per color rather than per stop: a trip calls at two or three of them and they all
 // look the same.
 const stationIcons = new Map<string, L.DivIcon>();
 function stationIcon(color: string): L.DivIcon {

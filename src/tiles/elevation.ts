@@ -6,7 +6,7 @@ import { drawRamped } from "./theme-gl";
 
 // The baked elevation pyramid, magnified through src/tiles/magnify.ts rather than by the browser.
 //
-// An elevation tile carries three fields and no colour: height across the city's range in red, the
+// An elevation tile carries three fields and no color: height across the city's range in red, the
 // relief shade in green, and how much of the pixel stands on ground in alpha. The hypsometric tint,
 // the relief it is multiplied by and the wash's opacity are all the palette's, applied on the way
 // onto the tile (./theme-gl.ts).

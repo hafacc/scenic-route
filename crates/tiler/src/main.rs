@@ -1,6 +1,6 @@
 //! The tree-cover model, end to end: the blurred measured-canopy cover field, the Monte-Carlo
 //! cover distribution, the tile pyramids and the street chunks. TypeScript fetches the sources,
-//! encodes the `.bin`s and owns the manifest and the colour ramp; everything numeric is here.
+//! encodes the `.bin`s and owns the manifest and the color ramp; everything numeric is here.
 //! See scripts/README.md.
 //!
 //! Four subcommands, and package.json is the only thing that runs any of them — no TypeScript
@@ -167,7 +167,7 @@ fn run() -> Fallible<()> {
         // `keyHash` of its stats line. It is handed only the three sources that can put a key in the
         // space at all — everything else `graph::run` takes bakes a per-edge attribute byte over
         // edges already final, and moves no key — so what comes back is a stamp of the key
-        // assignment's BEHAVIOUR, which is what scripts/graph-inputs.ts wants and what a hash of the
+        // assignment's BEHAVIOR, which is what scripts/graph-inputs.ts wants and what a hash of the
         // crate's source text can only stand in for. Every field is written out rather than
         // defaulted: a new graph input then fails to compile here until someone says which side of
         // the line it is on.

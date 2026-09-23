@@ -26,7 +26,7 @@ import { useCity } from "./city-context";
 //
 // The deck geometry is src/tiles/shed-decks.ts's, which the shade layer casts the decks' shadows
 // from — so a band and the shadow leaving it cannot disagree. A deck arrives as the polygon it
-// covers, already pinned between the building line and the kerb at its own measured depth, so this
+// covers, already pinned between the building line and the curb at its own measured depth, so this
 // only scales it into the tile and fills it. Where that depth falls under a pixel the minimum width
 // opens the band out instead of dropping it.
 //
@@ -125,7 +125,7 @@ export default function ShedLayer() {
     });
     grid.addTo(map);
 
-    let cancelled = false;
+    let canceled = false;
     let graph: RoutingGraph | null = null;
     let history: ShedHistory | null = null;
     let drawnDay = Number.NaN; // no day drawn yet; every real day differs from it
@@ -146,7 +146,7 @@ export default function ShedLayer() {
 
     Promise.all([loadGraph(city.id), loadSheds()]).then(
       ([loaded, sheds]) => {
-        if (!cancelled) {
+        if (!canceled) {
           graph = loaded;
           history = sheds;
           apply();
@@ -157,7 +157,7 @@ export default function ShedLayer() {
     const unsubscribe = subscribeRouteTime(apply);
 
     return () => {
-      cancelled = true;
+      canceled = true;
       unsubscribe();
       grid.remove();
     };

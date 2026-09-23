@@ -173,8 +173,8 @@ export function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
     // graph whose A* silently degenerates to Dijkstra rather than one with no trains.
     ferries: null,
     transit: null,
-    minRideSecPerMetre: Number.POSITIVE_INFINITY,
-    minAccessSecPerMetre: Number.POSITIVE_INFINITY,
+    minRideSecPerMeter: Number.POSITIVE_INFINITY,
+    minAccessSecPerMeter: Number.POSITIVE_INFINITY,
     transitEdges: new Uint32Array(0),
     boardEdges: new Uint32Array(0),
     names: [],

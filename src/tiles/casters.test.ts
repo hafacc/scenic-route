@@ -29,7 +29,7 @@ function zigzag(value: number): number {
   return value < 0 ? -2 * value - 1 : 2 * value;
 }
 
-// One building: its height in decimetres and its rings in degrees, quantized about the chunk origin
+// One building: its height in decimeters and its rings in degrees, quantized about the chunk origin
 // with the delta chain running across the rings and restarting here.
 function encodeBuilding(
   bytes: number[],
@@ -74,8 +74,8 @@ function encodeRings(
   }
 }
 
-// The trunk section: its own chain of deltas about the chunk origin, then a radius in centimetres and
-// a height in decimetres.
+// The trunk section: its own chain of deltas about the chunk origin, then a radius in centimeters and
+// a height in decimeters.
 function encodeTrunks(
   bytes: number[],
   trunks: [lng: number, lat: number, radiusCm: number, heightDm: number][],
@@ -169,7 +169,7 @@ test("decodes a chunk's records, rings and heights", () => {
 
   expect(decoded.buildings).toBe(2);
   expect(decoded.records.length - 1).toBe(3);
-  // Decimetres in the blob, metres out, through a Float32Array.
+  // Decimeters in the blob, meters out, through a Float32Array.
   for (const [record, height] of [10, 10.1, 5].entries()) {
     expect(decoded.heights[record]).toBeCloseTo(height, 5);
   }

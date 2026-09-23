@@ -3,7 +3,7 @@
 // will raise into walls to shade the walking graph. From the NYC Building Footprints dataset
 // (5zhs-2jue): a GeoJSON MultiPolygon per building, its `height_roof` (feet), and its
 // `ground_elevation` (feet AMSL, for terrain-aware shade). Kept to real buildings (feature_code
-// 2100) with a positive finite height, clipped to the shoreline, and converted to metres. Polygons
+// 2100) with a positive finite height, clipped to the shoreline, and converted to meters. Polygons
 // only this batch; the shade computation lives in a later phase.
 // Layout: scripts/README.md.
 

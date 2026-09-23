@@ -122,7 +122,7 @@ export function mergeSettings(local: Settings, remote: Settings): Settings {
 }
 
 // A document read back from Firestore, which is whatever was last written there — by a build that
-// may be newer than this one. Everything unrecognised is dropped rather than trusted, the same way
+// may be newer than this one. Everything unrecognized is dropped rather than trusted, the same way
 // the local document is read (./store.ts), so a field this build cannot name cannot corrupt it.
 export function settingsFromRemote(
   document: unknown,

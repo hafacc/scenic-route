@@ -21,9 +21,9 @@ export type ModeId = "naturalist" | "rain" | "historic" | "streetlife";
 export interface Mode {
   id: ModeId;
   name: string;
-  color: string; // chip fill and route colour, as a CSS hex
+  color: string; // chip fill and route color, as a CSS hex
   // What the mode's own overlays draw their elements in, which is what its alternative routes are
-  // coloured from. Day hues, as `color` is.
+  // colored from. Day hues, as `color` is.
   palette: readonly string[];
   overlays: readonly OverlayId[];
   weights: Partial<Record<FactorKey, number>>; // fraction of the factor's max, 0..1
@@ -91,7 +91,7 @@ export const MODES: readonly Mode[] = [
   {
     id: "rain",
     name: "Rain",
-    color: "#0284c7", // sky-600, the shelter slider's colour
+    color: "#0284c7", // sky-600, the shelter slider's color
     // Shelter is overhead cover of both kinds, so the canopy's own green belongs here as much as
     // the decks' orange, whether or not this city draws either.
     palette: [
@@ -109,7 +109,7 @@ export const MODES: readonly Mode[] = [
   {
     id: "historic",
     name: "Historic",
-    color: "#4338ca", // indigo-700, the historic overlay's colour
+    color: "#4338ca", // indigo-700, the historic overlay's color
     palette: [
       HISTORIC_COLOR.light, // indigo-700, the historic-district wash
       LANDMARK_COLOR.light, // amber-500, the landmark dots
@@ -122,7 +122,7 @@ export const MODES: readonly Mode[] = [
       landmark: 1,
       art: 0.9,
       bridge: 1,
-      // A harbour crossing is a way of seeing a city that predates every other line on the map.
+      // A harbor crossing is a way of seeing a city that predates every other line on the map.
       ferry: 0.1,
       industrial: 1,
       transit: 1,

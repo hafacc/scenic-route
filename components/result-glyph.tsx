@@ -23,7 +23,7 @@ export default function ResultGlyph({ type }: { type: string }) {
     // street the signpost below stands for.
     return <MdOutlineHome className={GLYPH} aria-hidden="true" />;
   } else if (type === SUBWAY_RESULT_TYPE) {
-    // The layer menu's own subway colour, in the theme the map is drawing in, so a station in the
+    // The layer menu's own subway color, in the theme the map is drawing in, so a station in the
     // list and a station on the map are the same blue.
     return (
       <PiTrainSimpleFill

@@ -12,7 +12,7 @@ import type { FactorAvailability, Mode } from "./modes";
 export interface LandedPlan {
   id: number;
   graph: RoutingGraph;
-  // What the sweep was run under, which is what its cards are coloured and chipped from — the
+  // What the sweep was run under, which is what its cards are colored and chipped from — the
   // reader can already be in another mode by the time it lands.
   mode: Mode;
   available: FactorAvailability;

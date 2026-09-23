@@ -26,11 +26,11 @@ const DATA_DIR = join(ROOT, "data");
 const PUBLIC_DIR = join(ROOT, "public");
 const TILE_DIR = join(PUBLIC_DIR, "tiles");
 // The measured LiDAR canopy pyramid, rendered from data/canopy/*.bin: the map's cover fill, blurred
-// and written as a covered fraction in alpha, which the client colours with the shared ramp.
+// and written as a covered fraction in alpha, which the client colors with the shared ramp.
 const CANOPY_TILE_DIR = join(TILE_DIR, "canopy");
 // The client-shaded genus dominance pyramid, rendered from data/trees/*.bin: four lossless data tiles
 // per position, each carrying three genera's local crown density in R/G/B. The WebGL overlay
-// (components/genus-gl-layer.tsx) colours them at render time.
+// (components/genus-gl-layer.tsx) colors them at render time.
 const GENUS_FIELD_TILE_DIR = join(TILE_DIR, "genus-field");
 const CHUNK_DIR = join(PUBLIC_DIR, "streets");
 // The shadow casters the client sweeps for itself past the baked pyramid's deepest level, cut from
@@ -39,7 +39,7 @@ const CASTER_DIR = join(PUBLIC_DIR, "casters");
 // The commercial overlay's precomputed per-segment signals, one file per STCK chunk. Derived,
 // gitignored, like the chunks.
 const COMMERCIAL_DIR = join(PUBLIC_DIR, "commercial");
-// The qualifying-block centrelines the same pass emits, one file per city (magic CMLN), which the
+// The qualifying-block centerlines the same pass emits, one file per city (magic CMLN), which the
 // graph proximity-bakes into the per-edge commercial discount.
 const COMMERCIAL_LINES_DIR = join(PUBLIC_DIR, "commercial-lines");
 const ROUTING_DIR = join(PUBLIC_DIR, "routing");
@@ -151,21 +151,21 @@ async function codeFiles(): Promise<Record<string, string>> {
 }
 
 // The existence gate's two ceilings per region — the share of derived sidewalk km the gate may drop,
-// and the 90th-percentile share of one half-kilometre cell's street km it may leave with no pavement
+// and the 90th-percentile share of one half-kilometer cell's street km it may leave with no pavement
 // — read by crates/tiler/src/graph.rs. A region absent from here is held to 0.30/0.30, which is what
 // a municipal sidewalk survey implies: where one exists, a side coming back silent really is evidence
 // that the STRT per-side bits were never stamped.
 //
 // The Bay Area has no such survey. Even after the pipeline learned to read OSM's `sidewalk=*` tags
-// off the road centrelines — which took the region from 10.9% to 47.2% of side-km with any statement
+// off the road centerlines — which took the region from 10.9% to 47.2% of side-km with any statement
 // on them at all — 45% of East Bay streets still have nobody saying whether a pavement exists. That
 // is a hole in OpenStreetMap rather than a source we failed to read, so over this region the guards
 // were measuring the wrong thing rather than measuring a bad build.
 //
 // So its ceilings sit just over what it actually measures rather than at a round number, and a real
 // regression still trips them. Measured on the 2026-08-30 build: 0.357 dropped, and 0.84 at the 90th
-// percentile over the region's 1,294 half-kilometre cells. At 0.88 the cell ceiling no longer catches
-// a neighbourhood quietly losing its pavement here — for this region it is a total-failure detector
+// percentile over the region's 1,294 half-kilometer cells. At 0.88 the cell ceiling no longer catches
+// a neighborhood quietly losing its pavement here — for this region it is a total-failure detector
 // and nothing finer. Read a later number against those two measurements rather than against the
 // ceilings: a few points is the drift of a year of OSM edits, and OSM gaining sidewalk statements
 // moves both DOWN, so an upward move of any size is worth opening.
@@ -187,14 +187,14 @@ async function planCity(city: City): Promise<PlanCity> {
       (await fileExists(sourcePath(kind, `${city.id}.bin`))) ? kind : null,
     ),
   );
-  // One grid per city: a bin's sun position is synthesised at the city's own latitude, so two cities
+  // One grid per city: a bin's sun position is synthesized at the city's own latitude, so two cities
   // share neither what an index means nor how many indices exist. Empty when the year yields no
   // above-horizon bin, and then the city gets no shade pyramid and no per-edge bake.
   const buckets = computeShadeBuckets(city.id);
   const mosaics = KEY_SPACE ? [] : await fetchElevationMosaics(city.id);
   return {
     id: city.id,
-    // The alley invariants assert New York's meaning of an alley; a city whose centreline has no such
+    // The alley invariants assert New York's meaning of an alley; a city whose centerline has no such
     // class says so rather than being asked about it.
     alleys: city.streets.alleys ?? true,
     existenceCeilings: EXISTENCE_CEILINGS[city.id],

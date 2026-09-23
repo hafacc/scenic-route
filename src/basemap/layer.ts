@@ -14,7 +14,7 @@ import { basemapLabelRules, basemapPaintRules } from "./rules";
 // keep. So the service worker caches these, bounded to the cities (src/sw/policy.ts).
 //
 // Drawing the vectors here rather than fetching pictures of them is also what makes the night map a
-// real style: it is a second colour dictionary in ./flavor.ts and nothing else, where the raster
+// real style: it is a second color dictionary in ./flavor.ts and nothing else, where the raster
 // layer this replaced could only be inverted in CSS.
 
 // Free for non-commercial use up to a soft cap, and restricted by the CORS allow-list set on the key

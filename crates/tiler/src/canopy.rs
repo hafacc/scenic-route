@@ -1,7 +1,7 @@
 //! The canopy pass: rasterizes data/canopy/<id>.bin — the measured 2017 LiDAR tree canopy,
 //! magic CNPY, ~1.08 M polygons — into a per-pixel coverage pyramid at
 //! public/tiles/canopy/{z}/{x}/{y}.webp, blurred and written as a VALUE: the covered fraction of
-//! ground lands in the tile's alpha channel and nothing here is coloured. The emerald ramp lives
+//! ground lands in the tile's alpha channel and nothing here is colored. The emerald ramp lives
 //! only on the client, which applies it to the stored byte in a shader. This is the map's cover
 //! fill; the routing graph reads the same canopy through `densities`, so the block fill, the
 //! street lines and the routes all speak of one measured field. See scripts/README.md.
@@ -28,7 +28,7 @@ use crate::raster::{
 const SUPERSAMPLE: usize = 4;
 // The raw polygon coverage is too concentrated to read as density — a hard 1 under a crown, 0
 // between — and shade physically reaches past a crown's edge. So the fraction is convolved with
-// an isotropic Gaussian before colouring, the same blur the sidewalk sampler uses, at the same
+// an isotropic Gaussian before coloring, the same blur the sidewalk sampler uses, at the same
 // sigma. Mirrors the ingest's FILL_SIGMA_METERS, which scripts/tree-data-fetch.ts hands to the
 // density pass and the manifest records as `field.fillSigmaMeters`.
 const FILL_SIGMA_METERS: f64 = 15.0;
@@ -123,13 +123,13 @@ fn coverage(canopy: &Canopy, tile: &Tile, want_stats: bool) -> (Option<Vec<f32>>
     let origin_x = f64::from(tile.x) * TILE_SIZE as f64;
     let origin_y = f64::from(tile.y) * TILE_SIZE as f64;
 
-    // The blur runs in pixel space, so its sigma is the fill metres over this zoom's ground
+    // The blur runs in pixel space, so its sigma is the fill meters over this zoom's ground
     // resolution at the tile's latitude. Below half a pixel it has nothing left to say and is
     // skipped (the supersample average is already the field); above it the tile grows a halo of
-    // BLUR_RADII sigmas so the kernel has neighbouring canopy to draw from and tiles do not seam.
-    let centre_lat = pixel_y_to_lat(origin_y + TILE_SIZE as f64 / 2.0, zoom);
+    // BLUR_RADII sigmas so the kernel has neighboring canopy to draw from and tiles do not seam.
+    let center_lat = pixel_y_to_lat(origin_y + TILE_SIZE as f64 / 2.0, zoom);
     let meters_per_pixel =
-        EQUATOR_METERS_PER_PIXEL * centre_lat.to_radians().cos() / f64::from(1u32 << zoom);
+        EQUATOR_METERS_PER_PIXEL * center_lat.to_radians().cos() / f64::from(1u32 << zoom);
     let sigma_pixels = FILL_SIGMA_METERS / meters_per_pixel;
     let blur = sigma_pixels >= MIN_FEATHER_PIXELS;
     let halo = if blur {
@@ -153,7 +153,7 @@ fn coverage(canopy: &Canopy, tile: &Tile, want_stats: bool) -> (Option<Vec<f32>>
         return (None, 0, 0.0);
     }
 
-    // Land at each pixel centre, separably: a column's x and a row's base are each one lookup.
+    // Land at each pixel center, separably: a column's x and a row's base are each one lookup.
     let land = &canopy.land;
     let land_cols: Vec<Option<usize>> = (0..TILE_SIZE)
         .map(|x| {
@@ -250,8 +250,8 @@ fn coverage(canopy: &Canopy, tile: &Tile, want_stats: bool) -> (Option<Vec<f32>>
 }
 
 /// Write the canopy fraction itself into the tile's alpha channel, RGB left at zero, for the
-/// client to colour. This is an EXACT re-encoding of what the pass used to bake, not a new
-/// quantisation: the ramp LUT was indexed by `round_half_up(cover * 255.0)`, the identical 8-bit
+/// client to color. This is an EXACT re-encoding of what the pass used to bake, not a new
+/// quantization: the ramp LUT was indexed by `round_half_up(cover * 255.0)`, the identical 8-bit
 /// step of the identical fraction, so applying that ramp to the stored byte reproduces the old
 /// tiles pixel for pixel. The old `ramp[stop + 3] < MIN_ALPHA` skip is reproduced by `alpha == 0`,
 /// since the ramp's alpha only falls under MIN_ALPHA at cover 0.
@@ -294,7 +294,7 @@ fn render(
     }
 
     // Lossy, even though the tile is data now: WebP's lossy mode compresses the ALPHA plane
-    // losslessly, so the cover byte survives exactly, and the RGB it does quantise is a constant
+    // losslessly, so the cover byte survives exactly, and the RGB it does quantize is a constant
     // zero plane that costs almost nothing.
     let rendered = if painted {
         Some(encode_webp(&pixels)?)

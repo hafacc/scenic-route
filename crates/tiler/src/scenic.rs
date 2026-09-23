@@ -11,7 +11,7 @@
 //!   landmarks reach further and saturate fast, art stays tight and keeps rewarding a rich corridor.
 //! - **Highway / elevated-rail nuisance — a PENALTY, by an areal proximity field.** Noise and grime
 //!   carry through the air regardless of the street grid, so this is Euclidean: each edge's penalty
-//!   is a Gaussian of its metre distance to the nearest nuisance line.
+//!   is a Gaussian of its meter distance to the nearest nuisance line.
 //! - **Nice commercial frontage — a DISCOUNT, by the same proximity field over the qualifying blocks.**
 //!   A commercial street is walked ALONG, so a tight Euclidean σ keeps the reward on the block's own
 //!   sidewalks and off the parallel residential street a block over.
@@ -49,7 +49,7 @@ pub struct PoiParams {
 }
 
 /// The finished walking graph as flat slices, everything the scenic passes need. Coordinates are
-/// the quantized graph units; `mpu_*` convert a unit to metres at the origin latitude.
+/// the quantized graph units; `mpu_*` convert a unit to meters at the origin latitude.
 pub struct Network<'a> {
     pub node_x: &'a [i32],
     pub node_y: &'a [i32],
@@ -59,14 +59,14 @@ pub struct Network<'a> {
     pub edge_b: &'a [u32],
     pub edge_len_m: &'a [f64],
     /// Whether an edge is one a walker uses. The fan-out below walks the graph, and the graph now
-    /// holds a transit topology: a station's board edge is zero metres long, so without this a
+    /// holds a transit topology: a station's board edge is zero meters long, so without this a
     /// landmark beside one station would deposit its discount on the pavement beside the next.
     pub edge_walkable: &'a [bool],
     pub origin_lng: f64,
     pub origin_lat: f64,
     pub scale: f64,
-    pub mpu_lng: f64, // metres per quantized x unit at the origin latitude
-    pub mpu_lat: f64, // metres per quantized y unit
+    pub mpu_lng: f64, // meters per quantized x unit at the origin latitude
+    pub mpu_lat: f64, // meters per quantized y unit
 }
 
 impl Network<'_> {
@@ -78,7 +78,7 @@ impl Network<'_> {
         self.edge_a.len()
     }
 
-    fn node_metres(&self, node: u32) -> (f64, f64) {
+    fn node_meters(&self, node: u32) -> (f64, f64) {
         (
             f64::from(self.node_x[node as usize]) * self.mpu_lng,
             f64::from(self.node_y[node as usize]) * self.mpu_lat,
@@ -98,7 +98,7 @@ impl Network<'_> {
             .collect()
     }
 
-    fn coord_metres(&self, coord: Coord) -> (f64, f64) {
+    fn coord_meters(&self, coord: Coord) -> (f64, f64) {
         (
             (coord.lng - self.origin_lng) / self.scale * self.mpu_lng,
             (coord.lat - self.origin_lat) / self.scale * self.mpu_lat,
@@ -129,7 +129,7 @@ impl PartialOrd for HeapItem {
     }
 }
 
-/// A grid of the WALKABLE node ids in metre space, cells `cell_meters` on a side, for a
+/// A grid of the WALKABLE node ids in meter space, cells `cell_meters` on a side, for a
 /// nearest-node snap.
 fn node_grid(net: &Network, cell_meters: f64) -> HashMap<(i32, i32), Vec<u32>> {
     let walkable = net.walkable_nodes();
@@ -138,7 +138,7 @@ fn node_grid(net: &Network, cell_meters: f64) -> HashMap<(i32, i32), Vec<u32>> {
         if !is_walkable {
             continue;
         }
-        let (x, y) = net.node_metres(node as u32);
+        let (x, y) = net.node_meters(node as u32);
         grid.entry((
             (x / cell_meters).floor() as i32,
             (y / cell_meters).floor() as i32,
@@ -176,22 +176,22 @@ pub fn poi_amenity(net: &Network, params: &PoiParams, pois: &[Coord]) -> (Vec<u8
     let mut snapped = 0usize;
 
     for (index, poi) in pois.iter().enumerate() {
-        let (px, py) = net.coord_metres(*poi);
+        let (px, py) = net.coord_meters(*poi);
         let (cx, cy) = ((px / cell).floor() as i32, (py / cell).floor() as i32);
         let mut nearest: Option<(u32, f64)> = None;
         for gx in cx - 1..=cx + 1 {
             for gy in cy - 1..=cy + 1 {
                 for &node in grid.get(&(gx, gy)).into_iter().flatten() {
-                    let (nx, ny) = net.node_metres(node);
-                    let metres = (nx - px).hypot(ny - py);
-                    if nearest.is_none_or(|(_, best)| metres < best) {
-                        nearest = Some((node, metres));
+                    let (nx, ny) = net.node_meters(node);
+                    let meters = (nx - px).hypot(ny - py);
+                    if nearest.is_none_or(|(_, best)| meters < best) {
+                        nearest = Some((node, meters));
                     }
                 }
             }
         }
         let start = match nearest {
-            Some((node, metres)) if metres <= POI_SNAP_RADIUS_METERS => node,
+            Some((node, meters)) if meters <= POI_SNAP_RADIUS_METERS => node,
             _ => continue,
         };
         snapped += 1;
@@ -255,7 +255,7 @@ pub fn poi_amenity(net: &Network, params: &PoiParams, pois: &[Coord]) -> (Vec<u8
     (bytes, PoiStats { snapped, max_byte })
 }
 
-/// The per-edge nuisance-penalty byte: `e^{-(d/σ)²/2}` of the metre distance `d` from the edge to
+/// The per-edge nuisance-penalty byte: `e^{-(d/σ)²/2}` of the meter distance `d` from the edge to
 /// the nearest highway or elevated-rail segment. A later phase reads it as a `1 + w·attr` penalty.
 pub fn highway_penalty(net: &Network, lines: &[Polygon]) -> (Vec<u8>, u8) {
     line_proximity(net, lines, HIGHWAY_SIGMA_METERS)
@@ -268,7 +268,7 @@ pub fn commercial_amenity(net: &Network, lines: &[Polygon]) -> (Vec<u8>, u8) {
     line_proximity(net, lines, COMMERCIAL_SIGMA_METERS)
 }
 
-/// The per-edge proximity byte to a set of lines: `e^{-(d/σ)²/2}` of the metre distance `d` from the
+/// The per-edge proximity byte to a set of lines: `e^{-(d/σ)²/2}` of the meter distance `d` from the
 /// edge to the nearest line segment. The edge is sampled at its two endpoints and its midpoint, and
 /// the nearest of the three stands for it — if any part runs near a line, the whole edge reads near.
 /// Each `Polygon` is one line as a single ring. The caller decides whether the byte is a discount or
@@ -278,8 +278,8 @@ fn line_proximity(net: &Network, lines: &[Polygon], sigma_meters: f64) -> (Vec<u
     for polygon in lines {
         for ring in polygon {
             for pair in ring.windows(2) {
-                let (ax, ay) = net.coord_metres(pair[0]);
-                let (bx, by) = net.coord_metres(pair[1]);
+                let (ax, ay) = net.coord_meters(pair[0]);
+                let (bx, by) = net.coord_meters(pair[1]);
                 segments.push((ax, ay, bx, by));
             }
         }
@@ -303,8 +303,8 @@ fn line_proximity(net: &Network, lines: &[Polygon], sigma_meters: f64) -> (Vec<u
     let mut bytes = vec![0u8; net.edge_count()];
     let mut max_byte = 0u8;
     for (edge, byte) in bytes.iter_mut().enumerate() {
-        let (ax, ay) = net.node_metres(net.edge_a[edge]);
-        let (bx, by) = net.node_metres(net.edge_b[edge]);
+        let (ax, ay) = net.node_meters(net.edge_a[edge]);
+        let (bx, by) = net.node_meters(net.edge_b[edge]);
         let samples = [(ax, ay), ((ax + bx) / 2.0, (ay + by) / 2.0), (bx, by)];
         let mut nearest2 = f64::INFINITY;
         for &(px, py) in &samples {

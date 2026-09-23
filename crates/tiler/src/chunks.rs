@@ -55,7 +55,7 @@ impl Stranded {
 }
 
 /// A chunk member: which network it came from and its segment index there. Streets and paths
-/// share a z12 chunk, so they are bucketed and encoded together; a path is a single centreline,
+/// share a z12 chunk, so they are bucketed and encoded together; a path is a single centerline,
 /// so it lands with sidewalk offset 0 and the client draws it as the one line it is.
 enum Member {
     Street(u32),
@@ -64,7 +64,7 @@ enum Member {
 
 // The client has no access to the records, so the sidewalk offset the two lines are drawn either
 // side of travels with the geometry. A path member points into `paths` and always carries offset
-// 0 — it is one centreline, not a curb-to-curb road.
+// 0 — it is one centerline, not a curb-to-curb road.
 //
 // The stranded bits ride in a trailing bitmap rather than in each segment's header so that the two
 // passes over a chunk — before the graph and after it — differ in that region alone, leaving the

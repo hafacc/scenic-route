@@ -216,7 +216,7 @@ struct Elevation {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PlanCity {
     id: String,
-    /// Whether this city's centreline classifies alleys, for the graph's alley invariants. New
+    /// Whether this city's centerline classifies alleys, for the graph's alley invariants. New
     /// York's meaning, so a city that says nothing is asked about it.
     #[serde(default = "classifies_alleys")]
     alleys: bool,
@@ -395,7 +395,7 @@ impl Plan {
     /// plan no longer names is a directory nothing would ever look at again — it used to be swept
     /// away by emptying every root before the first pass, and that sweep is what this replaces.
     ///
-    /// Only what a pass would have written is considered. An unrecognised name under `routing` is
+    /// Only what a pass would have written is considered. An unrecognized name under `routing` is
     /// left alone rather than guessed about: `public/routing` is a directory this build shares with
     /// whatever a later one decides to put there.
     fn reconcile(&self, manifest: &Manifest) -> Fallible<()> {
@@ -1466,7 +1466,7 @@ fn handoffs(plan: &Plan, cities: &[(&City, &PlanCity)], selection: &Selection) -
 }
 
 /// A build, on `jobs` rayon threads or on rayon's own default of one per core when that is `None`.
-/// Every pass parallelises through the global pool and none builds one of its own, so sizing it here
+/// Every pass parallelizes through the global pool and none builds one of its own, so sizing it here
 /// — before the first parallel iterator, which would otherwise build the default pool and leave
 /// `build_global` with nothing left to size — sizes the whole build.
 pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fallible<()> {
@@ -2331,7 +2331,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pass_that_reruns_clears_its_own_output_and_leaves_its_neighbours_alone() {
+    fn a_pass_that_reruns_clears_its_own_output_and_leaves_its_neighbors_alone() {
         let root = scratch("clearing");
         let mine = Pass::whole("a".to_owned(), &root.join("streets"));
         let theirs = Pass::whole("b".to_owned(), &root.join("casters"));
@@ -2350,7 +2350,7 @@ mod tests {
         assert!(root.join("casters").join("last-build.bin").is_file());
         assert!(
             theirs.is_fresh(),
-            "a neighbour rerunning is not this pass's business"
+            "a neighbor rerunning is not this pass's business"
         );
     }
 

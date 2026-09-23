@@ -24,7 +24,7 @@ import { shedDecks } from "../src/tiles/shed-decks";
 import { useCity } from "./city-context";
 
 // The "Shade" overlay: shadow tiles for the sun's actual position, drawn as a smooth cool wash over all
-// ground. The heavy work — casting ~1M building footprints with a physically-modelled penumbra
+// ground. The heavy work — casting ~1M building footprints with a physically-modeled penumbra
 // (area-light sampling of the sun disk) — is baked by the shade pass into one WebP pyramid per SUN-POSITION
 // bin: the sun's (azimuth, elevation) envelope over the whole year, gridded, at public/tiles/shade/<bin>/
 // {z}/{x}/{y}.webp, with public/tiles/shade/buckets.json listing each bin's position. This layer maps the
@@ -187,12 +187,12 @@ export default function ShadeLayer() {
       pane.style.zIndex = String(PANE_Z_INDEX);
     }
 
-    let cancelled = false;
+    let canceled = false;
     let bins: Bin[] = [];
     let activeIndex = -1;
     // The sun the swept tiles are cast from, held still until the bin changes: within one bin every
     // tile has to sweep from the SAME position, or a tile drawn after a scrub would not line up with
-    // the neighbours drawn before it.
+    // the neighbors drawn before it.
     let sweepSun = currentSun();
     let drawnTau = canopyTau(getResolvedDate()); // the canopy transmittance the live tiles were drawn with
     // Only the visible bin, plus the outgoing one until its fade ends.
@@ -275,7 +275,7 @@ export default function ShadeLayer() {
       }
       layer.setOpacity(0);
       window.setTimeout(() => {
-        if (!cancelled && activeIndex !== index) {
+        if (!canceled && activeIndex !== index) {
           evict(index);
         }
       }, FADE_MS);
@@ -298,7 +298,7 @@ export default function ShadeLayer() {
     };
 
     // The baked source tiles the view is reading right now, plus — where the tiles are magnified — the
-    // ring of neighbours a draw samples for its margin.
+    // ring of neighbors a draw samples for its margin.
     const viewSources = (): TileCoords[] => {
       const view = Math.round(map.getZoom());
       const zoom = Math.min(view, MAX_NATIVE_ZOOM);
@@ -375,7 +375,7 @@ export default function ShadeLayer() {
       deckDay = day;
       Promise.all([loadGraph(city.id), loadSheds()]).then(
         ([graph, history]) => {
-          if (!cancelled && deckDay === day) {
+          if (!canceled && deckDay === day) {
             sendShedDecks(shedDecks(graph, history, day));
             for (const layer of layers.values()) {
               layer.redraw();
@@ -429,7 +429,7 @@ export default function ShadeLayer() {
       }
       const layer = layerFor(bin);
       const crossfade = (): void => {
-        if (cancelled || activeIndex !== target) {
+        if (canceled || activeIndex !== target) {
           return; // a newer scrub already moved on
         }
         layer.setOpacity(1);
@@ -443,7 +443,7 @@ export default function ShadeLayer() {
     };
 
     loadSchedule(city.id).then((loaded) => {
-      if (!cancelled) {
+      if (!canceled) {
         bins = loaded;
         apply();
       }
@@ -458,7 +458,7 @@ export default function ShadeLayer() {
     map.on("moveend", moved);
 
     return () => {
-      cancelled = true;
+      canceled = true;
       unsubscribe();
       map.off("moveend", moved);
       for (const detach of watching.values()) {

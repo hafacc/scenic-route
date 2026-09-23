@@ -282,7 +282,7 @@ describe("the v12 graph decoder", () => {
   test("never snaps a walker onto a platform", () => {
     clearEdgePathCache(); // the polyline cache keys on the edge id alone, across graphs
     const index = buildSnapIndex(graph);
-    // Right on top of station A, which is a metre off the sidewalk and shares its point with a
+    // Right on top of station A, which is a meter off the sidewalk and shares its point with a
     // platform node: the only thing indexed is the pavement.
     const snaps = snapCandidates(graph, index, {
       lat: ORIGIN_LAT + 10 * SCALE,

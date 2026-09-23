@@ -1,5 +1,5 @@
 // `bun run build-transit`: the rail TOPOLOGY the routing graph rides on, as data/transit/<city>.bin
-// (magic TRNS) — every station a train calls at, every route with the colour and names its agency
+// (magic TRNS) — every station a train calls at, every route with the color and names its agency
 // publishes, and every stop PATTERN a route runs, carrying the ride seconds between one stop and the
 // next. The tiler turns that into station and platform nodes with board/ride/alight edges; the
 // timetable those edges depart against is a different artifact, rebuilt daily
@@ -86,7 +86,7 @@ export type EntranceKind = (typeof ENTRANCE_KINDS)[number];
 // printable character, spaces and punctuation included, but never this one.
 const KEY_SEPARATOR = "\u0000";
 
-// The GTFS defaults for a route that publishes no colour, as the display ingests use them.
+// The GTFS defaults for a route that publishes no color, as the display ingests use them.
 const DEFAULT_ROUTE_COLOR = "FFFFFF";
 const DEFAULT_TEXT_COLOR = "000000";
 
@@ -117,12 +117,12 @@ export interface TransitFeedSource {
   // SBWY route of the same line carry the same id.
   routePrefix: string;
   // Which of the feed's route_ids are one route. BART splits every line into a northbound and a
-  // southbound route_id ("Yellow-N", "Yellow-S") that run one pair of rails under one colour, so
+  // southbound route_id ("Yellow-N", "Yellow-S") that run one pair of rails under one color, so
   // they are folded the way the map folds them; everywhere else a route_id is a route. A key that
   // is not the route_id is the name the group shares, and becomes the route's short name — "Yellow"
   // rather than whichever direction's row happened to come first.
   groupKey: (row: GtfsRow) => string;
-  // Stations the feed models as bare kerbside stops but which are actually underground, so the
+  // Stations the feed models as bare curbside stops but which are actually underground, so the
   // tiler charges the full descent to the platform rather than a step off the pavement. Only Muni
   // needs one: it publishes no `parent_station`, no `location_type` and no entrances, so nothing in
   // the feed separates the Market Street and Central Subway platforms from a stop on the tarmac.
@@ -303,7 +303,7 @@ async function mtaEntrances(): Promise<FeedEntrances> {
   );
   const overrides = parseSideOverrides("nyc-entrance-sides.txt");
   // Every override has to find its entrance. The key is the MTA's own published point to six
-  // decimals, so a dataset that moves a stair by a metre silently drops the correction and the
+  // decimals, so a dataset that moves a stair by a meter silently drops the correction and the
   // geometric rule — which was wrong about that stair, or there would be no line for it — takes it
   // back. There is nothing to see in the output when that happens, so it is a failure here.
   const matched = new Set<string>();
@@ -405,7 +405,7 @@ const NAMED_ENTRANCE_METERS = 300;
 const CLOSED_ACCESS: ReadonlySet<string> = new Set(["no", "private"]);
 
 // A margin on the box the OSM nodes are read in, and the hundredth of a degree the box is rounded
-// out to: the query is cached by its own text, and rounding keeps a stop moving a few metres from
+// out to: the query is cached by its own text, and rounding keeps a stop moving a few meters from
 // re-fetching the city.
 const ENTRANCE_BOX_MARGIN_DEGREES = 0.01;
 const ENTRANCE_BOX_STEP = 100;
@@ -798,7 +798,7 @@ export function laneIdOf(
 }
 
 // A feed's routes of the kept types, folded onto their group key. The group's primary row — the
-// lowest route_id — supplies the names and colours, which for BART is the northbound half of a line
+// lowest route_id — supplies the names and colors, which for BART is the northbound half of a line
 // and for everyone else the route itself.
 function feedRoutes(
   feed: GtfsFeed,
@@ -896,7 +896,7 @@ function feedStations(
       name,
       complex: complexes.get(stationId) ?? 0,
       // A feed that models its stops as stations is saying they are enclosed places with a way in;
-      // one that models nothing is describing the kerb, apart from the platforms named above.
+      // one that models nothing is describing the curb, apart from the platforms named above.
       surface: !publishesParents && !source.underground.has(name),
     });
   }
@@ -910,7 +910,7 @@ function feedStations(
 
 // Same-named stops within STATION_MERGE_METERS chained into one station at their centroid, carrying
 // the lowest complex any member is in and underground if any member is. Single-link, so a terminal's
-// three kerbs become one station.
+// three curbs become one station.
 function mergeByName(
   stations: readonly RawStation[],
   stationOfStop: Map<string, string>,
@@ -1123,7 +1123,7 @@ interface RawPattern {
   trips: PatternTrip[];
 }
 
-// A step across the ground in metres, east and north, which is what a bearing and an entrance
+// A step across the ground in meters, east and north, which is what a bearing and an entrance
 // offset are both measured in.
 export interface Bearing {
   east: number;
@@ -1189,7 +1189,7 @@ export function sideMask(axis: TrackAxis, entrance: Coord): number {
 
 // Which way a direction-0 train runs through each station, as a unit vector, averaged over the
 // patterns calling there: a station the line curves through averages its two legs, and a terminal
-// takes the one neighbour it has. Coarse — it is a chord between two stops half a kilometre apart —
+// takes the one neighbor it has. Coarse — it is a chord between two stops half a kilometer apart —
 // so it is only ever used to point the drawn track the right way round, and as the fallback axis
 // where nothing is drawn. `null` where no direction-0 pattern calls at all.
 function rideBearings(
@@ -1264,11 +1264,11 @@ export function readRouteTracks(cityId: string): RouteTracks {
 }
 
 // How much track the tangent is measured over, either side of the station. A GTFS shape puts its
-// vertices a few metres apart, so the one segment the station stands beside is mostly quantization
+// vertices a few meters apart, so the one segment the station stands beside is mostly quantization
 // noise; 25 m is a platform's worth of rail, short enough to follow a curve through a station.
 const TANGENT_METERS = 25;
 // How far a station may stand from the drawn track and still be on it. A shape the display ingest
-// cut at the city edge can leave a station with a polyline that only passes within a kilometre, and
+// cut at the city edge can leave a station with a polyline that only passes within a kilometer, and
 // a perpendicular taken off that says nothing; past this the ride through the station point is the
 // honest answer.
 const MAX_TRACK_METERS = 150;
@@ -1673,7 +1673,7 @@ export function buildTopology(
           break;
         }
         // A pattern calling twice in a row at what the merge made one station is one call: the
-        // second is the other kerb of the same corner, and a platform node per call would let the
+        // second is the other curb of the same corner, and a platform node per call would let the
         // router board a train it is already on.
         if (index === stops[stops.length - 1]) {
           continue;

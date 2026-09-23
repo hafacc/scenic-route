@@ -15,7 +15,7 @@ export const COORD_SCALE = 1e-6; // degrees per quantized unit, ~0.1 m
 
 export const EARTH_RADIUS_METERS = 6_371_008.8;
 
-// Great-circle distance in metres. Used where a source dedups or clips by a real ground radius.
+// Great-circle distance in meters. Used where a source dedups or clips by a real ground radius.
 export function haversineMeters(from: Coord, to: Coord): number {
   const fromLat = from.lat * (Math.PI / 180);
   const toLat = to.lat * (Math.PI / 180);
@@ -93,7 +93,7 @@ export interface CrownedTree extends Coord {
   genusId: number;
 }
 
-export const DECIMETERS_PER_METER = 10; // the crown byte's unit: a decimetre of crown radius
+export const DECIMETERS_PER_METER = 10; // the crown byte's unit: a decimeter of crown radius
 
 // Every point carries a crown-radius byte and a genus byte, each written as a fixed-size trailing
 // region after the coordinate stream and in the very same sorted order, so byte i sizes/labels
@@ -116,7 +116,7 @@ export function encodeTrees(
     .map(({ lat, lng, crownRadiusM, genusId }) => ({
       x: Math.round((lng - originLng) / COORD_SCALE),
       y: Math.round((lat - originLat) / COORD_SCALE),
-      // Clamped into the byte: a decimetre of radius, 0..25.5 m, which the allometry never
+      // Clamped into the byte: a decimeter of radius, 0..25.5 m, which the allometry never
       // approaches even at the largest trunk the ingest keeps.
       crown: Math.min(
         255,
@@ -331,7 +331,7 @@ export function encodePolygons(
 }
 
 // The measured canopy polygons, magic `CNPY`: the encodePolygons body, then ONE trailing region of
-// one u16 little-endian per polygon in the same polygon order — the crown height in decimetres, as
+// one u16 little-endian per polygon in the same polygon order — the crown height in decimeters, as
 // BLDG carries its roof heights. The ingest writes the region zeroed and the height pass samples
 // the LiDAR height model into it in place, the way the density pass fills the street density blob;
 // a polygon the model saw no cell for keeps the 0, which reads as unknown. layout: scripts/README.md
@@ -355,15 +355,15 @@ export interface HeightedBuilding {
   baseElevationMeters: number;
 }
 
-// The metres of positive bias added to a base elevation before it is quantized, so the harbour's
+// The meters of positive bias added to a base elevation before it is quantized, so the harbor's
 // slightly-negative ground (min ~ -3 m) survives the unsigned u16 store. A reader recovers the true
-// elevation as `decimetres / 10 - ELEVATION_BIAS_METERS`.
+// elevation as `decimeters / 10 - ELEVATION_BIAS_METERS`.
 export const ELEVATION_BIAS_METERS = 100;
 
 // The building footprints, magic `BLDG`: the encodePolygons body (a header, then per-polygon
 // varint-delta rings), then TWO parallel trailing regions of one u16 little-endian per polygon, in
 // the same polygon order and mirroring how encodeTrees keeps its crown and genus regions parallel:
-// first the roof height in decimetres, then the base (ground) elevation in decimetres biased by
+// first the roof height in decimeters, then the base (ground) elevation in decimeters biased by
 // +ELEVATION_BIAS_METERS so a below-sea-level base stays non-negative. The header count is the
 // number of polygons. layout: scripts/README.md
 export function encodeBuildings(
@@ -375,24 +375,24 @@ export function encodeBuildings(
   const trailing = new Uint8Array(buildings.length * 4);
   const trailingView = new DataView(trailing.buffer);
   for (let index = 0; index < buildings.length; index++) {
-    const heightDecimetres = Math.round(
+    const heightDecimeters = Math.round(
       buildings[index].heightMeters * DECIMETERS_PER_METER,
     );
     trailingView.setUint16(
       index * 2,
-      Math.min(65535, Math.max(0, heightDecimetres)),
+      Math.min(65535, Math.max(0, heightDecimeters)),
       true,
     );
   }
   const baseOffset = buildings.length * 2;
   for (let index = 0; index < buildings.length; index++) {
-    const biasedDecimetres = Math.round(
+    const biasedDecimeters = Math.round(
       (buildings[index].baseElevationMeters + ELEVATION_BIAS_METERS) *
         DECIMETERS_PER_METER,
     );
     trailingView.setUint16(
       baseOffset + index * 2,
-      Math.min(65535, Math.max(0, biasedDecimetres)),
+      Math.min(65535, Math.max(0, biasedDecimeters)),
       true,
     );
   }
@@ -408,7 +408,7 @@ export const NETWORK_SIDES = 2; // the density blob carries both sidewalks of ev
 export const UNNAMED_ID = 0xffff; // a record's name id when its source carried no label
 
 // Splits every piece longer than `stepMeters`, so the field is sampled often enough along a line
-// for its colour to vary rather than come out in one flat block. Returns the geodesic length too:
+// for its color to vary rather than come out in one flat block. Returns the geodesic length too:
 // it is what the network record stores, and the graph sums those rather than recomputing.
 export function densify(
   points: readonly Coord[],

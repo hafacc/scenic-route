@@ -63,7 +63,7 @@ export function ModesControls({
     [city, state.modeId],
   );
 
-  // The tab and the browser's own chrome follow the mode with everything else it colours. Both are
+  // The tab and the browser's own chrome follow the mode with everything else it colors. Both are
   // put back on the way out, so Explorer and the installed app keep the app's green.
   useEffect(() => {
     const icon =

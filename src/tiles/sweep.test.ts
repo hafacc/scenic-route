@@ -11,17 +11,17 @@ import { castSheds, crownSegments, frameFor, type PolygonSink } from "./sweep";
 
 const DEGREES = Math.PI / 180;
 const MAX_SHADOW_METERS = 500;
-const CENTRE = { lat: 40.75, lng: -73.98 }; // midtown, where the sheds are
+const CENTER = { lat: 40.75, lng: -73.98 }; // midtown, where the sheds are
 
 // The tile the decks sit in, deep enough that a 4 m deck is several pixels across.
 const ZOOM = 17;
 const FRAME = frameFor({
-  x: Math.floor(projectX(CENTRE.lng, ZOOM) / 256),
-  y: Math.floor(projectY(CENTRE.lat, ZOOM) / 256),
+  x: Math.floor(projectX(CENTER.lng, ZOOM) / 256),
+  y: Math.floor(projectY(CENTER.lat, ZOOM) / 256),
   z: ZOOM,
 });
 
-// The sun as a sample states it: the ground direction the shadow runs in, and its length per metre of
+// The sun as a sample states it: the ground direction the shadow runs in, and its length per meter of
 // caster height. Azimuth is a compass bearing, so the shadow runs the opposite way.
 function sunAt(elevationDeg: number, azimuthDeg: number): SunSample {
   return {
@@ -36,7 +36,7 @@ function sunAt(elevationDeg: number, azimuthDeg: number): SunSample {
 const DEPTH_METERS = 4;
 
 // One deck along a run of coordinates, ringed and packed by the production geometry so that what is
-// cast here is what the display draws — the band centred on the run rather than pinned to a kerb,
+// cast here is what the display draws — the band centered on the run rather than pinned to a curb,
 // since there is no graph under these to say which side the building is.
 function deckAlong(
   path: { lat: number; lng: number }[],
@@ -49,7 +49,7 @@ function deckAlong(
       xs: Float64Array.from(path, ({ lng }) => projectX(lng, 0)),
       ys: Float64Array.from(path, ({ lat }) => projectY(lat, 0)),
       building: edges.fill(half),
-      kerb: new Float64Array(path.length - 1).fill(-half),
+      curb: new Float64Array(path.length - 1).fill(-half),
       closed: false,
     },
   ]);
@@ -82,7 +82,7 @@ function signedDoubleArea(ring: [number, number][]): number {
 }
 
 // The middle of everything the cast emitted, in tile pixels.
-function centre(rings: [number, number][][]): { x: number; y: number } {
+function center(rings: [number, number][][]): { x: number; y: number } {
   const xs = rings.flatMap((ring) => ring.map(([x]) => x));
   const ys = rings.flatMap((ring) => ring.map(([, y]) => y));
   return {
@@ -92,7 +92,7 @@ function centre(rings: [number, number][][]): { x: number; y: number } {
 }
 
 // The middle of a deck's own box, in tile pixels.
-function deckCentre({ boxes }: ShedDecks, deck = 0): { x: number; y: number } {
+function deckCenter({ boxes }: ShedDecks, deck = 0): { x: number; y: number } {
   return {
     x:
       ((boxes[deck * 4] + boxes[deck * 4 + 2]) / 2) * FRAME.scale -
@@ -103,12 +103,12 @@ function deckCentre({ boxes }: ShedDecks, deck = 0): { x: number; y: number } {
   };
 }
 
-// A deck running east-west through the tile's centre, and where its own middle lands in tile pixels.
+// A deck running east-west through the tile's center, and where its own middle lands in tile pixels.
 const STRAIGHT = deckAlong([
-  { lat: CENTRE.lat, lng: CENTRE.lng - 0.0004 },
-  { lat: CENTRE.lat, lng: CENTRE.lng + 0.0004 },
+  { lat: CENTER.lat, lng: CENTER.lng - 0.0004 },
+  { lat: CENTER.lat, lng: CENTER.lng + 0.0004 },
 ]);
-const STRAIGHT_CENTRE = deckCentre(STRAIGHT);
+const STRAIGHT_CENTER = deckCenter(STRAIGHT);
 
 function cast(decks: ShedDecks, sample: SunSample, clamp: number): Recorder {
   const recorder = new Recorder();
@@ -127,13 +127,13 @@ test("throws the deck its own depth wide, at the deck's own height", () => {
     (STRAIGHT.boxes[2] - STRAIGHT.boxes[0]) * FRAME.scale,
     6,
   );
-  // The band's own metres, which src/tiles/shed-decks.ts measures at the city's reference latitude
+  // The band's own meters, which src/tiles/shed-decks.ts measures at the city's reference latitude
   // rather than at this tile's.
   expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(
     DEPTH_METERS * pixelsPerMeter(ZOOM),
     6,
   );
-  expect(STRAIGHT_CENTRE.y - centre(rings).y).toBeCloseTo(
+  expect(STRAIGHT_CENTER.y - center(rings).y).toBeCloseTo(
     (DECK_HEIGHT_METERS / Math.tan(elevation * DEGREES)) * FRAME.pixelsPerMeter,
     6,
   );
@@ -143,27 +143,27 @@ test("runs the shadow the way the sun points, however far it reaches", () => {
   for (const azimuth of [0, 75, 180, 250]) {
     for (const elevation of [12, 45, 75]) {
       const sample = sunAt(elevation, azimuth);
-      const moved = centre(cast(STRAIGHT, sample, MAX_SHADOW_METERS).rings);
+      const moved = center(cast(STRAIGHT, sample, MAX_SHADOW_METERS).rings);
       const reach =
         DECK_HEIGHT_METERS * sample.shadowPerHeight * FRAME.pixelsPerMeter;
-      expect(moved.x - STRAIGHT_CENTRE.x).toBeCloseTo(reach * sample.east, 6);
-      expect(moved.y - STRAIGHT_CENTRE.y).toBeCloseTo(-reach * sample.north, 6);
+      expect(moved.x - STRAIGHT_CENTER.x).toBeCloseTo(reach * sample.east, 6);
+      expect(moved.y - STRAIGHT_CENTER.y).toBeCloseTo(-reach * sample.north, 6);
     }
   }
 });
 
 test("stops at the shadow clamp", () => {
   // A sun on the horizon would otherwise throw the deck out of the world.
-  const moved = centre(cast(STRAIGHT, sunAt(0.05, 180), 10).rings);
-  expect(STRAIGHT_CENTRE.y - moved.y).toBeCloseTo(10 * FRAME.pixelsPerMeter, 6);
+  const moved = center(cast(STRAIGHT, sunAt(0.05, 180), 10).rings);
+  expect(STRAIGHT_CENTER.y - moved.y).toBeCloseTo(10 * FRAME.pixelsPerMeter, 6);
 });
 
 test("winds every polygon positively, bends included", () => {
   const bent = deckAlong([
-    { lat: CENTRE.lat - 0.0003, lng: CENTRE.lng - 0.0003 },
-    { lat: CENTRE.lat, lng: CENTRE.lng },
-    { lat: CENTRE.lat - 0.0003, lng: CENTRE.lng + 0.0003 },
-    { lat: CENTRE.lat - 0.0003, lng: CENTRE.lng + 0.0008 },
+    { lat: CENTER.lat - 0.0003, lng: CENTER.lng - 0.0003 },
+    { lat: CENTER.lat, lng: CENTER.lng },
+    { lat: CENTER.lat - 0.0003, lng: CENTER.lng + 0.0003 },
+    { lat: CENTER.lat - 0.0003, lng: CENTER.lng + 0.0008 },
   ]);
   for (const azimuth of [0, 45, 120, 200, 300]) {
     const { rings } = cast(bent, sunAt(25, azimuth), MAX_SHADOW_METERS);
@@ -183,13 +183,13 @@ test("throws a deck that closes on itself as the annulus it is", () => {
   const ringed = packRuns([
     {
       xs: Float64Array.from([0, 1, 1, 0], (corner) =>
-        projectX(CENTRE.lng + corner * block, 0),
+        projectX(CENTER.lng + corner * block, 0),
       ),
       ys: Float64Array.from([0, 0, 1, 1], (corner) =>
-        projectY(CENTRE.lat - corner * block, 0),
+        projectY(CENTER.lat - corner * block, 0),
       ),
       building: new Float64Array(4).fill(2 * pixelsPerMeter(0)),
-      kerb: new Float64Array(4).fill(-2 * pixelsPerMeter(0)),
+      curb: new Float64Array(4).fill(-2 * pixelsPerMeter(0)),
       closed: true,
     },
   ]);
@@ -205,8 +205,8 @@ test("throws a deck that closes on itself as the annulus it is", () => {
 
 test("skips a deck whose shadow never reaches the tile", () => {
   const away = deckAlong([
-    { lat: CENTRE.lat + 0.05, lng: CENTRE.lng + 0.05 },
-    { lat: CENTRE.lat + 0.05, lng: CENTRE.lng + 0.051 },
+    { lat: CENTER.lat + 0.05, lng: CENTER.lng + 0.05 },
+    { lat: CENTER.lat + 0.05, lng: CENTER.lng + 0.051 },
   ]);
   const recorder = new Recorder();
   expect(
@@ -216,22 +216,22 @@ test("skips a deck whose shadow never reaches the tile", () => {
 });
 
 test("each deck is thrown at its own depth, not at the set's first", () => {
-  // Two straight runs twenty-odd metres apart in latitude, so their bands cannot be confused, cast in
+  // Two straight runs twenty-odd meters apart in latitude, so their bands cannot be confused, cast in
   // one call: a caster reading one depth for the whole set would throw both the same width.
   const NARROW = 2.5;
   const WIDE = 6;
   const decks = packRuns(
     [NARROW, WIDE].map((depth, deck) => {
       const half = (depth / 2) * pixelsPerMeter(0);
-      const lat = CENTRE.lat - deck * 0.0002;
+      const lat = CENTER.lat - deck * 0.0002;
       return {
         xs: Float64Array.of(
-          projectX(CENTRE.lng - 0.0005, 0),
-          projectX(CENTRE.lng + 0.0005, 0),
+          projectX(CENTER.lng - 0.0005, 0),
+          projectX(CENTER.lng + 0.0005, 0),
         ),
         ys: Float64Array.of(projectY(lat, 0), projectY(lat, 0)),
         building: Float64Array.of(half),
-        kerb: Float64Array.of(-half),
+        curb: Float64Array.of(-half),
         closed: false,
       };
     }),
@@ -280,7 +280,7 @@ test("nests a crown's slices around its widest section", () => {
 });
 
 test("cuts the bands the tiler cuts", () => {
-  // (height, shadow per height, metres per pixel) and the slices they have to cut, in metres of
+  // (height, shadow per height, meters per pixel) and the slices they have to cut, in meters of
   // shadow displacement. Duplicated verbatim in `cuts_the_bands_the_client_cuts` in
   // crates/tiler/src/crown.rs: a table on each side is what catches either half drifting from the
   // other at the zoom they hand over.

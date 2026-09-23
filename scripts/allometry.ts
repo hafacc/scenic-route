@@ -11,13 +11,13 @@
 // genus overlay draws; the cover field comes from measured canopy polygons and never from these.
 
 // dbh is recorded in whole inches by both cities' registers, and every published equation takes
-// centimetres.
+// centimeters.
 export const CM_PER_INCH = 2.54;
 
 export type CrownAllometry =
   | {
       // GTR-PSW-253's `loglogw1`: exp(a + b*ln(ln(dbh_cm + 1)) + mse/2). The trailing term is the
-      // Baskerville correction for the bias a log-space fit carries back into metres.
+      // Baskerville correction for the bias a log-space fit carries back into meters.
       readonly form: "loglog";
       readonly a: number;
       readonly b: number;

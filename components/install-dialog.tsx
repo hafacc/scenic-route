@@ -59,7 +59,7 @@ export default function InstallDialog({ onClose }: InstallDialogProps) {
     <Sheet
       onClose={onClose}
       closeLabel="Close install instructions"
-      labelledBy="install-title"
+      labeledBy="install-title"
       width="md:max-w-sm"
     >
       <div className="flex shrink-0 items-start gap-3">

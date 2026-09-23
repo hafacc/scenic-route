@@ -26,7 +26,7 @@ export function offersReload(parked: number, running: number): boolean {
 
 // How long between asking the browser to re-check sw.js. An installed app that is resumed rather
 // than navigated fires no load, so without this nothing would ever notice a deploy; but each check
-// is a network request and switching apps twice a minute is ordinary behaviour, so it cannot be
+// is a network request and switching apps twice a minute is ordinary behavior, so it cannot be
 // short. Five minutes is far under how long a session lasts and far over how fast anyone flicks.
 export const UPDATE_CHECK_MS = 5 * 60 * 1000;
 

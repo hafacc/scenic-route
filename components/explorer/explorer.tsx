@@ -193,7 +193,7 @@ export default function Explorer() {
   );
 
   // Toggle one overlay. Tree genus is exclusive: turning it on clears the rest, and turning on any
-  // normal layer clears it — so the dense per-genus recolouring never fights the other overlays.
+  // normal layer clears it — so the dense per-genus recoloring never fights the other overlays.
   const handleToggleOverlay = useCallback((id: OverlayId) => {
     setActiveOverlays((current) => {
       const next = new Set(current);

@@ -1,6 +1,6 @@
 // The half of a transit-lines ingest that is not the feed: which of a route's shape variants are
 // worth drawing, and the SBWY blob they are written as — a route table carrying the agency's own
-// colours and names, one polyline per drawn variant, and a station table naming the routes calling
+// colors and names, one polyline per drawn variant, and a station table naming the routes calling
 // there as a bitmask. Layout: scripts/README.md.
 //
 // Both cities' ingests write through this: New York's (scripts/subway.ts) reads one feed, San
@@ -25,7 +25,7 @@ const MAX_ROUTES = 32;
 // nothing — but a pattern that runs one way ONLY (a cable car's one-way street couplet, New York's
 // southbound-only West End patterns) is track the map would otherwise be missing entirely. So a
 // non-primary shape is kept when it covers at least this many grid cells no kept shape of the route
-// covers, about 150 m of track: above the few metres the two directions wobble apart at terminals
+// covers, about 150 m of track: above the few meters the two directions wobble apart at terminals
 // and relay tracks, and far below a block of one-way street.
 //
 // San Francisco's 28 non-primary shapes measure 0-4 fresh cells each except three — the F's Jefferson
@@ -47,7 +47,7 @@ export interface Rgb {
   blue: number;
 }
 
-// One route as it is drawn: the agency's colours and names, and the polylines the variant selection
+// One route as it is drawn: the agency's colors and names, and the polylines the variant selection
 // kept. `shortName` is what a rider says ("N", "Yellow"), `longName` the corridor ("JUDAH").
 export interface TransitRoute {
   id: string;
@@ -153,12 +153,12 @@ export function transferComplexes(
   return complexes;
 }
 
-// How far apart two same-named stops can stand and still be one station. A terminal's several kerbs,
+// How far apart two same-named stops can stand and still be one station. A terminal's several curbs,
 // and the two ends of a long platform, arrive as separate stops in every feed here.
 export const STATION_MERGE_METERS = 100;
 
 // Same-named points chained into clusters, each within STATION_MERGE_METERS of another member.
-// Single-link, so a row of kerbs strung along a block joins up; what a cluster becomes — a station
+// Single-link, so a row of curbs strung along a block joins up; what a cluster becomes — a station
 // marker, a routing station, the key its stops are remapped onto — is the caller's business.
 export function clusterByName<Point extends Coord & { name: string }>(
   points: readonly Point[],
@@ -312,7 +312,7 @@ export function chooseLines(variants: readonly ShapeVariant[]): Coord[][] {
   return lines;
 }
 
-// Writes the system as SBWY v3: a header, a route table (colours, name ids and the run of lines each
+// Writes the system as SBWY v3: a header, a route table (colors, name ids and the run of lines each
 // route owns), a line table (a geometry pointer, a vertex count and the owning route), a station
 // table (a position, a name id, the route mask and the complex id), a varint geometry blob and a
 // trailing name blob.

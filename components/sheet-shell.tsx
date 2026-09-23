@@ -10,7 +10,7 @@ import { createPortal } from "react-dom";
 // stacking context of its own at z-1200, and a dialog left inside the page's layers paints under its
 // buttons while its scrim no longer blocks them.
 
-// A bottom sheet on a phone, a centred card from md up. The bottom padding is the keyboard's: see
+// A bottom sheet on a phone, a centered card from md up. The bottom padding is the keyboard's: see
 // `useKeyboardInset` for why the browser cannot be trusted to shorten the viewport itself.
 export const SHEET_WRAPPER =
   "fixed inset-0 z-[1300] flex items-end justify-center pb-[var(--sheet-keyboard,0px)] md:items-center";
@@ -33,7 +33,7 @@ export const SHEET_SCROLL = "min-h-0 flex-1 overflow-y-auto overscroll-contain";
 export function Sheet({
   onClose,
   closeLabel,
-  labelledBy,
+  labeledBy,
   width,
   children,
 }: {
@@ -41,7 +41,7 @@ export function Sheet({
   // Escape key and the dialog's own close button are all the same way out.
   onClose: () => void;
   closeLabel: string; // what the scrim is called to a screen reader
-  labelledBy?: string;
+  labeledBy?: string;
   width: string; // the md+ cap, which is the one thing that differs card to card
   children: ReactNode;
 }) {
@@ -68,7 +68,7 @@ export function Sheet({
       <div
         role="dialog"
         aria-modal="true"
-        aria-labelledby={labelledBy}
+        aria-labelledby={labeledBy}
         className={`${SHEET_CARD} ${width}`}
       >
         {children}

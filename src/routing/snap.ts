@@ -1,7 +1,7 @@
 // Snapping a lat/lng to the graph. A uniform grid over edge bounding boxes finds the nearby
 // edges; each is projected to find the closest point, its along-distance, and its component. The
 // per-component candidate rule keeps a start on an isolated park path routable (both ends fall
-// back to the surrounding street component together) and makes a cross-harbour query fail
+// back to the surrounding street component together) and makes a cross-harbor query fail
 // honestly rather than snapping across the water.
 
 import { edgeKind, edgePath, isTransitEdge, type RoutingGraph } from "./graph";
@@ -17,7 +17,7 @@ const CELL_KEY_STRIDE = 1 << 20;
 export interface SnapIndex {
   cellUnitsX: number; // cell size in quantized units, longitude
   cellUnitsY: number; // cell size in quantized units, latitude
-  cellMeters: number; // the smaller cell side in metres, for ring termination
+  cellMeters: number; // the smaller cell side in meters, for ring termination
   cells: Map<number, Uint32Array>; // packed cell key -> edge ids whose bbox touches the cell
 }
 
@@ -140,7 +140,7 @@ function haversineMeters(
   return 2 * EARTH_RADIUS_METERS * Math.asin(Math.min(1, Math.sqrt(inner)));
 }
 
-// Project the query point onto an edge polyline in a local equirectangular frame centred on the
+// Project the query point onto an edge polyline in a local equirectangular frame centered on the
 // point, returning the closest point, its along-distance scaled to the edge's geodesic length,
 // and the perpendicular distance.
 function projectToEdge(
@@ -222,23 +222,23 @@ export function snapCandidates(
 ): Snap[] {
   const quantizedX = Math.round((point.lng - graph.originLng) / graph.scale);
   const quantizedY = Math.round((point.lat - graph.originLat) / graph.scale);
-  const centreCellX = Math.floor(quantizedX / index.cellUnitsX);
-  const centreCellY = Math.floor(quantizedY / index.cellUnitsY);
+  const centerCellX = Math.floor(quantizedX / index.cellUnitsX);
+  const centerCellY = Math.floor(quantizedY / index.cellUnitsY);
   const maxRing = Math.ceil(SNAP_RADIUS_METERS / index.cellMeters) + 1;
 
   const best = new Map<number, Snap>();
   const visited = new Set<number>();
   for (let ring = 0; ring <= maxRing; ring++) {
-    for (let cellX = centreCellX - ring; cellX <= centreCellX + ring; cellX++) {
+    for (let cellX = centerCellX - ring; cellX <= centerCellX + ring; cellX++) {
       for (
-        let cellY = centreCellY - ring;
-        cellY <= centreCellY + ring;
+        let cellY = centerCellY - ring;
+        cellY <= centerCellY + ring;
         cellY++
       ) {
         // Only the newly reached perimeter of this ring.
         const onRing =
-          Math.abs(cellX - centreCellX) === ring ||
-          Math.abs(cellY - centreCellY) === ring;
+          Math.abs(cellX - centerCellX) === ring ||
+          Math.abs(cellY - centerCellY) === ring;
         if (!onRing) {
           continue;
         }

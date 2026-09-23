@@ -108,7 +108,7 @@ export default function LocationField({
   const showCurrentRow = Boolean(currentLocationLabel && onUseCurrentLocation);
 
   // The one row that stands in for a list there is not: never both, since a bar saying nothing
-  // matched printed over matches contradicts itself. The search panel's warning about a map centre
+  // matched printed over matches contradicts itself. The search panel's warning about a map center
   // off the city has no twin here — a route endpoint is in the city by construction.
   const notice =
     suggestions.kind === "idle"

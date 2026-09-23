@@ -10,7 +10,7 @@ import {
   nearestCity,
 } from "./cities";
 
-test("every city offers overlays and a centre inside its own bounds", () => {
+test("every city offers overlays and a center inside its own bounds", () => {
   expect(CITIES.length).toBeGreaterThan(0);
   for (const city of CITIES) {
     expect(city.overlays.length).toBeGreaterThan(0);

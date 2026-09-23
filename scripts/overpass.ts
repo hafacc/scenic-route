@@ -233,10 +233,10 @@ export async function fetchPaths(
   return ways;
 }
 
-// One OSM road way that says, on the centreline itself, what its own kerbs carry. This is OSM's
+// One OSM road way that says, on the centerline itself, what its own curbs carry. This is OSM's
 // *other* way of recording a pavement — the four `sidewalk` keys — and it is a per-side statement
 // about the road rather than a way of its own, so it is fetched apart from the footways above and
-// read against the city centreline it matches rather than added to the walking network. The values
+// read against the city centerline it matches rather than added to the walking network. The values
 // are handed on raw: what each one means, and which key beats which, is `scripts/sidewalks.ts`.
 export interface SidewalkTaggedRoad {
   id: number;
@@ -247,7 +247,7 @@ export interface SidewalkTaggedRoad {
   points: Coord[];
 }
 
-// The road classes a city centreline can be. Motorways are left out — no centreline this pipeline
+// The road classes a city centerline can be. Motorways are left out — no centerline this pipeline
 // ingests is one, so a tagged motorway could only ever match the frontage road beside it.
 const ROAD_CLASSES =
   '["highway"~"^(trunk|primary|secondary|tertiary)(_link)?$|' +
@@ -361,7 +361,7 @@ export async function fetchSidewalks(
 export interface OsmTree {
   lat: number;
   lng: number;
-  crownDiameterMeters?: number; // diameter_crown, metres, when the tag is present and parses
+  crownDiameterMeters?: number; // diameter_crown, meters, when the tag is present and parses
 }
 
 function osmTreesQuery(
@@ -393,7 +393,7 @@ export async function fetchOsmTrees(
     ) {
       continue;
     }
-    // Lenient: diameter_crown is metres but comes in as "12", "12 m", "12.5" — parseFloat takes
+    // Lenient: diameter_crown is meters but comes in as "12", "12 m", "12.5" — parseFloat takes
     // the leading number and ignores the unit. A zero or unparseable value is treated as absent,
     // so the ingest sizes that tree's crown from the imputed median instead.
     const diameter = Number.parseFloat(element.tags?.diameter_crown ?? "");

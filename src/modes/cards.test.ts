@@ -262,18 +262,18 @@ describe("chips", () => {
 describe("cardColors", () => {
   const plain = (scenicScore: number) => ({ scenicScore, colorFactor: null });
 
-  test("a lone card is the mode's own colour", () => {
+  test("a lone card is the mode's own color", () => {
     expect(cardColors(HISTORIC, [plain(3)])).toEqual([HISTORIC.color]);
   });
 
-  test("two cards are the mode's colour and slate", () => {
+  test("two cards are the mode's color and slate", () => {
     expect(cardColors(HISTORIC, [plain(1), plain(3)])).toEqual([
       DIRECT_COLOR,
       HISTORIC.color,
     ]);
   });
 
-  test("a third card takes the first palette colour the mode has not used", () => {
+  test("a third card takes the first palette color the mode has not used", () => {
     // The historic palette leads with the mode's own indigo, so the middle card takes the next.
     expect(cardColors(HISTORIC, [plain(3), plain(2), plain(1)])).toEqual([
       HISTORIC.color,
@@ -293,7 +293,7 @@ describe("cardColors", () => {
     ]);
   });
 
-  test("a route that stands out on one factor wears that factor's colour", () => {
+  test("a route that stands out on one factor wears that factor's color", () => {
     const colors = cardColors(HISTORIC, [
       plain(4),
       { scenicScore: 3, colorFactor: "art" },
@@ -311,7 +311,7 @@ describe("cardColors", () => {
     ]);
   });
 
-  test("the ends keep their colours whatever they stand out on", () => {
+  test("the ends keep their colors whatever they stand out on", () => {
     expect(
       cardColors(HISTORIC, [
         { scenicScore: 2, colorFactor: "art" },

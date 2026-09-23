@@ -68,7 +68,7 @@ test("a calendar row written for two special weeks is outvoted", () => {
 });
 
 test("a service written only as calendar_dates rows rides the vote", () => {
-  // The shape SFMTA publishes: the weekday calendar row is cancelled every weekday and an
+  // The shape SFMTA publishes: the weekday calendar row is canceled every weekday and an
   // unscheduled service id added in its place, so the masks alone would board nothing.
   const services: readonly ServiceCalendar[] = [
     { mask: WEEKDAYS, startDay: 20_260_601, endDay: 20_260_828 },

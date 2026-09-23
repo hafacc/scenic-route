@@ -562,7 +562,7 @@ export default function SettingsDialog({
     <Sheet
       onClose={onClose}
       closeLabel="Close settings"
-      labelledBy="settings-title"
+      labeledBy="settings-title"
       width="md:max-w-md"
     >
       <div className="flex shrink-0 items-start gap-3">

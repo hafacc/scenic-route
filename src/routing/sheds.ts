@@ -29,9 +29,9 @@ export const DEFAULT_DECK_DEPTH_METERS = 4;
 
 // The narrowest deck that can be BUILT, which is not the narrowest that can be measured. The code
 // wants a clear path of 5 ft under a shed (BC 3307.6.2, and BC 3307.6.3 has the deck cover the whole
-// pavement bar 18 in at the kerb), the frame's posts and their bracing stand outside that path either
+// pavement bar 18 in at the curb), the frame's posts and their bracing stand outside that path either
 // side, and 8 ft is where the standard shed frame starts. So a measurement under it is a lot line or
-// a kerb estimate that is off rather than a sliver of a shed, and the correction belongs to the
+// a curb estimate that is off rather than a sliver of a shed, and the correction belongs to the
 // MEASUREMENT: the band, the shadow it throws and the shade it holds all take the corrected number.
 export const MIN_DECK_DEPTH_METERS = 2.4;
 
@@ -43,7 +43,7 @@ export function measuredDepth(depth: number): number {
 
 // One span's depth as a reader should use it: the measurement, floored at what can be built. The
 // extra goes OUTWARD, over what the graph took for roadway — the lot line the measurement started
-// from is evidence and the kerb is a fixed inset off a centreline, so the kerb is the one to move.
+// from is evidence and the curb is a fixed inset off a centerline, so the curb is the one to move.
 export function deckDepth(depth: number): number {
   return Math.max(MIN_DECK_DEPTH_METERS, measuredDepth(depth));
 }
@@ -54,7 +54,7 @@ const CLOSED_FLAG = 0x1; // header byte 26, set in closed.bin
 const INDEX_ENTRY_BYTES = 8; // u16 month, u32 offset, u16 close day
 const FRACTION_SCALE = 255; // a span's t0/t1 are a fraction of its edge; 255 is exactly 1.0
 const CONFIDENCE_SCALE = 255; // the byte is capped at 254, as the graph's cover and scenic bytes are
-const DEPTH_SCALE = 10; // a span's depth byte is decimetres; 0 means the placement could not measure one
+const DEPTH_SCALE = 10; // a span's depth byte is decimeters; 0 means the placement could not measure one
 const SIDE_BITS = 3; // a span's packed side-and-ordinal varint, as the graph's kind-and-side byte packs it
 const SIDE_MASK = 0x7;
 const MILLISECONDS_PER_DAY = 86_400_000;
@@ -89,8 +89,8 @@ export interface ShedSpan {
   edge: number;
   t0: number;
   t1: number;
-  // How deep the deck runs ACROSS the pavement here, in metres: the pipeline measured the building
-  // line off the tax lot and the kerb off the graph's own sidewalk offset (scripts/README.md). 0
+  // How deep the deck runs ACROSS the pavement here, in meters: the pipeline measured the building
+  // line off the tax lot and the curb off the graph's own sidewalk offset (scripts/README.md). 0
   // where it could measure neither, which every reader turns into the fallback depth.
   depth: number;
 }
@@ -382,7 +382,7 @@ export function shedsOn(
 // What a day's sheds add up to on one edge.
 export interface EdgeDeck {
   covered: number; // the share of the edge standing under a deck, 0..1
-  depth: number; // how deep that deck runs across the pavement, metres; 0 where none was measured
+  depth: number; // how deep that deck runs across the pavement, meters; 0 where none was measured
 }
 
 // Every decked edge on `day`, by edge id. Sheds overlap — about a tenth of the touched edges are
@@ -427,15 +427,15 @@ export function shedCoverage(
 
 // A day's scaffolding as the cost model reads it: one byte per graph edge, on the same 0-254 ceiling
 // the graph's own attribute bytes use. Coverage feeds discounts (the shade composite and the shelter
-// factor), so it has to stay strictly under 1 or a metre under a deck could cost nothing and the
+// factor), so it has to stay strictly under 1 or a meter under a deck could cost nothing and the
 // search would wander. It carries the day's rain tau too, since the shelter factor is the deck and the
 // canopy together and only the client knows the date, and the sun across the walk, since how much of
 // its own sidewalk a deck still shades depends on where the sun is and which way the street runs.
 export interface ShedField {
   coverage: Uint8Array; // per edge, 0-254: the share of it standing under a deck
-  depth: Float32Array; // per decked edge, how deep its deck runs across the pavement, metres
+  depth: Float32Array; // per decked edge, how deep its deck runs across the pavement, meters
   bearing: Float32Array; // per decked edge, the way it runs, in radians clockwise from north
-  translate: Float64Array; // per shade-schedule bucket, metres the sun slides a deck's shadow along the ground
+  translate: Float64Array; // per shade-schedule bucket, meters the sun slides a deck's shadow along the ground
   sunAzimuth: Float64Array; // per shade-schedule bucket, where the sun comes from, radians clockwise from north
   rainTau: number; // the share of rain a crown directly overhead keeps off on the day
   maxCoverage: number; // the greatest per-edge coverage, 0..1; an input to the shelter clip floor
@@ -541,7 +541,7 @@ export function shedField(
 // A deck is a floating opaque slab, not a tunnel. Trace a ray back toward the sun from a point under
 // one and the point is lit as soon as that ray has moved further ACROSS the sidewalk than the deck is
 // deep — which is why only the across-street component of the translate counts. A sun running ALONG
-// the street slides the shadow down the shed's own length, tens of metres of it, so the deck stays
+// the street slides the shadow down the shed's own length, tens of meters of it, so the deck stays
 // shaded to a far lower elevation than one across the street does. A single elevation threshold
 // cannot say that; the angle between the sun and the street is what decides it.
 //

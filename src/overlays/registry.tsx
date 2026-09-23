@@ -97,9 +97,9 @@ export type OverlayId =
   | "scaffolding"
   | "elevation";
 
-// A menu glyph in the layer's own colour. Every one of those is a light/dark pair, so the glyph has
+// A menu glyph in the layer's own color. Every one of those is a light/dark pair, so the glyph has
 // to read the theme the map is drawing in: a Tailwind tint only ever shows one half of the pair, and
-// on a night map that left the menu naming a colour the map was no longer painting.
+// on a night map that left the menu naming a color the map was no longer painting.
 function LayerIcon({
   Icon,
   color,
@@ -122,7 +122,7 @@ export function overlayLabel(overlay: OverlayDef, city: City): string {
   return typeof overlay.label === "string" ? overlay.label : overlay.label(city);
 }
 
-// The one colour this layer's key swatches it with, in the theme the map is drawing in.
+// The one color this layer's key swatches it with, in the theme the map is drawing in.
 export function overlaySwatch(
   overlay: OverlayDef,
   theme: ThemeName,
@@ -130,7 +130,7 @@ export function overlaySwatch(
   return overlay.swatch?.(theme) ?? null;
 }
 
-// Genus recolours every tree rather than adding a colour to the map, so it goes solo. The toggle
+// Genus recolors every tree rather than adding a color to the map, so it goes solo. The toggle
 // handler holds to that a click at a time; a whole set arriving at once — a link's `layers`, or the
 // remembered one — has to be held to it here, or a hand-written `#layers=genus,canopy` draws both.
 // Naming an exclusive layer at all is asking for that layer, so it is the one that survives.
@@ -146,14 +146,14 @@ export interface OverlayDef {
   // Menu text. A function where the layer is the same artifact in every city but goes by a different
   // name in each — New York rides the subway, San Francisco rides Muni and BART.
   label: string | ((city: City) => string);
-  icon: ReactNode; // menu glyph; a tinted one shows the layer's colour code
+  icon: ReactNode; // menu glyph; a tinted one shows the layer's color code
   render: () => ReactNode; // the Leaflet layer(s) this overlay mounts on the map
-  // The colour the layer key swatches this one with, read off what the layer actually paints
-  // with so the two cannot drift. Taken per theme, since every overlay's colour is a light/dark pair.
-  // Null for a layer with no single colour to stand for it.
+  // The color the layer key swatches this one with, read off what the layer actually paints
+  // with so the two cannot drift. Taken per theme, since every overlay's color is a light/dark pair.
+  // Null for a layer with no single color to stand for it.
   swatch: ((theme: ThemeName) => string) | null;
   legend?: ReactNode; // floating key shown while this overlay is active
-  // When on, no other overlay is, and turning on any other turns this off. Tree genus recolours
+  // When on, no other overlay is, and turning on any other turns this off. Tree genus recolors
   // every tree, so it does not compose with the additive dot/line layers.
   exclusive?: boolean;
 }
@@ -166,7 +166,7 @@ export const OVERLAYS: readonly OverlayDef[] = [
     id: "canopy",
     label: "Tree canopy",
     // teal-600, the ramp's own mid stop — the icon says what the layer paints rather than
-    // inheriting the menu's text colour, as every other overlay's does.
+    // inheriting the menu's text color, as every other overlay's does.
     icon: <PiTreeFill className="h-4 w-4 text-teal-600" aria-hidden="true" />,
     // The stop a leafy street lands on, rather than either end: the faint end is bare ground and the
     // full end is cover almost nowhere reaches.
@@ -189,7 +189,7 @@ export const OVERLAYS: readonly OverlayDef[] = [
     id: "shade",
     label: "Shade",
     icon: <MdWbShade className="h-4 w-4 text-slate-500" aria-hidden="true" />,
-    // Shade is one colour at varying strength, so the ramp has a single stop to take.
+    // Shade is one color at varying strength, so the ramp has a single stop to take.
     swatch: (theme) => rgbCss(PALETTES[theme].shade.stops[0]),
     render: () => <ShadeLayer />,
   },
@@ -208,7 +208,7 @@ export const OVERLAYS: readonly OverlayDef[] = [
   },
   {
     id: "historic",
-    // Whole landmarked neighbourhoods, not the individually landmarked buildings the "Landmarks"
+    // Whole landmarked neighborhoods, not the individually landmarked buildings the "Landmarks"
     // overlay dots.
     label: "Historic",
     icon: <LayerIcon Icon={MdMapsHomeWork} color={HISTORIC_COLOR} />,
@@ -218,7 +218,7 @@ export const OVERLAYS: readonly OverlayDef[] = [
   {
     id: "legacy",
     // Just "Businesses". Every one of these has been trading fifty years — that is the whole entry
-    // condition — so saying so in the label would be labelling the only kind there is.
+    // condition — so saying so in the label would be labeling the only kind there is.
     label: "Businesses",
     icon: <LayerIcon Icon={MdStorefront} color={LEGACY_COLOR} />,
     swatch: (theme) => LEGACY_COLOR[theme],
@@ -291,13 +291,13 @@ export const OVERLAYS: readonly OverlayDef[] = [
     swatch: (theme) => SHED_COLOR[theme],
     render: () => <ShedLayer />,
   },
-  // Tree genus recolours every tree, so it sits last and is exclusive — it does not compose with the
+  // Tree genus recolors every tree, so it sits last and is exclusive — it does not compose with the
   // additive dot/line layers.
   {
     id: "genus",
     label: "Tree genus",
     icon: <PiTreeStructureFill className="h-4 w-4" aria-hidden="true" />,
-    swatch: null, // a colour per genus, and its own key to spend them in
+    swatch: null, // a color per genus, and its own key to spend them in
     render: () => <GenusLayer />,
     legend: <TreeLegend />,
     exclusive: true,

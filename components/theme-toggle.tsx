@@ -16,7 +16,7 @@ const META: Record<
   system: { label: "System theme", next: "light", Icon: BsCircleHalf },
 };
 
-// next-themes hands back whatever string is in storage, so anything unrecognised (or the
+// next-themes hands back whatever string is in storage, so anything unrecognized (or the
 // undefined it renders with on the server) falls back to the default choice.
 function toChoice(theme: string | undefined): ThemeChoice {
   return theme === "light" || theme === "dark" ? theme : "system";

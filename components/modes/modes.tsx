@@ -145,7 +145,7 @@ export default function Modes() {
     [modeId, hiddenLayers, handleToggleLayer],
   );
 
-  // The cards wait for the whole sweep: their colours and their bold chips are settled across
+  // The cards wait for the whole sweep: their colors and their bold chips are settled across
   // the whole set.
   const solve = useCallback(
     async (request: SolveRequest): Promise<SolveReply | null> => {

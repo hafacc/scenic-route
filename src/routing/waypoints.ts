@@ -16,8 +16,8 @@
 // motivated the detour the outside router will not actually walk. Deviation would protect the shape
 // of the route rather than the reason for its shape.
 //
-// One candidate per intersection, not one per kerb. This network draws a street corner as several
-// nodes — the kerb, the far side of the crossing it meets, and an island for every piece a divided
+// One candidate per intersection, not one per curb. This network draws a street corner as several
+// nodes — the curb, the far side of the crossing it meets, and an island for every piece a divided
 // roadway breaks that crossing into — and Google snaps every one of them to the same road node. On
 // real routes that had the DP spending about half its nine pins on pairs standing 7 to 32 m apart at
 // one junction, which is a pin describing nothing. So corners are walked in route order and one is
@@ -100,7 +100,7 @@ function nodeLng(graph: RoutingGraph, node: number): number {
   return graph.originLng + graph.nodeQx[node] * graph.scale;
 }
 
-// Whether a node is a kerb corner, the only kind of point worth pinning. Google snaps every
+// Whether a node is a curb corner, the only kind of point worth pinning. Google snaps every
 // coordinate it is given to its own road network, and a mid-block point can land on the far side of
 // the street and turn one leg into an out-and-back. A node an actual crossing meets is standing on a
 // corner, which snaps where you meant; a node whose every edge is a crossing is a median island,
@@ -122,7 +122,7 @@ function isCorner(graph: RoutingGraph, node: number): boolean {
 // Every node of the intersection `node` stands at: what a chain of crossings reaches from it without
 // ever setting foot on pavement in between. A marked crossing of a divided street is drawn as
 // several crossing edges chained through the islands in it, so the walk goes on through a
-// mid-roadway node and stops at the kerb on the far side, however many pieces the crossing is in.
+// mid-roadway node and stops at the curb on the far side, however many pieces the crossing is in.
 // Bounded by that rule rather than by a distance: the islands of one junction are all it can reach.
 function junctionNodes(graph: RoutingGraph, node: number): Set<number> {
   const junction = new Set([node]);
@@ -286,7 +286,7 @@ class ProxyExplorer {
         ) {
           continue; // the proxy walks; it cannot put anyone on a boat or a train
         }
-        const neighbour = otherEnd(this.graph, edge, node);
+        const neighbor = otherEnd(this.graph, edge, node);
         // What PROXY_WEIGHTS price this edge at, written out: every scenic factor is 1 at those
         // weights and a freely-spent crossing adds nothing, so the multiplier machinery would do a
         // dozen multiplications to arrive back at the walk. `proxyPricesAWalk` pins the equality.
@@ -295,38 +295,38 @@ class ProxyExplorer {
           this.graph.edgeLength[edge] *
           walkSecondsPerMeter(this.graph, edge, forward);
         const relaxed = this.distance[node] + walked;
-        if (relaxed < this.distance[neighbour]) {
-          if (this.distance[neighbour] === Number.POSITIVE_INFINITY) {
-            this.touched.push(neighbour);
+        if (relaxed < this.distance[neighbor]) {
+          if (this.distance[neighbor] === Number.POSITIVE_INFINITY) {
+            this.touched.push(neighbor);
           }
-          this.distance[neighbour] = relaxed;
-          this.record(neighbour, node, edge, walked);
-          this.heap.push(relaxed, neighbour);
+          this.distance[neighbor] = relaxed;
+          this.record(neighbor, node, edge, walked);
+          this.heap.push(relaxed, neighbor);
         } else if (
-          relaxed === this.distance[neighbour] &&
+          relaxed === this.distance[neighbor] &&
           this.routeEdges.has(directedEdge(edge, forward))
         ) {
           // Two ways of identical walking cost, one of them the route's own: the proxy is a guess at
           // what Google walks and this is the walk we know it is being compared against, so the leg
           // is not charged for a difference no walker would notice. Only the recorded price moves;
           // the key is unchanged, so the heap entry already standing for this node still holds.
-          this.record(neighbour, node, edge, walked);
+          this.record(neighbor, node, edge, walked);
         }
       }
     }
   }
 
-  // What arriving at `neighbour` over `edge` costs the reader, and when it happens.
+  // What arriving at `neighbor` over `edge` costs the reader, and when it happens.
   private record(
-    neighbour: number,
+    neighbor: number,
     node: number,
     edge: number,
     walked: number,
   ): void {
-    this.valueCost[neighbour] =
+    this.valueCost[neighbor] =
       this.valueCost[node] +
       effSeconds(this.graph, edge, this.weights, this.elapsed[node], node);
-    this.elapsed[neighbour] =
+    this.elapsed[neighbor] =
       this.elapsed[node] + walked + crossingWait(this.graph, edge, node);
   }
 
@@ -369,7 +369,7 @@ export function planWaypoints(
     // failure is a wedged tab.
     const anchors = [0];
     const visited = new Set([walk.nodes[0]]);
-    // Seeded with the intersection the walk starts at, so a kerb a crossing away from the origin is
+    // Seeded with the intersection the walk starts at, so a curb a crossing away from the origin is
     // not pinned: anchor 0 already stands there.
     let junction = junctionNodes(graph, walk.nodes[0]);
     for (let index = 1; index < lastIndex; index += 1) {

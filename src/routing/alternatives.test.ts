@@ -292,7 +292,7 @@ test("the fixture's corridors win where they were designed to", async () => {
 
 // A route along a parallel of latitude, `lat` north of the equator and running `east` degrees of
 // longitude: at the equator a degree of longitude is the same 111,320 m a degree of latitude is, so
-// these read in metres without a projection of the test's own.
+// these read in meters without a projection of the test's own.
 const alongLatitude = (lat: number, east = 0.01): RouteResult =>
   ({
     path: {
@@ -330,7 +330,7 @@ test("two routes are as far apart as the ground between them", async () => {
   ).toBeGreaterThan(5000);
 });
 
-// The property the old grid rasterisation was built to keep, and the floor under the threshold: the
+// The property the old grid rasterization was built to keep, and the floor under the threshold: the
 // two pavements of one street are one route.
 test("opposite sidewalks of one street are the same walk", async () => {
   const apart = routeDistanceMeters(alongLatitude(0), alongLatitude(0.00018));
@@ -446,7 +446,7 @@ test("selection stops rather than offering a route that is not different", async
   }
 });
 
-test("the scenic score and the colour factor say what a card has", async () => {
+test("the scenic score and the color factor say what a card has", async () => {
   const fixture = buildFixture();
   const plan = await planOn(fixture, MODE_WEIGHTS);
   const scoreOf = (corridor: string): number =>
@@ -458,12 +458,12 @@ test("the scenic score and the colour factor say what a card has", async () => {
   expect(scoreOf("deep")).toBeGreaterThan(scoreOf("canopy"));
   expect(scoreOf("deep")).toBeGreaterThan(0.5);
 
-  const colourOf = (corridor: string): string | null =>
+  const colorOf = (corridor: string): string | null =>
     plan.routes.find((route) => fixture.corridorOf(route.result) === corridor)!
       .colorFactor;
-  expect(colourOf("deep")).toBe("tree");
-  expect(colourOf("shops")).toBe("commercial");
-  expect(colourOf("direct")).toBeNull();
+  expect(colorOf("deep")).toBe("tree");
+  expect(colorOf("shops")).toBe("commercial");
+  expect(colorOf("direct")).toBeNull();
 
   const treeBest = plan.bestByFactor.tree;
   expect(treeBest).toBeDefined();
@@ -703,7 +703,7 @@ test("a route that rides is offered the walk that stays on the surface", async (
   ).toBe(true);
 });
 
-// A route that runs due east in two even halves, each held a number of metres north of a shared
+// A route that runs due east in two even halves, each held a number of meters north of a shared
 // line: two of these run as far apart as the mean of their two gaps, which is what lets the
 // geometry of the pool below be read off as plain numbers. Every second of one is spent under trees,
 // so a longer one is always the more scenic and no pool below has a dominated route in it — what
@@ -992,7 +992,7 @@ function enumerateCards(
   return [0, ...best];
 }
 
-// Twenty routes scattered over a few hundred metres, which is the spread a real pool has: some
+// Twenty routes scattered over a few hundred meters, which is the spread a real pool has: some
 // pairs are the same walk, most are not.
 function randomPool(seed: number): {
   separations: Float64Array[];

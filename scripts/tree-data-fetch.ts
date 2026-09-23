@@ -227,12 +227,12 @@ const GENUS_COMMON_NAMES: Record<string, string> = {
 // lawns stay blank, and a park edge feathers over ~2σ ≈ 30 m. The land cover distribution reads
 // this kernel, so meanCoverOverLand is the map's own mean.
 const FILL_SIGMA_METERS = 15;
-// The oriented blur that colours the two sidewalks: broad along the road so the line runs smooth,
+// The oriented blur that colors the two sidewalks: broad along the road so the line runs smooth,
 // tight across it so a one-sided street — a park-bounding avenue — keeps its dark park side and
 // pale building side distinct rather than blurring to their mean.
 const TIGHT_SIGMA_ALONG_METERS = 15;
 const TIGHT_SIGMA_ACROSS_METERS = 4;
-const SIDEWALK_INSET_METERS = 2; // curb to the centre of the sidewalk
+const SIDEWALK_INSET_METERS = 2; // curb to the center of the sidewalk
 
 // max(dbh) is 2427 in in New York and 9999 in San Francisco, both nonsense; a 60 in trunk is
 // already a very large street tree, so anything past it is clamped there. Keeping a quadratic
@@ -244,14 +244,14 @@ const MAX_DBH_INCHES = 60;
 // An OSM natural=tree point this close to a ForMS trunk is the same tree; ForMS wins the duplicate
 // because it carries a dbh the crown is sized from, where OSM usually carries none.
 const OSM_TREE_DEDUP_METERS = 5;
-// The crown byte is a decimetre of radius, 0..255, so radius saturates at 25.5 m; a recorded
+// The crown byte is a decimeter of radius, 0..255, so radius saturates at 25.5 m; a recorded
 // diameter_crown/2 is clamped here so the count of clamps is honest rather than silent in the byte.
 const CROWN_RADIUS_CEILING_METERS = 25.5;
 
 const COVER_SAMPLES = 1_000_000;
 const COVER_SEED = 42; // fixed, so the reported mean cover does not churn between runs
 
-const DENSIFY_METERS = 25; // road sampling step, below the tight sigma so the colour varies
+const DENSIFY_METERS = 25; // road sampling step, below the tight sigma so the color varies
 const DROP_LENGTH_METERS = 1; // shorter than this the geometry is degenerate
 const EARTH_RADIUS_METERS = 6_371_008.8;
 
@@ -260,7 +260,7 @@ const EARTH_RADIUS_METERS = 6_371_008.8;
 // 7 tunnel + 101 boardwalk + 5,918 path + 248 step + 3,835 alley) rather than tracking it exactly.
 const NYC_SEGMENT_COUNT = 111_000;
 
-// The crown radius the allometry predicts for one trunk, in metres. dbh is capped and a missing
+// The crown radius the allometry predicts for one trunk, in meters. dbh is capped and a missing
 // dbh imputed *before* this, so the log-log curve is only ever asked about a plausible trunk.
 function crownRadiusMeters(
   allometry: CrownAllometry,
@@ -532,7 +532,7 @@ function toPathSegments(
 // service is NYC Parks' own LiDAR and carries essentially no New Jersey / Westchester spill, but
 // the clip is applied for parity with the other polygon sources and to guard a future re-extent.
 //
-// One vertex decides the whole polygon, which is the whole answer for a crown — a few metres across,
+// One vertex decides the whole polygon, which is the whole answer for a crown — a few meters across,
 // and the coastline either holds it or does not. It is no answer at all for a polygon the mask runs
 // through the middle of, so a source with those cuts its own and arrives as `landCut`.
 function clipCanopyToLand(
@@ -550,7 +550,7 @@ function clipCanopyToLand(
   return kept;
 }
 
-// The area of one ring in square metres, in a local equirectangular metre space about `refLat`
+// The area of one ring in square meters, in a local equirectangular meter space about `refLat`
 // (the shoelace, signed by the ring's winding). Esri gives outer rings and their holes opposite
 // windings, so summing the signed ring areas of a polygon and taking the magnitude nets the holes
 // out. Good to a fraction of a percent over a single crown-sized polygon, which is all a coverage
@@ -695,7 +695,7 @@ interface CitySources {
   canopySourceUrl: string;
   // The polygons the whole ingest is clipped to, and whose box every Overpass query is cut from.
   land: () => Promise<Polygon[]>;
-  // Handed the finished land context because a city may read a centreline that is not its own: the
+  // Handed the finished land context because a city may read a centerline that is not its own: the
   // Bay Area's East Bay half comes from a COUNTY layer covering three times the city, and only the
   // land test decides which of its rows are in. San Francisco's and New York's ignore it.
   streets: (land: LandContext) => Promise<Segment[]>;
@@ -723,7 +723,7 @@ interface CitySources {
   // fetcher rather than a flag, because a third city's feeds are its own and a boolean can only ever
   // mean "the ones scripts/ferries.ts already hardcodes".
   ferries: (() => Promise<FerrySource>) | null;
-  // Whether its centreline classifies a service way with no pavement. New York's does; San
+  // Whether its centerline classifies a service way with no pavement. New York's does; San
   // Francisco's "alleys" are narrow streets with sidewalks, which is a different thing.
   alleys: boolean;
   // The city's own registers, or null where it has none. Null is a decision the descriptor states,
@@ -734,7 +734,7 @@ interface CitySources {
   buildings: BuildingSource | null;
   // Which side of a street the city's own survey says carries pavement. Not optional: the existence
   // gate needs an authoritative answer, because OSM's silence is ambiguous between a mapping gap and
-  // genuinely bare kerb.
+  // genuinely bare curb.
   survey: () => Promise<Survey>;
   // The DEM the terrain overlay and the relief byte are read off, or null for a flat model.
   elevation: (() => Promise<ElevationRaster>) | null;
@@ -799,9 +799,9 @@ const SF: CitySources = {
   // out the genus overlay and nothing else: cover and shade come from the canopy polygons.
   attribution: `SF Public Works street trees via DataSF; ${OAKLAND_TREE_ATTRIBUTION}; ${BERKELEY_TREE_ATTRIBUTION}`,
   sourceUrl: DATA_SF.page("tkzw-k3nq"),
-  // Two centrelines, one per half of the region. The manifest schema has one source URL, so it
+  // Two centerlines, one per half of the region. The manifest schema has one source URL, so it
   // stays San Francisco's.
-  streetAttribution: `SF basemap street centrelines via DataSF; ${EAST_BAY_STREET_ATTRIBUTION}`,
+  streetAttribution: `SF basemap street centerlines via DataSF; ${EAST_BAY_STREET_ATTRIBUTION}`,
   streetSourceUrl: DATA_SF.page("3psu-pn9h"),
   fieldAttribution: "path & tree data © OpenStreetMap contributors",
   fieldSourceUrl: "https://www.openstreetmap.org/copyright",
@@ -1143,7 +1143,7 @@ async function fetchCity(CITY: CitySources): Promise<void> {
       canopySourceUrl: CITY.canopySourceUrl,
       alleys: CITY.alleys,
     },
-    // Every survey's credit, joined the way the two centrelines' is; the source URL is one field in
+    // Every survey's credit, joined the way the two centerlines' is; the source URL is one field in
     // the manifest schema and names the first, with the rest in scripts/README.md.
     heightSource:
       chm.length > 0

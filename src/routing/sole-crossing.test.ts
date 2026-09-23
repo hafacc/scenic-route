@@ -3,11 +3,11 @@
 // New York's ferries compete with bridges: bar them, or miss the last one, and the walk is longer.
 // The Bay Area's do not. San Francisco and the East Bay are two land masses with no walking edge
 // between them — nobody walks the Bay Bridge — so every ferry edge there is a cut edge of the
-// graph, and three of the router's behaviours that never mattered before decide whether a crossing
+// graph, and three of the router's behaviors that never mattered before decide whether a crossing
 // works at all:
 //
 //   - the search has to FIND it, with an A* heuristic that scales straight-line distance by the
-//     least seconds a walked metre can cost. A boat crosses twelve kilometres in twenty-five
+//     least seconds a walked meter can cost. A boat crosses twelve kilometers in twenty-five
 //     minutes, which is five times walking pace, so the walking estimate alone would exceed the
 //     true cost and the heuristic would be inadmissible. The bounded ferry credit is what repairs
 //     that, and this is the shape it has to survive.

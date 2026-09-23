@@ -26,7 +26,7 @@ export interface CardView {
   chips: ChipView[];
 }
 
-// A line's own bullet, in the livery the agency publishes: the map's colour, said on the card. Set
+// A line's own bullet, in the livery the agency publishes: the map's color, said on the card. Set
 // inline rather than as a flex item, so a summary too long for its row ellipses like any sentence.
 const PILL_SHAPE =
   "inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 align-middle text-[11px] font-bold leading-none";
@@ -239,7 +239,7 @@ export default function RouteCards({
     >
       {cards.map((card, index) => (
         <button
-          // Two cards can round to the same line, and a mode's colour is one of its factors' too.
+          // Two cards can round to the same line, and a mode's color is one of its factors' too.
           // biome-ignore lint/suspicious/noArrayIndexKey: the plan's order IS a card's identity
           key={index}
           type="button"

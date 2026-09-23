@@ -10,7 +10,7 @@
 //
 // It answers one question: were the sheds placed after the last change to anything that can move a
 // key? Not to anything that can move the graph — the two are very different sets, and the wider one
-// costs a re-place of every shed in the city for an edit to a colour ramp. A yes is still not proof
+// costs a re-place of every shed in the city for an edit to a color ramp. A yes is still not proof
 // the key space held (an input can change and cut the same edges), but the header is a hash gate, so
 // an artifact that cannot say it is current is one nobody can trust, and a re-place is two minutes.
 // `check-sheds` remains the stronger, later check: it compares against the graph CI actually built

@@ -14,7 +14,7 @@
   --color-brand-700: #047857;
 }
 
-/* Keyboard focus rings default to the brand colour rather than the browser's blue. In @layer base so
+/* Keyboard focus rings default to the brand color rather than the browser's blue. In @layer base so
    any element that sets its own Tailwind ring (focus:outline-none focus-visible:ring-*) still wins. */
 @layer base {
   :focus-visible {
@@ -79,7 +79,7 @@
   position: absolute;
   inset: 8px;
   border-radius: 9999px;
-  background-color: #334155; /* slate-700: matches the route path colour */
+  background-color: #334155; /* slate-700: matches the route path color */
   border: 2px solid #ffffff;
   box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
 }
@@ -92,18 +92,18 @@
 }
 
 /* Leaflet paints the gaps between tiles — the ones a zoom opens up before the new level arrives —
-   with the container's own background, which is its light grey by default and flashes on a dark map.
-   Made transparent rather than given a colour of its own, so what shows through is the page's, which
-   Tailwind already themes; the alternative is a third place the map's ground colour is written down.
+   with the container's own background, which is its light gray by default and flashes on a dark map.
+   Made transparent rather than given a color of its own, so what shows through is the page's, which
+   Tailwind already themes; the alternative is a third place the map's ground color is written down.
    */
 .leaflet-container {
   background: transparent;
 }
 
 /* Nothing here darkens the map. Every layer in the tile pane draws itself in the theme's own
-   colours — the basemap from src/basemap/flavor.ts, the value overlays through the palette in
+   colors — the basemap from src/basemap/flavor.ts, the value overlays through the palette in
    src/theme/palette.ts — and the container's background is set from the same flavor in
-   components/basemap.tsx, where the colour it has to match is written down. This used to be an
+   components/basemap.tsx, where the color it has to match is written down. This used to be an
    invert + hue-rotate over the whole pane, which is why dark mode had near-black streets on a
    brown ground: inverting a style turns its most important lines into its least visible ones. */
 
@@ -211,7 +211,7 @@ html {
   box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
 }
 
-/* A station the route boards, changes or alights at: a white disc ringed in the line's colour, which
+/* A station the route boards, changes or alights at: a white disc ringed in the line's color, which
    the marker's own inline style supplies. */
 .scenic-station-dot {
   display: block;
@@ -276,8 +276,8 @@ html {
 }
 
 /* The scenery sliders are styled explicitly rather than via `accent-color`, because Chrome derives
-   the unfilled track colour from the accent and turns it near-black for a light accent like amber.
-   Fill (up to --pct) and thumb use --fill; the rest of the track is a neutral grey in both themes. */
+   the unfilled track color from the accent and turns it near-black for a light accent like amber.
+   Fill (up to --pct) and thumb use --fill; the rest of the track is a neutral gray in both themes. */
 .scenery-slider {
   -webkit-appearance: none;
   appearance: none;

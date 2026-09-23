@@ -33,9 +33,9 @@ export const savedIcon = L.divIcon({
   tooltipAnchor: [0, -34],
 });
 
-// The same hue at a lower lightness, keeping the saturation, so one themed colour draws the whole
-// teardrop: the gradient reads as the pin lit from above rather than as two authored colours, which
-// mixing toward black does not — that drains the colour to grey.
+// The same hue at a lower lightness, keeping the saturation, so one themed color draws the whole
+// teardrop: the gradient reads as the pin lit from above rather than as two authored colors, which
+// mixing toward black does not — that drains the color to gray.
 function shaded(hex: string, scale: number): string {
   const { red, green, blue } = hexToRgb(hex);
   const channels = [red, green, blue].map((channel) => channel / 255);
@@ -59,7 +59,7 @@ function shaded(hex: string, scale: number): string {
 // apart in practice, since the directions control is what turns one into the other.
 //
 // Built per theme rather than once at import, because the green is a light/dark pair like every
-// other colour on this map (src/overlays/colors.ts) and the marker is handed a fresh icon when the
+// other color on this map (src/overlays/colors.ts) and the marker is handed a fresh icon when the
 // theme flips.
 export function searchIcon(theme: ThemeName, accent?: string | null): L.DivIcon {
   const green = accent ?? SEARCH_PIN_COLOR[theme];
@@ -72,7 +72,7 @@ export function searchIcon(theme: ThemeName, accent?: string | null): L.DivIcon 
 }
 
 // The point a route ends at, or the pin a tap drops. Green by default, and in the deck's own accent
-// where it has one, so a mode's colour reaches the marks on the map and not only its chrome.
+// where it has one, so a mode's color reaches the marks on the map and not only its chrome.
 export function destIcon(accent: string | null): L.DivIcon {
   if (accent === null) {
     return savedIcon;

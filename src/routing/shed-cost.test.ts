@@ -63,7 +63,7 @@ interface NodeSpec {
 
 // The fractions (0..1) the cost model reads off a walking edge. `shed` is the share standing under a
 // deck; `canopy` is the unsmoothed share with a crown directly overhead; `highway` is the one
-// nuisance attribute, the only factor that can push a metre's multiplier above 1.
+// nuisance attribute, the only factor that can push a meter's multiplier above 1.
 interface EdgeAttrs {
   cover?: number;
   canopy?: number;
@@ -381,10 +381,10 @@ test("a shelter preference walks the sheltered way in either season", () => {
   }
 });
 
-test("the avoid penalty is charged per metre of deck, not per edge", () => {
+test("the avoid penalty is charged per meter of deck, not per edge", () => {
   const { graph } = diamond({ shed: 0.1 }, { shed: 1 });
   const avoiding = noPref({ allowSheds: false });
-  // A tenth of the edge decked: nine tenths cost a plain metre, the tenth costs one plus the penalty.
+  // A tenth of the edge decked: nine tenths cost a plain meter, the tenth costs one plus the penalty.
   expect(edgeMultiplier(graph, 1, avoiding)).toBeCloseTo(
     1 + SHED_AVOID_PENALTY * shedOf(graph, 1),
     12,
@@ -407,7 +407,7 @@ test("a barred deck still shades and shelters what it stands over", () => {
   const avoiding = noPref({ ...tempting, allowSheds: false });
   const shed = shedOf(graph, 1);
   // The scenic factors read the deck exactly as they do when it is allowed — a deck someone asked not
-  // to walk under is still overhead — and only the decked share is repriced, at an undiscounted metre
+  // to walk under is still overhead — and only the decked share is repriced, at an undiscounted meter
   // plus the whole penalty.
   expect(edgeMultiplier(graph, 1, avoiding)).toBeCloseTo(
     allowed * (1 - shed) + shed + SHED_AVOID_PENALTY * shed,
@@ -427,7 +427,7 @@ test("avoiding buys a detour well past breaking even, and gives up beyond the pe
   expect(upperTaken(direct)).toBe(true);
   const avoided = findRoute(graph, start, dest, noPref({ allowSheds: false }));
   expect(upperTaken(avoided)).toBe(false);
-  // What the toggle actually bought, in metres — the ratio the constant has to be sized past.
+  // What the toggle actually bought, in meters — the ratio the constant has to be sized past.
   expect(walkMeters(avoided) / walkMeters(direct)).toBeGreaterThan(4);
 
   // Past the penalty's own worth of extra walking the shed is simply cheaper, and the route says so
@@ -445,7 +445,7 @@ test("avoiding buys a detour well past breaking even, and gives up beyond the pe
 
 test("a decked edge never costs less than the same edge bare, at any weights", () => {
   // What makes the toggle sound: nothing the deck earns can leave it cheaper than the bare edge beside
-  // it. The pricing charges the decked share a flat undiscounted metre, which is only a penalty while
+  // it. The pricing charges the decked share a flat undiscounted meter, which is only a penalty while
   // the multiplier is under 1 — and the signed shade axis and the highway penalty both push it over 1
   // — so the avoid penalty is what has to dominate, and it is charged on the whole decked share.
   for (const shed of [0.05, 0.3, 0.6, 1]) {

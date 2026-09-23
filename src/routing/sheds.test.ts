@@ -632,7 +632,7 @@ test("the shaded share follows the sun down and never exceeds the coverage", () 
 test("a deeper deck holds its shade to a lower sun than a shallow one", () => {
   // Solar noon, the sun due south and so straight across an east-west street. Same sun, same
   // coverage, same bearing: only the measured depth differs, and the wide pavement's deck is still
-  // shading its own kerb where the narrow one's has let the light under.
+  // shading its own curb where the narrow one's has let the light under.
   const noon = new Date(Date.UTC(2026, 6, 15, 17));
   const narrow = shedShade(twoStreets(noon, NARROW_METERS), EAST_WEST, 0);
   const wide = shedShade(twoStreets(noon, WIDE_METERS), EAST_WEST, 0);
@@ -693,7 +693,7 @@ test("re-aiming the sun moves the shade without rebuilding the coverage", () => 
 });
 
 // The worker never sets the active city, so a field built there aimed New York's sun over every
-// city's sheds until the city travelled with the date.
+// city's sheds until the city traveled with the date.
 test("the sun is aimed over the city the field was built for", () => {
   const sanFrancisco = cityById("sf");
   const newYork = cityById("nyc");

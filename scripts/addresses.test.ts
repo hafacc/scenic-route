@@ -220,7 +220,7 @@ test("a row repeated at the same doorway is written once", () => {
 });
 
 test("the same number at another doorway is kept", () => {
-  // A metre apart is a metre apart: two entrances of one building, not one address listed twice.
+  // A meter apart is a meter apart: two entrances of one building, not one address listed twice.
   const both = [
     ...NYC,
     row("COURT ST", "Brooklyn", "312", 40.68566, -73.99444),

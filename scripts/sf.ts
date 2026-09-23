@@ -4,14 +4,14 @@
 // DataSF is a Socrata deployment like NYC Open Data, so the reading is shared (scripts/socrata.ts)
 // and most of what is here is a field remap. The ones that are not:
 //
-//   - **The walkability filter.** CSCL has `rw_type`, one code per kind of way. SF's centreline has
+//   - **The walkability filter.** CSCL has `rw_type`, one code per kind of way. SF's centerline has
 //     `classcode`, which is only a road hierarchy (freeway down to local street) and says nothing
 //     about whether a person may walk it. The field that does is `layer`, and it is the more
 //     expressive of the two — it separates the Presidio's network, pedestrian streets and
 //     unimproved right of way from ordinary streets, and it names the PAPER layers, which are
 //     streets that exist on the map and not on the ground.
 //
-//   - **The sidewalk offset.** NYC publishes a kerb-to-kerb `streetwidth` and the pavement is
+//   - **The sidewalk offset.** NYC publishes a curb-to-curb `streetwidth` and the pavement is
 //     offset half of it. SF publishes the opposite — the width of the *sidewalk* — so the roadway
 //     is derived from the right-of-way polygons instead. See `roadwayFeet`.
 //
@@ -50,7 +50,7 @@ export const SF_CANOPY_ATTRIBUTION =
 // The land the city actually occupies. NOT the county polygon: San Francisco County's legal
 // boundary runs out into the bay, out into the ocean, and 45 km offshore to the Farallon Islands,
 // which would widen the city's bounding box by half a degree of empty water — and that box is what
-// every Overpass query and the whole tile plan are cut from. The analysis neighbourhoods are
+// every Overpass query and the whole tile plan are cut from. The analysis neighborhoods are
 // already clipped to the shoreline and are the structural twin of NYC's borough boundaries.
 export async function fetchSfLand(): Promise<Polygon[]> {
   const rows = await DATA_SF.dataset<{
@@ -108,7 +108,7 @@ const WALKABLE_LAYERS: Record<string, RoadType> = {
 // streets, which carry the steps flag through to the route panel.
 //
 // `ALY` is deliberately NOT mapped to the tiler's alley type. That type carries New York's meaning:
-// a service way with no pavement at all, which the existence gate demotes to its centreline (97% of
+// a service way with no pavement at all, which the existence gate demotes to its centerline (97% of
 // New York's alley km). San Francisco's alleys are narrow STREETS — Clara, Minna, Natoma — and OSM
 // maps sidewalks along them, so only 6.6% of their km demote. Calling them alleys asserted something
 // about them that is not true and failed the build for it.
@@ -131,14 +131,14 @@ function roadTypeOf(row: StreetRow): RoadType | null {
   return override !== undefined && layer === ROAD_STREET ? override : layer;
 }
 
-// The pavement's distance from the centreline, in the feet a STRT record stores, derived rather
-// than published. NYC offsets by half its kerb-to-kerb `streetwidth`; SF publishes no roadway width
+// The pavement's distance from the centerline, in the feet a STRT record stores, derived rather
+// than published. NYC offsets by half its curb-to-curb `streetwidth`; SF publishes no roadway width
 // at all. What it does publish is the right-of-way polygon for each segment and, separately, the
 // width of the sidewalk — and a right of way is the roadway plus its two pavements, so
 //
 //     roadway = rightOfWay - 2 * sidewalk
 //
-// with the right of way measured as the polygon's area over the length of the centreline it belongs
+// with the right of way measured as the polygon's area over the length of the centerline it belongs
 // to. Storing the roadway as a "street width" keeps one meaning downstream: the tiler halves it.
 //
 // Measured over the 10,028 segments carrying both inputs, that lands at a median of 26 ft (p25 18,
@@ -167,7 +167,7 @@ function roadwayFeet(
 }
 
 // Right-of-way area per segment, summed because a divided street is several polygons under one id.
-// The width itself is not taken here: it is the area over the *centreline's* own length, and that
+// The width itself is not taken here: it is the area over the *centerline's* own length, and that
 // is known only once the geometry has been read.
 function rightOfWayAreas(rows: RowPolygonRow[]): Map<string, number> {
   const areas = new Map<string, number>();
@@ -213,7 +213,7 @@ export async function fetchSfStreets(): Promise<Segment[]> {
     ),
   ]);
 
-  // Keyed through `toInt`, the same normalisation a segment's own `physicalId` goes through, so the
+  // Keyed through `toInt`, the same normalization a segment's own `physicalId` goes through, so the
   // two sides of the join cannot drift on a leading zero or a ".0" the column comes back with.
   const sidewalkFeet = new Map<string, number>();
   const measured: number[] = [];
@@ -275,7 +275,7 @@ export async function fetchSfStreets(): Promise<Segment[]> {
       physicalId: toInt(row.cnn),
       roadType,
       streetWidth: width,
-      postedSpeed: 0, // SF publishes speed limits as their own dataset, not on the centreline
+      postedSpeed: 0, // SF publishes speed limits as their own dataset, not on the centerline
       // No vehicular-only flag: `classcode = 1` occurs on the FREEWAYS layer and nowhere else, and
       // that layer is already dropped above, so the branch that set it could never fire. If SF ever
       // publishes a field that really marks a roadway closed to walking, it goes here.
@@ -408,7 +408,7 @@ export interface NamedPoint extends Coord {
 }
 
 // Article 10 landmarks, the city's own designated historic sites — 362 of them against New York's
-// ~1,500, over a sixth of the land, so denser per square kilometre rather than thinner.
+// ~1,500, over a sixth of the land, so denser per square kilometer rather than thinner.
 export async function fetchSfLandmarks(
   onLand: (coord: Coord) => boolean,
 ): Promise<NamedPoint[]> {
@@ -540,7 +540,7 @@ export async function fetchSfBuildings(
 const SF_PARCEL_COUNT = 8_500;
 const SF_INDUSTRIAL_ZONE_COUNT = 370;
 // The 62 `analytical` rows are not parcels: they are named analysis districts — the whole Presidio,
-// all of Treasure Island, the blocks of Mission Bay South — carrying modelled round-number floor
+// all of Treasure Island, the blocks of Mission Bay South — carrying modeled round-number floor
 // areas over polygons up to 2.1 km², six of which read PDR-dominant. The industrial land under them
 // is in the table as ordinary parcels anyway (208 inside Hunters Point Shipyard alone). A
 // `multiple_parcels` row, by contrast, is real adjacent parcels recorded together, and lists its own
@@ -550,7 +550,7 @@ const SF_PARCEL_GEOGRAPHIES = "('parcel', 'multiple_parcels')";
 // District. Dominance happens to exclude it — its own biggest category is offices — but a rule that
 // only accidentally rejects a number that wrong is not a rule.
 const PDR_ROLLUP_PARCEL = "0253021";
-// Fort Mason: 66 hectares of federal parkland — the Marina Green, the yacht harbour and the lawns
+// Fort Mason: 66 hectares of federal parkland — the Marina Green, the yacht harbor and the lawns
 // above them — recorded as one parcel whose only floor area is the 30k sq ft of pier sheds at Fort
 // Mason Center. Those really are warehouses, so the rule reads it correctly and still gets the place
 // wrong. Excluded by hand rather than by a threshold: every measure that separates it from a genuine
@@ -661,7 +661,7 @@ export async function fetchSfIndustrial(
       continue;
     }
     // Any vertex on land, not the centroid: this is the waterfront, and a pier or a bulkhead lot
-    // reaching past the shoreline the neighbourhood polygons draw tests as land only where it meets
+    // reaching past the shoreline the neighborhood polygons draw tests as land only where it meets
     // it — the same rule the New York lots are clipped by.
     const parts = (row.the_geom?.coordinates ?? [])
       .map((part) =>

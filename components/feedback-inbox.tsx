@@ -35,7 +35,7 @@ export default function FeedbackInbox({ onClose }: FeedbackInboxProps) {
     <Sheet
       onClose={onClose}
       closeLabel="Close feedback inbox"
-      labelledBy="feedback-inbox-title"
+      labeledBy="feedback-inbox-title"
       width="md:max-w-lg"
     >
       <div className="flex shrink-0 items-start gap-3">

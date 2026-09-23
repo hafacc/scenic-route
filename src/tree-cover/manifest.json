@@ -404,7 +404,7 @@
           }
         },
         "updated": "2026-09-15",
-        "attribution": "SF basemap street centrelines via DataSF; Alameda County Street Centerlines via Alameda County GIS",
+        "attribution": "SF basemap street centerlines via DataSF; Alameda County Street Centerlines via Alameda County GIS",
         "sourceUrl": "https://data.sfgov.org/d/3psu-pn9h"
       },
       "paths": {

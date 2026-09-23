@@ -15,8 +15,8 @@ fetches. None of these files is ever served to a browser. Layouts are documented
 | `sidewalks/nyc.bin` | the OSM ways describing a street's own pavement — `footway=sidewalk`, `footway=crossing`, `footway=traffic_island` — the set the paths extract excludes | **OpenStreetMap** |
 | `ferries/nyc.bin` | the time-independent ferry graph (stops, crossings, per-segment crossing+wait time and drawing geometry) — OSM- and canopy-independent | NYC DOT Staten Island Ferry GTFS + NYC Ferry (Hornblower) GTFS |
 | `ferries/siferry-gtfs.zip`, `ferries/nycferry-gtfs.zip` | the two raw GTFS feeds, frozen so a later time-of-day pass can re-derive from the exact feeds a build read | NYC DOT + NYC Ferry (Hornblower) |
-| `subway/nyc.bin` | the 29 subway route lines (28 subway routes + the Staten Island Railway) with the colour, bullet-text colour and both names the MTA publishes for each, and the 496 stations with the routes calling at each — drawn only, read by no routing input | MTA subway GTFS (`rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip`) |
-| `subway/sf.bin` | San Francisco's 14 rail lines — Muni's six Metro lines, the F historic streetcar and the three cable cars, plus the four BART lines that run through the city — as 42 polylines clipped to the city's land, with each agency's own colours and names, and the 268 stations with the routes calling at each; the same `SBWY` layout as `subway/nyc.bin`, drawn only, read by no routing input | SFMTA Muni GTFS (`muni-gtfs.apps.sfmta.com`) + BART GTFS (`bart.gov/dev/schedules`) |
+| `subway/nyc.bin` | the 29 subway route lines (28 subway routes + the Staten Island Railway) with the color, bullet-text color and both names the MTA publishes for each, and the 496 stations with the routes calling at each — drawn only, read by no routing input | MTA subway GTFS (`rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip`) |
+| `subway/sf.bin` | San Francisco's 14 rail lines — Muni's six Metro lines, the F historic streetcar and the three cable cars, plus the four BART lines that run through the city — as 42 polylines clipped to the city's land, with each agency's own colors and names, and the 268 stations with the routes calling at each; the same `SBWY` layout as `subway/nyc.bin`, drawn only, read by no routing input | SFMTA Muni GTFS (`muni-gtfs.apps.sfmta.com`) + BART GTFS (`bart.gov/dev/schedules`) |
 | `landmarks/nyc.bin` | ~1,530 designated landmark sites (points) — the "passes a landmark" routing discount | NYC LPC Individual Landmark Sites (`buis-pvji`) |
 | `art/nyc.bin` | public-art points (murals, sculpture, installations) — the "passes public art" routing discount | NYC PDC Outdoor Public Art Inventory (`2pg3-gcaa`) + **OpenStreetMap** (`tourism=artwork`) |
 | `highways/nyc.bin` | limited-access highways and above-ground rail as polylines — the highway/rail proximity *penalty* | **OpenStreetMap** |
@@ -76,7 +76,7 @@ and maps, and requires every derivative to bear this notice:
 > merchantability or fitness for a particular purpose, and assumes no responsibility for anyone's use
 > of the information.
 
-What the file carries is the feed's own route colours, names, shapes and stop positions — data, not
+What the file carries is the feed's own route colors, names, shapes and stop positions — data, not
 Muni's map or wordmark — so the trademark clause bites on how the overlay is *drawn* and named, not
 on the ingest.
 
@@ -97,7 +97,7 @@ explains it; `bun run scripts/east-bay-trees.ts --snapshot` rewrites it. It is d
 in LFS — it is under a megabyte and written once.
 
 `canopy/sf.bin` holds two surveys: San Francisco's own 2013 Urban Forest Plan canopy analysis, from
-DataSF, and the East Bay's, traced from the **Alameda and Contra Costa 1-metre lidar canopy height
+DataSF, and the East Bay's, traced from the **Alameda and Contra Costa 1-meter lidar canopy height
 model** (East Bay Regional Parks / CAL FIRE / USGS / Tukman Geospatial). The latter is **public
 domain** — Pacific Veg Map, which publishes it, states that "all of the map data accessible via this
 site is in the public domain and is freely accessible to all" — so it carries no share-alike

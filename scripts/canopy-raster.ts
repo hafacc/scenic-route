@@ -56,7 +56,7 @@ function meridianArc(phi: number, eccentricity2: number): number {
   );
 }
 
-// Snyder's transverse Mercator series, inverse: grid metres to degrees. Millimetre-accurate this
+// Snyder's transverse Mercator series, inverse: grid meters to degrees. Millimeter-accurate this
 // close to the central meridian, which is three orders finer than the 1 m cells whose corners are
 // what actually goes through it.
 export function inverseTmerc(grid: Tmerc, x: number, y: number): Coord {
@@ -133,7 +133,7 @@ export function inverseTmerc(grid: Tmerc, x: number, y: number): Coord {
   };
 }
 
-// Snyder's transverse Mercator series, forward: degrees to grid metres — the same series
+// Snyder's transverse Mercator series, forward: degrees to grid meters — the same series
 // crates/tiler/src/heights.rs projects a canopy vertex with. It is what cuts a lon/lat box down to
 // the tiles of a grid that cover it, for the canopy rasters here and the staged DEM squares
 // scripts/lidar.ts fetches.
@@ -185,7 +185,7 @@ export function forwardTmerc(
 }
 
 // A rectangle of a raster's own grid: the ground coordinate of the upper-left CORNER of cell (0, 0)
-// — not its centre — and how many square cells of `cellMeters` follow, east and south.
+// — not its center — and how many square cells of `cellMeters` follow, east and south.
 export interface Grid {
   originX: number;
   originY: number;
@@ -222,7 +222,7 @@ const STEP_Y = [0, 1, 0, -1];
 // which is what makes the cover field it feeds the measured canopy rather than an approximation of
 // it.
 //
-// Each set cell contributes one directed edge per empty neighbour, wound so the cell lies to the
+// Each set cell contributes one directed edge per empty neighbor, wound so the cell lies to the
 // right of the direction of travel. An outer boundary then comes back with positive double area and
 // a hole with negative, and the two never need telling apart by any other means.
 //
@@ -306,7 +306,7 @@ export function traceRings(
 }
 
 // Drops the vertices in the middle of a straight run. A rectilinear ring is nearly all such runs —
-// a 1 m staircase carries a vertex per metre — and they cost the blob as much as a real corner.
+// a 1 m staircase carries a vertex per meter — and they cost the blob as much as a real corner.
 function dropCollinear(ring: Ring): Ring {
   const kept: number[] = [];
   const count = ring.length / 2;
@@ -463,7 +463,7 @@ export interface MaskPolygons {
 // The polygons of one mask: traced, holes nested into the ring that contains them, each ring
 // simplified, and the specks dropped.
 //
-// A hole is matched to its outer ring by containment rather than by labelling the components: a
+// A hole is matched to its outer ring by containment rather than by labeling the components: a
 // hole is inside exactly one outer ring of the mask, and there are only ever a few hundred rings in
 // one raster tile, so a box test and a point-in-ring test settle it without a second pass over the
 // cells.

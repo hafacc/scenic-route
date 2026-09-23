@@ -250,9 +250,9 @@ function dijkstraCost(
     for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
       const edge = graph.adjacency[slot];
       const relaxed = distance[node] + effSeconds(graph, edge, weights);
-      const neighbour = otherEnd(graph, edge, node);
-      if (relaxed < distance[neighbour]) {
-        distance[neighbour] = relaxed;
+      const neighbor = otherEnd(graph, edge, node);
+      if (relaxed < distance[neighbor]) {
+        distance[neighbor] = relaxed;
       }
     }
   }
@@ -326,7 +326,7 @@ function upperTaken(result: RouteResult | null): boolean {
 test("edgeMultiplier and minMultiplier reduce to the tree-only model when the new weights are zero", () => {
   const { graph } = diamond({ cover: 0.6, landmark: 0.4 }, { highway: 0.5 });
   for (let edge = 0; edge < graph.edgeCount; edge++) {
-    // No weights at all: every metre costs 1.
+    // No weights at all: every meter costs 1.
     expect(edgeMultiplier(graph, edge, noScenic())).toBeCloseTo(1, 12);
     // Only the tree weight: exactly 1 - w*cover, unchanged from before the product model.
     const treeOnly = noScenic({ tree: 0.8 });
@@ -465,7 +465,7 @@ test("the historic discount keeps a positive floor at the top of its slider", ()
   // The whole reason the bake caps the byte at 254 rather than 255. The attribute is close to binary
   // — an interior sidewalk saturates — so this is the graph the factor actually meets, and at w = 1
   // its floor is what the A* heuristic scales straight-line distance by. A floor of 0 would make an
-  // in-district metre free and let the search wander; a negative one is not a metric at all.
+  // in-district meter free and let the search wander; a negative one is not a metric at all.
   const { graph, start, dest } = diamond({ historic: 1 }, { historic: 1 });
   const full = noScenic({ historic: MAX_HISTORIC_WEIGHT });
 
@@ -540,7 +540,7 @@ test("a highway weight steers the route away from a shorter nuisance path", () =
 
 test("edgeMultiplier prices a bridge over water as a discount of its own", () => {
   // A span that is both over water and rich in landmarks — the two are independent facts about the
-  // same metre, so they multiply.
+  // same meter, so they multiply.
   const { graph } = diamond({ landmark: 0.4, bridge: 0.8 }, {});
   const weights = noScenic({ landmark: 0.5, bridge: 0.3 });
   const edge = 1; // the upper 0->1 edge, which carries both

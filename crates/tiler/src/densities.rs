@@ -5,7 +5,7 @@
 //!
 //! Cover is the measured 2017 LiDAR canopy, lightly blurred: a Gaussian convolution of the
 //! canopy indicator, sampled at each sidewalk offset. The street kernel is oriented — broad
-//! along the road so the colour runs smooth, tight across it so the two sidewalks stay distinct
+//! along the road so the color runs smooth, tight across it so the two sidewalks stay distinct
 //! — while the reported land distribution reads the isotropic fill kernel, the field the pyramid
 //! renders. The value is in [0, 1] by construction, and the byte it quantizes to is clamped to
 //! 254 so a closed-canopy sidewalk never reads a routing-free 255.
@@ -42,9 +42,9 @@ pub struct Params {
     source_box: Bounds,     // the raw extent of the streets and canopy, before the kernel's reach
     land_box: Bounds, // the land polygons' own box, which the cover distribution is drawn over
     fill_sigma_meters: f64, // the isotropic blur the pyramid renders and the land mean reads
-    tight_sigma_along_meters: f64, // the street kernel, down the road: the colour stays smooth
+    tight_sigma_along_meters: f64, // the street kernel, down the road: the color stays smooth
     tight_sigma_across_meters: f64, // and over it: the far sidewalk falls away, keeping sides apart
-    sidewalk_inset_meters: f64, // curb to the centre of the sidewalk
+    sidewalk_inset_meters: f64, // curb to the center of the sidewalk
     cover_samples: usize, // land points the reported cover distribution is estimated from
     cover_seed: u64,  // and the seed they are drawn with, so the mean does not churn
     percentiles: Vec<u32>, // the labels the reported distributions are cut at
@@ -177,7 +177,7 @@ fn cover_at_vertices(
 
             let mut sampled = Vec::with_capacity(binfmt::SIDES * (to - from));
             for (vertex, bearing) in sidewalks::bearings(&xs, &ys).into_iter().enumerate() {
-                // The offset is placed in metre space, then handed back to the lng/lat field; the
+                // The offset is placed in meter space, then handed back to the lng/lat field; the
                 // kernel is oriented to the street's bearing, tight across it so the two sidewalks
                 // do not blur into one.
                 let mut at = |x: f64, y: f64| {

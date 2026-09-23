@@ -27,7 +27,7 @@ import {
 // naive walk would draw it twice.
 
 // A deterministic spread of boxes over roughly the city's extent in zoom-0 world pixels, sized from a
-// few metres to several cells across.
+// few meters to several cells across.
 function boxesOf(count: number): Float64Array {
   const boxes = new Float64Array(count * 4);
   let seed = 12345;
@@ -160,9 +160,9 @@ const span = (edge: number, t0 = 0, t1 = 1, depth = 0): ShedSpan => ({
   depth,
 });
 
-// A deck stands between the building line and the kerb, not on the sidewalk's own line, so a vertex
-// lands a metre or two off the node it belongs to and a corner comes back as TWO vertices a step
-// apart. Both are matched within a few metres and consecutive repeats collapse, so what these assert
+// A deck stands between the building line and the curb, not on the sidewalk's own line, so a vertex
+// lands a meter or two off the node it belongs to and a corner comes back as TWO vertices a step
+// apart. Both are matched within a few meters and consecutive repeats collapse, so what these assert
 // is the walk order rather than the offset — which has its own test below.
 const NEAR_METERS = 5;
 
@@ -218,18 +218,18 @@ test("two sheds meeting at the same corner stay two decks", () => {
 
 // The acceptance test the flat 4 m band failed: a deck has to meet the building it stands against.
 // Edge 0 runs east along the bottom of the block, geometry-left of its own direction is north, and
-// the sidewalk's baked line sits one `sidewalkInsetMeters` out from the kerb — so the deck's far
+// the sidewalk's baked line sits one `sidewalkInsetMeters` out from the curb — so the deck's far
 // edge has to land on the building line whatever the pavement measures, and its near edge a hand's
-// breadth off the kerb.
+// breadth off the curb.
 
 const INSET_METERS = 2; // the manifest's streets.sidewalkInsetMeters, which the graph bakes at
-const KERB_MARGIN_METERS = 0.3;
+const CURB_MARGIN_METERS = 0.3;
 const FALLBACK_METERS = 4; // what a span with no measured depth falls back to
 
-// One straight deck's two long edges, as metres north of the sidewalk's own line — the building side
+// One straight deck's two long edges, as meters north of the sidewalk's own line — the building side
 // being north here, since the edge runs east. Measured off the RING rather than off the run, since
 // the ring is what both readers draw.
-function bandEdges(depth: number): { kerb: number; building: number } {
+function bandEdges(depth: number): { curb: number; building: number } {
   const graph = blockGraph();
   const [run] = shedRuns(graph, shedOf([span(0, 0, 1, depth)]));
   const ring = deckRing(run);
@@ -239,40 +239,40 @@ function bandEdges(depth: number): { kerb: number; building: number } {
     ys.push((line - ring[vertex * 2 + 1]) / pixelsPerMeter(0));
   }
   // y runs south in world pixels, so the building edge is the northernmost of the two.
-  return { kerb: Math.min(...ys), building: Math.max(...ys) };
+  return { curb: Math.min(...ys), building: Math.max(...ys) };
 }
 
-test("the band runs from just off the kerb out to the building line", () => {
+test("the band runs from just off the curb out to the building line", () => {
   for (const depth of [2.5, 4, 6, 8]) {
-    const { kerb, building } = bandEdges(depth);
-    expect(kerb).toBeCloseTo(KERB_MARGIN_METERS - INSET_METERS, 6);
-    expect(building).toBeCloseTo(depth - INSET_METERS + KERB_MARGIN_METERS, 6);
+    const { curb, building } = bandEdges(depth);
+    expect(curb).toBeCloseTo(CURB_MARGIN_METERS - INSET_METERS, 6);
+    expect(building).toBeCloseTo(depth - INSET_METERS + CURB_MARGIN_METERS, 6);
   }
 });
 
 test("a deck measured narrower than one can be built reaches over the roadway", () => {
   // The building line is where the measurement put it; the width missing from what DOB's rules
-  // allow to be built comes off the kerb side, which is the estimate rather than the evidence.
+  // allow to be built comes off the curb side, which is the estimate rather than the evidence.
   const measured = 1.2;
-  const { kerb, building } = bandEdges(measured);
-  expect(building).toBeCloseTo(measured - INSET_METERS + KERB_MARGIN_METERS, 6);
-  expect(building - kerb).toBeCloseTo(MIN_DECK_DEPTH_METERS, 6);
-  expect(kerb).toBeLessThan(-INSET_METERS); // out past the kerb itself
+  const { curb, building } = bandEdges(measured);
+  expect(building).toBeCloseTo(measured - INSET_METERS + CURB_MARGIN_METERS, 6);
+  expect(building - curb).toBeCloseTo(MIN_DECK_DEPTH_METERS, 6);
+  expect(curb).toBeLessThan(-INSET_METERS); // out past the curb itself
 });
 
 test("a span with no measured depth falls back rather than collapsing", () => {
-  const { kerb, building } = bandEdges(0);
-  expect(kerb).toBeCloseTo(KERB_MARGIN_METERS - INSET_METERS, 6);
+  const { curb, building } = bandEdges(0);
+  expect(curb).toBeCloseTo(CURB_MARGIN_METERS - INSET_METERS, 6);
   expect(building).toBeCloseTo(
-    FALLBACK_METERS - INSET_METERS + KERB_MARGIN_METERS,
+    FALLBACK_METERS - INSET_METERS + CURB_MARGIN_METERS,
     6,
   );
 });
 
-// The depth each of a run's segments carries, in metres.
+// The depth each of a run's segments carries, in meters.
 function runDepths(run: DeckRun): number[] {
   return [...run.building].map(
-    (edge, segment) => Math.abs(edge - run.kerb[segment]) / pixelsPerMeter(0),
+    (edge, segment) => Math.abs(edge - run.curb[segment]) / pixelsPerMeter(0),
   );
 }
 
@@ -290,7 +290,7 @@ test("a corner onto a pavement of another width stays one deck", () => {
   ).toEqual([6, 2.5]);
 });
 
-// The ring is the deck's own polygon: out along the building edge and back along the kerb, so its
+// The ring is the deck's own polygon: out along the building edge and back along the curb, so its
 // vertices come in pairs straddling the run and it winds positively however the sidewalk it stands
 // on was baked. Both readers depend on all three.
 
@@ -307,7 +307,7 @@ function signedDoubleArea(ring: Float64Array): number {
   return sum;
 }
 
-// The width the ring carries at each pair, in metres.
+// The width the ring carries at each pair, in meters.
 function ringWidths(ring: Float64Array): number[] {
   const widths: number[] = [];
   const count = ring.length / 4;
@@ -323,7 +323,7 @@ function ringWidths(ring: Float64Array): number[] {
   return widths;
 }
 
-// Every ring vertex as metres east and north of a block node.
+// Every ring vertex as meters east and north of a block node.
 function ringAround(ring: Float64Array, node: number): [number, number][] {
   const scale = pixelsPerMeter(0);
   const originX = projectX(BLOCK_NODES[node].lng, 0);
@@ -341,7 +341,7 @@ function ringAround(ring: Float64Array, node: number): [number, number][] {
 test("a ring is a strip of paired vertices, positively wound", () => {
   const graph = blockGraph();
   // Edge 0 runs east along the top of the block and edge 2 west along the bottom, so between them
-  // the walk leaves along the building edge on one and along the kerb edge on the other.
+  // the walk leaves along the building edge on one and along the curb edge on the other.
   for (const edge of [0, 2]) {
     for (const depth of [2.5, 6]) {
       const [run] = shedRuns(graph, shedOf([span(edge, 0, 1, depth)]));
@@ -362,15 +362,15 @@ test("a corner turns where the two offset lines meet", () => {
   expect(signedDoubleArea(ring)).toBeGreaterThan(0);
   // Node 1 is the block's north-east corner: the 6 m deck runs east to it with its building line
   // 4.3 m north, the 2.5 m deck runs south from it with its own 0.8 m east, and the corner of the
-  // band is where those two lines cross. Both kerb edges sit 1.7 m the other side of their line.
+  // band is where those two lines cross. Both curb edges sit 1.7 m the other side of their line.
   const near = (east: number, north: number): boolean =>
     ringAround(ring, 1).some(
       ([atEast, atNorth]) =>
         Math.abs(atEast - east) < 0.01 && Math.abs(atNorth - north) < 0.01,
     );
-  expect(near(6 - INSET_METERS + KERB_MARGIN_METERS, 0)).toBe(false);
-  expect(near(2.5 - INSET_METERS + KERB_MARGIN_METERS, 4.3)).toBe(true);
-  expect(near(KERB_MARGIN_METERS - INSET_METERS, -1.7)).toBe(true);
+  expect(near(6 - INSET_METERS + CURB_MARGIN_METERS, 0)).toBe(false);
+  expect(near(2.5 - INSET_METERS + CURB_MARGIN_METERS, 4.3)).toBe(true);
+  expect(near(CURB_MARGIN_METERS - INSET_METERS, -1.7)).toBe(true);
 });
 
 test("a wrap that closes on itself rings as an annulus", () => {
@@ -422,7 +422,7 @@ test("a band under the minimum width opens out about its own middle", () => {
   expect(spread(asDrawn)).toBeCloseTo(4 * pixelsPerMeter(0), 9);
   const opened = traced(8 * pixelsPerMeter(0));
   expect(spread(opened)).toBeCloseTo(8 * pixelsPerMeter(0), 9);
-  // Opened about the middle: the band's own centre has not moved.
+  // Opened about the middle: the band's own center has not moved.
   const middle = (points: { x: number; y: number }[]): number =>
     (Math.max(...points.map(({ y }) => y)) +
       Math.min(...points.map(({ y }) => y))) /

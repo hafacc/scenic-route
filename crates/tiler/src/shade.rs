@@ -1,6 +1,6 @@
 //! The shade pass: rasterizes building shadows from data/buildings/<id>.bin — footprints with roof
 //! heights, magic BLDG — into one lossless WebP tile pyramid per time-of-day bucket at
-//! <tiles>/shade/<bucket>/{z}/{x}/{y}.webp, with a physically-modelled penumbra. A bucket carries
+//! <tiles>/shade/<bucket>/{z}/{x}/{y}.webp, with a physically-modeled penumbra. A bucket carries
 //! several sun-disk samples; each building casts one shadow hull per sample, and a pixel's fill is
 //! the fraction of samples that reach it — umbra where all do, penumbra where some do. Mirrors
 //! the canopy pass's rasterize/coverage/paint shape. See scripts/README.md.
@@ -27,7 +27,7 @@ use crate::raster::{
     lng_to_pixel_x, pixel_x_to_lng, pixel_y_to_lat, plan_tiles,
 };
 
-// The alpha — the one channel that varies — is quantised to this step before encoding, which keeps
+// The alpha — the one channel that varies — is quantized to this step before encoding, which keeps
 // the deep z15 level (two thirds of the pyramid) inside the deploy's size budget at ~3% opacity
 // granularity, fine enough to stay invisible. The lattice is coarser than the step alone implies:
 // MAX_SHADE_ALPHA and the bin's intensity cap it well below 255, so 23 distinct values exist across
@@ -37,7 +37,7 @@ const SHADE_ALPHA_STEP: u16 = 8;
 // Shadow edges are hard, so the fill is antialiased by rasterizing each sample at 4x and averaging
 // the block back down — a pixel half inside a hull reads 0.5. Same pattern as canopy.
 const SUPERSAMPLE: usize = 4;
-const SHADE_RGB: [u8; 3] = [51, 65, 85]; // a cool slate; the shadow's only colour
+const SHADE_RGB: [u8; 3] = [51, 65, 85]; // a cool slate; the shadow's only color
 // Umbra opacity at full solar intensity (a zenith sun, never reached at NYC's latitude). The shaded
 // fraction AND the bucket's intensity scale down from here, so a low sun's long shadows read faint.
 const MAX_SHADE_ALPHA: f64 = 190.0;
@@ -103,7 +103,7 @@ pub struct Params {
 }
 
 /// The client's schedule: which bin index stands for which grid cell (season, hourAngle) and sun
-/// position. The client selects on season/hourAngle; the position is carried for labelling/debugging.
+/// position. The client selects on season/hourAngle; the position is carried for labeling/debugging.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BucketEntry {
@@ -114,7 +114,7 @@ struct BucketEntry {
     azimuth: f64,
 }
 
-/// What throws a shadow: the building footprints and their roof heights in metres, and the canopy
+/// What throws a shadow: the building footprints and their roof heights in meters, and the canopy
 /// polygons that carry a measured crown height with those heights (empty for a city with no canopy).
 /// Shared by the display pyramid and the per-edge bake.
 pub struct Casters {
@@ -260,7 +260,7 @@ fn convex_hull(points: &[Coord]) -> Vec<Coord> {
 const MIN_CONCAVITY_M2: f64 = 200.0;
 
 // Vertices one swept run is allowed before it is cut and carried on. A run is a strip as long as the
-// boundary it follows, and a park's boundary runs for hundreds of metres — which every tile that strip's
+// boundary it follows, and a park's boundary runs for hundreds of meters — which every tile that strip's
 // bounding box touches would then walk in full. Cutting keeps a strip's box near the ground it covers.
 const MAX_SWEEP_RUN: usize = 16;
 
@@ -400,7 +400,7 @@ fn append_sweep(
     close(&mut run, out);
 }
 
-/// The displacement, in degrees, a shadow of `distance` metres carries at this latitude's scale.
+/// The displacement, in degrees, a shadow of `distance` meters carries at this latitude's scale.
 fn offset(distance: f64, sample: &Sample, meters_per_lng: f64) -> (f64, f64) {
     (
         distance * sample.east / meters_per_lng,
@@ -409,7 +409,7 @@ fn offset(distance: f64, sample: &Sample, meters_per_lng: f64) -> (f64, f64) {
 }
 
 /// Append the shadow one building casts for one sample to `out`: the footprint's outer ring swept
-/// down the shadow by `min(max_shadow, height * shadowPerHeight)` metres, since a wall joins the roof
+/// down the shadow by `min(max_shadow, height * shadowPerHeight)` meters, since a wall joins the roof
 /// to the ground. A ring its convex hull barely over-fills is swept as that single hull; a real
 /// concavity is swept exactly, as the ring, its translate and one parallelogram per edge. Nothing is
 /// appended when the building has no footprint or casts nothing (zero height or a sun at the zenith).
@@ -591,7 +591,7 @@ fn build_sample_sets(shade: &CityShade, bucket: &Bucket, max_shadow_meters: f64)
         .collect()
 }
 
-/// Every measured crown's shadow for one bucket, from the CENTRE sun-disk sample alone: at z15 a 10 m
+/// Every measured crown's shadow for one bucket, from the CENTER sun-disk sample alone: at z15 a 10 m
 /// crown's penumbra is ~5 cm against a ~3.6 m pixel, so the ring samples would paint the same picture
 /// six times over. None when the city has no measured crown.
 fn build_crown_set(
@@ -802,7 +802,7 @@ fn coverage(
     }
 }
 
-/// Colour EVERY pixel the fixed slate, so the colour plane is one constant and only alpha carries
+/// Color EVERY pixel the fixed slate, so the color plane is one constant and only alpha carries
 /// the tile, scaled from the shadow fraction and the bucket's solar intensity. A pixel whose alpha
 /// rounds below MIN_ALPHA, where the fill is invisible, stays transparent. Writing the slate
 /// unconditionally is byte-neutral — the lossless encoder zeroes RGB under transparent pixels
@@ -1051,7 +1051,7 @@ const SHADE_COARSE_CELL_METERS: f64 = 8.0; // fallback cell for a bbox too large
 const SHADE_CELL_BUDGET: usize = 128_000_000; // ~128 MB per bin grid before the coarser cell kicks in
 
 /// A rasterized shadow-coverage grid for one bin over the edges' bounding box: `cells[r*cols+c]` is
-/// nonzero where the bin's shadow hulls cover that ~`cell`-metre cell. A point maps to its cell the
+/// nonzero where the bin's shadow hulls cover that ~`cell`-meter cell. A point maps to its cell the
 /// same way `fill_polygons` places the hulls, so `shaded` reads the fill back in O(1); a point
 /// outside the grid is sunlit (a shadow beyond the edge extent never touches a sample).
 struct CoverageGrid {
@@ -1121,7 +1121,7 @@ fn encode_fraction(fraction: f64) -> u8 {
     round_half_up(fraction * 255.0).clamp(0.0, 255.0) as u8
 }
 
-/// The edges' bounding box in metres and the cell-grid it induces, computed once and shared across
+/// The edges' bounding box in meters and the cell-grid it induces, computed once and shared across
 /// bins (only the rasterized `cells` differ per bin). `None` when no edge carries geometry.
 struct GridSpec {
     bounds: Bounds,
@@ -1231,7 +1231,7 @@ pub fn bin_position(bucket: &Bucket) -> BinPosition {
 
 /// Per bin, per edge, the two unsigned occlusion fractions the client routes on: how much of the
 /// edge's polyline the bin's BUILDING shadows cover, and how much its CROWN shadows do, both from the
-/// bin's crisp centre sample (the ring samples give the tiles their penumbra; an edge is cleanly in
+/// bin's crisp center sample (the ring samples give the tiles their penumbra; an edge is cleanly in
 /// or out of shadow). One (buildings, trees) row pair per bin given, each `edge_count` bytes. An edge
 /// with no polyline — a ferry, whose cost never reads a shade attribute — reads 0 in both.
 ///
@@ -1323,7 +1323,7 @@ mod tests {
     }
 
     // A 100 m building near (-74, 40.7) and, 850 m east of it, a 10 m crown and a crown of unknown
-    // height, against two bins whose centre sample throws a shadow due north at 5 m per metre: 500 m
+    // height, against two bins whose center sample throws a shadow due north at 5 m per meter: 500 m
     // for the building and a smear from 20 m to 50 m for the crown — its slices swept from its 4 m
     // crown base to its 10 m top, not its outline moved once — and nothing for the unknown one. Each
     // edge sits under one caster (or neither), so the two fractions separate.

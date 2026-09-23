@@ -43,7 +43,7 @@ const COMMERCIAL_FRACTION = 0.5;
 const LOW_RISE_METERS = 25;
 
 // The band composites at one flat opacity — lower than a thin line would take, since the band is fat
-// and neighbouring bands overlap at corners, so it stays airy.
+// and neighboring bands overlap at corners, so it stays airy.
 const BAND_OPACITY = 0.45;
 
 // The band's stroke wants the overlay's violet as channels rather than as hex, so both themes' are
@@ -59,7 +59,7 @@ const BAND_CHANNELS: Record<ThemeName, readonly [number, number, number]> = {
 };
 
 // The vector band's ground width: the roadway plus the frontage lots on both sides, so it reads as the
-// commercial BLOCK strip rather than a centreline over the street. A NYC lot is ~30 m deep, the road
+// commercial BLOCK strip rather than a centerline over the street. A NYC lot is ~30 m deep, the road
 // ~12 m, so ~50 m covers the street and most of the frontage each side. From z13 down that comes to
 // a couple of pixels or less, so it is floored — the floor is what keeps the city overview a legible
 // wash instead of invisible hairlines, and it is narrow enough that at z10 the strips still read as
@@ -71,15 +71,15 @@ const MIN_BAND_PX = 4;
 // as the map zooms out — a fixed pixel blur swallows a thin band and turns the strips into a wash —
 // capped so a wide band at high zoom keeps the soft edge it has. The band is drawn onto an offscreen
 // padded by BLUR_PAD (~3× the widest blur, so a band near the tile edge still has pixels for the blur
-// to pull from), blurred, then only the centre TILE_SIZE region is composited — so a blurred edge
-// lines up with the neighbouring tile's. All three are tunable by eye.
+// to pull from), blurred, then only the center TILE_SIZE region is composited — so a blurred edge
+// lines up with the neighboring tile's. All three are tunable by eye.
 const BLUR_FRACTION = 0.18;
 const MAX_BLUR_PX = 5;
 const BLUR_PAD = 15;
 
 const EQUATOR_METERS_PER_PIXEL = 156_543.033_92; // web mercator, at the equator, at z0
 
-// One block-length CSCL centreline: just the geometry, the unit the overlay highlights. The chunk's
+// One block-length CSCL centerline: just the geometry, the unit the overlay highlights. The chunk's
 // per-vertex density bytes are consumed to advance the cursor but not kept — this overlay is on/off.
 interface Segment {
   lngs: Float64Array;
@@ -313,7 +313,7 @@ function sizedCanvas(
   return reused;
 }
 
-// The metres a screen pixel spans at this tile's centre, for sizing the ground-width band.
+// The meters a screen pixel spans at this tile's center, for sizing the ground-width band.
 function metersPerPixel(coords: TileCoords): number {
   const center = unproject(
     coords.x * TILE_SIZE + TILE_SIZE / 2,
@@ -327,12 +327,12 @@ function metersPerPixel(coords: TileCoords): number {
 }
 
 // Stroke the whole unioned band path opaque onto a padded offscreen, blur it to feather the edges,
-// then composite the centre region onto the tile at BAND_OPACITY. Stroking the union at alpha 1
+// then composite the center region onto the tile at BAND_OPACITY. Stroking the union at alpha 1
 // paints overlapping and abutting bands as one solid shape (no darker patches where blocks cross);
 // one uniform opacity at composite keeps it flat. Square caps let a block ending at a T/L fill the
 // corner flush; miter joins keep a within-street bend continuous. The offscreen is padded by
-// BLUR_PAD so a band near the tile edge has pixels for the blur to draw from, and only the centre
-// TILE_SIZE region is copied out, so a feathered edge lines up with the neighbouring tile's.
+// BLUR_PAD so a band near the tile edge has pixels for the blur to draw from, and only the center
+// TILE_SIZE region is copied out, so a feathered edge lines up with the neighboring tile's.
 function compositeBand(
   context: OffscreenCanvasRenderingContext2D,
   path: Path2D,
@@ -375,7 +375,7 @@ function compositeBand(
 }
 
 // Draw each qualifying block as one WIDE violet band over the street — a rectangle that reads as the
-// whole block, not a centreline. Projected at the tile's own zoom, so the band stays crisp however
+// whole block, not a centerline. Projected at the tile's own zoom, so the band stays crisp however
 // far in the map goes. Every qualifying block goes into ONE unioned path, composited (and feathered)
 // once.
 function draw(

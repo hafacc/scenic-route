@@ -60,14 +60,14 @@ const BART_CACHE_KEY = "gtfs-bart";
 // What Muni draws. route_type 0 is its rail: the six Metro lines (J/K/L/M/N/T) and the F historic
 // streetcar, which runs the same rails down Market and is on Muni's own system map. 5 is the three
 // cable car lines, kept for the same reason — they are scheduled rail service with published
-// colours and shapes, and a San Francisco transit map without the cable cars is not one. The other
+// colors and shapes, and a San Francisco transit map without the cable cars is not one. The other
 // 58 routes are buses (route_type 3): New York's ingest draws no buses either, and Muni's bus
 // network alone would not fit the station mask's 32 routes.
 const MUNI_ROUTE_TYPES = new Set(["0", "5"]);
 // BART is one route_type, 1. Its two `BB-*` bus bridges are route_type 3 and carry no shapes.
 const BART_ROUTE_TYPE = "1";
 
-// The GTFS defaults for a route publishing no colour. Both feeds publish both for every route drawn
+// The GTFS defaults for a route publishing no color. Both feeds publish both for every route drawn
 // here; the spec's white-on-black beats inventing one.
 const DEFAULT_ROUTE_COLOR = "FFFFFF";
 const DEFAULT_TEXT_COLOR = "000000";
@@ -177,11 +177,11 @@ function muniRoutes(feed: GtfsFeed): FeedRoute[] {
   }));
 }
 
-// BART's lines, one per colour. The feed splits each line into two route_ids — "Yellow-S" (route 1)
+// BART's lines, one per color. The feed splits each line into two route_ids — "Yellow-S" (route 1)
 // and "Yellow-N" (route 2) — which are the two directions of one line down one pair of rails, so
 // they are folded together here exactly as direction_id 0 and 1 are folded within a Muni route: the
 // lower-numbered route_id's shapes are the primary ones, the other's have to reach track they do not
-// already cover. Drawing them apart would put every BART line on the map twice, in one colour, under
+// already cover. Drawing them apart would put every BART line on the map twice, in one color, under
 // two names no station sign uses.
 function bartRoutes(feed: GtfsFeed): FeedRoute[] {
   const shapes = readShapes(feed);
@@ -235,10 +235,10 @@ function bartRoutes(feed: GtfsFeed): FeedRoute[] {
 // coordinate, so the parents are what a marker wants; BART publishes them (and its entrances, as
 // location_type 2, which never appear in stop_times and so never reach this). Muni publishes no
 // parent_station at all, which the same code path handles by a stop standing in for itself — the
-// kerb-to-kerb pairs it leaves behind are what the name merge below folds.
+// curb-to-curb pairs it leaves behind are what the name merge below folds.
 //
 // `displayName` is how a feed that names a stop for the platform it is turns that into the place a
-// marker is labelled with; a feed whose stop_name is already the station's, as BART's is, has none.
+// marker is labeled with; a feed whose stop_name is already the station's, as BART's is, has none.
 function feedStations(
   feed: GtfsFeed,
   routeOfTrip: ReadonlyMap<string, number>,
@@ -277,7 +277,7 @@ function feedStations(
   return stations;
 }
 
-// One marker per station rather than one per kerb: stops sharing a name and lying within
+// One marker per station rather than one per curb: stops sharing a name and lying within
 // STATION_MERGE_METERS of one another become a single marker at their centroid, carrying every route
 // that calls at any of them. Single-link, so the three stops of a rail terminal chain into one
 // marker; run over both agencies together, so a Muni stop and a BART entrance of the same name at the

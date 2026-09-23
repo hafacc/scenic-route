@@ -9,15 +9,15 @@ use crate::binfmt::Coord;
 use crate::geometry::{METERS_PER_DEGREE_LAT, PolygonGrid, PolygonSet};
 use crate::manifest::Bounds;
 
-// One sample per metre of walk, which is what the two callers of `contained_fraction` want of it: a
-// crown is metres across and a district boundary is drawn to the lot line, and even the shortest
+// One sample per meter of walk, which is what the two callers of `contained_fraction` want of it: a
+// crown is meters across and a district boundary is drawn to the lot line, and even the shortest
 // edge — a crossing runs ~15 m — still lands a dozen samples.
 const SAMPLE_STEP_METERS: f64 = 1.0;
 
 /// The share of a polyline's LENGTH that falls inside `set`: the line walked at
 /// `SAMPLE_STEP_METERS` by arc length, each sample tested UNDERFOOT against the raw 0/1 indicator
 /// with no kernel, and the inside share returned. The samples are the midpoints of equal
-/// sub-lengths, so the estimate is the arc-length integral of that indicator and every metre of the
+/// sub-lengths, so the estimate is the arc-length integral of that indicator and every meter of the
 /// line weighs the same.
 ///
 /// The candidates are gathered once for the whole polyline — a graph edge is a block long and the
@@ -65,7 +65,7 @@ pub fn contained_fraction(
     let step = total / samples as f64;
     let mut covered = 0usize;
     let mut segment = 0usize;
-    let mut behind = 0.0; // metres of the segments before `segment`
+    let mut behind = 0.0; // meters of the segments before `segment`
     // The targets rise, so the segment cursor never walks back.
     for sample in 0..samples {
         let target = (sample as f64 + 0.5) * step;

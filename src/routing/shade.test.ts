@@ -15,11 +15,11 @@ const sun = SunCalc as unknown as {
   ) => { altitude: number; azimuth: number };
 };
 const [city] = manifest.cities;
-const CENTRE_LAT = (city.bounds.north + city.bounds.south) / 2;
-const CENTRE_LNG = (city.bounds.east + city.bounds.west) / 2;
+const CENTER_LAT = (city.bounds.north + city.bounds.south) / 2;
+const CENTER_LNG = (city.bounds.east + city.bounds.west) / 2;
 
 function sunAt(date: Date): { elevation: number; azimuth: number } {
-  const position = sun.getPosition(date, CENTRE_LAT, CENTRE_LNG);
+  const position = sun.getPosition(date, CENTER_LAT, CENTER_LNG);
   return {
     elevation: position.altitude,
     azimuth: ((position.azimuth % 360) + 360) % 360,
@@ -55,11 +55,11 @@ function buildBin(buildings: number[], trees: number[]): ArrayBuffer {
 // straddle its hour angle symmetrically (equal distance) and a third sits far off in the same band;
 // the nearest two by hour angle are then bins 0 and 1, blended 50/50.
 const daySun = sunAt(DAY);
-const dayDecl = declinationOf(daySun.elevation, daySun.azimuth, CENTRE_LAT);
+const dayDecl = declinationOf(daySun.elevation, daySun.azimuth, CENTER_LAT);
 const dayHour = hourAngleOf(
   daySun.elevation,
   daySun.azimuth,
-  CENTRE_LAT,
+  CENTER_LAT,
   dayDecl,
 );
 const daySeason = seasonBand(dayDecl);
@@ -210,7 +210,7 @@ test("computeEdgeShade advances the sun with elapsed walking time", async () => 
 
   // Edge 2 is open in bin 0 (the later, larger-hour-angle bin) and half building-shaded in bin 1. As
   // the walk elapses the sun's hour angle grows toward bin 0, so the blend shifts off bin 1 toward 0 —
-  // a metre reached an hour in is costed against a later sun than one reached at the start.
+  // a meter reached an hour in is costed against a later sun than one reached at the start.
   const atStart = shade.attrAt(2, 0);
   const anHourIn = shade.attrAt(2, 3600);
   expect(atStart).toBeCloseTo(63 / 128, 6);

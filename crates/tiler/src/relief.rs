@@ -25,8 +25,8 @@ const REFERENCE_GRADE: f64 = 0.35;
 
 const MAX_BYTE: f64 = 254.0;
 
-/// The shortest run a grade is taken over. A kerb link a metre long that happens to span three
-/// metres of ground is not a 300% street, it is too short for a grade to mean anything — and left
+/// The shortest run a grade is taken over. A curb link a meter long that happens to span three
+/// meters of ground is not a 300% street, it is too short for a grade to mean anything — and left
 /// alone it maxes the byte and makes the reported steepest nonsense. San Francisco's real steepest
 /// blocks run to 31%, which this leaves untouched.
 const MIN_GRADE_METERS: f64 = 10.0;
@@ -55,7 +55,7 @@ fn climb_of(polyline: &[Coord], field: &Field) -> Option<(f64, f64)> {
         let height = field.sample(point.lng, point.lat);
         if !height.is_finite() {
             // A gap in the ground breaks the chain rather than being bridged: the height across it
-            // is unknown, and treating the far side as the near side's neighbour would invent a
+            // is unknown, and treating the far side as the near side's neighbor would invent a
             // cliff at every shoreline.
             previous = None;
             continue;
@@ -79,7 +79,7 @@ fn climb_of(polyline: &[Coord], field: &Field) -> Option<(f64, f64)> {
 }
 
 /// The ascent and descent bytes for every edge, given each edge's polyline in degrees and its length
-/// in metres. `mean_grade` and `max_grade` are over their SUM, the figure the hill penalty reads.
+/// in meters. `mean_grade` and `max_grade` are over their SUM, the figure the hill penalty reads.
 pub fn relief(polylines: &[Vec<Coord>], lengths: &[f32], field: &Field) -> Fallible<Relief> {
     let mut ascent = vec![0u8; polylines.len()];
     let mut descent = vec![0u8; polylines.len()];
@@ -130,7 +130,7 @@ mod tests {
     /// 0.9 m long — which is the terrain's slope charged as the edge's own.
     #[test]
     fn a_short_edge_climbs_in_proportion_to_its_length() {
-        // Two cells ten metres apart in height, and an edge crossing a tenth of the gap between them.
+        // Two cells ten meters apart in height, and an edge crossing a tenth of the gap between them.
         let field = ramp([0.0, 10.0, 20.0, 30.0]);
         let short = vec![Coord { lng: 1.5, lat: 0.5 }, Coord { lng: 1.6, lat: 0.5 }];
         let baked = relief(&[short], &[100.0], &field).unwrap();

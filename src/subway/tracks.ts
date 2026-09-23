@@ -11,11 +11,11 @@ const METERS_PER_DEGREE_LAT = 111_320;
 
 // How far a station may sit from the shape its own line is drawn as before the match is refused.
 // The agency's shapes run down the middle of the tracks and a station point stands over them, so the
-// gap is tens of metres where the two describe the same place; a few hundred means the projection
+// gap is tens of meters where the two describe the same place; a few hundred means the projection
 // landed on the wrong stretch, and a chord is a better drawing than a wrong one.
 const MAX_STATION_OFFSET_METERS = 300;
 
-// A station whose projection lands this close to it is already on the track: about a centimetre, so
+// A station whose projection lands this close to it is already on the track: about a centimeter, so
 // the only thing it absorbs is the arithmetic of projecting a point onto the segment it lies on.
 const SAME_POINT_DEGREES = 1e-7;
 
@@ -176,7 +176,7 @@ export function sliceTrack(
 }
 
 // The shapes drawn for a line the graph names. The display artifact carries no route ids, so the
-// join is on the name a rider says plus the published colour — the pair the two files agree on.
+// join is on the name a rider says plus the published color — the pair the two files agree on.
 export function trackShapes(
   subway: Subway,
   route: { shortName: string; color: string },

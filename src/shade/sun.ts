@@ -30,7 +30,7 @@ const SUN_ANGULAR_RADIUS_DEG = 0.265;
 export const DISK_SAMPLES = 6;
 
 // One sun-disk sample: the ground unit vector pointing DOWN the shadow (anti-sun) and the shadow
-// length per metre of caster height.
+// length per meter of caster height.
 export interface SunSample {
   east: number;
   north: number;
@@ -41,7 +41,7 @@ function clamp(value: number, low: number, high: number): number {
   return Math.min(high, Math.max(low, value));
 }
 
-// `count` samples of the disk around a sun position: index 0 at the centre, the rest on a ring near the
+// `count` samples of the disk around a sun position: index 0 at the center, the rest on a ring near the
 // disk's mean, so a count of 1 is the crisp point sun. The azimuth spread divides by cos(elevation) so
 // the offsets stay a circle on the sky.
 export function sunSamples(

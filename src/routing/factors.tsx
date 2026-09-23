@@ -43,7 +43,7 @@ import {
 
 // What each scenic factor is called, looks like and moves on. The route panel and the settings page
 // both draw the same twelve sliders, so the metadata lives here rather than in either of them: two
-// tables would be two chances for a label, a colour or a scale to drift.
+// tables would be two chances for a label, a color or a scale to drift.
 
 // Everything else in the cost context: one slider each. The switches are in ./cost.ts, with the
 // types they are excluded by, so the two lists cannot drift apart. `allowTransit` is excluded there
@@ -56,8 +56,8 @@ export interface Factor {
   label: string;
   Icon: ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
   max: number;
-  tint: string; // text colour for the icon and chip
-  color: string; // the slider's fill/thumb colour (a CSS hex; matches the map overlay)
+  tint: string; // text color for the icon and chip
+  color: string; // the slider's fill/thumb color (a CSS hex; matches the map overlay)
   signed?: boolean; // a bipolar −max..max slider (sun ↔ shade) rather than one-sided 0..max
   // The layer a city omits when it has no data for this factor. The route panel reads the loaded
   // graph instead, which is exact — but the settings page opens with no graph and must still say
@@ -160,7 +160,7 @@ export const FACTORS: readonly Factor[] = [
     label: "Prefer historic areas",
     // The overlay's own glyph and indigo — deliberately not the landmarks amber, which prices a
     // different thing: passing one designated building, rather than walking inside a designated
-    // neighbourhood.
+    // neighborhood.
     Icon: MdMapsHomeWork,
     max: MAX_HISTORIC_WEIGHT,
     tint: "text-indigo-600 dark:text-indigo-400",
@@ -208,7 +208,7 @@ export const FACTORS: readonly Factor[] = [
     Icon: PiBridgeFill,
     max: MAX_BRIDGE_WEIGHT,
     // Cyan, beside the ferries' blue: the nearest idea on the list, and deliberately not the same
-    // colour, since only one of the two is a walk.
+    // color, since only one of the two is a walk.
     tint: "text-cyan-600 dark:text-cyan-400",
     color: "#0891b2",
   },
@@ -217,7 +217,7 @@ export const FACTORS: readonly Factor[] = [
     label: "Avoid the subway",
     Icon: PiTrainSimpleFill,
     max: MAX_TRANSIT_WEIGHT,
-    // The lines' own colours are the routes', which vary by line; this is the layer's chrome.
+    // The lines' own colors are the routes', which vary by line; this is the layer's chrome.
     tint: "text-slate-600 dark:text-slate-300",
     color: "#475569",
     overlay: "subway",
@@ -251,7 +251,7 @@ export function factorReading(factor: Factor, weight: number): string {
   }
 }
 
-// A factor's slider, tracked in its own colour. The two pages show the same weight, so they show it
+// A factor's slider, tracked in its own color. The two pages show the same weight, so they show it
 // through the same control rather than through two that have to be kept in step.
 // The steps a slider moves in, as percentages. Twenty positions either way rather than a hundred:
 // nobody is choosing between 63% and 64% tree cover, and a coarse step is what makes the same drag
@@ -299,7 +299,7 @@ export function FactorSlider({
       style={
         {
           "--fill": factor.color,
-          // A signed slider fills from the centre, so map −100..100 to a 0..100 track.
+          // A signed slider fills from the center, so map −100..100 to a 0..100 track.
           "--pct": factor.signed ? `${(value + 100) / 2}%` : `${value}%`,
         } as CSSProperties
       }

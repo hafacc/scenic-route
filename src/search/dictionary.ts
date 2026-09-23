@@ -31,7 +31,7 @@ export interface TokenDictionary {
   postingsStart: number;
 }
 
-// Where a walk over the dictionary is: the token it has just read, spelt out from the front-coded
+// Where a walk over the dictionary is: the token it has just read, spelled out from the front-coded
 // tail, and where that token's postings start. `index` is the dictionary position, so that a caller
 // can tell a run's extent; `lcp` is what the entry shares with the one before it, which is what the
 // fuzzy walk pops its rows by.
@@ -99,7 +99,7 @@ export function stepDict(
 
 // Spells the current entry out into `cursor.token`, which is only ever the tail: what the entry
 // shares with its predecessor is already in the buffer, and stays right even across entries the walk
-// skipped, since a skipped entry shares those bytes with the last one spelt out or it would not have
+// skipped, since a skipped entry shares those bytes with the last one spelled out or it would not have
 // been skipped.
 export function dictToken(
   dictionary: TokenDictionary,
@@ -139,7 +139,7 @@ export const FUZZY_MIN_LENGTH = 4;
 // while two of "delicatessen" is still unmistakably that word.
 export const FUZZY_FAR_LENGTH = 7;
 
-// How wrong a word of this length may be spelt and still be looked for. Zero is "do not look".
+// How wrong a word of this length may be spelled and still be looked for. Zero is "do not look".
 export function maxEditDistance(length: number): number {
   if (length < FUZZY_MIN_LENGTH) {
     return 0;
@@ -150,7 +150,7 @@ export function maxEditDistance(length: number): number {
   }
 }
 
-// One dictionary token the misspelt word reached.
+// One dictionary token the misspelled word reached.
 export interface FuzzyMatch {
   postings: number;
   postingCount: number;

@@ -24,7 +24,7 @@ const DOT_ALPHA = 0.85;
 
 const CELL_DEG = 0.004; // ~440 m spatial buckets, so a tile query scans only nearby trees
 
-// The genus colours as CSS, one per id (0..12), precomputed so the draw loop is a lookup.
+// The genus colors as CSS, one per id (0..12), precomputed so the draw loop is a lookup.
 const GENUS_CSS: readonly string[] = Array.from({ length: 13 }, (_, id) => {
   const { red, green, blue } = genusColor(id);
   return `rgb(${red}, ${green}, ${blue})`;
@@ -33,8 +33,8 @@ const GENUS_CSS: readonly string[] = Array.from({ length: 13 }, (_, id) => {
 interface Trees {
   lngs: Float64Array;
   lats: Float64Array;
-  crownM: Float32Array; // crown radius in metres, the dot's size
-  genus: Uint8Array; // 0..12, the dot's colour
+  crownM: Float32Array; // crown radius in meters, the dot's size
+  genus: Uint8Array; // 0..12, the dot's color
   // Tree indices bucketed by `${floor(lng/CELL_DEG)},${floor(lat/CELL_DEG)}`, so a tile draw
   // touches only the handful of cells it overlaps rather than the whole city.
   buckets: Map<string, number[]>;
@@ -129,17 +129,17 @@ function draw(
   // The legend's selection as the tile was requested; a tree of a disabled genus is skipped so the
   // live dots match the raster half.
   const enabled = new Set(params.enabled);
-  const centre = unproject(
+  const center = unproject(
     originX + TILE_SIZE / 2,
     originY + TILE_SIZE / 2,
     zoom,
   );
-  const cosLat = Math.cos((centre.lat * Math.PI) / 180);
+  const cosLat = Math.cos((center.lat * Math.PI) / 180);
   const metersPerPixel = (EQUATOR_METERS_PER_PIXEL * cosLat) / 2 ** zoom;
 
   const northWest = unproject(originX, originY, zoom);
   const southEast = unproject(originX + TILE_SIZE, originY + TILE_SIZE, zoom);
-  // A dot reaches its crown radius in metres (or the min-visibility floor, whichever is larger),
+  // A dot reaches its crown radius in meters (or the min-visibility floor, whichever is larger),
   // so the query grows the tile box by the largest that can be — no dot spilling in is missed.
   const marginMeters = Math.max(MAX_CROWN_METERS, MIN_DOT_PX * metersPerPixel);
   const marginLat = marginMeters / METERS_PER_DEGREE_LAT;

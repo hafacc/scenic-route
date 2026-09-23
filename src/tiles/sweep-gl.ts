@@ -36,7 +36,7 @@ const SAMPLES = 4;
 // rebuilding through; a driver that cannot hold a context is not worth retrying every tile.
 const REBUILDS = 3;
 
-// The shade colour the fills carry, on the 0..1 the shaders want. Read per tile rather than once:
+// The shade color the fills carry, on the 0..1 the shaders want. Read per tile rather than once:
 // it is the theme's, and a theme flip redraws every tile.
 function slate(): [number, number, number] {
   const [red, green, blue] = shadeRgb();
@@ -115,15 +115,15 @@ void main() {
 const FLAT_FRAGMENT = `#version 300 es
 precision highp float;
 uniform vec4 tint;
-out vec4 colour;
-void main() { colour = tint; }`;
+out vec4 color;
+void main() { color = tint; }`;
 
 const BLIT_FRAGMENT = `#version 300 es
 precision highp float;
 uniform sampler2D source;
 uniform float alpha;
-out vec4 colour;
-void main() { colour = texelFetch(source, ivec2(gl_FragCoord.xy), 0) * alpha; }`;
+out vec4 color;
+void main() { color = texelFetch(source, ivec2(gl_FragCoord.xy), 0) * alpha; }`;
 
 function compile(
   gl: WebGL2RenderingContext,
@@ -164,7 +164,7 @@ class Sweeper {
   private readonly quadArray: WebGLVertexArrayObject;
   private readonly pathBuffer: WebGLBuffer;
   private readonly indexBuffer: WebGLBuffer;
-  // One multisampled colour+stencil target serves both layers in turn, and the crowns are parked in
+  // One multisampled color+stencil target serves both layers in turn, and the crowns are parked in
   // the resolve texture while the buildings reuse it.
   private readonly target: WebGLFramebuffer;
   private readonly resolved: WebGLFramebuffer;

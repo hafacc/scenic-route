@@ -2,7 +2,7 @@ import { decodeNames, type Polyline, readPolyline } from "../tiles/polylines";
 import type { Cursor } from "../tiles/varint";
 
 // The SBWY layout (scripts/README.md, "the subway route lines and stations"): the MTA's 29 routes,
-// their 93 drawn shape variants and the 496 stations, with the colours and names the feed publishes.
+// their 93 drawn shape variants and the 496 stations, with the colors and names the feed publishes.
 // Display only — nothing here reaches the routing graph, because nobody walks the subway.
 //
 // Decoded here rather than in the tile worker because the station list has a second reader: the
@@ -143,7 +143,7 @@ const METERS_PER_DEGREE_LAT = 111_320;
 // Muni files the same street corner twice, once per direction ("Metro Powell Station/Downtown" and
 // ".../Outbound") and once per side of the street it stops on ("Market St & 4th St" and "Market St &
 // Stockton St" are the two ends of one crossing), and it never puts two genuinely separate stops
-// this close — its tightest stop spacing is a few hundred metres. 60 m closes all 63 near pairs in
+// this close — its tightest stop spacing is a few hundred meters. 60 m closes all 63 near pairs in
 // the file, Balboa Park's Muni platform and BART's mezzanine 7.5 m away among them.
 const SAME_PLACE_METERS = 60;
 // How far apart two records sharing a name may be and still be one place. Muni's two Metro platforms
@@ -176,7 +176,7 @@ function metersApart(
 }
 
 // The records that are one place, folded into one marker each: the union of their routes at the
-// centre of the records it merged, under the name of the record serving the most routes.
+// center of the records it merged, under the name of the record serving the most routes.
 //
 // What counts as one place has two answers, and each record says which of them applies to it.
 //
@@ -203,7 +203,7 @@ function metersApart(
 // old geometric rule made 463, and the Bay Area's 282 as 231 under either.
 //
 // The surviving name is the record serving the most routes because that is the record the agency
-// treats as the station rather than the kerb beside it: it picks "Metro Civic Center Station" over
+// treats as the station rather than the curb beside it: it picks "Metro Civic Center Station" over
 // "Market St & Hyde St", and "Jackson Hts-Roosevelt Av" (5 routes) over "74 St-Broadway" (2). Ties
 // go to the shorter name — "Van Ness Station" over "Metro Van Ness Station" — and then to the file's
 // own order, which is south to north.

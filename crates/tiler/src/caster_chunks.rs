@@ -47,7 +47,7 @@ const CHUNK_ZOOM: u32 = 15;
 const CROWN_A: f64 = -0.752;
 const CROWN_B: f64 = 2.414;
 const CROWN_LOG_BIAS: f64 = 0.00988;
-// The dbh the inversion is allowed to return, 1 and 60 inches in centimetres. Only the upper bound
+// The dbh the inversion is allowed to return, 1 and 60 inches in centimeters. Only the upper bound
 // mirrors the forward pass, which clamps there (MAX_DBH_INCHES in scripts/tree-data-fetch.ts); the
 // lower one is this side's own floor, since the forward pass imputes a missing dbh to its median
 // rather than clamping and so never produces a small one to mirror.
@@ -65,7 +65,7 @@ pub struct Args {
 }
 
 /// One shadow caster as it ships: its rings in degrees, in GROUPS, and the height it casts from in
-/// decimetres — the unit both source files store.
+/// decimeters — the unit both source files store.
 ///
 /// A building is one group: its outer ring first and its holes after. A crown is one group per SLICE,
 /// group `j` being its outline inset by `j / CROWN_SEGMENTS` of the crown radius, every ring of it a
@@ -83,9 +83,9 @@ impl Caster {
     }
 }
 
-/// One trunk as it ships: where it stands, how thick it is in centimetres of RADIUS — the decimetre
+/// One trunk as it ships: where it stands, how thick it is in centimeters of RADIUS — the decimeter
 /// the crown byte is quantized on is coarser than a whole median trunk — and how high it stands
-/// before its crown starts, in the decimetres the crown heights are stored in.
+/// before its crown starts, in the decimeters the crown heights are stored in.
 struct Trunk {
     coord: Coord,
     radius_cm: u8,
@@ -190,10 +190,10 @@ fn city_crowns(city: &City, data: &Path) -> Fallible<(Vec<Polygon>, Vec<f64>)> {
         .unzip())
 }
 
-/// The trunk radius a shipped crown radius implies, in metres. Two trees the inversion cannot know
+/// The trunk radius a shipped crown radius implies, in meters. Two trees the inversion cannot know
 /// about ride through it: one whose dbh was MISSING carries the imputed median (crown byte 39, 7.1%
 /// of the city), and an OSM tree's crown is a RECORDED diameter that was never a dbh at all, which
-/// the clamp below is what keeps from inverting into a metre-thick trunk.
+/// the clamp below is what keeps from inverting into a meter-thick trunk.
 fn trunk_radius_m(crown_radius_m: f64) -> f64 {
     let log_log = ((2.0 * crown_radius_m).ln() - CROWN_A - CROWN_LOG_BIAS) / CROWN_B;
     let dbh_cm = (log_log.exp().exp() - 1.0).clamp(MIN_DBH_CM, MAX_DBH_CM);
@@ -404,7 +404,7 @@ fn signed_double_area(ring: &[Coord]) -> f64 {
 }
 
 /// Whether a point is inside a ring, by the even-odd crossing count — asked only of a chunk's
-/// centre, to tell a ring that misses the chunk from one that swallows it whole.
+/// center, to tell a ring that misses the chunk from one that swallows it whole.
 fn point_inside_ring(ring: &[Coord], point: &Coord) -> bool {
     let mut inside = false;
     let mut previous = ring.len() - 1;
@@ -539,11 +539,11 @@ fn clip_ring(ring: &[Coord], rect: &Rect) -> Vec<Ring> {
 
     if spans.is_empty() {
         // the ring never meets the chunk: it either misses it or swallows it whole
-        let centre = Coord {
+        let center = Coord {
             lng: (rect.west + rect.east) / 2.0,
             lat: (rect.south + rect.north) / 2.0,
         };
-        return if point_inside_ring(ring, &centre) {
+        return if point_inside_ring(ring, &center) {
             vec![rect.ring(counter_clockwise)]
         } else {
             Vec::new()
@@ -720,7 +720,7 @@ fn encode_crown(caster: &Caster, origin_lng: f64, origin_lat: f64, bytes: &mut V
 }
 
 /// The trunk section: per trunk a zigzag varint step in x and y from the trunk before it, a varint
-/// radius in centimetres and a varint height in decimetres. The steps are taken in the chunk's own
+/// radius in centimeters and a varint height in decimeters. The steps are taken in the chunk's own
 /// row-major order rather than the city's, which is what keeps them short.
 fn encode_trunks(
     trunks: &[Trunk],
@@ -933,7 +933,7 @@ mod tests {
     }
 
     /// One chunk read back: its buildings as a height and their rings, its crowns as a height and
-    /// their rings BY SLICE, and its trunks as a point, a radius in metres and a height in decimetres.
+    /// their rings BY SLICE, and its trunks as a point, a radius in meters and a height in decimeters.
     struct Decoded {
         buildings: Vec<(u16, Vec<Ring>)>,
         crowns: Vec<(u16, Vec<Vec<Ring>>)>,
@@ -1283,7 +1283,7 @@ mod tests {
     }
 
     /// The inversion recovers the dbh the crown was grown from exactly, and still within 1.5 mm once
-    /// the crown has been through the decimetre byte it ships in — checked at the 22.86 cm (9 inch)
+    /// the crown has been through the decimeter byte it ships in — checked at the 22.86 cm (9 inch)
     /// dbh the ingest imputes for a missing one, which is where 7.1% of the city sits. A crown no dbh
     /// could have grown (an OSM tree's recorded 20 m radius) and a crown of nothing land on the clamps.
     #[test]

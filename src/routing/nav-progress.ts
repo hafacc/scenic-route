@@ -53,8 +53,8 @@ export function navProgress(
     return null;
   }
 
-  // A local equirectangular frame centred on the user: metres east/north of the user, accurate to
-  // well under a metre across a city-scale route.
+  // A local equirectangular frame centered on the user: meters east/north of the user, accurate to
+  // well under a meter across a city-scale route.
   const metersPerDegreeLng =
     METERS_PER_DEGREE_LAT * Math.cos((user.lat * Math.PI) / 180);
   const toFrame = (lat: number, lng: number): { x: number; y: number } => ({

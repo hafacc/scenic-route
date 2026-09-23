@@ -167,7 +167,7 @@ function demSquareOf(lng: number, lat: number): string {
 // A square with no tile reads downstream as flat ground, not as absent ground, which is the whole
 // reason this is checked rather than assumed.
 //
-// The vertices name every square the coastline runs through; the centres name the ones a polygon
+// The vertices name every square the coastline runs through; the centers name the ones a polygon
 // swallows whole, which have no vertex of their own and would otherwise be dropped from a check
 // that exists to catch exactly that.
 function landSquares(land: readonly Polygon[], box: LidarWindow): Set<string> {
@@ -226,7 +226,7 @@ export const EAST_BAY_ELEVATION: () => Promise<ElevationRaster> = async () => {
 // overlap, the FIRST one wins. San Francisco leads because the bay is flown from both sides and its
 // own five-band product is the one this city was measured against.
 //
-// A city with no mosaic keeps a flat model: every edge's relief reads 0, and the hill weight greys
+// A city with no mosaic keeps a flat model: every edge's relief reads 0, and the hill weight grays
 // out rather than moving nothing silently.
 export async function fetchElevationMosaics(
   cityId: string,

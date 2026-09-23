@@ -190,7 +190,7 @@ test("the walk finds exactly the words a brute-force count of edits finds", () =
   }
 });
 
-// A word with one letter changed, dropped, added or swapped with its neighbour.
+// A word with one letter changed, dropped, added or swapped with its neighbor.
 function mutate(token: string, next: () => number): string {
   if (token.length < 2) {
     return token;
@@ -275,7 +275,7 @@ test("the walk reports the fewest letters of a word that the query reaches", () 
 });
 
 test("a letter written in two bytes is measured in the bytes it is written in", () => {
-  // Normalisation folds "Café" onto "cafe" before anything gets here, so an accent only survives in
+  // Normalization folds "Café" onto "cafe" before anything gets here, so an accent only survives in
   // a name no folding covers — and there the walk counts bytes, which is what the brute force does
   // too. What must not happen is a half-decoded character being called a match.
   const tokens = ["cafe", "cafes", "café", "καφε", "καφές"].sort();

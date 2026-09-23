@@ -103,7 +103,7 @@ export interface LabelPoints {
 // Greedy placement over the whole point set at one zoom, in the set's own order and in world pixels:
 // no part of it depends on which tile asked, so every tile agrees on which labels survive and where.
 // `radius` is the marker the text is set beside, and `above` which side of it the text sits — two
-// layers labelling the same place can take opposite sides and never collide.
+// layers labeling the same place can take opposite sides and never collide.
 export function placeLabels(
   context: OffscreenCanvasRenderingContext2D,
   { lngs, lats, names, halfWidths, halfHeights }: LabelPoints,
@@ -114,7 +114,7 @@ export function placeLabels(
   context.font = LABEL_FONT;
   const byTile: PlacedLabels = new Map();
   // Every marker's own footprint, reserved before any text is placed, so a name never lands on a
-  // neighbour's marker — which for the subway means covering the very bullets the marker is there
+  // neighbor's marker — which for the subway means covering the very bullets the marker is there
   // to show. Markers come first because they are drawn whether or not their name survives.
   const taken = new Map<string, Box[]>();
   for (let point = 0; point < names.length; point++) {
@@ -154,7 +154,7 @@ export function placeLabels(
       y1: above ? y : y + LABEL_LINE_HEIGHT,
     });
     // Right of the marker by preference, and left of it when that side is taken — which in a dense
-    // downtown is most often by a neighbour's marker rather than by another name. Times Sq-42 St at
+    // downtown is most often by a neighbor's marker rather than by another name. Times Sq-42 St at
     // z15 is exactly that: its name only fits west, because 42 St-Bryant Pk sits 40 px east of it.
     const label = [
       at(markerX + halfWidth + LABEL_GAP_PX),
@@ -170,7 +170,7 @@ export function placeLabels(
 }
 
 // The labels one tile holds, drawn in tile coordinates from the shared placement: a dark-outlined
-// name in the layer's colour. A label reaching over a seam belongs to both tiles and is drawn at the
+// name in the layer's color. A label reaching over a seam belongs to both tiles and is drawn at the
 // same world position by each, so the two clipped halves line up exactly.
 export function drawLabels(
   context: OffscreenCanvasRenderingContext2D,

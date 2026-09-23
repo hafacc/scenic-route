@@ -3,9 +3,9 @@ import type { TileCoords } from "./protocol";
 
 // Magnifying a baked tile pyramid in the worker rather than leaving it to the browser. A pyramid stops
 // at its finest baked level; past that Leaflet would hand the native tile to an <img> and stretch it,
-// and each image is interpolated on its own — at its border there is no neighbour to sample, so the
-// browser clamps to the edge texel and two stretched neighbours disagree along their shared edge, which
-// reads as a seam. Here the source tile is assembled with its eight neighbours first, so the resample
+// and each image is interpolated on its own — at its border there is no neighbor to sample, so the
+// browser clamps to the edge texel and two stretched neighbors disagree along their shared edge, which
+// reads as a seam. Here the source tile is assembled with its eight neighbors first, so the resample
 // has real pixels past every edge, and it runs at "high" quality rather than bilinear.
 //
 // All three baked overlays magnify through this: the shade wash (src/tiles/shade.ts), which composites
@@ -20,7 +20,7 @@ const TILE_SIZE = 256;
 const MARGIN_PX = 4;
 
 // Decoded source tiles held between draws, from every pyramid read here. Sixteen magnified tiles share
-// one source tile and their neighbourhoods overlap heavily, so this cache is what keeps the magnified
+// one source tile and their neighborhoods overlap heavily, so this cache is what keeps the magnified
 // path to roughly one fetch per source tile; the cap is generous because it also holds the clock's
 // prefetched shade bins. Each entry is a 256² bitmap, so the cap is ~64 MB — a fraction of what one
 // drawn tile layer per bin cost.
@@ -126,7 +126,7 @@ export interface Patch {
   scale: number;
 }
 
-// Which source pixels a tile is cut from: the source tile it falls in, the ring of neighbours around
+// Which source pixels a tile is cut from: the source tile it falls in, the ring of neighbors around
 // that when the tile is finer than anything baked, and where inside them its own pixels start. One cut
 // serves any number of pyramids over the same ground, since they share a plan.
 export interface Cut {

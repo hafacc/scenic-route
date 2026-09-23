@@ -1,9 +1,9 @@
-// Planar geometry in a single equirectangular metre frame over New York. The city's latitude span
-// keeps the x-scale error under 1%, i.e. sub-decimetre over the 10-30 m distances that decide which
+// Planar geometry in a single equirectangular meter frame over New York. The city's latitude span
+// keeps the x-scale error under 1%, i.e. sub-decimeter over the 10-30 m distances that decide which
 // sidewalk a building fronts, so one frame for the whole city is enough and every distance below is
 // a plain Euclidean one.
 //
-// Polylines and rings are interleaved [x0, y0, x1, y1, ...] in metres. A ring is closed: its last
+// Polylines and rings are interleaved [x0, y0, x1, y1, ...] in meters. A ring is closed: its last
 // vertex repeats its first. Only what the sidewalk-shed placement needs lives here.
 
 const METERS_PER_DEGREE_LAT = 111_320;
@@ -239,7 +239,7 @@ export function ringToPoint(ring: Float64Array, x: number, y: number): number {
   return pointInRing(ring, x, y) ? 0 : pointToPolyline(ring, x, y);
 }
 
-// Resample a closed ring at about `step` metres, dropping the repeated closing vertex.
+// Resample a closed ring at about `step` meters, dropping the repeated closing vertex.
 export function densifyRing(ring: Float64Array, step: number): Float64Array {
   const segments = ring.length / 2 - 1;
   const cumulative = new Float64Array(segments + 1);
@@ -288,7 +288,7 @@ export function outwardNormals(
   return normals;
 }
 
-// The point `along` metres from the start of a polyline, clamped to its ends.
+// The point `along` meters from the start of a polyline, clamped to its ends.
 export function pointAt(
   coords: Float64Array,
   along: number,
@@ -334,7 +334,7 @@ export function projectToPolyline(
   into: LineProjection,
 ): LineProjection {
   let bestDistance = Number.POSITIVE_INFINITY;
-  let travelled = 0;
+  let traveled = 0;
   for (let at = 2; at < coords.length; at += 2) {
     const fromX = coords[at - 2];
     const fromY = coords[at - 1];
@@ -357,18 +357,18 @@ export function projectToPolyline(
     const distance = Math.hypot(x - closestX, y - closestY);
     if (distance < bestDistance) {
       bestDistance = distance;
-      into.along = travelled + param * span;
+      into.along = traveled + param * span;
       into.distance = distance;
       into.x = closestX;
       into.y = closestY;
       // A collapsed segment leaves the previous direction standing rather than a zero vector; the
-      // ingest drops anything shorter than a metre, so it is the degenerate-input guard.
+      // ingest drops anything shorter than a meter, so it is the degenerate-input guard.
       if (span > 0) {
         into.tangentX = deltaX / span;
         into.tangentY = deltaY / span;
       }
     }
-    travelled += span;
+    traveled += span;
   }
   return into;
 }

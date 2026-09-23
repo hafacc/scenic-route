@@ -307,7 +307,7 @@ interface CsvFeed {
 }
 
 // A latitude or longitude column. Null rather than 0 where it is blank: an address at the origin is
-// a thousand kilometres off the coast of Africa, not a missing coordinate.
+// a thousand kilometers off the coast of Africa, not a missing coordinate.
 function coordinate(text: string): number | null {
   const value = Number(text.trim());
   if (text.trim() === "" || !Number.isFinite(value)) {
@@ -399,7 +399,7 @@ const SF_EAS: CsvFeed = {
 // they are, because a street the map has no graph for is a search result that goes nowhere.
 //
 // This is a feature service rather than a CSV export, so it is read the way scripts/alameda.ts reads
-// the county's centreline: paged, ordered, and cached a page at a time.
+// the county's centerline: paged, ordered, and cached a page at a time.
 const ALAMEDA_ADDRESS_SERVICE =
   "https://services5.arcgis.com/ROBnTHSNjoZ2Wm1P/arcgis/rest/services/Address_Points/FeatureServer/0";
 
@@ -443,9 +443,9 @@ function alamedaPageUrl(offset: number): string {
   return url.toString();
 }
 
-// The name as the county's own centreline spells it — "E 38TH ST", the four parts run together in
+// The name as the county's own centerline spells it — "E 38TH ST", the four parts run together in
 // the order they are written down. That spelling is the point: the routing graph's street names come
-// from that centreline, so an address filed under the same string is an address the search box can
+// from that centerline, so an address filed under the same string is an address the search box can
 // hand straight to a street it already knows about.
 function alamedaStreet(row: AlamedaRow): string {
   return [row.DIRPRE, row.FEANME, row.FEATYP, row.DIRSUF]

@@ -1,6 +1,6 @@
-//! The coordinate math the tile pyramids and the density sampler share: a local metre space for
+//! The coordinate math the tile pyramids and the density sampler share: a local meter space for
 //! one city, the bounds its blurred field can reach, a street's bearing — plus polygon
-//! rasterisation, the Gaussian feather over a mask, and the point-in-polygon index the
+//! rasterization, the Gaussian feather over a mask, and the point-in-polygon index the
 //! cover-distribution sampler queries a million times.
 
 use std::sync::LazyLock;
@@ -11,7 +11,7 @@ use crate::manifest::Bounds;
 pub const BLUR_RADII: f64 = 3.0; // kernel half-width, in sigmas
 pub const METERS_PER_DEGREE_LAT: f64 = 111_320.0;
 
-/// A local metre space with the city bbox centre as its origin. One reference latitude for the
+/// A local meter space with the city bbox center as its origin. One reference latitude for the
 /// whole city: over NYC's 0.42 degrees of span that costs about 0.7% in the east-west scale,
 /// which is well inside the noise of the blur. Only cos(lat0) actually reaches the field — the
 /// origin cancels out of every distance — so two callers agree as long as they agree on the
@@ -42,8 +42,8 @@ impl Projection {
         (lat - self.lat0) * METERS_PER_DEGREE_LAT
     }
 
-    /// The inverses of `x` and `y`: a metre-space offset from the origin back to a coordinate, so
-    /// a sidewalk placed in metre space can be handed to the lng/lat blurred-cover sampler.
+    /// The inverses of `x` and `y`: a meter-space offset from the origin back to a coordinate, so
+    /// a sidewalk placed in meter space can be handed to the lng/lat blurred-cover sampler.
     pub fn lng(&self, x: f64) -> f64 {
         self.lng0 + x / self.meters_per_degree_lng
     }
@@ -52,14 +52,14 @@ impl Projection {
         self.lat0 + y / METERS_PER_DEGREE_LAT
     }
 
-    /// Metres per degree of longitude at the reference latitude, the east-west scale the blurred
+    /// Meters per degree of longitude at the reference latitude, the east-west scale the blurred
     /// field converts its kernel offsets through.
     pub fn meters_per_degree_lng(&self) -> f64 {
         self.meters_per_degree_lng
     }
 }
 
-/// The direction a street runs at one of its vertices: the unit tangent in the local metre
+/// The direction a street runs at one of its vertices: the unit tangent in the local meter
 /// space, which is the cos and sin of its bearing. The oriented sampler rotates a sidewalk's
 /// offset into this frame.
 #[derive(Clone, Copy)]
@@ -237,7 +237,7 @@ impl PolygonSet {
                 false
             } else {
                 self.rings[index].iter().any(|ring| {
-                    let metres = |vertex: usize| {
+                    let meters = |vertex: usize| {
                         (
                             (ring.lngs[vertex] - lng) * meters_per_degree_lng,
                             (ring.lats[vertex] - lat) * METERS_PER_DEGREE_LAT,
@@ -250,8 +250,8 @@ impl PolygonSet {
                         } else {
                             point - 1
                         };
-                        let (ax, ay) = metres(previous);
-                        let (bx, by) = metres(point);
+                        let (ax, ay) = meters(previous);
+                        let (bx, by) = meters(point);
                         point_segment_dist2(0.0, 0.0, ax, ay, bx, by) <= limit2
                     })
                 })
@@ -260,7 +260,7 @@ impl PolygonSet {
     }
 }
 
-/// The squared distance from a point to a segment, all in one flat metre frame.
+/// The squared distance from a point to a segment, all in one flat meter frame.
 pub fn point_segment_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
     let (dx, dy) = (bx - ax, by - ay);
     let length2 = dx * dx + dy * dy;
@@ -278,7 +278,7 @@ pub fn point_segment_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64)
 /// returning how many reached it. `project` carries a lng/lat to the mask's coordinate space;
 /// both tile projections are separable, but a single point map keeps this one loop. Taking
 /// every ring of a polygon together is what makes its inner rings cut holes rather than fill
-/// them; taking the polygons one at a time is what keeps two overlapping woods from cancelling
+/// them; taking the polygons one at a time is what keeps two overlapping woods from canceling
 /// out. The mask is set, never toggled, so a polygon drawn twice — a canopy candidate gathered
 /// from two grid cells — is idempotent.
 fn fill_indices(
@@ -545,8 +545,8 @@ pub struct CoverScratch {
 /// Rather than test every node against the polygons one point at a time — which re-walks a park's
 /// hundred-thousand-vertex boundary once per node — this projects each nearby polygon into the
 /// oriented node grid and scanline-fills it there, so a ring is walked once per sample instead of
-/// once per node. `fill_indices` marks a cell iff its centre is inside, so placing node `i` at
-/// cell centre `i + 0.5` makes the result byte-for-byte identical to per-node point-in-polygon.
+/// once per node. `fill_indices` marks a cell iff its center is inside, so placing node `i` at
+/// cell center `i + 0.5` makes the result byte-for-byte identical to per-node point-in-polygon.
 /// The weights sum to one, so the return is the covered fraction in [0, 1].
 // The canopy set, its grid and the projection travel together and the two sigmas name the oriented
 // kernel; bundling them into a struct only to satisfy the arg-count lint would obscure the call.
@@ -570,7 +570,7 @@ pub fn blurred_cover(
     let (across_x, across_y) = (-bearing.along_y, bearing.along_x);
     let along_step = sigma_along / 4.0;
     let across_step = sigma_across / 4.0;
-    // The node farthest from the centre sits at 2.5 sigma on each axis; its axis-aligned reach is
+    // The node farthest from the center sits at 2.5 sigma on each axis; its axis-aligned reach is
     // at most 2.5 * hypot(along, across), whatever the bearing — enough to gather every polygon a
     // node can land on.
     let reach = 2.5 * sigma_along.hypot(sigma_across);
@@ -584,7 +584,7 @@ pub fn blurred_cover(
 
     let width = QUAD_NODES;
     let height = QUAD_NODES;
-    let centre = QUAD_STEPS as f64 + 0.5; // node i sits at cell centre i + 0.5
+    let center = QUAD_STEPS as f64 + 0.5; // node i sits at cell center i + 0.5
     scratch.mask.clear();
     scratch.mask.resize(width * height, 0);
     for slot in 0..scratch.candidates.len() {
@@ -606,12 +606,12 @@ pub fn blurred_cover(
         for ring in &set.rings[index] {
             scratch.ring_starts.push(scratch.xs.len());
             for (ring_lng, ring_lat) in ring.lngs.iter().zip(&ring.lats) {
-                let metre_x = (ring_lng - lng) * meters_per_degree_lng;
-                let metre_y = (ring_lat - lat) * METERS_PER_DEGREE_LAT;
-                let along = metre_x * along_x + metre_y * along_y;
-                let across = metre_x * across_x + metre_y * across_y;
-                let node_x = along / along_step + centre;
-                let node_y = across / across_step + centre;
+                let meter_x = (ring_lng - lng) * meters_per_degree_lng;
+                let meter_y = (ring_lat - lat) * METERS_PER_DEGREE_LAT;
+                let along = meter_x * along_x + meter_y * along_y;
+                let across = meter_x * across_x + meter_y * across_y;
+                let node_x = along / along_step + center;
+                let node_y = across / across_step + center;
                 low_row = low_row.min(node_y);
                 high_row = high_row.max(node_y);
                 scratch.xs.push(node_x);
