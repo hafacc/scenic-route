@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { coversACity, fileRequest, isGraph, pageFor, shadeKey } from "./policy";
 
-// Production always deploys under a basePath, and paths are filed relative to the worker's scope.
-const SCOPE = "https://hafa.cc/scenic-route/";
+// Paths are filed relative to the worker's scope, which in production is the origin root.
+const SCOPE = "https://scenic.hafa.cc/";
 
 test("the exported app goes in the shell store", () => {
   for (const path of [
@@ -56,7 +56,7 @@ test("another origin is left alone entirely", () => {
   for (const url of [
     "https://basemaps.cartocdn.com/light_all/14/4825/6162.png",
     "https://firestore.googleapis.com/v1/projects/scenic/databases",
-    "https://hafa.cc/other-app/index.html",
+    "https://hafa.cc/scenic-route/index.html",
   ]) {
     expect(fileRequest(url, SCOPE)).toBeNull();
   }
