@@ -45,6 +45,21 @@ use serde::Serialize;
 
 pub type Fallible<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
+/// Returns freed pages to the OS, since glibc keeps a finished pass's small frees for its own reuse.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub fn trim_heap() {
+    unsafe extern "C" {
+        fn malloc_trim(pad: usize) -> i32;
+    }
+    // SAFETY: malloc_trim only releases free pages; no live allocation moves.
+    unsafe {
+        malloc_trim(0);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+pub fn trim_heap() {}
+
 /// A pass's report as a file, since the next package.json command reads it without a pipe.
 pub fn write_report<T: Serialize>(path: &Path, report: &T) -> Fallible<()> {
     if let Some(directory) = path.parent() {

@@ -189,8 +189,12 @@ pub fn read_trees(path: &Path) -> Fallible<Trees> {
 
 // Polygons: u16 ring count, per ring a u32 vertex count and varint deltas; leaves the cursor after.
 fn decode_polygons(cursor: &mut Cursor, head: &Header) -> Vec<Polygon> {
-    let mut polygons = Vec::with_capacity(head.count);
-    for _ in 0..head.count {
+    decode_some_polygons(cursor, head, head.count)
+}
+
+fn decode_some_polygons(cursor: &mut Cursor, head: &Header, count: usize) -> Vec<Polygon> {
+    let mut polygons = Vec::with_capacity(count);
+    for _ in 0..count {
         let rings = usize::from(u16_at(cursor.bytes, cursor.offset));
         cursor.offset += 2;
         let mut polygon: Polygon = Vec::with_capacity(rings);
@@ -281,6 +285,79 @@ impl Canopy {
             self.bytes[at..at + 2].copy_from_slice(&height.to_le_bytes());
         }
     }
+}
+
+/// A CNPY v2 file whose polygons decode a batch at a time, so a caller can free each batch.
+pub struct CanopyBatches {
+    bytes: Vec<u8>,
+    head: Header,
+    offset: usize, // where the next batch's first polygon starts
+    left: usize,
+    heights: usize,
+}
+
+impl CanopyBatches {
+    /// Crown heights in meters, as `Canopy::heights_m` reads them.
+    pub fn heights_m(&self) -> Vec<f64> {
+        (0..self.head.count)
+            .map(|polygon| {
+                f64::from(u16_at(&self.bytes, self.heights + polygon * 2)) / DECIMETERS_PER_METER
+            })
+            .collect()
+    }
+
+    /// The next `count` polygons in file order, fewer at the end.
+    pub fn next_polygons(&mut self, count: usize) -> Vec<Polygon> {
+        let count = count.min(self.left);
+        let mut cursor = Cursor {
+            bytes: &self.bytes,
+            offset: self.offset,
+        };
+        let polygons = decode_some_polygons(&mut cursor, &self.head, count);
+        self.offset = cursor.offset;
+        self.left -= count;
+        polygons
+    }
+}
+
+/// `read_canopy` without decoding: the polygons are only stepped over to find the heights.
+pub fn read_canopy_batches(path: &Path) -> Fallible<CanopyBatches> {
+    let bytes = fs::read(path)?;
+    check_magic(&bytes, "CNPY", CANOPY_FORMAT, path)?;
+    let head = header(&bytes);
+    let mut cursor = Cursor {
+        bytes: &bytes,
+        offset: head.body,
+    };
+    for _ in 0..head.count {
+        let rings = usize::from(u16_at(cursor.bytes, cursor.offset));
+        cursor.offset += 2;
+        for _ in 0..rings {
+            let vertices = u32_at(cursor.bytes, cursor.offset) as usize;
+            cursor.offset += 4;
+            for _ in 0..2 * vertices {
+                cursor.unsigned_varint();
+            }
+        }
+    }
+    let heights = cursor.offset;
+    let end = heights + head.count * 2;
+    if bytes.len() < end {
+        return Err(format!(
+            "{} is truncated: {} bytes, {end} needed for {} height u16s",
+            path.display(),
+            bytes.len(),
+            head.count
+        )
+        .into());
+    }
+    Ok(CanopyBatches {
+        offset: head.body,
+        left: head.count,
+        heights,
+        head,
+        bytes,
+    })
 }
 
 /// CNPY v2: the canopy polygons, then one u16 crown height in decimeters per polygon.

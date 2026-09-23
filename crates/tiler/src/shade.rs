@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use crate::Fallible;
 use crate::binfmt::{self, Coord, Polygon, Ring};
 use crate::crown;
-use crate::geometry::{self, METERS_PER_DEGREE_LAT, PolygonGrid, PolygonSet, round_half_up};
+use crate::geometry::{self, METERS_PER_DEGREE_LAT, round_half_up};
+#[cfg(test)]
+use crate::geometry::{PolygonGrid, PolygonSet};
 use crate::manifest::{Bounds, City, Manifest};
 use crate::raster::{
     EQUATOR_METERS_PER_PIXEL, MIN_ALPHA, TILE_SIZE, Tile, encode_webp_lossless, lat_to_pixel_y,
@@ -98,14 +100,158 @@ pub struct Casters {
 /// One city's casters plus the footprints that punch building bases out of both shadows.
 struct CityShade {
     casters: Casters,
-    footprints: PolygonSet,
-    footprint_grid: PolygonGrid,
+    footprints: ShadowIndex, // indexes `casters.polygons` themselves, unswept
 }
 
-/// One sample's shadow hulls for a city and bucket, gridded for per-tile lookup.
-struct SampleSet {
-    set: PolygonSet,
-    grid: PolygonGrid,
+// Hulls are flattened and filled this many at a time, so no pass holds a whole city's shadows.
+const FILL_BATCH: usize = 1024;
+
+/// A CSR grid over caster boxes: each cell lists the casters whose box overlaps it.
+struct BoxGrid {
+    bounds: Bounds,
+    cols: usize,
+    rows: usize,
+    cell_lng: f64,
+    cell_lat: f64,
+    starts: Vec<u32>, // cols * rows + 1 offsets into `items`
+    items: Vec<u32>,  // caster indices, grouped by the cell their box touches
+}
+
+impl BoxGrid {
+    const TARGET_PER_CELL: usize = 16;
+
+    /// An empty box, one whose west exceeds its east, is left out of every cell.
+    fn new(boxes: &[Bounds]) -> Self {
+        let mut bounds = Bounds {
+            south: f64::INFINITY,
+            west: f64::INFINITY,
+            north: f64::NEG_INFINITY,
+            east: f64::NEG_INFINITY,
+        };
+        let mut count = 0;
+        for box_ in boxes.iter().filter(|box_| box_.west <= box_.east) {
+            bounds.south = bounds.south.min(box_.south);
+            bounds.west = bounds.west.min(box_.west);
+            bounds.north = bounds.north.max(box_.north);
+            bounds.east = bounds.east.max(box_.east);
+            count += 1;
+        }
+        if count == 0 {
+            return Self {
+                bounds,
+                cols: 1,
+                rows: 1,
+                cell_lng: 1.0,
+                cell_lat: 1.0,
+                starts: vec![0, 0],
+                items: Vec::new(),
+            };
+        }
+        let span_lng = (bounds.east - bounds.west).max(1e-9);
+        let span_lat = (bounds.north - bounds.south).max(1e-9);
+        let aspect = span_lng / span_lat;
+        let target = (count / Self::TARGET_PER_CELL).max(1) as f64;
+        let cols = ((target * aspect).sqrt().round() as usize).max(1);
+        let rows = ((target / aspect).sqrt().round() as usize).max(1);
+        let mut grid = Self {
+            bounds,
+            cols,
+            rows,
+            cell_lng: span_lng / cols as f64,
+            cell_lat: span_lat / rows as f64,
+            starts: vec![0u32; cols * rows + 1],
+            items: Vec::new(),
+        };
+        let cells = |grid: &Self, box_: &Bounds| {
+            let (west, east, south, north) = grid.cell_range(box_);
+            (south..=north).flat_map(move |row| (west..=east).map(move |col| row * cols + col))
+        };
+        for box_ in boxes.iter().filter(|box_| box_.west <= box_.east) {
+            for cell in cells(&grid, box_) {
+                grid.starts[cell + 1] += 1;
+            }
+        }
+        for cell in 0..cols * rows {
+            grid.starts[cell + 1] += grid.starts[cell];
+        }
+        let mut items = vec![0u32; grid.starts[cols * rows] as usize];
+        let mut cursors = grid.starts.clone();
+        for (index, box_) in boxes.iter().enumerate() {
+            if box_.west > box_.east {
+                continue;
+            }
+            for cell in cells(&grid, box_) {
+                items[cursors[cell] as usize] = index as u32;
+                cursors[cell] += 1;
+            }
+        }
+        grid.items = items;
+        grid
+    }
+
+    /// The columns and rows a box spans, clamped into the grid.
+    fn cell_range(&self, box_: &Bounds) -> (usize, usize, usize, usize) {
+        let col_of = |lng: f64| {
+            (((lng - self.bounds.west) / self.cell_lng).max(0.0) as usize).min(self.cols - 1)
+        };
+        let row_of = |lat: f64| {
+            (((lat - self.bounds.south) / self.cell_lat).max(0.0) as usize).min(self.rows - 1)
+        };
+        (
+            col_of(box_.west),
+            col_of(box_.east),
+            row_of(box_.south),
+            row_of(box_.north),
+        )
+    }
+
+    /// The deduplicated caster indices whose cells the clip overlaps, into `out`.
+    fn candidates(&self, clip: &Bounds, out: &mut Vec<u32>) {
+        out.clear();
+        if !overlaps(clip, &self.bounds) {
+            return;
+        }
+        let (west, east, south, north) = self.cell_range(clip);
+        for row in south..=north {
+            for col in west..=east {
+                let cell = row * self.cols + col;
+                out.extend_from_slice(
+                    &self.items[self.starts[cell] as usize..self.starts[cell + 1] as usize],
+                );
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+    }
+}
+
+/// Whether two boxes share a point, edges included, as the scanline fill's clip test reads it.
+fn overlaps(left: &Bounds, right: &Bounds) -> bool {
+    !(left.east < right.west
+        || left.west > right.east
+        || left.north < right.south
+        || left.south > right.north)
+}
+
+/// Casters of one kind: each one's box over all its hulls, gridded per tile.
+struct ShadowIndex {
+    boxes: Vec<Bounds>,
+    grid: BoxGrid,
+}
+
+impl ShadowIndex {
+    fn new(count: usize, hulls_of: impl Fn(usize, &mut Vec<Polygon>) + Sync) -> Self {
+        let boxes: Vec<Bounds> = (0..count)
+            .into_par_iter()
+            .map_init(Vec::new, |hulls, caster| {
+                hulls.clear();
+                hulls_of(caster, hulls);
+                geometry::box_of(hulls)
+            })
+            .collect();
+        let grid = BoxGrid::new(&boxes);
+        Self { boxes, grid }
+    }
 }
 
 /// One tile of one bucket, counted once for each pyramid it fed.
@@ -132,20 +278,29 @@ impl std::ops::Add for Stats {
     }
 }
 
-/// A canopy file's crowns and heights; height 0 is the unknown sentinel, so those are dropped.
-fn read_crowns(path: &Path) -> Fallible<(Vec<Polygon>, Vec<f64>)> {
-    let canopy = binfmt::read_canopy(path)?;
-    let heights = canopy.heights_m();
-    Ok(canopy
-        .polygons
-        .into_iter()
-        .zip(heights)
-        .filter(|(_, height)| *height > 0.0)
-        .unzip())
+// Outlines decoded and cut per batch, so a city's outlines and its slices never peak together.
+const CROWN_BATCH: usize = 65_536;
+
+/// A canopy file's crowns, cut, and heights; height 0 is the unknown sentinel, so those are dropped.
+fn read_crowns(path: &Path) -> Fallible<(Vec<crown::Crown>, Vec<f64>)> {
+    let mut canopy = binfmt::read_canopy_batches(path)?;
+    let mut crowns = Vec::new();
+    let mut heights = Vec::new();
+    for batch in canopy.heights_m().chunks(CROWN_BATCH) {
+        let (outlines, kept): (Vec<Polygon>, Vec<f64>) = canopy
+            .next_polygons(batch.len())
+            .into_iter()
+            .zip(batch.iter().copied())
+            .filter(|(_, height)| *height > 0.0)
+            .unzip();
+        crowns.extend(crown::slice_crowns(&outlines));
+        heights.extend(kept);
+    }
+    Ok((crowns, heights))
 }
 
-/// The city's crowns, empty when it has no canopy layer or the file is missing.
-fn city_crowns(city: &City, data: &Path) -> Fallible<(Vec<Polygon>, Vec<f64>)> {
+/// The city's crowns, cut, empty when it has no canopy layer or the file is missing.
+pub fn city_crowns(city: &City, data: &Path) -> Fallible<(Vec<crown::Crown>, Vec<f64>)> {
     let Some(layer) = &city.field.canopy else {
         return Ok((Vec::new(), Vec::new()));
     };
@@ -163,10 +318,10 @@ fn read_city_shade(city: &City, data: &Path) -> Fallible<Option<CityShade>> {
         return Ok(None);
     }
     let (polygons, heights) = binfmt::read_buildings(&buildings)?;
-    let (crown_polygons, crown_heights) = city_crowns(city, data)?;
-    let crowns = crown::slice_crowns(&crown_polygons);
-    let footprints = geometry::flatten(&polygons);
-    let footprint_grid = PolygonGrid::new(&footprints);
+    let (crowns, crown_heights) = city_crowns(city, data)?;
+    let footprints = ShadowIndex::new(polygons.len(), |index, out| {
+        out.push(polygons[index].clone());
+    });
     Ok(Some(CityShade {
         casters: Casters {
             polygons,
@@ -175,7 +330,6 @@ fn read_city_shade(city: &City, data: &Path) -> Fallible<Option<CityShade>> {
             crown_heights,
         },
         footprints,
-        footprint_grid,
     }))
 }
 
@@ -451,86 +605,80 @@ fn meters_per_pixel(lat: f64, max_zoom: u32) -> f64 {
     EQUATOR_METERS_PER_PIXEL * lat.to_radians().cos() / f64::from(1u32 << (max_zoom + 1))
 }
 
-/// Every building's shadow for one sun-disk sample, shared by the pyramid and the per-edge bake.
-fn hulls_for_sample(
-    polygons: &[Polygon],
-    heights: &[f64],
-    sample: &Sample,
-    max_shadow_meters: f64,
-) -> Vec<Polygon> {
-    let mut hulls: Vec<Polygon> = Vec::with_capacity(polygons.len());
-    for (footprint, height) in polygons.iter().zip(heights) {
-        append_shadow(footprint, *height, sample, max_shadow_meters, &mut hulls);
+impl Casters {
+    fn building_count(&self) -> usize {
+        self.polygons.len().min(self.heights.len())
     }
-    hulls
-}
 
-/// Every measured crown's shadow for one sun-disk sample; the crown mirror of `hulls_for_sample`.
-fn crown_hulls_for_sample(
-    crowns: &[crown::Crown],
-    heights: &[f64],
-    sample: &Sample,
-    max_shadow_meters: f64,
-    max_zoom: u32,
-) -> Vec<Polygon> {
-    let mut hulls: Vec<Polygon> = Vec::with_capacity(crowns.len());
-    for (crown, height) in crowns.iter().zip(heights) {
+    fn crown_count(&self) -> usize {
+        self.crowns.len().min(self.crown_heights.len())
+    }
+
+    /// One building's shadow for one sun-disk sample, shared by the pyramid and the per-edge bake.
+    fn building_hulls(
+        &self,
+        index: usize,
+        sample: &Sample,
+        max_shadow_meters: f64,
+        out: &mut Vec<Polygon>,
+    ) {
+        append_shadow(
+            &self.polygons[index],
+            self.heights[index],
+            sample,
+            max_shadow_meters,
+            out,
+        );
+    }
+
+    /// One measured crown's shadow for one sun-disk sample; the crown mirror of `building_hulls`.
+    fn crown_hulls(
+        &self,
+        index: usize,
+        sample: &Sample,
+        max_shadow_meters: f64,
+        max_zoom: u32,
+        out: &mut Vec<Polygon>,
+    ) {
+        let crown = &self.crowns[index];
         let Some(ring) = crown.levels.first().and_then(|level| level.first()) else {
-            continue;
+            return;
         };
         append_crown_shadow(
             crown,
-            *height,
+            self.crown_heights[index],
             sample,
             max_shadow_meters,
             meters_per_pixel(ring[0].lat, max_zoom),
-            &mut hulls,
+            out,
         );
     }
-    hulls
 }
 
-/// Every building's shadow hulls for one bucket, one set per sun-disk sample.
-fn build_sample_sets(shade: &CityShade, bucket: &Bucket, max_shadow_meters: f64) -> Vec<SampleSet> {
-    bucket
+/// A city's shadow indexes for one bucket; crowns cast from the center sample only (~5 cm penumbra).
+struct CityShadows {
+    buildings: ShadowIndex,
+    trees: Option<ShadowIndex>,
+}
+
+fn city_shadows(shade: &CityShade, bucket: &Bucket, params: &Params) -> CityShadows {
+    let casters = &shade.casters;
+    let max_shadow_meters = params.max_shadow_meters;
+    let buildings = ShadowIndex::new(casters.building_count(), |index, out| {
+        for sample in &bucket.samples {
+            casters.building_hulls(index, sample, max_shadow_meters, out);
+        }
+    });
+    let trees = bucket
         .samples
-        .iter()
+        .first()
+        .filter(|_| !casters.crowns.is_empty())
         .map(|sample| {
-            let hulls = hulls_for_sample(
-                &shade.casters.polygons,
-                &shade.casters.heights,
-                sample,
-                max_shadow_meters,
-            );
-            let set = geometry::flatten(&hulls);
-            let grid = PolygonGrid::new(&set);
-            SampleSet { set, grid }
-        })
-        .collect()
-}
-
-/// A bucket's crown shadows from the center sample only (a crown's z15 penumbra is ~5 cm).
-fn build_crown_set(
-    shade: &CityShade,
-    bucket: &Bucket,
-    max_shadow_meters: f64,
-    max_zoom: u32,
-) -> Option<SampleSet> {
-    let sample = bucket.samples.first()?;
-    if shade.casters.crowns.is_empty() {
-        return None;
-    }
-    let hulls = crown_hulls_for_sample(
-        &shade.casters.crowns,
-        &shade.casters.crown_heights,
-        sample,
-        max_shadow_meters,
-        max_zoom,
-    );
-    let set = geometry::flatten(&hulls);
-    drop(hulls); // ~25 M vertices; don't hold two copies
-    let grid = PolygonGrid::new(&set);
-    Some(SampleSet { set, grid })
+            ShadowIndex::new(casters.crown_count(), |index, out| {
+                casters.crown_hulls(index, sample, max_shadow_meters, params.max_zoom, out);
+            })
+        });
+    CityShadows { buildings, trees }
 }
 
 /// One tile's supersampled rasterizer: its lng/lat window, projection and reusable scratch.
@@ -565,16 +713,28 @@ impl TileRaster {
         }
     }
 
-    /// Add each pixel's covered fraction into `target`; false when nothing reached the tile.
+    /// Lng/lat to supersampled mask coordinates.
+    fn projection(&self) -> impl Fn(f64, f64) -> (f64, f64) + use<> {
+        let scale = SUPERSAMPLE as f64;
+        let (zoom, origin_x, origin_y) = (self.zoom, self.origin_x, self.origin_y);
+        move |lng, lat| {
+            (
+                (lng_to_pixel_x(lng, zoom) - origin_x) * scale,
+                (lat_to_pixel_y(lat, zoom) - origin_y) * scale,
+            )
+        }
+    }
+
+    /// Add each pixel's covered fraction of a whole set into `target`; the streamed path's reference.
+    #[cfg(test)]
     fn accumulate(&mut self, set: &PolygonSet, grid: &PolygonGrid, target: &mut [f32]) -> bool {
         grid.candidates(&self.clip, &mut self.candidates);
         if self.candidates.is_empty() {
             return false;
         }
         self.mask.iter_mut().for_each(|cell| *cell = 0);
-        let scale = SUPERSAMPLE as f64;
         let width = TILE_SIZE * SUPERSAMPLE;
-        let (zoom, origin_x, origin_y) = (self.zoom, self.origin_x, self.origin_y);
+        let project = self.projection();
         let drawn = geometry::fill_polygons_indexed(
             &mut self.mask,
             width,
@@ -582,16 +742,64 @@ impl TileRaster {
             set,
             &self.candidates,
             &self.clip,
-            |lng, lat| {
-                (
-                    (lng_to_pixel_x(lng, zoom) - origin_x) * scale,
-                    (lat_to_pixel_y(lat, zoom) - origin_y) * scale,
-                )
-            },
+            project,
         );
         if drawn == 0 {
             return false;
         }
+        self.add_mask(target);
+        true
+    }
+
+    /// `accumulate` over hulls generated per candidate caster, filled a batch at a time.
+    fn accumulate_shadows(
+        &mut self,
+        index: &ShadowIndex,
+        hulls_of: impl Fn(usize, &mut Vec<Polygon>),
+        target: &mut [f32],
+    ) -> bool {
+        index.grid.candidates(&self.clip, &mut self.candidates);
+        if self.candidates.is_empty() {
+            return false;
+        }
+        self.mask.iter_mut().for_each(|cell| *cell = 0);
+        let width = TILE_SIZE * SUPERSAMPLE;
+        let project = self.projection();
+        let clip = self.clip;
+        let mut drawn = 0;
+        let mut fill = |mask: &mut [u8], hulls: &mut Vec<Polygon>| {
+            drawn += geometry::fill_polygons(
+                mask,
+                width,
+                width,
+                &geometry::flatten(hulls),
+                &clip,
+                &project,
+            );
+            hulls.clear();
+        };
+        let mut hulls: Vec<Polygon> = Vec::new();
+        for caster in &self.candidates {
+            let caster = *caster as usize;
+            if !overlaps(&index.boxes[caster], &clip) {
+                continue;
+            }
+            hulls_of(caster, &mut hulls);
+            if hulls.len() >= FILL_BATCH {
+                fill(&mut self.mask, &mut hulls);
+            }
+        }
+        fill(&mut self.mask, &mut hulls);
+        if drawn == 0 {
+            return false;
+        }
+        self.add_mask(target);
+        true
+    }
+
+    /// Add each pixel's covered fraction of the mask into `target`.
+    fn add_mask(&self, target: &mut [f32]) {
+        let width = TILE_SIZE * SUPERSAMPLE;
         let subpixels = (SUPERSAMPLE * SUPERSAMPLE) as f32;
         for pixel_y in 0..TILE_SIZE {
             for pixel_x in 0..TILE_SIZE {
@@ -605,7 +813,6 @@ impl TileRaster {
                 target[pixel_y * TILE_SIZE + pixel_x] += covered as f32 / subpixels;
             }
         }
-        true
     }
 }
 
@@ -667,26 +874,46 @@ fn soften(plane: &mut [f32]) {
 /// Crowns aren't punched from their own shadow: the ground under a tree is the shadiest there is.
 fn coverage(
     shade: &CityShade,
-    samples: &[SampleSet],
-    crowns: Option<&SampleSet>,
+    shadows: &CityShadows,
+    bucket: &Bucket,
+    params: &Params,
     tile: &Tile,
 ) -> Coverage {
     let mut raster = TileRaster::new(tile);
+    let casters = &shade.casters;
+    let max_shadow_meters = params.max_shadow_meters;
+    let samples = &bucket.samples;
 
     let mut buildings = vec![0.0f32; TILE_SIZE * TILE_SIZE];
     let mut any_buildings = false;
     for sample in samples {
-        any_buildings |= raster.accumulate(&sample.set, &sample.grid, &mut buildings);
+        any_buildings |= raster.accumulate_shadows(
+            &shadows.buildings,
+            |index, out| casters.building_hulls(index, sample, max_shadow_meters, out),
+            &mut buildings,
+        );
     }
     let mut trees = vec![0.0f32; TILE_SIZE * TILE_SIZE];
-    let any_trees =
-        crowns.is_some_and(|crowns| raster.accumulate(&crowns.set, &crowns.grid, &mut trees));
+    let any_trees = shadows.trees.as_ref().is_some_and(|crowns| {
+        let sample = &samples[0];
+        raster.accumulate_shadows(
+            crowns,
+            |index, out| {
+                casters.crown_hulls(index, sample, max_shadow_meters, params.max_zoom, out)
+            },
+            &mut trees,
+        )
+    });
     if !any_buildings && !any_trees {
         return Coverage::default();
     }
 
     let mut base = vec![0.0f32; TILE_SIZE * TILE_SIZE];
-    raster.accumulate(&shade.footprints, &shade.footprint_grid, &mut base);
+    raster.accumulate_shadows(
+        &shade.footprints,
+        |index, out| out.push(casters.polygons[index].clone()),
+        &mut base,
+    );
     Coverage {
         buildings: (any_buildings && resolve(&mut buildings, samples.len() as f32, &base))
             .then_some(buildings),
@@ -732,9 +959,9 @@ fn write_tile(directory: &Path, tile: &Tile, pixels: &[u8]) -> Fallible<usize> {
 /// What one bucket's tiles render from; `trees` and `tree_dir` are None without measured crowns.
 struct BucketRender<'a> {
     cities: &'a [Option<CityShade>],
-    buildings: Vec<Option<Vec<SampleSet>>>,
-    trees: Vec<Option<SampleSet>>,
-    intensity: f64,
+    shadows: Vec<Option<CityShadows>>,
+    bucket: &'a Bucket,
+    params: &'a Params,
     building_dir: PathBuf,
     tree_dir: Option<PathBuf>,
 }
@@ -747,14 +974,14 @@ impl BucketRender<'_> {
         let mut painted = false;
         let mut tree_painted = false;
         for member in &tile.members {
-            if let (Some(shade), Some(samples)) = (&self.cities[*member], &self.buildings[*member])
-            {
-                let fractions = coverage(shade, samples, self.trees[*member].as_ref(), tile);
+            if let (Some(shade), Some(shadows)) = (&self.cities[*member], &self.shadows[*member]) {
+                let fractions = coverage(shade, shadows, self.bucket, self.params, tile);
+                let intensity = self.bucket.intensity;
                 if let Some(fraction) = fractions.buildings {
-                    painted |= paint(&mut building_pixels, &fraction, self.intensity);
+                    painted |= paint(&mut building_pixels, &fraction, intensity);
                 }
                 if let Some(fraction) = fractions.trees {
-                    tree_painted |= paint(&mut tree_pixels, &fraction, self.intensity);
+                    tree_painted |= paint(&mut tree_pixels, &fraction, intensity);
                 }
             }
         }
@@ -863,22 +1090,15 @@ pub fn run(args: &Args) -> Fallible<()> {
         }
         let render = BucketRender {
             cities: &cities,
-            buildings: cities
+            shadows: cities
                 .iter()
                 .map(|city| {
                     city.as_ref()
-                        .map(|shade| build_sample_sets(shade, bucket, params.max_shadow_meters))
+                        .map(|shade| city_shadows(shade, bucket, params))
                 })
                 .collect(),
-            trees: cities
-                .iter()
-                .map(|city| {
-                    city.as_ref().and_then(|shade| {
-                        build_crown_set(shade, bucket, params.max_shadow_meters, params.max_zoom)
-                    })
-                })
-                .collect(),
-            intensity: bucket.intensity,
+            bucket,
+            params,
             building_dir,
             tree_dir,
         };
@@ -1051,22 +1271,38 @@ fn grid_spec(edge_polys: &[Vec<Coord>]) -> Option<GridSpec> {
     })
 }
 
-/// The share of each edge's polyline one hull set covers, `encode_fraction`d, via a coverage grid.
-fn edge_fractions(hulls: &[Polygon], spec: &GridSpec, edge_polys: &[Vec<Coord>]) -> Vec<u8> {
+/// The share of each edge's polyline the casters' hulls cover, `encode_fraction`d, via a coverage grid.
+fn edge_fractions(
+    count: usize,
+    hulls_of: impl Fn(usize, &mut Vec<Polygon>),
+    spec: &GridSpec,
+    edge_polys: &[Vec<Coord>],
+) -> Vec<u8> {
     let mut cells = vec![0u8; spec.cols * spec.rows];
-    geometry::fill_polygons(
-        &mut cells,
-        spec.cols,
-        spec.rows,
-        &geometry::flatten(hulls),
-        &spec.bounds,
-        |lng, lat| {
-            (
-                (lng - spec.west) * spec.meters_per_lng / spec.cell,
-                (lat - spec.south) * METERS_PER_DEGREE_LAT / spec.cell,
-            )
-        },
-    );
+    let fill = |cells: &mut [u8], hulls: &mut Vec<Polygon>| {
+        geometry::fill_polygons(
+            cells,
+            spec.cols,
+            spec.rows,
+            &geometry::flatten(hulls),
+            &spec.bounds,
+            |lng, lat| {
+                (
+                    (lng - spec.west) * spec.meters_per_lng / spec.cell,
+                    (lat - spec.south) * METERS_PER_DEGREE_LAT / spec.cell,
+                )
+            },
+        );
+        hulls.clear();
+    };
+    let mut hulls: Vec<Polygon> = Vec::new();
+    for caster in 0..count {
+        hulls_of(caster, &mut hulls);
+        if hulls.len() >= FILL_BATCH {
+            fill(&mut cells, &mut hulls);
+        }
+    }
+    fill(&mut cells, &mut hulls);
     let grid = CoverageGrid {
         cells,
         cols: spec.cols,
@@ -1121,12 +1357,8 @@ pub fn bake_edge_shade(
             };
             // One grid alive at a time per bin, each up to SHADE_CELL_BUDGET.
             let buildings = edge_fractions(
-                &hulls_for_sample(
-                    &casters.polygons,
-                    &casters.heights,
-                    sample,
-                    max_shadow_meters,
-                ),
+                casters.building_count(),
+                |index, out| casters.building_hulls(index, sample, max_shadow_meters, out),
                 &spec,
                 edge_polys,
             );
@@ -1134,13 +1366,10 @@ pub fn bake_edge_shade(
                 vec![0u8; edge_count]
             } else {
                 edge_fractions(
-                    &crown_hulls_for_sample(
-                        &casters.crowns,
-                        &casters.crown_heights,
-                        sample,
-                        max_shadow_meters,
-                        max_zoom,
-                    ),
+                    casters.crown_count(),
+                    |index, out| {
+                        casters.crown_hulls(index, sample, max_shadow_meters, max_zoom, out)
+                    },
                     &spec,
                     edge_polys,
                 )
@@ -1157,14 +1386,14 @@ pub fn bake_edge_shade(
 /// What a city casts onto its own edges: buildings and, if present, canopy crowns.
 pub fn edge_shade_casters(buildings_path: &Path, canopy_path: Option<&Path>) -> Fallible<Casters> {
     let (polygons, heights) = binfmt::read_buildings(buildings_path)?;
-    let (crown_polygons, crown_heights) = match canopy_path {
+    let (crowns, crown_heights) = match canopy_path {
         Some(path) => read_crowns(path)?,
         None => (Vec::new(), Vec::new()),
     };
     Ok(Casters {
         polygons,
         heights,
-        crowns: crown::slice_crowns(&crown_polygons),
+        crowns,
         crown_heights,
     })
 }
@@ -1172,9 +1401,169 @@ pub fn edge_shade_casters(buildings_path: &Path, canopy_path: Option<&Path>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raster;
 
     fn coord(lng: f64, lat: f64) -> Coord {
         Coord { lng, lat }
+    }
+
+    /// A 40 x 40 block of towers, every third an L concave enough to sweep as strips, and crowns.
+    fn city_block() -> Casters {
+        let meters_per_lng = METERS_PER_DEGREE_LAT * 40.7f64.to_radians().cos();
+        let at = |lng: f64, lat: f64, east: f64, north: f64| {
+            coord(
+                lng + east / meters_per_lng,
+                lat + north / METERS_PER_DEGREE_LAT,
+            )
+        };
+        let mut polygons: Vec<Polygon> = Vec::new();
+        let mut heights = Vec::new();
+        let mut outlines: Vec<Polygon> = Vec::new();
+        let mut crown_heights = Vec::new();
+        for column in 0..40 {
+            for row in 0..40 {
+                let (lng, lat) = (-74.0 + column as f64 * 0.0008, 40.70 + row as f64 * 0.0006);
+                let ring = if (column + row) % 3 == 0 {
+                    vec![
+                        at(lng, lat, 0.0, 0.0),
+                        at(lng, lat, 60.0, 0.0),
+                        at(lng, lat, 60.0, 20.0),
+                        at(lng, lat, 20.0, 20.0),
+                        at(lng, lat, 20.0, 60.0),
+                        at(lng, lat, 0.0, 60.0),
+                    ]
+                } else {
+                    vec![
+                        at(lng, lat, 0.0, 0.0),
+                        at(lng, lat, 25.0, 0.0),
+                        at(lng, lat, 25.0, 25.0),
+                        at(lng, lat, 0.0, 25.0),
+                    ]
+                };
+                polygons.push(vec![ring]);
+                heights.push(5.0 + ((column * 7 + row * 13) % 30) as f64 * 5.0);
+                if row % 4 == 0 {
+                    outlines.push(vec![
+                        (0..12)
+                            .map(|step| {
+                                let angle = step as f64 * std::f64::consts::TAU / 12.0;
+                                at(lng, lat, 70.0 + 5.0 * angle.cos(), 30.0 + 5.0 * angle.sin())
+                            })
+                            .collect(),
+                    ]);
+                    crown_heights.push(8.0 + (column % 5) as f64 * 3.0);
+                }
+            }
+        }
+        Casters {
+            polygons,
+            heights,
+            crowns: crown::slice_crowns(&outlines),
+            crown_heights,
+        }
+    }
+
+    // Generating hulls per tile in batches must paint exactly what one whole-city set did.
+    #[test]
+    fn streamed_shadows_match_a_whole_city_set() {
+        let casters = city_block();
+        let samples: Vec<Sample> = [(0.3, 0.95, 1.2), (-0.6, 0.8, 2.5), (0.9, -0.44, 0.7)]
+            .iter()
+            .map(|&(east, north, shadow_per_height)| Sample {
+                east,
+                north,
+                shadow_per_height,
+            })
+            .collect();
+        let (max_shadow_meters, max_zoom) = (500.0, 14);
+        let whole = |hulls_of: &dyn Fn(usize, &mut Vec<Polygon>), count: usize| {
+            let mut hulls = Vec::new();
+            for index in 0..count {
+                hulls_of(index, &mut hulls);
+            }
+            let set = geometry::flatten(&hulls);
+            let grid = PolygonGrid::new(&set);
+            (set, grid)
+        };
+        let mut checked = 0;
+        for (zoom, lng, lat) in [
+            (12, -73.985, 40.71),
+            (14, -73.985, 40.71),
+            (15, -73.99, 40.705),
+            (15, -73.97, 40.72),
+            (16, -73.98, 40.715),
+        ] {
+            let tile = Tile {
+                zoom,
+                x: raster::tile_index(lng_to_pixel_x(lng, zoom), zoom),
+                y: raster::tile_index(lat_to_pixel_y(lat, zoom), zoom),
+                members: vec![0],
+            };
+            let mut streamed = TileRaster::new(&tile);
+            let mut baseline = TileRaster::new(&tile);
+            for sample in &samples {
+                let building = |index: usize, out: &mut Vec<Polygon>| {
+                    casters.building_hulls(index, sample, max_shadow_meters, out);
+                };
+                let crown = |index: usize, out: &mut Vec<Polygon>| {
+                    casters.crown_hulls(index, sample, max_shadow_meters, max_zoom, out);
+                };
+                for (hulls_of, count) in [
+                    (
+                        &building as &(dyn Fn(usize, &mut Vec<Polygon>) + Sync),
+                        casters.building_count(),
+                    ),
+                    (&crown, casters.crown_count()),
+                ] {
+                    let index = ShadowIndex::new(count, hulls_of);
+                    let (set, grid) = whole(hulls_of, count);
+                    let mut got = vec![0.0f32; TILE_SIZE * TILE_SIZE];
+                    let mut want = vec![0.0f32; TILE_SIZE * TILE_SIZE];
+                    let drew = streamed.accumulate_shadows(&index, hulls_of, &mut got);
+                    assert_eq!(drew, baseline.accumulate(&set, &grid, &mut want));
+                    assert!(
+                        got.iter()
+                            .zip(&want)
+                            .all(|(a, b)| a.to_bits() == b.to_bits())
+                    );
+                    checked += usize::from(drew);
+                }
+            }
+        }
+        assert!(
+            checked >= 20,
+            "most tiles should see shadows, saw {checked}"
+        );
+    }
+
+    // Filling the coverage grid a batch at a time must match filling it from every hull at once.
+    #[test]
+    fn streamed_edge_fractions_match_one_fill() {
+        let casters = city_block();
+        let sample = Sample {
+            east: 0.3,
+            north: 0.95,
+            shadow_per_height: 1.2,
+        };
+        let edge_polys: Vec<Vec<Coord>> = (0..200)
+            .map(|edge| {
+                let lat = 40.70 + edge as f64 * 0.00012;
+                vec![coord(-74.001, lat), coord(-73.968, lat + 0.0001)]
+            })
+            .collect();
+        let spec = grid_spec(&edge_polys).expect("edges with geometry");
+        let count = casters.building_count();
+        let hulls_of = |index: usize, out: &mut Vec<Polygon>| {
+            casters.building_hulls(index, &sample, 500.0, out);
+        };
+        let all_at_once = |_: usize, out: &mut Vec<Polygon>| {
+            for index in 0..count {
+                hulls_of(index, out);
+            }
+        };
+        let streamed = edge_fractions(count, hulls_of, &spec, &edge_polys);
+        assert_eq!(streamed, edge_fractions(1, all_at_once, &spec, &edge_polys));
+        assert!(streamed.iter().any(|fraction| *fraction > 0));
     }
 
     // A 100 m building, a 10 m crown and an unknown-height crown under a 5 m/m due-north shadow.
