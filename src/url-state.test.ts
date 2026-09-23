@@ -285,19 +285,19 @@ test("a rewrite clears the Modes keys as well as the route's", () => {
 
 test("a share link is the page it was made on, plus the hash", () => {
   const page = {
-    origin: "https://hafaio.github.io",
+    origin: "https://hafa.cc",
     pathname: "/scenic-route/explorer",
     search: "",
   };
   expect(shareUrl(page, encodeRoute({ ...DEFAULT_ROUTE_STATE }))).toBe(
-    "https://hafaio.github.io/scenic-route/explorer",
+    "https://hafa.cc/scenic-route/explorer",
   );
   expect(
     shareUrl(
       { ...page, pathname: "/scenic-route/" },
       encodeModes({ ...DEFAULT_MODE_STATE, mode: "rain" }),
     ),
-  ).toBe("https://hafaio.github.io/scenic-route/#mode=rain");
+  ).toBe("https://hafa.cc/scenic-route/#mode=rain");
 });
 
 test("the bridge weight rides on its own key", () => {
