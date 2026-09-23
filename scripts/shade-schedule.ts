@@ -1,12 +1,4 @@
-// The shade tiler's bins: the sun's positions gridded on (declination, hourAngle) — its natural
-// season × time-of-day axes — and per bin the SUN-DISK samples that give the shadow its penumbra.
-// The shade pass bakes one tile pyramid per bin; the client maps "now" (today's declination + hour
-// angle) to the bin and shows it. See src/shade/sun.ts for why this grid, not the raw (azimuth,
-// elevation) envelope, is the one that scrubs without jitter.
-//
-// A shadow depends only on where the sun is, and (declination, hourAngle) fixes that exactly, so each
-// bin's sun position is SYNTHESIZED straight from its grid cell — no year sweep, no astronomy library
-// here. The shade pass does the geometry; this does the trig.
+// Shade bins on a (declination, hourAngle) grid; each bin's sun position is computed from its cell.
 
 import {
   DECL_MAX_DEG,
@@ -19,25 +11,22 @@ import {
 import manifest from "../src/tree-cover/manifest.json";
 
 const DEGREES = Math.PI / 180;
-const HORIZON_DEG = 0.5; // at or below this the sun is down; no bin
+const HORIZON_DEG = 0.5; // at or below, the sun is down
 
-// The finest native pyramid level, and the shadow-length clamp (past this a low sun's shadow is
-// faint and unbounded to trace). The pyramid stops here because the client sweeps the casters itself
-// from the next level down (components/shade-layer.tsx), and z15 was two thirds of its bytes.
+// The client sweeps casters itself below this level, so the pyramid stops here.
 export const SHADE_MAX_ZOOM = 14;
 export const SHADE_MAX_SHADOW_METERS = 500;
 
 interface ShadeBucket {
-  season: number; // the declination band [0, SEASON_BANDS) this bin sits in — its season key
-  hourAngle: number; // the sun's hour angle (degrees, 0 at solar noon) — its time-of-day key
-  elevation: number; // the synthesized sun elevation for (season, hourAngle), degrees
-  azimuth: number; // and azimuth (compass, clockwise from north), degrees
-  intensity: number; // solar intensity ~sin(elevation); scales the shade darkness
+  season: number; // declination band in [0, SEASON_BANDS)
+  hourAngle: number; // degrees, 0 at solar noon
+  elevation: number; // degrees
+  azimuth: number; // degrees clockwise from north
+  intensity: number; // ~sin(elevation)
   samples: SunSample[];
 }
 
-// The sun's horizontal position (degrees) for a declination and hour angle over `latDeg`: the forward
-// spherical-triangle solution the clients invert in src/shade/sun.ts. Azimuth is a compass bearing.
+// The forward solution that src/shade/sun.ts inverts.
 function positionOf(
   declDeg: number,
   hourAngleDeg: number,
@@ -61,14 +50,7 @@ function positionOf(
   };
 }
 
-// The bins: for each declination band, the sun position at the band's central declination stepped
-// across the daytime hour angles. The band center stands for every date in the band (identical
-// shadows), and the hour steps run from just after sunrise to just before sunset.
-//
-// PER CITY, and not only because the numbers differ. The (season, hourAngle) keys are latitude-free
-// — that is what makes a scrub jitter-free — but the sun position each one resolves to is not, and
-// neither is the sunrise cut that decides which keys exist at all: a city further south has winter
-// bins a northern one does not. So two cities can share neither a bin index nor a pyramid.
+// Per city: latitude changes which bins exist, so cities share neither bin indices nor pyramids.
 export function computeShadeBuckets(cityId: string): ShadeBucket[] {
   const city = manifest.cities.find((entry) => entry.id === cityId);
   if (!city) {
@@ -80,14 +62,13 @@ export function computeShadeBuckets(cityId: string): ShadeBucket[] {
   const bandWidth = (2 * DECL_MAX_DEG) / SEASON_BANDS;
   for (let band = 0; band < SEASON_BANDS; band++) {
     const declination = -DECL_MAX_DEG + (band + 0.5) * bandWidth;
-    // The hour angle at sunrise/sunset for this declination (cos H = -tan φ tan δ); the sweep stays
-    // inside it, and the horizon check below trims the last partial step.
+    // Sunset hour angle: cos H = -tan φ tan δ.
     const cosSunset =
       -Math.tan(centerLat * DEGREES) * Math.tan(declination * DEGREES);
     const maxHourAngle =
       Math.abs(cosSunset) >= 1
         ? cosSunset < 0
-          ? 180 // sun never sets at this band (not reached at any city's latitude)
+          ? 180 // sun never sets
           : 0
         : Math.acos(cosSunset) / DEGREES;
     const steps = Math.floor(maxHourAngle / HOUR_ANGLE_STEP_DEG);
@@ -107,7 +88,7 @@ export function computeShadeBuckets(cityId: string): ShadeBucket[] {
       });
     }
   }
-  // A stable order (season then hour angle) so bin indices do not churn between builds.
+  // Stable order, so bin indices don't churn between builds.
   buckets.sort(
     (left, right) =>
       left.season - right.season || left.hourAngle - right.hourAngle,

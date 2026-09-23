@@ -1,10 +1,4 @@
-// The encoders the tree-cover ingest writes its .bin sources with: the varint coordinate codec
-// and the two source layouts built on it. Only the ingest needs them — crates/tiler reads these
-// files back, and the model math lives there. Layouts are documented in scripts/README.md.
-//
-// The network layout (STRT, PATH, SWLK) carries a decoder beside its encoder, which nothing in the
-// pipeline calls: the format test reads a hand-written fixture with it, so a mistake mirrored into
-// an encoder/decoder pair cannot pass by round-tripping (DESIGN.md, "Repository traps").
+// Layouts are documented in scripts/README.md.
 
 import type { Bounds } from "./manifest";
 import type { Polygon } from "./overpass";
@@ -15,7 +9,7 @@ export const COORD_SCALE = 1e-6; // degrees per quantized unit, ~0.1 m
 
 export const EARTH_RADIUS_METERS = 6_371_008.8;
 
-// Great-circle distance in meters. Used where a source dedups or clips by a real ground radius.
+// Great-circle distance in meters.
 export function haversineMeters(from: Coord, to: Coord): number {
   const fromLat = from.lat * (Math.PI / 180);
   const toLat = to.lat * (Math.PI / 180);
@@ -85,22 +79,15 @@ function writeHeader(
   view.setFloat64(32, COORD_SCALE, true);
 }
 
-// A tree, with the crown disc already sized from its dbh: the genus overlay draws each tree at
-// this crown size, so it travels with the point through the encoder. `genusId` is the top-11
-// genus id 0..10, or 11 ("Other") for a tail genus, an unknown genus, or an OSM tree.
+// `genusId` is a top-11 genus 0..10, or 11 ("Other") for a tail, unknown or OSM tree.
 export interface CrownedTree extends Coord {
   crownRadiusM: number;
   genusId: number;
 }
 
-export const DECIMETERS_PER_METER = 10; // the crown byte's unit: a decimeter of crown radius
+export const DECIMETERS_PER_METER = 10; // the crown byte's unit
 
-// Every point carries a crown-radius byte and a genus byte, each written as a fixed-size trailing
-// region after the coordinate stream and in the very same sorted order, so byte i sizes/labels
-// point i. The points are sorted by quantized (lat, lng), so a delta carries a step along a row
-// rather than a jump across the city and the whole inventory fits in about five bytes a tree.
-// Crown and genus ride through the sort with each point, so the two blocks stay parallel. TREE v3.
-// layout: scripts/README.md
+// Sorted by (lat, lng) so each delta is a short step along a row. layout: scripts/README.md
 export function encodeTrees(
   format: number,
   trees: readonly CrownedTree[],
@@ -116,17 +103,15 @@ export function encodeTrees(
     .map(({ lat, lng, crownRadiusM, genusId }) => ({
       x: Math.round((lng - originLng) / COORD_SCALE),
       y: Math.round((lat - originLat) / COORD_SCALE),
-      // Clamped into the byte: a decimeter of radius, 0..25.5 m, which the allometry never
-      // approaches even at the largest trunk the ingest keeps.
       crown: Math.min(
         255,
         Math.max(0, Math.round(crownRadiusM * DECIMETERS_PER_METER)),
       ),
-      genusId, // 0..12, one byte
+      genusId,
     }))
     .sort((left, right) => left.y - right.y || left.x - right.x);
 
-  // Two varints of at most five bytes each per point, then one crown byte and one genus byte each.
+  // Two varints of at most five bytes each per point, then the crown and genus bytes.
   const bytes = new Uint8Array(HEADER_BYTES + trees.length * 12);
   const view = new DataView(bytes.buffer);
   let offset = HEADER_BYTES;
@@ -150,16 +135,11 @@ export function encodeTrees(
   return bytes.subarray(0, offset);
 }
 
-// A point carrying a small class byte: e.g. a land-use lot at its coordinate, tagged with its
-// PLUTO land-use digit. The class rides through the sort with each point, so byte i classes point i.
 export interface ClassifiedPoint extends Coord {
-  klass: number; // 0..255, the per-point class the trailing byte stores
+  klass: number; // 0..255
 }
 
-// A classified point set (e.g. magic `PLUT`): the header, then the coordinate stream as zigzag-varint
-// (x, y) deltas in (y, x)-sorted order, then ONE trailing class byte per point in that same sorted
-// order — mirroring how encodeTrees keeps its crown and genus regions parallel to the coordinates.
-// The header count is the number of points. layout: scripts/README.md
+// layout: scripts/README.md
 export function encodeClassifiedPoints(
   magic: string,
   format: number,
@@ -180,7 +160,6 @@ export function encodeClassifiedPoints(
     }))
     .sort((left, right) => left.y - right.y || left.x - right.x);
 
-  // Two varints of at most five bytes each per point, then one class byte each.
   const bytes = new Uint8Array(HEADER_BYTES + points.length * 11);
   const view = new DataView(bytes.buffer);
   let offset = HEADER_BYTES;
@@ -200,17 +179,11 @@ export function encodeClassifiedPoints(
   return bytes.subarray(0, offset);
 }
 
-// A named point: a POI's coordinate and the label the client draws (empty when the source names none).
 export interface NamedPoint extends Coord {
   name?: string;
 }
 
-// A point set with per-point names: the header, then the coordinate stream as zigzag-varint (x, y)
-// deltas in (y, x)-sorted order, then a trailing name blob — per point (in that same sorted order) a
-// u16 UTF-8 byte length and its bytes. The name blob is client-only (the overlay labels read it); the
-// Rust reader reads only `count` points from the header and ignores it, so the graph bake is
-// unaffected. The scenic-factor ingests (landmarks, public art) write their POIs with this.
-// layout: scripts/README.md
+// The trailing name blob is client-only; the Rust reader ignores it. layout: scripts/README.md
 export function encodePoints(
   magic: string,
   format: number,
@@ -232,7 +205,6 @@ export function encodePoints(
     }))
     .sort((left, right) => left.y - right.y || left.x - right.x);
 
-  // Two varints of at most five bytes each per point.
   const pointBytes = new Uint8Array(HEADER_BYTES + points.length * 10);
   const view = new DataView(pointBytes.buffer);
   let offset = HEADER_BYTES;
@@ -293,8 +265,7 @@ export function encodePolygons(
     }
   }
 
-  // Two varints of at most five bytes per vertex, four bytes of count per ring, two per
-  // polygon.
+  // Two 5-byte varints per vertex, a 4-byte count per ring, a 2-byte count per polygon.
   const bytes = new Uint8Array(
     HEADER_BYTES + polygons.length * 2 + vertices * 14,
   );
@@ -330,11 +301,7 @@ export function encodePolygons(
   return bytes.subarray(0, offset);
 }
 
-// The measured canopy polygons, magic `CNPY`: the encodePolygons body, then ONE trailing region of
-// one u16 little-endian per polygon in the same polygon order — the crown height in decimeters, as
-// BLDG carries its roof heights. The ingest writes the region zeroed and the height pass samples
-// the LiDAR height model into it in place, the way the density pass fills the street density blob;
-// a polygon the model saw no cell for keeps the 0, which reads as unknown. layout: scripts/README.md
+// The height region is zeroed here and filled in place by the height pass; 0 reads as unknown.
 export function encodeCanopy(
   format: number,
   polygons: readonly Polygon[],
@@ -345,27 +312,17 @@ export function encodeCanopy(
   return out;
 }
 
-// A building footprint carrying the roof height the shade model raises the wall to, plus the ground
-// elevation its base sits at (for terrain-aware shade). Both ride through the encoder parallel to
-// the polygon: a MultiPolygon with disjoint parts becomes several entries, each repeating that
-// building's height and base elevation.
+// A MultiPolygon becomes several entries, each repeating the building's height and base.
 export interface HeightedBuilding {
   polygon: Polygon;
   heightMeters: number;
   baseElevationMeters: number;
 }
 
-// The meters of positive bias added to a base elevation before it is quantized, so the harbor's
-// slightly-negative ground (min ~ -3 m) survives the unsigned u16 store. A reader recovers the true
-// elevation as `decimeters / 10 - ELEVATION_BIAS_METERS`.
+// Keeps the harbor's slightly negative ground (min ~ -3 m) non-negative in the u16 store.
 export const ELEVATION_BIAS_METERS = 100;
 
-// The building footprints, magic `BLDG`: the encodePolygons body (a header, then per-polygon
-// varint-delta rings), then TWO parallel trailing regions of one u16 little-endian per polygon, in
-// the same polygon order and mirroring how encodeTrees keeps its crown and genus regions parallel:
-// first the roof height in decimeters, then the base (ground) elevation in decimeters biased by
-// +ELEVATION_BIAS_METERS so a below-sea-level base stays non-negative. The header count is the
-// number of polygons. layout: scripts/README.md
+// layout: scripts/README.md
 export function encodeBuildings(
   format: number,
   buildings: readonly HeightedBuilding[],
@@ -404,12 +361,10 @@ export function encodeBuildings(
 
 export const NETWORK_HEADER_BYTES = 64;
 export const NETWORK_RECORD_BYTES = 24;
-export const NETWORK_SIDES = 2; // the density blob carries both sidewalks of every vertex, left then right
-export const UNNAMED_ID = 0xffff; // a record's name id when its source carried no label
+export const NETWORK_SIDES = 2; // left then right sidewalk per vertex
+export const UNNAMED_ID = 0xffff;
 
-// Splits every piece longer than `stepMeters`, so the field is sampled often enough along a line
-// for its color to vary rather than come out in one flat block. Returns the geodesic length too:
-// it is what the network record stores, and the graph sums those rather than recomputing.
+// Dense enough that the sampled field's color varies along a line rather than in one flat block.
 export function densify(
   points: readonly Coord[],
   stepMeters: number,
@@ -433,16 +388,12 @@ export function densify(
   return { points: dense, lengthMeters: total };
 }
 
-// Anything the encoder names: a street segment, a path way, a sidewalk way. Its `nameId` is
-// stamped in place by buildNameTable from its (already trimmed and, for OSM ways, uppercased) name.
 export interface Named {
   name: string;
   nameId: number;
 }
 
-// Collects the distinct names, sorts them, and stamps each record with its index into that
-// sorted table; a record with no label keeps UNNAMED_ID. Returns the table, which the encoder
-// writes once as the trailing name blob. Each network builds its own.
+// Stamps each record's `nameId` in place and returns the sorted table.
 export function buildNameTable(records: readonly Named[]): string[] {
   const distinct = new Set<string>();
   for (const record of records) {
@@ -460,25 +411,19 @@ export function buildNameTable(records: readonly Named[]): string[] {
   return names;
 }
 
-// One record of any of the three committed networks, mapped to the shared byte layout: the id at
-// offset 0, the kind at 20, and the width/speed/flags bytes. STRT fills all three; PATH and SWLK
-// leave width and speed 0.
+// PATH and SWLK leave width and speed 0.
 export interface NetworkRecord {
-  id: number; // record offset 0 (u32): CSCL physicalid, or an OSM way id
-  nameId: number; // record offset 10
-  lengthMeters: number; // record offset 12 (f32)
-  kind: number; // record byte 20: rw_type, or the PATH / SWLK kind
-  width: number; // record byte 21
-  speed: number; // record byte 22
-  flags: number; // record byte 23
+  id: number; // CSCL physicalid, or an OSM way id
+  nameId: number;
+  lengthMeters: number;
+  kind: number; // rw_type, or the PATH / SWLK kind
+  width: number;
+  speed: number;
+  flags: number;
   points: Coord[];
 }
 
-// The one encoder all three networks share: STRT's layout, parameterized by magic and format. The
-// density blob is written zeroed — two bytes a vertex, one sidewalk each — and filled in place by
-// the density pass for STRT and PATH, so the coordinates it offsets the sidewalks from are the
-// ones that ship rather than a parallel copy. SWLK's stays zeroed and no pass fills it: a mapped
-// sidewalk takes the cover byte of the street side it was matched to. layout: scripts/README.md
+// The density blob is zeroed here and filled in place by the density pass (never for SWLK).
 export function encodeNetwork(
   magic: string,
   format: number,
@@ -500,7 +445,6 @@ export function encodeNetwork(
     NETWORK_HEADER_BYTES + records.length * NETWORK_RECORD_BYTES,
   );
   const view = new DataView(table.buffer);
-  // Two varints of at most five bytes each per vertex.
   const blob = new Uint8Array(vertices * 10);
   let blobEnd = 0;
   let vertex = 0;
@@ -543,8 +487,6 @@ export function encodeNetwork(
   view.setFloat64(16, originLng, true);
   view.setFloat64(24, originLat, true);
   view.setFloat64(32, COORD_SCALE, true);
-  // The name blob is the file's final region: a u32 count, then each name as a u16 byte length
-  // and its UTF-8 bytes, back to back. Read once, sequentially, by the one Rust reader.
   const encoder = new TextEncoder();
   const nameBytes = names.map((name) => encoder.encode(name));
   let nameBlobLength = 4;
@@ -578,13 +520,12 @@ export function encodeNetwork(
   return encoded;
 }
 
-// One decoded network file: its records in file order, plus the regions a caller may want whole.
 export interface DecodedNetwork {
   magic: string;
   format: number;
   records: NetworkRecord[];
   names: string[];
-  densities: Uint8Array; // two bytes a vertex, left then right, in record order
+  densities: Uint8Array; // two bytes a vertex, left then right
 }
 
 function readVarint(bytes: Uint8Array, cursor: { offset: number }): number {
@@ -600,9 +541,7 @@ function readVarint(bytes: Uint8Array, cursor: { offset: number }): number {
   }
 }
 
-// The reader for the layout above, driven off the header's own offsets rather than the encoder's
-// arithmetic — so a header that disagrees with the regions it points at fails here rather than
-// decoding into whatever happens to sit at the offset the encoder would have used.
+// Reads the header's offsets, not the encoder's arithmetic, so a wrong header fails here.
 export function decodeNetwork(bytes: Uint8Array): DecodedNetwork {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const magic = String.fromCharCode(...bytes.subarray(0, 4));

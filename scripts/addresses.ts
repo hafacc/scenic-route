@@ -1,30 +1,5 @@
-// `bun run update-addresses`: every street address in both cities, as the ADDR artifact the offline
-// search box geocodes against.
-//
-// The routing graph already carries street names, so the only part of "312 Court St" that is not
-// already on the device is the house number.
-//
-// A city is a LIST of feeds rather than a file, because a city is not always one publisher's idea of
-// one. New York's five boroughs come out of the city's own AddressPoint export (uf93-f8nk). The Bay
-// Area is San Francisco's EAS (ramy-di5m) plus the seven Alameda County municipalities the map
-// covers, out of the county's ArcGIS address points — two publishers, two formats, one file. Every
-// feed's rows are concatenated and encoded ONCE, so a name that occurs in two of them is two streets
-// in the artifact rather than one run spanning the bay.
-//
-// A street here is a name AND a place: neither city qualifies its street names, New York has five
-// Court Streets and the Bay Area has a Park Street in Alameda and a Park Street in Berkeley, so the
-// borough or the municipality rides with the name and the search box can say which one it found.
-//
-// Written to public/addresses/<city>.bin.gz and committed, like the ferry timetable: no deploy step
-// rebuilds it, and at ~3 bytes an address both cities together are smaller than one zoom level of
-// any pyramid. Gzipped on disk because Pages serves .bin uncompressed; the client inflates it with
-// DecompressionStream.
-//
-// A rebuild renumbers the streets — they are ordered by (name, place), so one new feed shifts every
-// ordinal past its first street. public/search/<city>.bin.gz stores those ordinals, so it has to be
-// rebuilt in the same change or its results resolve house numbers against the wrong streets.
-//
-// Layout: src/search/address-format.ts, and scripts/README.md.
+// Gzipped because Pages serves .bin uncompressed.
+// A rebuild renumbers streets, so public/search/<city>.bin.gz must be rebuilt in the same change.
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -48,30 +23,27 @@ import { parseWktPoint } from "./socrata";
 const PUBLIC_DIR = join(import.meta.dirname, "..", "public");
 const ADDRESS_DIR = join(PUBLIC_DIR, "addresses");
 
-// What the write buffer is sized against: no value here needs more than five varint bytes, and an
-// address is four of them — number, extra, latitude, longitude.
+// An address is four varints: number, extra, latitude, longitude.
 const MAX_VARINT_BYTES = 5;
 const MAX_ADDRESS_BYTES = 4 * MAX_VARINT_BYTES;
 const REQUEST_TIMEOUT_MS = 300_000;
 
 export interface AddressRow {
-  street: string; // as the source writes it, upper case; the client prettifies
-  place: string; // the borough or municipality the street is in
+  street: string; // upper case, as the source writes it
+  place: string; // borough or municipality
   number: HouseNumber;
   lat: number;
   lng: number;
 }
 
-// One address at the grid the artifact stores it on. Quantizing before the sort is what makes two
-// rows for the same doorway identical rather than merely close.
+// Quantized before the sort so duplicate rows become identical, not merely close.
 interface Placed {
   number: HouseNumber;
   latUnits: number;
   lngUnits: number;
 }
 
-// One run of the body: the addresses of one name in one place. New York has five Court Streets, and
-// they are five of these.
+// A name in one place: New York's five Court Streets are five of these.
 interface Street {
   name: string;
   place: string;
@@ -81,16 +53,14 @@ interface Street {
 export interface EncodedAddresses {
   bytes: Uint8Array;
   names: number; // distinct street names
-  streets: number; // (name, place) pairs, which is what the body holds
-  addresses: number; // after the dedupe, so this is what is in the file
+  streets: number; // (name, place) pairs
+  addresses: number; // after the dedupe
 }
 
-// Joins a street's name and place into a map key. NUL because a street name may contain any
-// printable character — spaces, digits, apostrophes, "W  239 ST" — but never this one.
+// NUL: street names may contain any printable character.
 const KEY_SEPARATOR = "\u0000";
 
-// Ascending by code unit: the order the two blobs are written in, and so the order a client that
-// binary-searches them has to use.
+// By code unit: the order clients binary-search the blobs in.
 function compareText(left: string, right: string): number {
   if (left === right) {
     return 0;
@@ -108,8 +78,6 @@ function samePlace(left: Placed, right: Placed | undefined): boolean {
   );
 }
 
-// Groups the rows by (name, place), orders every level and writes the ADDR body. Pure, so the
-// artifact is a function of the rows and a test can build a handful by hand and read them back.
 export function encodeAddresses(rows: readonly AddressRow[]): EncodedAddresses {
   const byStreet = new Map<string, Street>();
   for (const { street, place, number, lat, lng } of rows) {
@@ -139,9 +107,7 @@ export function encodeAddresses(rows: readonly AddressRow[]): EncodedAddresses {
         left.latUnits - right.latUnits ||
         left.lngUnits - right.lngUnits,
     );
-    // San Francisco's file is per unit, so a six-flat is six rows of one address; the county's is
-    // per unit too, and New York's has its own repeats. Identical rows are adjacent once sorted,
-    // which is all the dedupe needs.
+    // The sources list one row per unit, so a six-flat is six identical rows.
     street.addresses = street.addresses.filter(
       (address, index) => !samePlace(address, street.addresses[index - 1]),
     );
@@ -153,8 +119,6 @@ export function encodeAddresses(rows: readonly AddressRow[]): EncodedAddresses {
 
   const names = [...new Set(streets.map((street) => street.name))].sort();
   const nameIndex = new Map(names.map((name, index) => [name, index]));
-  // A city that is one place has the single place "", whose blob is zero bytes and whose index is 0
-  // — which is what the format asks for, without a case for it here.
   const places = [...new Set(streets.map((street) => street.place))].sort();
   const placeIndex = new Map(places.map((place, index) => [place, index]));
 
@@ -218,9 +182,7 @@ export function encodeAddresses(rows: readonly AddressRow[]): EncodedAddresses {
   };
 }
 
-// RFC 4180 with the header row read as column names: the export quotes every field, and a street
-// name is free to contain a comma. Yielded a record at a time rather than collected, because the
-// text these walk is already tens of megabytes.
+// RFC 4180; the header row names the columns.
 function* csvRecords(
   text: string,
   columns: readonly string[],
@@ -287,18 +249,14 @@ function* csvRecords(
   }
 }
 
-// One feed of one city's addresses: what to call it in the log, and where its rows come from. A feed
-// answers rows rather than bytes because the two publishers read here do not agree on a format — a
-// Socrata CSV export and an ArcGIS feature service — and the encoder wants neither.
 interface Feed {
   name: string;
   collect(): Promise<Collected>;
 }
 
-// A feed published as one CSV export: the whole dataset in one request, where the JSON API would
-// page it. `read` answers null for a row the artifact cannot carry, which the caller counts.
+// One CSV export, so the whole dataset comes in one request rather than pages.
 interface CsvFeed {
-  id: string; // the cache entry's name
+  id: string; // cache entry name
   name: string;
   url: string;
   limit: number;
@@ -306,8 +264,7 @@ interface CsvFeed {
   read(fields: string[]): AddressRow | null;
 }
 
-// A latitude or longitude column. Null rather than 0 where it is blank: an address at the origin is
-// a thousand kilometers off the coast of Africa, not a missing coordinate.
+// Null, not 0, where blank: `Number("")` is 0.
 function coordinate(text: string): number | null {
   const value = Number(text.trim());
   if (text.trim() === "" || !Number.isFinite(value)) {
@@ -328,11 +285,7 @@ const NYC_ADDRESS_POINT: CsvFeed = {
     `full_street_name,boroughcode,the_geom&$limit=${NYC_LIMIT}`,
   limit: NYC_LIMIT,
   columns: ["house_number", "full_street_name", "boroughcode", "the_geom"],
-  // `house_number` is written the way the borough writes it: plain in four boroughs, hyphenated in
-  // Queens, where "25-07" is house 7 on block 25. The 191 rows this rejects are all a third shape —
-  // a letter inside the hyphen, "2701-B8", the buildings of a complex — which the format's numeric
-  // minor part cannot hold. `boroughcode` is "1" to "5" on every row today; one that is not is
-  // rejected rather than filed under a street of no place.
+  // Queens hyphenates ("25-07" is house 7 on block 25); "2701-B8" style numbers can't be encoded.
   read([houseNumber, street, boroughCode, geometry]) {
     const number = parseHouseNumber(houseNumber);
     const point = parseWktPoint(geometry);
@@ -353,10 +306,6 @@ const NYC_ADDRESS_POINT: CsvFeed = {
   },
 };
 
-// The place San Francisco's rows are filed under. It was "" while the city was San Francisco alone
-// — one place labels nothing — and it is the city's name now that the artifact also holds seven
-// East Bay municipalities: a Park Street with no place beside it, in a file where every other street
-// says which town it is in, reads as a missing label rather than as the one city that needs none.
 const SAN_FRANCISCO = "San Francisco";
 
 const SF_EAS: CsvFeed = {
@@ -373,9 +322,7 @@ const SF_EAS: CsvFeed = {
     "latitude",
     "longitude",
   ],
-  // The suffix is its own column here, and the number as written is the two run together: "269" plus
-  // "B" is 269B. Every row this rejects — 24 of them — is a half address, whose suffix is "½" rather
-  // than a letter.
+  // "269" plus suffix "B" is 269B; a "½" suffix can't be encoded.
   read([addressNumber, suffix, street, latitude, longitude]) {
     const number = parseHouseNumber(`${addressNumber.trim()}${suffix.trim()}`);
     const lat = coordinate(latitude);
@@ -393,22 +340,12 @@ const SF_EAS: CsvFeed = {
   },
 };
 
-// Alameda County's point addresses, the East Bay's half of the Bay Area file. The county publishes
-// 636,418 of them for all fourteen of its municipalities; the seven this map covers are 296,494 of
-// those, and the rest — Fremont, Hayward, Livermore and the unincorporated county — are left where
-// they are, because a street the map has no graph for is a search result that goes nowhere.
-//
-// This is a feature service rather than a CSV export, so it is read the way scripts/alameda.ts reads
-// the county's centerline: paged, ordered, and cached a page at a time.
 const ALAMEDA_ADDRESS_SERVICE =
   "https://services5.arcgis.com/ROBnTHSNjoZ2Wm1P/arcgis/rest/services/Address_Points/FeatureServer/0";
 
-// Five times the layer's own 2,000-row page, which it serves under `maxRecordCountFactor`: thirty
-// requests rather than a hundred and fifty, at two megabytes each.
+// 5x the layer's 2,000-row page, allowed by `maxRecordCountFactor`.
 const ALAMEDA_PAGE_SIZE = 10_000;
-// 296,494 rows over the seven municipalities at the last read (2026-08-28). A floor on what the
-// paged read returns, so a service that answered a truncated layer fails here rather than shipping a
-// city whose search box cannot find half its doors.
+// A floor that catches a truncated read; 296,494 rows at the 2026-08-28 read.
 const ALAMEDA_ADDRESS_FLOOR = 250_000;
 
 interface AlamedaRow {
@@ -443,10 +380,7 @@ function alamedaPageUrl(offset: number): string {
   return url.toString();
 }
 
-// The name as the county's own centerline spells it — "E 38TH ST", the four parts run together in
-// the order they are written down. That spelling is the point: the routing graph's street names come
-// from that centerline, so an address filed under the same string is an address the search box can
-// hand straight to a street it already knows about.
+// Spelled as the county centerline, which the routing graph's street names come from: "E 38TH ST".
 function alamedaStreet(row: AlamedaRow): string {
   return [row.DIRPRE, row.FEANME, row.FEATYP, row.DIRSUF]
     .map((part) => (part ?? "").trim())
@@ -503,9 +437,6 @@ function csvFeed(feed: CsvFeed): Feed {
   return { name: feed.name, collect: () => collectCsv(feed) };
 }
 
-// One artifact and the feeds it holds. New York is one publisher's file; the Bay Area is two, and
-// they are concatenated before a single `encodeAddresses` call so that a name occurring in both is
-// two streets rather than one run spanning the water.
 interface CityAddresses {
   id: string;
   feeds: readonly Feed[];
@@ -534,7 +465,6 @@ interface Collected {
   unparsed: number;
 }
 
-// Every row of one CSV export, those that cannot be read counted rather than dropped quietly.
 async function collectCsv(feed: CsvFeed): Promise<Collected> {
   const text = await fetchCsv(feed);
   const rows: AddressRow[] = [];
@@ -547,8 +477,7 @@ async function collectCsv(feed: CsvFeed): Promise<Collected> {
     }
   }
   if (total >= feed.limit) {
-    // The export is one request, so a dataset that grew past the limit would come back cut off at it
-    // and look complete.
+    // A dataset that grew past the limit would come back truncated and look complete.
     throw new Error(
       `${feed.name} returned ${total} rows, its whole $limit: raise it, the export was truncated`,
     );
@@ -567,8 +496,7 @@ export async function updateAddresses(): Promise<void> {
       console.error(
         `addresses: ${feed.name}: ${collected.rows.length} rows, ${collected.unparsed} unparsed`,
       );
-      // Appended one at a time: spreading a feed of a million rows into `push` passes them as
-      // arguments and overflows the stack.
+      // Spreading a million rows into `push` overflows the stack.
       for (const row of collected.rows) {
         rows.push(row);
       }

@@ -1,42 +1,30 @@
-// NYC's 2017 LiDAR tree-canopy polygons, from NYC Parks' public ArcGIS FeatureServer. This is the
-// *measured* canopy footprint — every crown the LiDAR saw — and it is the cover field itself: the
-// ingest encodes it to data/canopy/<id>.bin with the shared polygon encoder (magic `CNPY`), and
-// the tiler blurs it for the fill pyramid and samples it at every sidewalk for the routing
-// density. See scripts/README.md.
+// NYC's measured 2017 LiDAR tree-canopy polygons, from NYC Parks' ArcGIS FeatureServer.
 
 import { fetchArcgis } from "./arcgis";
 import { cached } from "./cache";
 import type { Polygon } from "./overpass";
 
-// NYC Parks (AGOL owner hayley.small@parks.nyc.gov_nycdpr) publishes the 2017 LiDAR canopy as
-// simplified polygons here; `maxRecordCount` is 2000 and the layer supports pagination. Fields are
-// only OBJECTID + Shape__Area — geometry is all the ingest needs, so `outFields` is empty.
 const SERVICE =
   "https://services3.arcgis.com/xJHn8F2NTtwCMFtX/arcgis/rest/services/TreeCanopy2017_Simplified_1ft/FeatureServer/0/query";
 
-const PAGE_SIZE = 2000; // the service's maxRecordCount; a larger resultRecordCount is capped here
+const PAGE_SIZE = 2000; // the service's maxRecordCount
 const MAX_ATTEMPTS = 6;
 const RETRY_BASE_MS = 5_000; // longer than the shared ladder's: this service rate-limits
-// ~1,077,146 polygons at the last probe (2026-07-17). A floor, not an exact count: it catches a
-// server-side page cut that would otherwise pass for the end of the layer, but tolerates the
-// service growing or shrinking a little between refreshes.
+// A floor (~1.08M at last probe) that catches a server-side page cut passing for the layer's end.
 const EXPECTED_POLYGONS = 1_000_000;
 
-// The Esri JSON a `f=json` query returns: features carry `geometry.rings`, already lon/lat under
-// `outSR=4326`.
 interface EsriResponse {
   features?: { geometry?: { rings?: [number, number][][] } }[];
   exceededTransferLimit?: boolean;
 }
 
 export interface CanopyPolygons {
-  polygons: Polygon[]; // one polygon per feature, its Esri rings as lon/lat Coord rings
-  fetched: number; // features the service returned across every page
-  dropped: number; // features dropped as carrying no non-degenerate ring
+  polygons: Polygon[];
+  fetched: number;
+  dropped: number; // features with no non-degenerate ring
 }
 
-// One page's request URL, ordered by OBJECTID so `resultOffset` paging is stable: without an
-// order an ArcGIS layer may repeat or skip rows between pages.
+// Ordered by OBJECTID: without an order an ArcGIS layer may repeat or skip rows between pages.
 function pageUrl(offset: number): string {
   const url = new URL(SERVICE);
   url.searchParams.set("where", "1=1");
@@ -50,7 +38,6 @@ function pageUrl(offset: number): string {
   return url.toString();
 }
 
-// One page, retried over the service's rate limit and asked again on its own longer ladder.
 async function fetchPage(url: string): Promise<EsriResponse> {
   try {
     return await fetchArcgis<EsriResponse>(
@@ -75,11 +62,7 @@ async function fetchPage(url: string): Promise<EsriResponse> {
   }
 }
 
-// Pages the whole layer, each page cached by its request URL through scripts/cache.ts, so this
-// ~540-page, ~1M-polygon fetch runs once and a re-run — or a resume after a transient failure —
-// serves the completed pages from disk. Each feature's Esri rings become one polygon in lon/lat;
-// a ring shorter than four vertices is degenerate and dropped, and a feature left with no ring is
-// counted out.
+// Each page is cached by URL, so a resume after a transient failure skips completed pages.
 export async function fetchCanopyPolygons(): Promise<CanopyPolygons> {
   const polygons: Polygon[] = [];
   let fetched = 0;
@@ -100,8 +83,7 @@ export async function fetchCanopyPolygons(): Promise<CanopyPolygons> {
       }
     }
     console.error(`  canopy: ${fetched} features fetched`);
-    // A short page — fewer than requested, or the transfer-limit flag cleared — is the end of
-    // the layer. Both are checked: some ArcGIS builds return a full final page with the flag off.
+    // Both checked: some ArcGIS builds return a full final page with the transfer flag off.
     if (features.length < PAGE_SIZE || page.exceededTransferLimit === false) {
       break;
     }

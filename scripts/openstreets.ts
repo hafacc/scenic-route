@@ -1,10 +1,4 @@
-// `bun run scripts/openstreets.ts`: fetches NYC Open Streets and writes them as data/openstreets/
-// nyc.bin (magic OSTR) — the pedestrianized/limited-traffic corridors that REINFORCE the commercial
-// overlay. Open Streets are not commercial on their own (many are residential blocks or 34th Ave-style
-// linear parks), so the overlay never lights a block from these alone: it uses them only to extend a
-// block that already carries café/dining presence. Each corridor's GeoJSON MultiLineString is sampled
-// densely along the ground so the points snap onto the corridor's own CSCL block segments. Points
-// only. Layout: scripts/README.md.
+// Many Open Streets are residential, so the overlay only uses them to extend a block with dining.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -19,38 +13,33 @@ const DATA_DIR = join(import.meta.dirname, "..", "data");
 const OPEN_STREETS_DIR = join(DATA_DIR, "openstreets");
 const OPEN_STREETS_MAGIC = "OSTR";
 const OPEN_STREETS_FORMAT = 1;
-const OPEN_STREETS_DATASET = "uiay-nctu"; // NYC Open Streets: pedestrianized/limited-traffic corridors
-const OPEN_STREETS_COUNT = 391; // a floor; ~391 rows at the last refresh
-// School-hour street closures, not corridors — dropped so they cannot reinforce a quiet block.
+const OPEN_STREETS_DATASET = "uiay-nctu";
+const OPEN_STREETS_COUNT = 391; // a floor
+// School-hour closures, not corridors.
 const OPEN_STREETS_SCHOOLS_STATUS = "approvedFullSchools";
-// Spacing of the points dropped along each corridor. Open Streets ARE streets, so a dense trail of
-// samples snaps onto the corridor's own CSCL block segments, marking each block the corridor covers.
+// Dense enough that samples snap onto every CSCL block segment the corridor covers.
 const OPEN_STREET_SAMPLE_METERS = 10;
 
 interface OpenStreetRow {
-  // GeoJSON MultiLineString: an array of lines, each an array of [lng, lat] pairs.
-  the_geom?: { type?: string; coordinates?: [number, number][][] };
-  reviewstat?: string; // the approval status; approvedFullSchools marks a school-hour closure
-  orgname?: string; // the sponsoring organization, used as the sample's (client-only) label
+  the_geom?: { type?: string; coordinates?: [number, number][][] }; // MultiLineString, [lng, lat]
+  reviewstat?: string;
+  orgname?: string; // sponsoring organization
 }
 
-// Walks one polyline and drops a point every OPEN_STREET_SAMPLE_METERS, interpolating between
-// vertices by ground distance, so a dense trail of points follows the corridor's own centerline.
 function sampleLine(line: [number, number][], name: string): NamedPoint[] {
   const points: NamedPoint[] = [];
   if (line.length === 0) {
     return points;
   }
   let [previousLng, previousLat] = line[0];
-  points.push({ lat: previousLat, lng: previousLng, name }); // always sample the corridor's start
-  let sinceSample = 0; // meters walked past the last emitted sample, at the previous vertex
+  points.push({ lat: previousLat, lng: previousLng, name });
+  let sinceSample = 0; // meters past the last sample, at the previous vertex
   for (let index = 1; index < line.length; index++) {
     const [lng, lat] = line[index];
     const span = haversineMeters(
       { lat: previousLat, lng: previousLng },
       { lat, lng },
     );
-    // The next sample sits this far into the current piece; step by the spacing until past its end.
     for (
       let along = OPEN_STREET_SAMPLE_METERS - sinceSample;
       along < span;
@@ -63,7 +52,6 @@ function sampleLine(line: [number, number][], name: string): NamedPoint[] {
         name,
       });
     }
-    // Carry the leftover past the last sample into the next piece; a zero-length piece leaves it be.
     sinceSample =
       span > 0 ? (sinceSample + span) % OPEN_STREET_SAMPLE_METERS : sinceSample;
     previousLng = lng;
@@ -72,8 +60,6 @@ function sampleLine(line: [number, number][], name: string): NamedPoint[] {
   return points;
 }
 
-// The corridors as dense samples, dropping school-hour closures and clipping to land. Returns the
-// samples plus how many corridor rows survived the school-status filter, for the log.
 function toSamples(
   rows: OpenStreetRow[],
   onLand: (coord: Coord) => boolean,
@@ -105,9 +91,7 @@ export async function ingestOpenStreets(
   cityId: string,
   land: LandContext,
 ): Promise<SourceFile> {
-  // New York only. The fetch below reads a NYC dataset unconditionally, so another city would clip
-  // New York's rows against its own coastline, drop every one of them, and write a silently empty
-  // artifact that `serveSources` would then publish.
+  // Another city would clip NYC rows to its own land and silently write an empty artifact.
   if (cityId !== "nyc") {
     throw new Error(`no open streets source for ${cityId}`);
   }
@@ -115,7 +99,7 @@ export async function ingestOpenStreets(
   const started = performance.now();
   await mkdir(OPEN_STREETS_DIR, { recursive: true });
 
-  // `*` so a newly-read column is free after one refetch (the disk cache keys on the query).
+  // `*` because the disk cache keys on the query, so a narrower select would refetch per column.
   const rows = await NYC_OPEN_DATA.dataset<OpenStreetRow>(
     OPEN_STREETS_DATASET,
     { $select: "*" },

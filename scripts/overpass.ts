@@ -1,7 +1,3 @@
-// OpenStreetMap via Overpass: the walking and park-drive network and the natural=tree points that
-// supplement the ForMS street-tree census, plus the shared request helper and polygon-ring type
-// the rest of the ingest builds on. See scripts/README.md.
-
 import pRetry from "p-retry";
 import { cached } from "./cache";
 import { USER_AGENT } from "./http";
@@ -20,7 +16,7 @@ interface OverpassWay {
   id?: number;
   tags?: Record<string, string>;
   geometry?: OverpassPoint[];
-  center?: OverpassPoint; // present with `out center;` — a way's representative point
+  center?: OverpassPoint; // only with `out center;`
 }
 
 interface OverpassRelation {
@@ -47,16 +43,14 @@ const ENDPOINTS: readonly string[] = [
 const ROTATIONS = 2;
 const MAX_ATTEMPTS = ROTATIONS * ENDPOINTS.length;
 const RETRY_BASE_MS = 30_000; // a busy Overpass frees a slot in minutes, not seconds
-const QUERY_TIMEOUT_SECONDS = 300; // the server's own budget, which it is given in full
-const REQUEST_TIMEOUT_MS = (QUERY_TIMEOUT_SECONDS + 60) * 1000; // only cuts off one that hung
+const QUERY_TIMEOUT_SECONDS = 300;
+const REQUEST_TIMEOUT_MS = (QUERY_TIMEOUT_SECONDS + 60) * 1000; // only cuts off a hung request
 
 function toCoords(geometry: OverpassPoint[]): Coord[] {
   return geometry.map(({ lat, lon }) => ({ lat, lng: lon }));
 }
 
-// Overpass answers a busy dispatcher with an HTML error page under a 200, so the body is checked
-// rather than just the status. An empty element list is not one of those failures: it is a box
-// with nothing mapped in it, and it stands.
+// A busy Overpass returns an HTML error page under a 200, so the body is checked too.
 async function queryEndpoint(
   endpoint: string,
   overpassQl: string,
@@ -83,8 +77,7 @@ async function queryEndpoint(
   return parsed.elements;
 }
 
-// One pass over every mirror, which is the unit the backoff waits between: within a pass the next
-// endpoint may well be free, so a failure there moves straight on.
+// Backoff waits between passes over all mirrors; within a pass the next mirror is tried at once.
 async function queryRotation(
   overpassQl: string,
   rotation: number,
@@ -104,7 +97,6 @@ async function queryRotation(
   throw lastError;
 }
 
-// One Overpass request, cached under `cacheKey` by its exact QL, over the rotating mirrors.
 export async function overpassQuery(
   cacheKey: string,
   overpassQl: string,
@@ -122,48 +114,30 @@ export async function overpassQuery(
   });
 }
 
-// One OSM pedestrian/park way: the geometry, its uppercase-later name, and the three record flags
-// the model reads — `steps` (highway=steps, kind 7), `structure` (a bridge/tunnel deck or a
-// non-zero layer, which suppresses false conflation welds in Phase 2) and `tunnel` (the walk itself
-// runs under something).
 export interface PathWay {
   id: number;
   name?: string;
   steps: boolean;
-  structure: boolean;
+  structure: boolean; // bridge/tunnel deck or non-zero layer; suppresses false conflation welds
   tunnel: boolean;
   points: Coord[];
 }
 
-// Shared exclusions on every path clause: plazas (area=yes) are not edges, indoor ways are not
-// the outdoor network, and anything barred to pedestrians (foot no|private) is not walkable.
 const WALKABLE = '["area"!="yes"]["indoor"!="yes"]["foot"!~"^(no|private)$"]';
 
-// The highway classes the pedestrian network is drawn from: footway/path/pedestrian/steps are the
-// pedestrian core; cycleway brings the greenways (a bike-only segment carries foot=no and drops
-// out); bridleway is Central Park's bridle path; track is park maintenance roads.
+// cycleway brings the greenways; a bike-only segment carries foot=no and drops out.
 const FOOT_CLASSES =
   '["highway"~"^(footway|path|pedestrian|steps|cycleway|bridleway|track)$"]';
-// The three `footway` values that describe a street's own pavement rather than a way of its own.
+// `footway` values that describe a street's own pavement rather than a way of its own.
 const SIDEWALK_CLASSES = "^(sidewalk|crossing|traffic_island)$";
 
-// The core walking net: dedicated foot and park ways. Bridge and tunnel promenades ride in here
-// already — the East River bridges' paths are footway/cycleway. The sidewalk classes are excluded
-// because the graph reads them under a different rule: they are the sidewalk network itself, not a
-// walk beside it, so none of the dedup bands the paths go through may touch them. They are fetched
-// as their own extract by fetchSidewalks below, which is this clause's exact complement. access
-// no|private is not walkable.
+// Sidewalk classes are excluded (fetchSidewalks is the complement): path dedup must not touch them.
 const FOOT_WAYS =
   `way${FOOT_CLASSES}["footway"!~"${SIDEWALK_CLASSES}"]` +
   '["access"!~"^(no|private)$"]' +
   WALKABLE;
 
-// Park drives: a road open on foot but closed to through motor traffic — Central Park's East /
-// West / Terrace Drives, Prospect Park's loop. The signal is motor_vehicle no|private on an
-// ordinary road class; service=driveway and its kin are the private stubs to leave out. A merely
-// private road (motor_vehicle=private) must also carry an affirmative pedestrian signal — a
-// foot=yes|designated grant, or a name — so gated driveways lacking one stay out. Whatever leaks
-// through and coincides with a real street is later deduped against CSCL by the graph conflation.
+// Park drives; motor_vehicle=private also needs a foot grant or a name to keep gated driveways out.
 const DRIVE_ROAD =
   '["highway"~"^(unclassified|service|residential|tertiary|living_street)$"]' +
   '["service"!~"^(driveway|parking_aisle|alley|drive-through|emergency_access)$"]';
@@ -173,7 +147,7 @@ const DRIVE_CLAUSES = [
   `way["motor_vehicle"="private"]["name"]${DRIVE_ROAD}${WALKABLE}`,
 ];
 
-// Unioned in Overpass, which returns each matching way once even where the clauses overlap.
+// Overpass returns each way once even where the unioned clauses overlap.
 const PATH_CLAUSES = [FOOT_WAYS, ...DRIVE_CLAUSES];
 
 function pathsQuery(
@@ -187,12 +161,11 @@ function pathsQuery(
   return `[out:json][timeout:${QUERY_TIMEOUT_SECONDS}];(${union});out geom;`;
 }
 
-// present-and-not-"no": a bridge/tunnel tag is a structure unless it explicitly says "no".
 function tagged(value: string | undefined): boolean {
   return value !== undefined && value !== "no";
 }
 
-// `covered` with any other value — arcade, colonnade — is a roof open along one side, not a tunnel.
+// Other `covered` values (arcade, colonnade) are open along one side, so not a tunnel.
 export function tunneled(tags: Record<string, string>): boolean {
   return tagged(tags.tunnel) || tags.covered === "yes";
 }
@@ -233,11 +206,7 @@ export async function fetchPaths(
   return ways;
 }
 
-// One OSM road way that says, on the centerline itself, what its own curbs carry. This is OSM's
-// *other* way of recording a pavement — the four `sidewalk` keys — and it is a per-side statement
-// about the road rather than a way of its own, so it is fetched apart from the footways above and
-// read against the city centerline it matches rather than added to the walking network. The values
-// are handed on raw: what each one means, and which key beats which, is `scripts/sidewalks.ts`.
+// A road's per-side `sidewalk` tags, raw; scripts/sidewalks.ts interprets them.
 export interface SidewalkTaggedRoad {
   id: number;
   sidewalk?: string; // `sidewalk` — both/left/right/yes/no/none/separate
@@ -247,8 +216,7 @@ export interface SidewalkTaggedRoad {
   points: Coord[];
 }
 
-// The road classes a city centerline can be. Motorways are left out — no centerline this pipeline
-// ingests is one, so a tagged motorway could only ever match the frontage road beside it.
+// No motorways: no ingested centerline is one, so it could only match the frontage road beside it.
 const ROAD_CLASSES =
   '["highway"~"^(trunk|primary|secondary|tertiary)(_link)?$|' +
   '^(unclassified|residential|living_street|service|road|busway)$"]';
@@ -259,8 +227,7 @@ const SIDEWALK_KEYS = [
   "sidewalk:both",
 ];
 
-// One clause per key rather than a key regex: Overpass returns a way once however many clauses it
-// matches, and naming the four keys keeps `sidewalk:left:surface` and its kin out of the answer.
+// One clause per key, not a key regex, to keep `sidewalk:left:surface` and its kin out.
 export async function fetchSidewalkTags(
   south: number,
   west: number,
@@ -295,8 +262,6 @@ export async function fetchSidewalkTags(
   return roads;
 }
 
-// One OSM way describing a street's own pavement: which of the three `footway` values it carries,
-// and the same geometry, name and flags a PathWay carries.
 export interface SidewalkWay {
   id: number;
   name?: string;
@@ -308,9 +273,7 @@ export interface SidewalkWay {
 
 const SIDEWALK_VALUES = ["sidewalk", "crossing", "traffic_island"] as const;
 
-// The exact complement of FOOT_WAYS: the same highway classes and the same walkability filters, but
-// keeping the sidewalk classes the walking net drops rather than dropping them. Crossings chain
-// through median islands, so excluding the islands would cut every median crossing in two.
+// Keeps traffic islands: crossings chain through them, so dropping them splits median crossings.
 export async function fetchSidewalks(
   south: number,
   west: number,
@@ -354,14 +317,11 @@ export async function fetchSidewalks(
   return ways;
 }
 
-// One OSM natural=tree node: a point, and the crown diameter the mapper recorded when there is
-// one. These supplement the ForMS street-tree census where ForMS is a hole — Central Park is
-// managed by the Conservancy and carries only 697 ForMS trees against ~3,945 OSM ones, so its
-// paths would otherwise read bare. scripts/README.md
+// Fills ForMS holes: Central Park has 697 ForMS trees against ~3,945 in OSM.
 export interface OsmTree {
   lat: number;
   lng: number;
-  crownDiameterMeters?: number; // diameter_crown, meters, when the tag is present and parses
+  crownDiameterMeters?: number; // diameter_crown, meters
 }
 
 function osmTreesQuery(
@@ -393,9 +353,7 @@ export async function fetchOsmTrees(
     ) {
       continue;
     }
-    // Lenient: diameter_crown is meters but comes in as "12", "12 m", "12.5" — parseFloat takes
-    // the leading number and ignores the unit. A zero or unparseable value is treated as absent,
-    // so the ingest sizes that tree's crown from the imputed median instead.
+    // Values come as "12", "12 m", "12.5"; parseFloat takes the leading number.
     const diameter = Number.parseFloat(element.tags?.diameter_crown ?? "");
     trees.push({
       lat: element.lat,
@@ -407,15 +365,11 @@ export async function fetchOsmTrees(
   return trees;
 }
 
-// One OSM public-art point: its coordinate and the `name` tag when it carries one (many artworks do).
 export interface OsmArtwork extends Coord {
   name?: string;
 }
 
-// OSM public-art points: tourism=artwork (murals, sculptures, statues, installations). A node is a
-// point; a way (a painted wall, a large installation) is taken at its center. Supplements the NYC
-// PDC public-art inventory, which is thin on murals. The art ingest clips these to land and dedups
-// them against the PDC works.
+// Supplements the NYC PDC inventory, which is thin on murals. A way is taken at its center.
 export async function fetchOsmArtwork(
   south: number,
   west: number,
@@ -450,15 +404,11 @@ export async function fetchOsmArtwork(
   return points;
 }
 
-// One OSM outdoor-seating point: its coordinate and the `name` tag when it carries one (most cafés do).
 export interface OsmSeating extends Coord {
   name?: string;
 }
 
-// OSM outdoor-seating points: outdoor_seating=yes (cafés, restaurants, bars with pavement tables). A
-// node is a point; a way (a building or seating area outline) is taken at its center. Supplements the
-// NYC Dining Out café-license inventory. The dining ingest clips these to land and dedups them
-// against the licensed cafés.
+// Supplements the NYC Dining Out café-license inventory. A way is taken at its center.
 export async function fetchOutdoorSeating(
   south: number,
   west: number,
@@ -493,21 +443,15 @@ export async function fetchOutdoorSeating(
   return points;
 }
 
-// One line walking near is unpleasant: a limited-access highway (or ramp), or ABOVE-GROUND rail. The
-// `kind` is kept for the ingest log; the routing penalty treats them the same. Never part of the
-// walking network — these are only rasterized into a proximity field, never routed.
 export interface NuisanceLine {
-  kind: "highway" | "rail";
+  kind: "highway" | "rail"; // only for the ingest log; the penalty treats them alike
   points: Coord[];
 }
 
 const HIGHWAY_CLASSES = "^(motorway|trunk|motorway_link|trunk_link)$";
 const RAIL_CLASSES = "^(rail|subway|light_rail)$";
 
-// Highways and above-ground rail as polylines. Rail counts when it is not underground — surface,
-// open cut, or elevated are all unpleasant to walk beside (the Franklin Ave shuttle runs in an open
-// cut with no bridge/layer tag, so an "elevated only" filter dropped most of it). Only `tunnel=yes`
-// and below-grade covered sections (`layer` < 0) are excluded.
+// Any rail not underground: open cuts carry no bridge/layer tag, so "elevated only" misses them.
 export async function fetchNuisanceLines(
   south: number,
   west: number,
@@ -536,7 +480,6 @@ export async function fetchNuisanceLines(
       kind = "highway";
     } else if (tags.railway !== undefined && tags.tunnel !== "yes") {
       const layer = Number.parseInt(tags.layer ?? "", 10);
-      // Keep everything not underground; a negative layer is a below-grade covered stretch, dropped.
       if (!Number.isFinite(layer) || layer >= 0) {
         kind = "rail";
       }
@@ -548,15 +491,12 @@ export async function fetchNuisanceLines(
   return lines;
 }
 
-// One OSM way into a rail station: a `railway=subway_entrance` or `railway=train_station_entrance`
-// node, with the text a mapper wrote on it and what the tags say a rider goes down. No tag ties a
-// node to a station — `station_name` is the closest thing and only some nodes carry it — so which
-// station this is a way into is the caller's to work out.
+// No tag reliably ties an entrance to its station; only some carry `station_name`.
 export interface OsmStationEntrance extends Coord {
-  stationName?: string; // `station_name`, the station the mapper named
+  stationName?: string;
   name?: string; // the corner or plaza the door stands on, not the station
-  ref?: string; // the agency's own letter for the door, "A1", "B3"
-  access?: string; // `access`, "no" or "private" on a door a rider may not walk through
+  ref?: string; // the agency's door letter, "A1", "B3"
+  access?: string;
   elevator: boolean;
   escalator: boolean;
   ramp: boolean;
@@ -567,10 +507,7 @@ function trimmed(value: string | undefined): string | undefined {
   return text === undefined || text === "" ? undefined : text;
 }
 
-// The published ways into a subway station. A lift is tagged three different ways depending on when
-// the node was surveyed (`highway=elevator`, `elevator=yes`, `entrance=elevator`) and all three
-// mean the same door; `conveying` is OSM's word for a moving stair. Nothing else about the descent
-// is tagged, so a node carrying none of them is a stair.
+// Lifts are tagged three equivalent ways by survey era; `conveying` is OSM's escalator tag.
 export async function fetchStationEntrances(
   south: number,
   west: number,

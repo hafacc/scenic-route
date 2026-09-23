@@ -1,15 +1,6 @@
-// What every fetch in scripts/ has in common: the identity it goes out under, the backoff it comes
-// back on, and the JSON and byte reads built from the two.
-//
-// The user agent is required rather than polite: an Overpass mirror 429s an anonymous client on
-// sight.
-//
-// How long a ladder a caller climbs stays with the caller: a layer read in hundreds of pages wants
-// several attempts under it, while a single request whose failure is the build's failure either way
-// is better off saying so at once.
-
 import pRetry, { type RetryContext } from "p-retry";
 
+// Required: an Overpass mirror 429s an anonymous client on sight.
 export const USER_AGENT =
   "scenic-route/0.1 (+https://github.com/erikbrinkman/scenic-route)";
 
@@ -17,15 +8,11 @@ const RETRY_BASE_MS = 2_000;
 const RETRY_CAP_MS = 30_000;
 
 interface LadderOptions {
-  // The first wait, for a source that wants more room than the default before being asked again.
   minTimeoutMs?: number;
-  // Called on every failure, for a read long enough that a silent wait reads as a hang.
   onFailedAttempt?: (context: RetryContext) => void;
 }
 
-// The p-retry options a public source is asked again on, from a count of attempts in total: one
-// means no retry at all. Randomized, because these builds read a service in parallel and a fixed
-// backoff would put every worker back on it at the same instant.
+// `attempts` counts in total, so 1 is no retry. Randomized so parallel workers don't retry in step.
 export function retryLadder(
   attempts: number,
   { minTimeoutMs = RETRY_BASE_MS, onFailedAttempt }: LadderOptions = {},
@@ -46,23 +33,18 @@ export function retryLadder(
 }
 
 export interface HttpRequest extends LadderOptions {
-  // A form body, which makes the read a POST. What needs one is a batched `where` of a few hundred
-  // clauses, which is longer than a URL may be.
+  // Makes the read a POST, for a batched `where` longer than a URL may be.
   body?: URLSearchParams;
-  // Left off for a request with no deadline of its own, which is most of them: a slow answer from a
-  // service being read a page at a time is still an answer.
   timeoutMs?: number;
-  // Attempts in total, so the default of 1 gives up on the first refusal.
+  // In total, so the default of 1 gives up on the first refusal.
   attempts?: number;
 }
 
 export interface JsonRequest<Value> extends HttpRequest {
-  // Run on the parsed body INSIDE the retry, so a service that reports failure in a 200 — which is
-  // how every ArcGIS layer here reports one — is asked again rather than believed.
+  // Runs inside the retry, since ArcGIS layers report failure in a 200.
   check?: (value: Value) => void;
 }
 
-// One attempt's request, up to the point where the two readers below part company over the body.
 async function send(
   url: string,
   { body, timeoutMs }: HttpRequest,
@@ -98,7 +80,6 @@ export async function fetchJson<Value>(
   );
 }
 
-// The same request read as bytes rather than as JSON: a point-cloud node, a DEM tile, a listing.
 export async function fetchBytes(
   url: string,
   request: Omit<HttpRequest, "body"> = {},

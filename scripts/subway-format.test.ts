@@ -1,13 +1,8 @@
-// The clustering both rail ingests merge their stations with: the display markers (scripts/subway.ts,
-// scripts/subway-sf.ts) and the routing stations (scripts/transit.ts) are one rule, so the network
-// drawn on the map and the network a route rides agree about what one station is.
-
 import { expect, test } from "bun:test";
 import { centroid, clusterByName, STATION_MERGE_METERS } from "./subway-format";
 
 const LAT = 37.79;
 const LNG = -122.4;
-// A degree of latitude is about 111 km, so this is meters.
 const DEGREES_PER_METER = 1 / 111_320;
 
 function stop(
@@ -29,7 +24,7 @@ test("same-named curbs a median apart are one station", () => {
 });
 
 test("a row of curbs chains through its members", () => {
-  // Single-link: the ends are 180 m apart, further than the threshold, and still one station.
+  // Single-link: the ends are 180 m apart, past the threshold.
   const clusters = clusterByName([
     stop("Embarcadero", 0),
     stop("Embarcadero", 90),
@@ -40,7 +35,7 @@ test("a row of curbs chains through its members", () => {
 });
 
 test("different stops that happen to share a name stay apart", () => {
-  // 19th Ave & Randolph St is three stops over 245 m, which is exactly what must not merge.
+  // 19th Ave & Randolph St is really three stops over 245 m.
   const clusters = clusterByName([
     stop("19th Ave & Randolph St", 0),
     stop("19th Ave & Randolph St", 245),

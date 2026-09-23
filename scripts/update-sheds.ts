@@ -1,46 +1,4 @@
-// `bun run update-sheds`: brings the sidewalk-shed artifact up to date with the DOB's feed. Run by
-// .github/workflows/sheds.yml once a day, and by hand whenever.
-//
-// The job keeps nothing of its own between runs. The artifact says which day it was built through,
-// the DOB's CSV history says what stood on that day and on every day since, and the difference
-// between the two is the update. Identity comes out of the artifact too: `open.bin` carries every
-// standing permit's job number, so which record is which permit is stated rather than re-derived.
-// The feed's own answer — the permits still provisional on that day, in job order — is then a CHECK
-// on it, and a disagreement stops the run rather than shifting every shed onto its neighbor's
-// street.
-//
-// The one thing it must not assume is that it ran yesterday. Cron on a public repo is best-effort and
-// is switched off entirely after sixty days of repository inactivity; a run can fail for a week
-// before anyone notices; and the feed has 74 gaps of its own, 392 days in total, the worst a 66-day
-// hole in early 2021. Reading the artifact's own day and replaying every snapshot published since
-// covers all of that with no extra machinery.
-//
-// What it writes cannot depend on when it was last run, which three properties of the rest of the
-// pipeline are what buy. The truncated-snapshot rule looks only BACKWARDS and its window travels in
-// the artifact, so a day's verdict is final the moment it is made and a run that picks the feed up
-// yesterday judges it exactly as a walk over the whole history would. A record is placed from the
-// attributes the feed carried on the day its own interval ended, so a correction the DOB publishes
-// later cannot move a shed that has already come down — which is what lets `closed.bin` be appended
-// to rather than revisited. And spans are keyed by the graph's durable edge id, so within one graph
-// nothing has to be kept in order to place a span again: the day's new permits are the only thing
-// that ever needs placing. Across a rebuild that moved the key space the artifact means nothing at
-// all — the header's key-space hash is what the client gates on — so a run that finds the site
-// serving another key space STOPS rather than carrying its records onto one they were never placed
-// against.
-//
-// What it costs in steady state: a shallow fetch of the DOB repo, the deployed graph off the Pages
-// site, and one Socrata batch for the ~16 permits that are new. No LFS object is touched on any path,
-// nothing deploys, and what it leaves behind is a commit on `main`.
-//
-// package.json fetches that history and pipes the snapshots in, so the clone happens before the
-// graph check below rather than after it: a run that stops on a key-space mismatch has spent a
-// shallow fetch it did not need, and writes nothing either way.
-//
-// Re-placing the artifact after a key-space move is this run with two overrides, because neither the
-// graph nor the history it needs is the one the daily job reads: SHED_GRAPH names the checkout's own
-// public/routing/nyc.bin, which no deploy has served yet, and SHED_SNAPSHOTS names the clone to walk
-// — `bun run build-sheds` over the DOB's archived deep history first, then this over the daily one
-// to bring that artifact to today.
+// Replays every snapshot since the artifact's own day, never assuming it ran yesterday: cron skips.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -79,16 +37,11 @@ import {
   shedSnapshots,
 } from "./shed-permits";
 
-// The graph the day's new sheds are placed against has to be the one the client is running, and the
-// client runs whatever the last deploy put on Pages — not necessarily what a checkout would build.
-// SHED_GRAPH overrides that with a local file, for the re-place the header describes.
+// New sheds must be placed on the deployed graph the client runs, not what a checkout would build.
 const SITE = process.env.SHED_SITE ?? "https://hafaio.github.io/scenic-route";
 const GRAPH_URL = `${SITE}/routing/nyc.bin`;
-// Where the artifact this run carries forward comes from: the committed copy the last run pushed,
-// read out of the checkout and written back over. SHED_ARTIFACT names another directory, or a URL to
-// read one over HTTP — what `raw` serves off `main`, say.
+// A directory, or a URL to read the artifact over HTTP.
 const ARTIFACT = process.env.SHED_ARTIFACT ?? SHED_DIR;
-// How far back the history this run reads reaches, counted from the first day the walk applies.
 const SHALLOW_DAYS = 30;
 const DAY_MS = 86_400_000;
 const EPOCH_MS = Date.UTC(2017, 11, 28); // the first DOB snapshot; every day number counts from here
@@ -114,20 +67,14 @@ async function readArtifact(name: string): Promise<Uint8Array> {
   }
 }
 
-// The first day of the feed's history this run has to read, which is what package.json bounds both
-// its shallow clone and its blob stream by. A month before the day the walk applies from: the walk
-// itself wants only the commits from a day or two before that, since a commit's UTC stamp can fall
-// after the New York day its CSV claims, and the rest is slack for a feed whose stamps have drifted
-// further. It costs a megabyte or two of history against the ~370 MB of the whole of it.
+// A month of slack: a commit's UTC stamp can fall after the New York day its CSV claims.
 export function readCommitsFrom(applyFrom: string): string {
   return new Date(Date.parse(applyFrom) - SHALLOW_DAYS * DAY_MS)
     .toISOString()
     .slice(0, 10);
 }
 
-// The same day, worked out from the artifact alone, so `scripts/shed-window.ts` can print it before
-// any of the pipeline runs. The update reads the artifact again for itself; this is the one thing the
-// clone depth has to know and cannot learn from anything already on disk.
+// From the artifact alone, so the clone depth is known before the pipeline runs.
 export async function shedWindow(): Promise<string> {
   const [open, closed] = await Promise.all([
     readArtifact("open.bin"),
@@ -138,14 +85,12 @@ export async function shedWindow(): Promise<string> {
   );
 }
 
-// The graph the day's new sheds are placed against, or null when the site is not serving one this
-// checkout can use yet, which is the deploy being a day behind rather than anything wrong here.
+// Null when the site serves no usable graph yet, which is the deploy lagging, not an error.
 export async function loadDeployedGraph(): Promise<RoutingGraph | null> {
   const local = process.env.SHED_GRAPH;
   if (local !== undefined) {
     console.error(`  graph: ${local}`);
-    // A named file is a graph an operator chose, so one that will not read is the wrong file handed
-    // over rather than a deploy still in flight, and nothing waiting will fix it.
+    // An operator-named file that won't read is the wrong file, so throw rather than wait.
     return loadGraphBytes(await readFile(local));
   }
   console.error(`  graph: ${GRAPH_URL}`);
@@ -161,9 +106,7 @@ export async function loadDeployedGraph(): Promise<RoutingGraph | null> {
   try {
     return loadGraphBytes(new Uint8Array(await response.arrayBuffer()));
   } catch (error) {
-    // A new shed's durable keys are the ones the client will resolve, so they have to be read off the
-    // graph it is running. One this checkout cannot read is a deploy behind the push that changed the
-    // format, and the deploy is what ends it.
+    // An unreadable deployed graph is a deploy behind a format change.
     console.error(
       `  ${GRAPH_URL} is not a graph this checkout can read (${String(error)});` +
         " leaving the artifact alone. Deploy the site, and this run will pick the day up once it" +
@@ -173,7 +116,6 @@ export async function loadDeployedGraph(): Promise<RoutingGraph | null> {
   }
 }
 
-// The permit's last sighting on or before `through`, or null when it has none.
 function lastSeenBy(permit: ShedPermit, through: string): string | null {
   let latest: string | null = null;
   for (const run of permit.runs) {
@@ -187,9 +129,7 @@ function lastSeenBy(permit: ShedPermit, through: string): string | null {
   return latest;
 }
 
-// What the feed says `open.bin` must hold: one record per permit still provisional on `through` —
-// seen within the renewal tolerance of it — ascending by job number, which is the order it was
-// written in. The artifact states that mapping itself; this is what it is checked against.
+// What the feed says `open.bin` must hold, as a check on the mapping the artifact states.
 export function standingOn(
   permits: readonly ShedPermit[],
   through: string,
@@ -200,14 +140,7 @@ export function standingOn(
   });
 }
 
-// The artifact carried forward over everything the feed has published since it was built. `permits`
-// is every permit the window mentioned, in job order; `placed` is keyed by the readings the caller
-// had to go to the tax map for, which are the ones the artifact has never placed.
-//
-// The records the window never mentioned are exactly the ones it cannot change: everything already in
-// `closed.bin` came down more than a renewal before the artifact's own day, so a reappearance can no
-// longer be merged into it and every closure this writes falls after all of them. That is what lets
-// the file be appended to rather than revisited.
+// `closed.bin` is append-only: its records ended over a renewal ago, so nothing merges into them.
 export function reconcileSheds(
   artifact: DecodedShedArtifact,
   permits: readonly ShedPermit[],
@@ -227,11 +160,7 @@ export function reconcileSheds(
         " the two disagree, so rebuild with `bun run build-sheds`",
     );
   }
-  // A first interval belonging to a record already held keeps that record's first day: its run
-  // reaches back past the window and the merge cannot see that far. Everything else is the feed's own,
-  // including a second interval, which is a permit that came down and went back up too long after to
-  // be one shed — placed from its own reading, which is the same one unless the feed corrected the
-  // permit between the two stints.
+  // A held record keeps its first day: its run reaches back past the window.
   const rebuilt = encodedShedsOf(
     permits.map((permit) => {
       const record = held.get(permit.job);
@@ -242,9 +171,7 @@ export function reconcileSheds(
       return { ...permit, intervals };
     }),
     (interval, permit) => {
-      // The reading this interval ended under, when it is one the run went to the tax map for, and
-      // otherwise the record already on file — which was placed from that same reading, since a
-      // permit whose attributes have changed since is one the run placed again.
+      // A changed reading is always re-placed, so a record on file matches its reading.
       const coverage = placed.get(interval.attributes);
       if (coverage !== undefined) {
         return coverage;
@@ -272,18 +199,8 @@ export async function updateSheds(): Promise<void> {
       ` ${artifact.closed.length.toLocaleString()} come down`,
   );
 
-  // Read before any of the work below, because a disagreement here ends the run. Every record the
-  // artifact holds is carried forward untouched, so it can only be extended against the graph it was
-  // placed against: a deploy that moved a graph input without re-placing lands here, with the client
-  // already showing bare pavement, and going on would replace that with the old keys re-stamped
-  // under the new key space — scaffolding on whatever streets they now happen to name.
-  //
-  // It SKIPS rather than fails. The daily job runs the two timetables after this and commits all
-  // three, and between a push that moves the graph and the deploy that serves it, failing here took
-  // the timetables down with it — a day of no republished departures to save a day of no new sheds.
-  // The artifact is left exactly as it was, which is what it must be until the deploy lands. A site
-  // serving a graph in a format this checkout cannot read at all is the same day-early state seen one
-  // step earlier, so loadDeployedGraph hands back nothing and the run ends here the same way.
+  // Old keys re-stamped under a new key space would misplace every shed. Skips rather than fails,
+  // since the daily job's timetable steps run after this.
   const graph = await loadDeployedGraph();
   if (graph === null) {
     return;
@@ -298,8 +215,6 @@ export async function updateSheds(): Promise<void> {
     return;
   }
 
-  // Every day whose intervals could still change, which is every day a reappearance could still be
-  // merged back into: the renewal tolerance and no more.
   const applyFrom = resumeFrom(through);
   const { sources, blobs } = await shedSnapshots(
     "update-sheds",
@@ -316,16 +231,11 @@ export async function updateSheds(): Promise<void> {
     `  the feed now reaches ${lastDay}, ${permits.length.toLocaleString()} permits mentioned since ${applyFrom}`,
   );
 
-  // A permit already on record carries its spans forward; one the artifact has never placed, and one
-  // whose length or geocode the feed has corrected since, are placed again. In steady state that is
-  // the day's ~16 new sheds, one or two corrections, and the few whose last stint ended more than a
-  // renewal ago and are up once more.
   const held = new Set(artifact.open.map((record) => record.job));
   const fresh = permits.filter(
     (permit) => !held.has(permit.job) || permit.corrected,
   );
-  // One placement per distinct reading, which for a corrected permit is the one its earlier interval
-  // ended under as well as the one it stands under now.
+  // A corrected permit has two readings: the one its earlier interval ended under and today's.
   const attributes = placementAttributes(fresh);
   console.error(
     `  ${fresh.length} permits need a parcel read over ${attributes.length} readings,` +

@@ -1,12 +1,5 @@
-// The writer for the `SHED` artifact — every scaffolding permit New York has issued since
-// 2017-12-28, as the graph edges it stands over and the days it stood there. `src/routing/sheds.ts`
-// is the reader and scripts/README.md is the layout; the two files have to agree byte for byte, and
-// `src/routing/sheds.test.ts` pins this one against a checked-in slice of the real history.
-//
-// A permit that came down and went back up is two records sharing geometry rather than one record
-// with a list of intervals. Both layouts were built and measured: the interval list is 3% smaller
-// overall but 30% BIGGER on open.bin, which is the only file the common query reads, because an open
-// shed's earlier closed intervals would have to ride in the hot file.
+// Must match src/routing/sheds.ts byte for byte; layout in scripts/README.md.
+// One record per interval, not an interval list: a list would bloat open.bin, the hot file, by 30%.
 
 import {
   durableKey,
@@ -19,44 +12,35 @@ const FORMAT_VERSION = 3;
 const HEADER_BYTES = 32;
 const CLOSED_FLAG = 0x1;
 const MILLISECONDS_PER_DAY = 86_400_000;
-const EPOCH_MS = Date.UTC(2017, 11, 28); // the first DOB snapshot; every day number counts from here
+const EPOCH_MS = Date.UTC(2017, 11, 28); // the first DOB snapshot, day 0
 
-// The side label takes the low three bits of the span's packed side-and-ordinal varint, as the
-// graph's own kind-and-side byte packs it.
 export const SIDE_BITS = 3;
 
-// One span's durable key, which is also the order the format stores spans in.
 function spanKey(span: EncodedSpan): number {
   return durableKey(span.sourceId, span.side, span.ordinal);
 }
 
-export const FRACTION_SCALE = 255; // t0/t1 are a fraction of the edge, and 255 is exactly 1.0
-export const CONFIDENCE_CEILING = 254; // as the graph's cover and scenic bytes, so a client attribute stays under 1
-// The deck's depth in DECIMETERS, which a byte carries to 25.5 m against a placement that refuses
-// anything past 8. 0 is not a depth of zero, it is "the placement could not measure one here".
+export const FRACTION_SCALE = 255; // 255 is exactly 1.0
+export const CONFIDENCE_CEILING = 254; // keeps a client attribute under 1, as the graph's bytes do
+// Decimeters; 0 means unmeasured, not zero depth.
 export const DEPTH_SCALE = 10;
 export const DEPTH_CEILING = 255;
 
-// A stretch of one edge, as the bytes the format stores rather than the quantities they stand for.
-// The edge is named by its DURABLE key rather than by its position in the graph: a rebuild renumbers
-// every edge id, and an artifact keyed on those would silently move scaffolding to other streets.
+// Keyed by durable key, since a rebuild renumbers every edge id.
 export interface EncodedSpan {
-  sourceId: number; // the edge's CSCL physicalid, or an OSM way id for a path
-  side: number; // its N/E/S/W label, 0-4, which tells the two sidewalks of one street apart
-  ordinal: number; // 0-255, separating the several edges one source segment becomes
+  sourceId: number; // CSCL physicalid, or an OSM way id for a path
+  side: number; // N/E/S/W label, 0-4
+  ordinal: number; // 0-255
   t0: number; // 0..255
   t1: number; // 0..255
-  depth: number; // the deck's depth in decimeters, 0 where it could not be measured
+  depth: number; // decimeters, 0 unmeasured
 }
 
-// One (permit, presence interval) pair: which permit it is, when it stood, how much to trust it, and
-// where it stood. A permit the placement could put nowhere still gets its record, with no spans.
+// An unplaceable permit still gets its record, with no spans.
 export interface EncodedShed {
-  // The permit's DOB job number, which `open.bin` stores and `closed.bin` does not — a record read
-  // back out of the closed half carries the empty string, and nothing asks it for one.
-  job: string;
-  first: number; // day number of the interval's first day
-  close: number | null; // day number of its last, or null while it is still provisional
+  job: string; // "" when read back from closed.bin, which does not store it
+  first: number; // day number
+  close: number | null; // day number, null while provisional
   confidence: number; // 0..254
   spans: EncodedSpan[];
 }
@@ -67,10 +51,7 @@ export interface ShedArtifact {
   index: Uint8Array;
 }
 
-// FNV-1a 64 over the GRPH file's own bytes, the same figure the graph pass writes into
-// routing/version.json as `hash` (crates/tiler/src/graph.rs). Run on 16-bit limbs: the 64-bit
-// multiply has to be exact well past 2^53, and a BigInt one over 37 MB of graph costs minutes where
-// this costs under a second.
+// FNV-1a 64, matching crates/tiler/src/graph.rs. 16-bit limbs: BigInt over 37 MB takes minutes.
 export function graphHashOf(bytes: Uint8Array): string {
   const LOW = 0x01b3; // 0x100000001b3, as its two non-zero 16-bit limbs
   const HIGH = 0x0100;
@@ -94,16 +75,8 @@ export function graphHashOf(bytes: Uint8Array): string {
     .join("");
 }
 
-// What the header's graph field carries, and what the graph pass writes into routing/version.json as
-// `keyHash`: FNV-1a 64 over the count of durable edges and then every durable key ascending, eight
-// little-endian bytes each. `key_space_hash` in crates/tiler/src/graph.rs is the other half of this,
-// and `bun run check-sheds` compares the two on every deploy.
-//
-// The key SET, not the graph. A span names its edge by `(source id, side, ordinal)` and by nothing
-// else, so a graph carrying the same keys puts every shed on the same pavement — while the blob hash
-// beside it moves on any rebuild, including a Linux one that landed an f32 length a ulp away from the
-// macOS one an artifact was placed against. Ascending, because the edge ORDER a key arrives in is
-// positional and no shed reads it.
+// Must match `key_space_hash` in crates/tiler/src/graph.rs.
+// The key set, not the bytes, which move on any rebuild (even an f32 ulp between Linux and macOS).
 export function graphKeyHashOf(graph: RoutingGraph): string {
   const keys = new Float64Array(graph.edgeCount);
   let count = 0;
@@ -117,8 +90,7 @@ export function graphKeyHashOf(graph: RoutingGraph): string {
   const durable = keys.subarray(0, count).sort();
   const bytes = new Uint8Array(8 * (count + 1));
   const view = new DataView(bytes.buffer);
-  // A key runs to a u32 source id times 2048, past what a u32 holds and well inside an exact double,
-  // so each is written as the two halves of its u64 rather than through BigInt.
+  // Keys exceed a u32 but fit an exact double, so they're written as two u32 halves.
   const HALF = 0x1_0000_0000;
   view.setUint32(0, count, true);
   for (const [order, key] of durable.entries()) {
@@ -128,8 +100,6 @@ export function graphKeyHashOf(graph: RoutingGraph): string {
   return graphHashOf(bytes);
 }
 
-// The day number an ISO calendar date falls on. Dates in the feed are New York calendar days and
-// carry no time, so they are read as such.
 export function shedDayOf(iso: string): number {
   const [year, month, day] = iso.split("-").map(Number);
   return Math.round(
@@ -137,8 +107,7 @@ export function shedDayOf(iso: string): number {
   );
 }
 
-// The day number of the first of the calendar month `day` falls in, clamped at the epoch: that falls
-// mid-December 2017, and a day number cannot express a day before it.
+// Clamped at the epoch, which falls mid-month.
 function monthStart(day: number): number {
   const date = new Date(EPOCH_MS + day * MILLISECONDS_PER_DAY);
   const start = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
@@ -166,10 +135,7 @@ class ByteWriter {
   }
 }
 
-// `extension` is what the file carries for the daily job rather than for a reader of the records:
-// `closed.bin`'s truncation window, `open.bin`'s job numbers. It is written after the fixed fields
-// and covered by the header-bytes field, so a reader reaches the records without knowing what is in
-// it.
+// `extension` is data for the daily job, covered by the header-bytes field so readers skip it.
 function header(
   records: readonly EncodedShed[],
   firstDay: number,
@@ -179,8 +145,7 @@ function header(
   extension: Uint8Array,
 ): Uint8Array {
   if (HEADER_BYTES + extension.length > 0xffff) {
-    // The header-bytes field is a u16, which the job block would have to reach ~21,000 records to
-    // exhaust; the standing set has sat near 7,500 for eight years. Loud rather than truncated.
+    // A u16 field: ~21,000 open records, against a standing set near 7,500.
     throw new Error(
       `a ${extension.length}-byte header does not fit the u16 that says where the records start`,
     );
@@ -198,8 +163,6 @@ function header(
     records.reduce((total, record) => total + record.spans.length, 0),
     true,
   );
-  // The hash is written as its two halves, matching how the reader takes it apart, so nothing here
-  // needs BigInt.
   view.setUint32(16, Number.parseInt(graphKeyHash.slice(8), 16), true);
   view.setUint32(20, Number.parseInt(graphKeyHash.slice(0, 8), 16), true);
   view.setUint16(24, firstDay, true);
@@ -209,8 +172,6 @@ function header(
   return bytes;
 }
 
-// The truncation window as `closed.bin` carries it: one u16 per row count, in the order the walk
-// judged them.
 function windowBytes(counts: readonly number[]): Uint8Array {
   const bytes = new Uint8Array(2 * counts.length);
   const view = new DataView(bytes.buffer);
@@ -220,10 +181,7 @@ function windowBytes(counts: readonly number[]): Uint8Array {
   return bytes;
 }
 
-// The source-id chain restarts at every record, so a suffix read never drifts: a chain running
-// across records would silently produce wrong ids instead of failing. Spans are ascending by durable
-// key, which makes the source-id deltas non-negative and puts the two sidewalks of one street next
-// to each other at a delta of zero.
+// The source-id delta chain restarts per record, so a read from mid-file can't drift.
 function writeSpans(writer: ByteWriter, record: EncodedShed): void {
   const spans = [...record.spans].sort(
     (left, right) => spanKey(left) - spanKey(right),
@@ -247,26 +205,20 @@ function join(head: Uint8Array, body: readonly number[]): Uint8Array {
   return bytes;
 }
 
-// A job number as two numbers that reconstruct it. The feed has issued exactly two shapes in eight
-// and a half years: a nine-digit BIS number, and a DOB NOW one — a borough letter, eight digits, and
-// a job-type letter and digit after a hyphen.
+// DOB job numbers come in two shapes: nine-digit BIS, and DOB NOW ("M12345678-I1").
 interface JobCode {
-  key: number; // ascending with the job STRING, so a job-ordered file's deltas are non-negative
+  key: number; // ascends with the job string
   suffix: number; // 0 for a BIS number, else 1 + 10*(type letter - "A") + the type digit
 }
 
-// The borough letters in the order they sort. A closed set — there are five boroughs — where the
-// job-type letter is not, so that one is carried as its own letter rather than as an index into a
-// list this would have to be right about.
-const BOROUGH_LETTERS = "BMQSX";
+const BOROUGH_LETTERS = "BMQSX"; // sorted
 const LETTER_A = "A".charCodeAt(0);
-const SUFFIX_DIGITS = 10; // the one digit that follows the job-type letter
+const SUFFIX_DIGITS = 10;
 const BIS_JOB = /^(\d{9})$/;
 const NOW_JOB = /^([A-Z])(\d{8})-([A-Z])(\d)$/;
-// Where a DOB NOW key starts. Digits sort below letters, so every BIS number sorts before every DOB
-// NOW one and their keys have to as well; a BIS number is its own nine digits, under a billion.
+// Above every nine-digit BIS number, since digits sort before letters.
 const NOW_KEY_BASE = 1e9;
-const NOW_DIGITS = 1e8; // what a DOB NOW number carries after its borough letter
+const NOW_DIGITS = 1e8;
 
 function jobCodeOf(job: string): JobCode {
   const legacy = BIS_JOB.exec(job);
@@ -275,8 +227,6 @@ function jobCodeOf(job: string): JobCode {
   if (legacy !== null) {
     return { key: Number(legacy[1]), suffix: 0 };
   } else if (now === null || borough < 0) {
-    // A third shape is a code change and a full rebuild, so it stops the run rather than being
-    // stored as something that will not read back as itself.
     throw new Error(
       `"${job}" is neither a nine-digit BIS job number nor a DOB NOW one, so open.bin cannot name it`,
     );
@@ -304,10 +254,6 @@ function jobOf({ key, suffix }: JobCode): string {
   }
 }
 
-// `open.bin`'s job numbers, one entry per record and in record order: the key's delta from the
-// previous record's, then the suffix. The file is in job order and a permit has at most one
-// provisional interval, so the deltas are non-negative and a permit's own digits — the part that
-// moves — cost two bytes rather than the twelve the string does.
 function jobBlock(records: readonly EncodedShed[]): Uint8Array {
   const writer = new ByteWriter();
   let previous = 0;
@@ -323,12 +269,7 @@ function jobBlock(records: readonly EncodedShed[]): Uint8Array {
   return Uint8Array.from(writer.bytes);
 }
 
-// Every shed still standing, in the order the caller gave them, which is ascending by JOB NUMBER.
-// The job numbers themselves ride in the header, where the daily job reads them and the client walks
-// past them: that is the artifact saying which record is which permit rather than leaving it to be
-// re-derived from the feed. The records are not sorted here and their first-day deltas are signed,
-// where a sort by day would have made them monotone and saved a byte a record — the file stays in
-// job order because that is the order its identity column is a delta chain over.
+// Kept in job order, not day order, because the job-number column is a delta chain over it.
 function encodeOpen(
   records: readonly EncodedShed[],
   graphKeyHash: string,
@@ -349,14 +290,7 @@ function encodeOpen(
   );
 }
 
-// Every shed that has come down, ascending by close day, plus the month index. A month's entry is
-// the offset of the first record closing on or after its first day and that record's ABSOLUTE close
-// day, which is what lets a reader start the chain there instead of replaying the file.
-//
-// The sort is STABLE and on the close day alone, so records closing on one day stay in the job order
-// the caller supplied. That is what lets the daily job append a run's worth of new closures without
-// rewriting the ones already there: everything it closes was still standing on the day the artifact
-// reached, so its close days are all later than every close day already in the file.
+// Stable sort on close day alone, so the daily job can append new closures without a rewrite.
 function encodeClosed(
   records: readonly EncodedShed[],
   graphKeyHash: string,
@@ -382,8 +316,7 @@ function encodeClosed(
   for (const record of ordered) {
     const close = record.close ?? 0;
     if (month < monthStart(close)) {
-      // An empty month gets no entry; a reader seeking one lands on the last entry at or before it
-      // and skips forward, which costs it at most that month's records.
+      // An empty month gets no entry; a reader skips forward from the one before.
       month = monthStart(close);
       const entry = new Uint8Array(8);
       const view = new DataView(entry.buffer);
@@ -404,11 +337,7 @@ function encodeClosed(
   };
 }
 
-// `records` must already be in the artifact's canonical order: ascending by job number, and by first
-// day within a job. `open.bin` is written in exactly that order and `closed.bin` is that order stably
-// re-sorted by close day. `lastDay` is the newest usable snapshot the artifact was built through,
-// which is what the daily job reads to know where to pick the feed up, and `counts` is the
-// truncation window it picks the feed up with.
+// `records` must be ascending by job number, then by first day.
 export function encodeSheds(
   records: readonly EncodedShed[],
   graphKeyHash: string,
@@ -432,13 +361,11 @@ export function encodeSheds(
   };
 }
 
-// The artifact read back, which only the daily job does: it carries every record forward, so it has
-// to see them exactly as they were written — the quantized bytes, and the file order, which is the
-// job order `open.bin` was built in and the close-day order `closed.bin` was.
+// Quantized bytes and file order, exactly as written, for the daily job to carry forward.
 export interface DecodedShedArtifact {
   graphKeyHash: string;
   lastDay: number; // the newest usable DOB snapshot the artifact was built through
-  counts: number[]; // the truncation window a walk resuming from `lastDay` has to be seeded with
+  counts: number[]; // the truncation window to seed a walk resuming from `lastDay`
   open: EncodedShed[];
   closed: EncodedShed[];
 }
@@ -568,7 +495,7 @@ export function decodeShedArtifact(
     close += closedReader.unsignedVarint();
     const duration = closedReader.unsignedVarint();
     closed.push({
-      job: "", // closed.bin does not carry one, and nothing that reads it asks
+      job: "", // closed.bin does not carry one
       first: close - duration,
       close,
       confidence: closedReader.u8(),
@@ -578,14 +505,7 @@ export function decodeShedArtifact(
   return { graphKeyHash, lastDay, counts, open, closed };
 }
 
-// Why the artifact does not mean anything against `graphKeyHash`, or null when it does. A durable key
-// survives a rebuild without promising to name the same edge across one, so the client resolves
-// nothing at all against a graph whose key space the header does not name (`shedsOn`,
-// src/routing/sheds.ts) — a visible failure rather than scaffolding down the wrong street.
-//
-// Every WRITER has to stop on the same disagreement rather than re-stamp the header. Carrying
-// records forward under a key space they were not placed under is exactly the misplacement the gate
-// exists to rule out, and it would heal the blank map into a wrong one within a day.
+// Writers must stop on a mismatch, not re-stamp, or the client's blank map turns wrong.
 export function shedGraphMismatch(
   artifact: DecodedShedArtifact,
   graphKeyHash: string,

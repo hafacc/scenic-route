@@ -1,11 +1,4 @@
-// `bun run scripts/buildings.ts`: fetches NYC building footprints with roof heights and writes them
-// as data/buildings/nyc.bin (magic BLDG) — the source data a later "building shade" routing factor
-// will raise into walls to shade the walking graph. From the NYC Building Footprints dataset
-// (5zhs-2jue): a GeoJSON MultiPolygon per building, its `height_roof` (feet), and its
-// `ground_elevation` (feet AMSL, for terrain-aware shade). Kept to real buildings (feature_code
-// 2100) with a positive finite height, clipped to the shoreline, and converted to meters. Polygons
-// only this batch; the shade computation lives in a later phase.
-// Layout: scripts/README.md.
+// NYC footprints: `height_roof` and `ground_elevation` (AMSL) are in feet, stored as meters.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -37,8 +30,7 @@ interface BuildingRow {
   feature_code?: string;
 }
 
-// Splits a GeoJSON MultiPolygon into its disjoint parts, each an outer ring then holes, in the
-// same [lng, lat] -> {lat, lng} shape land.ts reads borough boundaries with.
+// Each part is an outer ring then holes.
 function toParts(geom: BuildingRow["the_geom"]): Polygon[] {
   const parts: Polygon[] = [];
   for (const rings of geom?.coordinates ?? []) {
@@ -61,15 +53,13 @@ function toBuildings(
       continue;
     }
     const heightMeters = heightFeet * FEET_TO_METERS;
-    // A missing or unparseable ground elevation falls back to sea level rather than dropping the
-    // building; height_roof stays the only filter.
+    // A missing ground elevation falls back to sea level rather than dropping the building.
     const elevationFeet = Number.parseFloat(row.ground_elevation ?? "");
     const baseElevationMeters = Number.isFinite(elevationFeet)
       ? elevationFeet * FEET_TO_METERS
       : 0;
     for (const polygon of toParts(row.the_geom)) {
-      // Keep the part if any outer-ring vertex is on land, so a building on the shoreline is not
-      // dropped for the few vertices its footprint pokes past the coastline.
+      // Any vertex on land, so a shoreline building poking past the coastline is kept.
       const outerRing = polygon[0] ?? [];
       if (outerRing.some(onLand)) {
         buildings.push({ polygon, heightMeters, baseElevationMeters });
@@ -80,7 +70,7 @@ function toBuildings(
 }
 
 async function nycBuildings(land: LandContext): Promise<HeightedBuilding[]> {
-  // `*` so a newly-read column is free after one refetch (the disk cache keys on the query).
+  // `*` keeps the query, and so the disk cache key, stable when a new column is read.
   const rows = await NYC_OPEN_DATA.dataset<BuildingRow>(
     BUILDINGS_DATASET,
     { $select: "*" },
@@ -89,19 +79,12 @@ async function nycBuildings(land: LandContext): Promise<HeightedBuilding[]> {
   return toBuildings(rows, land.onLand);
 }
 
-// New York joins its footprints to a separate height table; San Francisco's carry a LiDAR-measured
-// height on the row itself. A city that passes null casts no building shade AT ALL — which is a loud
-// thing to choose and was a silent thing to forget, back when this looked the city up in a map.
+// A city that passes null casts no building shade at all.
 export type BuildingSource = (land: LandContext) => Promise<HeightedBuilding[]>;
 
 export const NYC_BUILDINGS: BuildingSource = nycBuildings;
 
-// Both sides of the bay in one artifact, because they are one city here: San Francisco's own
-// footprints carry a LiDAR median on the row, and the East Bay's are measured for themselves by
-// `tiler ndsm` because nobody publishes them (scripts/east-bay-buildings.ts). Throws rather than
-// returning nothing if that measurement has not been run — a city that silently loses half its walls
-// would cast half a shadow and say so nowhere — and throws before either footprint source is
-// fetched, so a build run in the wrong order costs a disk read rather than two downloads.
+// East Bay heights come from `tiler ndsm`; reading them first throws before any download if unrun.
 export const SF_BUILDINGS: BuildingSource = async (land) => {
   const readings = await readEastBayHeights();
   return [

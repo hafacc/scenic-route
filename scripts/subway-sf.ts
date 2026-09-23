@@ -1,21 +1,4 @@
-// `bun run build-subway:sf`: downloads SFMTA's and BART's GTFS feeds and writes San Francisco's
-// rail as data/subway/sf.bin — the same SBWY blob New York's subway ships as (scripts/subway.ts),
-// so one client format covers both cities. Two feeds rather than one: Muni and BART are separate
-// agencies, and 511.org's regional feed, which would carry both, needs an API key this pipeline does
-// not hold. Display only: nothing here enters the routing graph or any of its inputs — the rail a
-// route rides is scripts/transit.ts's TRNS blob, baked from these same feeds. Layout:
-// scripts/README.md.
-//
-// The whole of both feeds is drawn, and NOTHING here is clipped to the region. Every other source in
-// this pipeline is cut at the land mask (scripts/land.ts), because every other source is walked on:
-// a street or a tree outside the mask is ground the router would have to answer for. Rail is not.
-// BART's tube crosses open water, its lines run out to Antioch and Berryessa, and half its stations
-// stand in towns this region's mask has never heard of — cutting them at the shoreline severed the
-// tube in the middle of the bay and dropped 28 of BART's 50 stations, which is a map of a network
-// nobody rides. What the feeds hold IS the network, so the network is what is drawn.
-//
-// The one place the extent still matters is search, which must not offer a destination the routing
-// graph cannot reach: scripts/search-index.ts keeps the stations inside the region's own bounds.
+// Display only. Not clipped to the land mask: BART's tube crosses open water and runs far outside it.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -45,35 +28,24 @@ import { muniStationName } from "./transit";
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const SUBWAY_DIR = join(DATA_DIR, "subway");
 
-// SFMTA's own feed, published without a key from the page that documents it
-// (https://www.sfmta.com/reports/gtfs-transit-data). 10.0 MiB of zip, all 68 Muni routes.
+// Keyless; documented at https://www.sfmta.com/reports/gtfs-transit-data.
 const MUNI_FEED_URL =
   "https://muni-gtfs.apps.sfmta.com/data/muni_gtfs-current.zip";
 const MUNI_CACHE_KEY = "gtfs-muni";
-// BART's own feed, also keyless. This URL redirects to whichever dated zip is current
-// (google_transit_20260810-20270108_v02.zip at the last read), so the cache key stays put across
-// schedule changes — the same reason every other source here is cached by its request, not its
-// answer. bart.gov's OTHER endpoint, api.bart.gov/gtfs/google_transit.zip, still serves a 2013 feed.
+// Redirects to the current dated zip; api.bart.gov/gtfs/google_transit.zip still serves a 2013 feed.
 const BART_FEED_URL = "https://www.bart.gov/dev/schedules/google_transit.zip";
 const BART_CACHE_KEY = "gtfs-bart";
 
-// What Muni draws. route_type 0 is its rail: the six Metro lines (J/K/L/M/N/T) and the F historic
-// streetcar, which runs the same rails down Market and is on Muni's own system map. 5 is the three
-// cable car lines, kept for the same reason — they are scheduled rail service with published
-// colors and shapes, and a San Francisco transit map without the cable cars is not one. The other
-// 58 routes are buses (route_type 3): New York's ingest draws no buses either, and Muni's bus
-// network alone would not fit the station mask's 32 routes.
+// Metro lines and the F (0) and cable cars (5); buses alone wouldn't fit the station mask's 32 routes.
 const MUNI_ROUTE_TYPES = new Set(["0", "5"]);
-// BART is one route_type, 1. Its two `BB-*` bus bridges are route_type 3 and carry no shapes.
+// BART's `BB-*` bus bridges are route_type 3 and carry no shapes.
 const BART_ROUTE_TYPE = "1";
 
-// The GTFS defaults for a route publishing no color. Both feeds publish both for every route drawn
-// here; the spec's white-on-black beats inventing one.
+// The GTFS spec's defaults for a route publishing no color.
 const DEFAULT_ROUTE_COLOR = "FFFFFF";
 const DEFAULT_TEXT_COLOR = "000000";
 
-// A route as its feed describes it, before the variant selection decides what is drawn. `routeIds`
-// is plural because BART splits each line into a northbound and a southbound route_id.
+// `routeIds` is plural because BART splits each line into a route_id per direction.
 interface FeedRoute {
   id: string;
   shortName: string;
@@ -84,7 +56,6 @@ interface FeedRoute {
   variants: ShapeVariant[];
 }
 
-// shapes.txt as polylines, each ordered by shape_pt_sequence.
 function readShapes(feed: GtfsFeed): Map<string, Coord[]> {
   const ordered = new Map<string, { sequence: number; point: Coord }[]>();
   for (const row of feed.shapes) {
@@ -110,9 +81,7 @@ function readShapes(feed: GtfsFeed): Map<string, Coord[]> {
   return shapes;
 }
 
-// Every shape the given route_ids run, as drawn: the trips on it (what ranks the variants), whether
-// it is a primary shape, and its geometry. A shape used by trips in both directions counts as
-// primary — it is track the route runs, whichever way round it was recorded.
+// A shape used by any primary trip counts as primary.
 function shapeVariants(
   feed: GtfsFeed,
   shapes: ReadonlyMap<string, Coord[]>,
@@ -150,8 +119,7 @@ function shapeVariants(
   return variants;
 }
 
-// Muni's rail, in the order a legend reads: the Metro lines and the F first (route_type 0), then the
-// cable cars, alphabetically within each — the feed publishes no route_sort_order to defer to.
+// Legend order: the feed publishes no route_sort_order.
 function muniRoutes(feed: GtfsFeed): FeedRoute[] {
   const shapes = readShapes(feed);
   const rows = feed.routes
@@ -177,12 +145,7 @@ function muniRoutes(feed: GtfsFeed): FeedRoute[] {
   }));
 }
 
-// BART's lines, one per color. The feed splits each line into two route_ids — "Yellow-S" (route 1)
-// and "Yellow-N" (route 2) — which are the two directions of one line down one pair of rails, so
-// they are folded together here exactly as direction_id 0 and 1 are folded within a Muni route: the
-// lower-numbered route_id's shapes are the primary ones, the other's have to reach track they do not
-// already cover. Drawing them apart would put every BART line on the map twice, in one color, under
-// two names no station sign uses.
+// The feed's "Yellow-S"/"Yellow-N" route_ids are one line's two directions, folded into one route.
 function bartRoutes(feed: GtfsFeed): FeedRoute[] {
   const shapes = readShapes(feed);
   const byColor = new Map<string, GtfsRow[]>();
@@ -220,25 +183,12 @@ function bartRoutes(feed: GtfsFeed): FeedRoute[] {
       ),
     });
   }
-  // The feed's own order, which is BART's: Yellow, Orange, Green, Red, Blue, then the connector.
   return routes.sort(
     (left, right) => Number(left.routeIds[0]) - Number(right.routeIds[0]),
   );
 }
 
-// The station markers one feed contributes: where they are, what they are called, and which routes
-// call there as a bit per index into the route table. A station's routes come from every trip of a
-// drawn route that stops there, both directions and every shape variant — which routes call at a
-// station is a fact about the schedule, not about which shapes got drawn.
-//
-// GTFS models a station as a parent stop with one child platform per direction at the same
-// coordinate, so the parents are what a marker wants; BART publishes them (and its entrances, as
-// location_type 2, which never appear in stop_times and so never reach this). Muni publishes no
-// parent_station at all, which the same code path handles by a stop standing in for itself — the
-// curb-to-curb pairs it leaves behind are what the name merge below folds.
-//
-// `displayName` is how a feed that names a stop for the platform it is turns that into the place a
-// marker is labeled with; a feed whose stop_name is already the station's, as BART's is, has none.
+// Routes come from the schedule, not drawn shapes; Muni has no parent_station, so stops stand in.
 function feedStations(
   feed: GtfsFeed,
   routeOfTrip: ReadonlyMap<string, number>,
@@ -277,15 +227,9 @@ function feedStations(
   return stations;
 }
 
-// One marker per station rather than one per curb: stops sharing a name and lying within
-// STATION_MERGE_METERS of one another become a single marker at their centroid, carrying every route
-// that calls at any of them. Single-link, so the three stops of a rail terminal chain into one
-// marker; run over both agencies together, so a Muni stop and a BART entrance of the same name at the
-// same corner are one station on the map, which is what a rider sees.
+// Across both agencies, so a same-named Muni stop and BART station on one corner are one marker.
 function mergeStations(stations: readonly TransitStation[]): TransitStation[] {
   const merged = clusterByName(stations).map((cluster) => {
-    // The lowest complex any member is in, or 0 when none of them is in one — which is every
-    // marker in this city today, since neither feed names a transfer between two stations.
     const ids = cluster
       .map(({ complex }) => complex)
       .filter((complex) => complex !== 0);
@@ -297,8 +241,6 @@ function mergeStations(stations: readonly TransitStation[]): TransitStation[] {
     };
   });
 
-  // Sorted south to north, then west to east, then by name — the order the point sources are written
-  // in, and one a renderer can index into.
   return merged.sort(
     (left, right) =>
       left.lat - right.lat ||
@@ -307,10 +249,7 @@ function mergeStations(stations: readonly TransitStation[]): TransitStation[] {
   );
 }
 
-// Which route index each trip of a feed belongs to, for the station masks. `routes` must be that
-// feed's own routes and no other's: route_id is unique within a feed and nowhere else, and Muni's
-// bus routes 1, 2, 5, 6, 7, 8 and 12 are named exactly as BART's route_ids for Yellow, Green, Red
-// and Blue. Handed both feeds' routes, this hangs a BART bit on every stop of seven bus lines.
+// `routes` must be this feed's only: route_ids collide across feeds (Muni bus 1 vs BART Yellow).
 function tripRouteIndex(
   feed: GtfsFeed,
   routes: readonly FeedRoute[],
@@ -352,8 +291,6 @@ async function ingestSubwaySf(cityId: string): Promise<void> {
       console.error(`  ${route.shortName}: no shape to draw, dropped`);
       continue;
     }
-    // No route_sort_order in either feed, so the display order is the one built above and the field
-    // records it: Muni's rail, then the cable cars, then BART's lines in BART's own order.
     routes.push({
       id: route.id,
       shortName: route.shortName,
@@ -366,8 +303,7 @@ async function ingestSubwaySf(cityId: string): Promise<void> {
   }
 
   const indexOf = new Map(routes.map((route, index) => [route.id, index]));
-  // Two feeds in one file, so the second agency's complex ids start past the first's: a complex id
-  // means one place only within the feed that numbered it. Both maps are empty at these feeds.
+  // Complex ids are per feed, so BART's start past Muni's.
   const muniComplexes = transferComplexes(muni, 1);
   const bartComplexes = transferComplexes(bart, nextComplexId(muniComplexes));
   const stations = mergeStations([
@@ -417,7 +353,7 @@ async function ingestSubwaySf(cityId: string): Promise<void> {
 }
 
 if (import.meta.main) {
-  // The first argument that is not a flag: the cache flags belong to scripts/cache.ts.
+  // Flags belong to scripts/cache.ts.
   const city = process.argv
     .slice(2)
     .find((argument) => !argument.startsWith("--"));

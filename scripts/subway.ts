@@ -1,10 +1,4 @@
-// `bun run build-subway`: downloads the MTA's subway GTFS feed and writes the system's route
-// geometry and its stations as data/subway/nyc.bin (magic SBWY) — every route's polylines together
-// with the color and the names the MTA publishes for it, and every station with the set of routes
-// that genuinely serve it, so a renderer can draw one route at a time, and one marker per station,
-// and know what to paint them without a second file. Display only: nothing here enters the routing
-// graph or any of its inputs — the rail a route rides is scripts/transit.ts's TRNS blob, baked from
-// this same feed. Layout: scripts/README.md.
+// Display only: routing rides scripts/transit.ts's blob, baked from this same feed.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -25,66 +19,32 @@ import {
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const SUBWAY_DIR = join(DATA_DIR, "subway");
 
-// The MTA's own subway feed, one zip carrying every service. 5.3 MiB at the last read.
 const FEED_URL = "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip";
 const FEED_CACHE_KEY = "gtfs-subway";
 
-// GTFS route_type 1 is the subway proper (28 routes). 2 is heavy rail, which in this feed is the
-// Staten Island Railway alone — kept: it is drawn on the MTA's own subway map, it is inside the
-// fare system, and the map this feeds covers Staten Island, so dropping it would leave the whole
-// borough blank while every other borough draws its lines.
+// 1 is the subway; 2 is heavy rail, here only the Staten Island Railway, which the MTA map draws.
 const KEPT_ROUTE_TYPES = new Set(["1", "2"]);
 
-// GTFS direction_id for the forward direction, which every route in this feed runs shapes for.
 const FORWARD_DIRECTION = "0";
-// How much track a reverse-direction shape has to add to earn a place. A route's direction_id 1
-// shapes normally retrace its direction_id 0 shapes down the same rails, and a line drawn on top of
-// itself adds nothing — but a pattern that runs southbound ONLY (the R and W down the West End
-// line) is track the map would otherwise be missing entirely. So a reverse shape is kept when it
-// covers at least this many grid cells no kept shape of the route covers, about 600 m of track:
-// above the few meters the two directions wobble apart at terminals and relay tracks, and far below
-// a branch. Anything from 5 to 30 cells picks the same two shapes out of the 2026-05-26 feed, so
-// this sits in the middle of a wide plateau rather than on an edge that decides anything.
+// ~600 m of track a reverse shape must add (e.g. the southbound-only R and W); 5-30 all agree.
 const NEW_TRACK_CELLS = 20;
-// The coverage grid's cell, ~39 m of latitude and ~29 m of longitude at New York. Deliberately
-// coarser than the tracks are apart, so a shape running the opposite rail of one already drawn
-// reads as track already covered rather than as new.
+// ~39 x 29 m, coarser than the rails are apart, so the opposite rail reads as already covered.
 const COVERAGE_CELL_DEGREES = 0.00035;
-// Packs a (row, column) cell into one number. Columns run to about -2.1e5 here, nowhere near it.
 const CELL_STRIDE = 10_000_000;
 
-// A station lists a route only when that route's schedule really serves it, measured as the share of
-// the route's trips that stop there. Rush-hour put-ins sit an order of magnitude below regular
-// service and the 2026-05-26 feed leaves the two cleanly apart: 956 of the 1,028 station-route pairs
-// stand at 10.09% of the route's trips or more, the other 72 at 3.38% or less, and nothing at all
-// falls between. Any floor from 0.034 to 0.10 therefore removes exactly the same 72 pairs, and this
-// is the geometric middle of that empty band. Without it 96 St-2 Av claims the N (12 trips) and the
-// R (one trip in the entire schedule) beside the Q's 859. This is a fact about the MASKS only —
-// every shape a route runs is still drawn, so a line through a station whose mask no longer names
-// that route is correct: the track is there, the service is not.
+// Share of a route's trips a station needs to list it; the feed has a clean gap from 3.4% to 10%.
 const MIN_TRIP_SHARE = 0.058;
 
-// How close a station has to be to one of its route's drawn lines to count as sitting on it. Nothing
-// rides on the exact value: at the 2026-05-26 feed every pair but one is within 4.3 m of its line
-// and the one is 103 m out, so any threshold in between finds the same gap.
 const STATION_LINE_METERS = 25;
-// How far a line may run past its last vertex to reach a platform its shape stops short of, and how
-// far off that extension's axis the platform may sit. Both bound the one honest repair: the MTA's Q
-// shapes all end 103 m short of the 96 St terminal platform, straight up Second Avenue on a heading
-// 4.6° off the bearing to it, so running the line on to the platform's foot lays no track that is
-// not there. A platform further out, or off to one side, is a different problem — the ingest reports
-// it and leaves it rather than bending track toward it.
+// Bounds for extending a shape that stops short of its platform (the Q ends 103 m shy of 96 St).
 const MAX_TERMINAL_EXTENSION_METERS = 250;
 const MAX_TERMINAL_OFFSET_METERS = 25;
-// The flat meter frame the two constants above are measured in: over a few hundred meters, scaling
-// longitude by the local cosine is exact to millimeters.
 const METERS_PER_DEGREE_LAT = 111_320;
 
-// The GTFS defaults for a route that publishes no color. Every route in this feed publishes both;
-// the spec's white-on-black beats inventing one.
+// The GTFS spec defaults for a route with no color.
 const DEFAULT_ROUTE_COLOR = "FFFFFF";
 const DEFAULT_TEXT_COLOR = "000000";
-// A route the feed gives no route_sort_order sorts after every route that has one.
+// A route with no route_sort_order sorts last.
 const NO_SORT_ORDER = 0xffff;
 
 function cellKey(row: number, column: number): number {
@@ -102,8 +62,7 @@ function addTrack(points: readonly Coord[], covered: Set<number>): void {
   }
 }
 
-// How many distinct cells of a shape no cell of `covered` touches — its own cell or any of the eight
-// around it, so a shape on the opposite rail of one already drawn counts as covered.
+// Distinct cells of a shape with no covered cell among their eight neighbors or themselves.
 function newTrackCells(points: readonly Coord[], covered: Set<number>): number {
   const seen = new Set<number>();
   let fresh = 0;
@@ -131,7 +90,6 @@ function newTrackCells(points: readonly Coord[], covered: Set<number>): number {
   return fresh;
 }
 
-// shapes.txt as polylines, each ordered by shape_pt_sequence.
 function readShapes(feed: GtfsFeed): Map<string, Coord[]> {
   const ordered = new Map<string, { sequence: number; point: Coord }[]>();
   for (const row of feed.shapes) {
@@ -157,17 +115,13 @@ function readShapes(feed: GtfsFeed): Map<string, Coord[]> {
   return shapes;
 }
 
-// One shape variant a route runs: enough to rank the variants by how much service is on them and to
-// tell the forward direction from the reverse.
 interface ShapeVariant {
   shapeId: string;
   direction: string;
   trips: number;
 }
 
-// Every shape variant each route runs, forward direction first and within a direction the busiest
-// shape first, ties broken by shape id so the order is the same across runs. The forward-first order
-// is what makes the reverse direction earn its place against everything already drawn.
+// Forward first, so reverse shapes must earn their place against everything already drawn.
 function shapeVariants(feed: GtfsFeed): Map<string, ShapeVariant[]> {
   const counts = new Map<string, Map<string, ShapeVariant>>();
   for (const trip of feed.trips) {
@@ -217,12 +171,7 @@ function buildRoutes(feed: GtfsFeed): TransitRoute[] {
     if (!KEPT_ROUTE_TYPES.has(row.route_type)) {
       continue;
     }
-    // Every forward variant of the route is drawn, busiest first — express patterns, branches,
-    // rush-hour put-ins, the lot. Variants that merely SHARE track are all kept: separating them
-    // where they overlap is the renderer's job, with an offset, and it cannot do it with data the
-    // ingest threw away. Only track drawn twice with nothing added is dropped, on two tests of the
-    // same idea — a shape whose vertices are identical to one already taken, and a reverse-direction
-    // shape that reaches no track the route already covers.
+    // Overlapping variants stay for the renderer to offset; only exact or reverse retraces drop.
     const lines: Coord[][] = [];
     const drawn = new Set<string>();
     const covered = new Set<number>();
@@ -258,23 +207,13 @@ function buildRoutes(feed: GtfsFeed): TransitRoute[] {
     });
   }
 
-  // The MTA's own display order (route_sort_order: 8 Avenue first, the shuttles in the middle, the
-  // numbered lines last), so a legend built by walking the route table comes out in map order.
   return routes.sort(
     (left, right) =>
       left.sortOrder - right.sortOrder || (left.id < right.id ? -1 : 1),
   );
 }
 
-// The stations a marker is drawn at. GTFS models a station as a parent stop (location_type 1) with
-// one child platform per direction at the same coordinate, so the parents are what a marker wants:
-// the platforms would put two markers a few meters apart at every station. A platform with no
-// parent stands in for itself — defensive, this feed gives all 992 of its platforms one.
-//
-// A station's routes come from the trips of a kept route that stop there, both directions and every
-// shape variant — which routes call at a station is a fact about the schedule, not about what got
-// drawn — thinned by MIN_TRIP_SHARE, so a route that puts one rush-hour train through a station does
-// not label it as if it served the place. Its complex is the MTA's own, out of transfers.txt.
+// Parent stops, not platforms: GTFS gives each direction its own platform a few meters apart.
 function buildStations(
   feed: GtfsFeed,
   routeIndex: ReadonlyMap<string, number>,
@@ -289,9 +228,7 @@ function buildStations(
     routeTrips.set(trip.route_id, (routeTrips.get(trip.route_id) ?? 0) + 1);
   }
 
-  // Per station, per route, the distinct trips calling there. Distinct rather than a count of
-  // stop_times rows so that a pattern touching one station twice cannot count itself twice against
-  // the route's trip total.
+  // Distinct trips, so a pattern touching a station twice counts once.
   const calls = new Map<string, Map<string, Set<string>>>();
   for (const time of feed.stopTimes) {
     const routeId = routeOf.get(time.trip_id);
@@ -358,8 +295,7 @@ function buildStations(
       " route's trips dropped",
   );
 
-  // Sorted south to north, then west to east, then by name — the order the point sources are
-  // written in, and one a renderer can index into.
+  // The order every point source is written in.
   return stations.sort(
     (left, right) =>
       left.lat - right.lat ||
@@ -368,7 +304,6 @@ function buildStations(
   );
 }
 
-// `to` seen from `from`, in meters east and north.
 function offsetMeters(from: Coord, to: Coord): { east: number; north: number } {
   return {
     east:
@@ -379,9 +314,7 @@ function offsetMeters(from: Coord, to: Coord): { east: number; north: number } {
   };
 }
 
-// The distance from a point to the nearest point of any of these polylines, the segments taken as
-// segments rather than as their vertices — a station sits mid-block between two shape points as
-// often as not.
+// To segments, not vertices: a station often sits between two shape points.
 function lineMeters(point: Coord, lines: readonly Coord[][]): number {
   let nearest = Number.POSITIVE_INFINITY;
   for (const line of lines) {
@@ -412,12 +345,7 @@ function lineMeters(point: Coord, lines: readonly Coord[][]): number {
   return nearest;
 }
 
-// Runs a route's lines on to the stations that list it but sit off the end of every one of them. The
-// only repair made is the honest one: where a station lies straight ahead of a line's last vertex,
-// on the heading that vertex arrived on, the line is extended along that heading to the station's
-// own foot — which is a published shape stopping short of its terminal platform, the MTA's Q up
-// Second Avenue being the case in this feed. A station beside a line, or far past its end, is
-// reported and left alone: track that bends toward a marker is invented track.
+// Extends a line only straight along its end heading; bending toward a station would invent track.
 function reachTerminals(
   routes: readonly TransitRoute[],
   stations: readonly TransitStation[],
@@ -553,7 +481,7 @@ export async function ingestSubway(cityId: string): Promise<SourceFile> {
 }
 
 if (import.meta.main) {
-  // The first argument that is not a flag: the cache flags belong to scripts/cache.ts.
+  // Skip flags: they belong to scripts/cache.ts.
   const city = process.argv
     .slice(2)
     .find((argument) => !argument.startsWith("--"));

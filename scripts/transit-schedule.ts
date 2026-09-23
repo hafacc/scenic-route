@@ -1,19 +1,4 @@
-// `bun run update-transit-schedule`: the rail timetable the router departs against, refreshed daily
-// beside the ferry one and committed, as public/transit-schedule/<city>.bin (magic TSCH).
-//
-// data/transit/<city>.bin (TRNS) carries the topology — stations, routes, patterns — and the graph
-// pass bakes it into the 37 MB routing graph. Nothing in the daily path can rebuild that graph, so
-// the timetable lives on its own, keyed by the LANE IDS the two artifacts share.
-//
-// It holds HEADWAY BANDS, not departures: per lane and service, a window with a start, an end and
-// the seconds between trains inside it. A subway timetable listed departure by departure is about
-// ten times the size for an answer nobody can tell apart — what a walker needs from a five-minute
-// service is that a train comes in about five minutes, and where the service is sparse enough for
-// the exact minute to matter the bands are short and say so.
-//
-// Two files per city, exactly as the ferry timetable does it: `<city>.bin` is the timetable in
-// effect now and `<city>-past.bin` every superseded one, each carrying the day range it ran for.
-// The publishing itself is scripts/schedule-record.ts. Layout: scripts/README.md.
+// Keyed by TRNS lane ids, since the daily job can't rebuild the graph; headway bands, not departures.
 
 import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
@@ -53,38 +38,25 @@ const HEADER_BYTES = 44;
 const PATTERN_BYTES = 12;
 const LANE_BYTES = 12;
 
-// How far one gap between departures may fall from a band's mean headway and still belong to it.
-// Both terms matter: a minute is the slack a published timetable rounds to at any headway, and a
-// tenth lets a twenty-minute evening service vary by two minutes without splitting into a band per
-// train. The pair is measured, not guessed: over the 2026 feeds it folds New York's 20,353
-// departures into 3,036 bands and San Francisco's 14,261 into 1,605, and the departure it models for
-// a real train is a mean of 20 seconds out, 89% of them inside a minute and none more than 4:16.
-// Loosening it trades that fidelity away fast — at two minutes and a quarter the mean error is 75
-// seconds and only 57% land inside a minute, for 1,200 bands saved.
+// Measured on 2026 feeds: modeled departures average 20 s off the real ones, 89% within a minute.
 const BAND_TOLERANCE_SECONDS = 60;
 const BAND_TOLERANCE_FRACTION = 0.1;
-// A band of one departure: the train leaves at `start`, and `end` is the same second.
 const SINGLE_DEPARTURE_HEADWAY = 0;
 
-// One window of even service at a pattern's first stop. The departures it stands for are `start`,
-// `start + headway`, `start + 2·headway` … up to `end`, and `end` itself, which is the last train of
-// the window whether or not the grid lands on it.
+// First-stop departures `start + k·headway` up to `end`, plus `end` itself.
 export interface Band {
   start: number; // seconds from midnight of the service day; GTFS allows past 86400
   end: number;
   headway: number;
 }
 
-// One pattern's departures on one service.
 export interface ScheduleLane {
   patternIndex: number;
   serviceIndex: number;
   bands: Band[];
 }
 
-// One pattern the graph can board: the lane id it shares with TRNS, and the seconds from the first
-// stop's departure to each of its stops — which is what turns a first-stop departure into a
-// departure at the stop the walker is actually standing at.
+// `offsets`: seconds from the first stop's departure to each stop.
 export interface SchedulePattern {
   laneId: number;
   offsets: readonly number[];
@@ -97,9 +69,7 @@ export interface Timetable {
   exceptions: Exception[];
 }
 
-// The frequency windows a feed publishes for a trip, keyed `${feedId}:${tripId}`. GTFS runs a
-// frequency trip at `start_time`, `+headway`, … strictly BEFORE `end_time`, so the band's end is
-// pulled back to the last of those: a band's end is always a departure.
+// GTFS frequencies run strictly before `end_time`, so the band end is pulled back to a departure.
 function frequencyBands(
   feeds: readonly { feedId: string; feed: GtfsFeed }[],
 ): Map<string, Band[]> {
@@ -132,11 +102,7 @@ function frequencyBands(
   return bands;
 }
 
-// A sorted departure list cut into bands of even service. A band grows while the next gap sits
-// within the tolerance of the mean headway so far, so a run of five-minute trains stays one band
-// through the rounding a published timetable does, and the evening's first twelve-minute gap starts
-// a new one. The headway written is the mean over the band, which puts its last modeled departure
-// on its last real one rather than letting rounding drift across a long window.
+// Headway is the band's mean, so its last modeled departure lands on the last real one.
 export function deriveBands(departures: readonly number[]): Band[] {
   const sorted = [...new Set(departures)].sort((left, right) => left - right);
   const bands: Band[] = [];
@@ -174,19 +140,8 @@ export function deriveBands(departures: readonly number[]): Band[] {
   return bands;
 }
 
-// The city's timetable, for exactly the lanes the COMMITTED topology carries.
-//
-// `committed` is data/transit/<city>.bin as the graph was cut from it, and it decides both the
-// pattern table and its offsets: the graph's board edges carry a lane id and a stop index into these
-// offsets, and a timetable that indexed anything else would put a rider on the wrong departure. The
-// feeds supply only the trips, matched by lane id, and the share rule is off while they are read —
-// a pattern this run would drop is still a lane the deployed graph can board, and dropping it here
-// is how a lane goes silently Infinity for everyone.
-//
-// A lane the feeds no longer run gets no bands, and says so loudly: the pattern changed under the
-// graph, and the answer is to rebuild the graph, not to guess.
-//
-// Every table is sorted before it is written, so an unchanged feed writes identical bytes.
+// Patterns come from `committed`, which the graph indexes into; the share rule is off since a
+// pattern this run would drop is still boardable. Sorted, so an unchanged feed writes identical bytes.
 export function buildTimetable(
   loaded: readonly LoadedFeed[],
   committed: TransitTopology,
@@ -227,8 +182,7 @@ export function buildTimetable(
       usedServices.add(trip.serviceKey);
       const published = frequencies.get(`${trip.feedId}:${trip.tripId}`);
       if (published) {
-        // A frequency trip's own stop_times are a template nobody departs on; its rows are the
-        // service.
+        // A frequency trip's stop_times are only a template.
         const existing = bandsOf.get(trip.serviceKey);
         if (existing) {
           existing.push(...published);
@@ -284,7 +238,6 @@ export function buildTimetable(
   return { patterns, lanes, services, exceptions };
 }
 
-// One LEB128 varint appended to a byte list.
 function push(bytes: number[], value: number): void {
   const scratch = new Uint8Array(10);
   const end = writeVarint(scratch, 0, value);
@@ -293,9 +246,7 @@ function push(bytes: number[], value: number): void {
   }
 }
 
-// Writes one TSCH record: the header, then the service, exception, pattern, lane and band tables and
-// the varint offset blob, back to back. Little-endian throughout, and every section a multiple of 4
-// so that records concatenated into the history file stay aligned.
+// Sections are padded to 4 bytes so records concatenated into the history file stay aligned.
 export function encodeTimetable(
   timetable: Timetable,
   firstDay: number,
@@ -404,15 +355,12 @@ export interface ScheduleUpdate {
   sha256: string;
 }
 
-// Reads the city's feeds, builds its timetable and — only if it differs from the one in effect —
-// retires the standing record into `<city>-past.bin` and opens a new one from `today`.
 export async function updateTransitSchedule(
   cityId: string,
   today: string,
 ): Promise<ScheduleUpdate> {
   await mkdir(SCHEDULE_DIR, { recursive: true });
-  // The graph's own topology, not one rebuilt from today's feeds: the lane ids and stop offsets the
-  // deployed graph carries are what a rider boards against.
+  // Not rebuilt from today's feeds: the deployed graph boards the committed lane ids and offsets.
   const topologyPath = join(TRANSIT_DIR, `${cityId}.bin`);
   const committed = decodeTopology(
     new Uint8Array(await readFile(topologyPath)),
@@ -451,11 +399,9 @@ export async function updateTransitSchedule(
   };
 }
 
-// One city with `--city`, otherwise every city that has rail — which is what the daily job runs, so
-// adding a city needs no change to the workflow. One `today` for the whole run, so two cities whose
-// feeds both moved open their new records on the same day even across midnight.
+// One `today` for the run, so cities open new records on the same day even across midnight.
 if (import.meta.main) {
-  // The cache flags are declared so parseArgs does not reject them; scripts/cache.ts reads argv itself.
+  // Declared so parseArgs accepts them; scripts/cache.ts reads argv itself.
   const { values } = parseArgs({
     options: {
       city: { type: "string" },

@@ -1,23 +1,5 @@
-// `bun run build-sheds`: places every sidewalk-shed permit New York has issued since 2017-12-28 on
-// the sidewalk edges it stands over, and writes the result as public/sheds/{open,closed,
-// index}.bin (magic SHED). Three sources feed it — the DOB's own daily CSV snapshots, kept as the
-// git history of NYCDOB/ActiveShedPermits, for what was standing when; the DOF digital tax map for
-// the property line a shed runs along; and the building footprints for which part of a multi-part
-// lot is in use. The placement is scripts/shed-map.ts and the layout is scripts/README.md.
-//
-// The artifact has to be a function of the feed and its end date alone, so that an incremental job
-// can land on the bytes this writes however far apart the two were run. Two things buy that:
-// `open.bin` carries every standing permit's job number, so identity is stated rather than
-// re-derived, and a record is placed from the reading the feed carried on the day its own interval
-// ended, never from the one it carries now.
-//
-// The snapshots arrive on stdin: package.json clones the DOB repo, resolves every commit's snapshot
-// blob into .build/shed-index.txt and pipes the blobs themselves through `git cat-file --batch`, so
-// the whole git side of the walk is one visible chain of commands rather than a spawn in here.
-//
-// It reads public/routing/nyc.bin, so it runs AFTER `bun run build-tiles` — which bakes that graph
-// and clears public/routing on its way. What it writes sits outside that directory and is committed,
-// so no ordering against the tile build can take it back out again.
+// The artifact must be a function of the feed and its end date alone, so incremental runs match it.
+// Reads public/routing/nyc.bin, so it runs after `bun run build-tiles`.
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -68,8 +50,7 @@ import {
 
 const PUBLIC_DIR = join(import.meta.dirname, "..", "public");
 const ROUTING_DIR = join(PUBLIC_DIR, "routing");
-// Committed, and the one directory under public/ that is: SHED_BASE in src/routing/sheds.ts names it
-// as the client's relative path, and the tile build neither renders nor clears it.
+// The one committed directory under public/; the tile build neither renders nor clears it.
 export const SHED_DIR = join(PUBLIC_DIR, "sheds");
 const GRAPH_PATH = join(ROUTING_DIR, "nyc.bin");
 const VERSION_PATH = join(ROUTING_DIR, "nyc.version.json");
@@ -77,14 +58,9 @@ const SIDE_MASK = 0x7; // the graph's kind-and-side byte, bits 3-5
 const METERS_PER_MILE = 1609.344;
 const PROGRESS_EVERY = 5_000;
 
-// The graph the placement snaps against, carrying both figures it names itself by. They are
-// recomputed from the bytes rather than taken on trust from version.json beside them, because the
-// daily job reads a graph off the live site where that file may be older than the deploy that put it
-// there. The key space is a property of the decoded key column, so the decode runs once under the
-// blob hash alone and the graph is named with both on the way out.
+// Hashes recomputed, not read from version.json: on the live site that file may predate the graph.
 export function loadGraphBytes(source: Uint8Array): RoutingGraph {
-  // Copied out of the read rather than viewed in place: decodeGraph takes typed-array views over the
-  // buffer, and a Buffer from readFile can sit at an offset in a pooled one.
+  // Copied: decodeGraph views the buffer, and a readFile Buffer can sit at an offset in a pool.
   const bytes = new Uint8Array(source.byteLength);
   bytes.set(source);
   const graph = decodeGraph(bytes.buffer, {
@@ -111,15 +87,14 @@ async function loadGraph(): Promise<RoutingGraph> {
   return graph;
 }
 
-// A permit as the placement reads it: the attributes that decide where the shed goes, and the one lot
-// part and one building part it stands along, on the 1e-6 degree grid every blob in this repo uses.
+// Rings are on the repo's 1e-6 degree grid.
 export interface ShedRecord {
   street: string;
   linearFeet: number; // NaN when the feed carries none
   lng: number | null;
   lat: number | null;
-  lot: Ring | null; // the tax-lot part the permit sits on
-  footprint: Ring | null; // and the building part, which anchors a permit shorter than its frontage
+  lot: Ring | null;
+  footprint: Ring | null; // anchors a permit shorter than its frontage
 }
 
 export function toShedRecord(
@@ -145,10 +120,7 @@ export function toShedRecord(
   };
 }
 
-// Every distinct reading the placement has to answer for, in the order the records need them. One
-// per permit for the attributes the feed has now, and one more wherever a record's interval ended
-// under a reading the feed has since corrected — a few hundred against sixty thousand, because the
-// walk replaces a permit's attributes only when they actually change.
+// Includes readings an interval ended under that the feed has since corrected.
 export function placementAttributes(
   permits: readonly ShedPermit[],
 ): ShedAttributes[] {
@@ -174,9 +146,7 @@ export function parcelRequestsOf(
   }));
 }
 
-// The order the artifact stores its records in, and the only one the daily job can rebuild from the
-// DOB's CSV without keeping anything of its own: ascending by job number. A permit with more than one
-// presence interval keeps them in date order within its own group.
+// The artifact's record order: the only one the daily job can rebuild from the CSV alone.
 export function byJobNumber(left: ShedPermit, right: ShedPermit): number {
   return left.job < right.job ? -1 : left.job > right.job ? 1 : 0;
 }
@@ -208,9 +178,7 @@ export function placeRecords(
   });
 }
 
-// One placement as the spans the artifact stores: named by the graph's DURABLE key rather than by the
-// edge id they were placed on, because the artifact outlives the graph it was snapped against and a
-// positional id would quietly point at another street after the next rebuild.
+// Keyed by durable id, not edge id: the artifact outlives the graph it was snapped against.
 export function toEncodedSpans(
   graph: RoutingGraph,
   placement: ShedPlacement,
@@ -218,7 +186,7 @@ export function toEncodedSpans(
   return placement.spans.map((span) => {
     const sourceId = graph.edgeSourceId[span.edge];
     if (sourceId === NO_SOURCE_ID) {
-      // Placement only ever lands on sidewalks, and every sidewalk carries its source segment.
+      // Placement only lands on sidewalks, which all carry a source segment.
       throw new Error(`edge ${span.edge} has no durable id to key a shed on`);
     }
     const t0 = Math.min(
@@ -234,8 +202,7 @@ export function toEncodedSpans(
         FRACTION_SCALE,
         Math.max(t0, Math.round(span.t1 * FRACTION_SCALE)),
       ),
-      // A span the placement could measure no pavement width for stores 0, not a guess: the client
-      // has one fallback depth and it is better that it is applied in one place.
+      // 0 for unmeasured: the client applies its one fallback depth.
       depth: Number.isFinite(span.depthMeters)
         ? Math.min(DEPTH_CEILING, Math.round(span.depthMeters * DEPTH_SCALE))
         : 0,
@@ -243,29 +210,21 @@ export function toEncodedSpans(
   });
 }
 
-// The confidence byte, on the 0-254 ceiling the graph's own attribute bytes use.
 export function toConfidenceByte(placement: ShedPlacement): number {
   return Math.min(CONFIDENCE_CEILING, Math.round(placement.confidence * 255));
 }
 
-// Whether an interval is still PROVISIONAL on `lastDay`, the newest usable snapshot: a reappearance
-// within the renewal tolerance would extend it, and the feed drops 40-70 permits a day around a
-// renewal. A provisional interval goes in `open.bin` with no close day, and one that can never be
-// extended again goes in `closed.bin` and is final. That is the whole of the open/closed split, and
-// it is what lets the daily job append closures rather than revisit them.
+// Provisional (a reappearance could still extend it) goes in open.bin; the rest are final.
 export function isProvisional(last: number, lastDay: number): boolean {
   return lastDay - last < MERGE_TOLERANCE_DAYS;
 }
 
-// What a permit's spans and confidence are, however the caller came by them.
 export interface ShedCoverage {
   spans: EncodedSpan[];
   confidence: number; // 0..254
 }
 
-// One record per (permit, presence interval), spans repeated: the intervals are disjoint, so no day
-// ever sees a permit twice. `permits` must already be in job order, which is the order `open.bin`
-// stores its records and its job numbers in.
+// One record per (permit, interval); `permits` must already be in job order.
 export function encodedShedsOf(
   permits: readonly ShedPermit[],
   coverageOf: (interval: ShedInterval, permit: ShedPermit) => ShedCoverage,
@@ -370,11 +329,7 @@ export function summarize(
       ` min ${quantile(0)} p50 ${quantile(0.5)} p90 ${quantile(0.9)}` +
       ` max ${quantile(1)} m`,
   );
-  // The declared length the lot had no frontage left to hold. The lot boundary is a hard constraint
-  // the placement never trades against, so the shortfall is reported rather than chased. Nearly every
-  // record leaves a meter or two of it — a run is clipped to the frontage it can actually stand on —
-  // so the total and the tail are what to read: a permit declaring far more than its lot can hold is
-  // usually a bad geocode, and those are the records that place under half of what they claim.
+  // Declared length with no frontage to hold it; a large shortfall is usually a bad geocode.
   const declaredMeters = placements.reduce(
     (total, placement) =>
       total +
@@ -441,11 +396,7 @@ export async function buildSheds(): Promise<void> {
     day,
     counts,
   );
-  // What the durable key space of the graph these spans name is a function of, so `bun run
-  // check-shed-inputs` can tell on every push whether the placement is still current — the graph
-  // itself exists only inside a deploy. Written here and nowhere else: `update-sheds` extends the
-  // artifact against the graph the SITE is serving, so letting it re-stamp would launder an input
-  // change nobody re-placed.
+  // Stamped only here: update-sheds re-stamping would launder an input change nobody re-placed.
   const inputs = await writeShedInputs();
   console.error(
     `  inputs.json: ${inputs.files} committed key-space inputs stamped ${inputs.stamp}, key probe` +

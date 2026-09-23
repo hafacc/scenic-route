@@ -1,10 +1,4 @@
-// `bun run scripts/landuse.ts`: fetches NYC PLUTO land use and writes it as data/landuse/nyc.bin
-// (magic PLUT) — the tax-lot points, each tagged with its land-use class, that the commercial overlay
-// gates blocks on. A block reads as commercial when more than half the lots fronting it are commercial
-// land use (validated: Vanderbilt Ave ~77%, Prospect Place ~4%). Only the residential/commercial
-// classes 1..5 are kept — the classes that make up a storefront-vs-brownstone frontage; the mixed,
-// industrial, transport, institutional, open-space, parking, and vacant classes (6..11) do not. Points
-// only, one class byte each. Layout: scripts/README.md.
+// NYC PLUTO tax-lot points by land-use class, for the commercial overlay. Layout: scripts/README.md.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -20,15 +14,13 @@ const LANDUSE_DIR = join(DATA_DIR, "landuse");
 const LANDUSE_MAGIC = "PLUT";
 const LANDUSE_FORMAT = 1;
 const LANDUSE_DATASET = "64uk-42ks"; // PLUTO Primary Land Use Tax Lot Output
-const LANDUSE_COUNT = 860_000; // ~860k tax lots at the last refresh; a floor, not a number
-// The land-use digit kept: 1 one/two-family, 2 walk-up, 3 elevator (residential), 4 mixed
-// residential/commercial, 5 commercial/office. Classes 6..11 (industrial, transport, institutional,
-// open space, parking, vacant) never front a commercial block, so they are dropped here.
+const LANDUSE_COUNT = 860_000; // a floor, not an exact count
+// 1-3 residential, 4 mixed, 5 commercial; 6..11 (industrial, open space, vacant...) never matter.
 const MIN_CLASS = 1;
 const MAX_CLASS = 5;
 
 interface LandUseRow {
-  landuse?: string; // the PLUTO land-use code "01".."11"; the overlay reads the digit 1..5
+  landuse?: string; // "01".."11"
   latitude?: string;
   longitude?: string;
 }
@@ -45,7 +37,7 @@ function toPoints(
     }
     const lat = Number.parseFloat(row.latitude ?? "");
     const lng = Number.parseFloat(row.longitude ?? "");
-    // Some lots carry blank or 0/0 coordinates; NYC never sits on the null island, so drop those.
+    // Some lots carry blank or 0/0 coordinates.
     if (
       !Number.isFinite(lat) ||
       !Number.isFinite(lng) ||
@@ -66,9 +58,7 @@ export async function ingestLandUse(
   cityId: string,
   land: LandContext,
 ): Promise<SourceFile> {
-  // New York only. The fetch below reads a NYC dataset unconditionally, so another city would clip
-  // New York's rows against its own coastline, drop every one of them, and write a silently empty
-  // artifact that `serveSources` would then publish.
+  // Another city would clip NYC's rows to nothing and publish a silently empty artifact.
   if (cityId !== "nyc") {
     throw new Error(`no land use source for ${cityId}`);
   }
@@ -76,8 +66,6 @@ export async function ingestLandUse(
   const started = performance.now();
   await mkdir(LANDUSE_DIR, { recursive: true });
 
-  // A narrowed $select: 860k lots carry dozens of columns each, so pulling only the three the
-  // overlay reads keeps the paged payload (and the disk cache entry) an order of magnitude smaller.
   const rows = await NYC_OPEN_DATA.dataset<LandUseRow>(
     LANDUSE_DATASET,
     { $select: "landuse, latitude, longitude" },

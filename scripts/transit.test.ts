@@ -1,8 +1,3 @@
-// The station entrances the topology carries: the right-hand side rule, the two curated New York
-// files behind it, and the entrance table's round trip through the encoder. The rest of the TRNS
-// artifact — patterns, lanes, ride seconds — is exercised against the timetable in
-// src/routing/transit-schedule.test.ts.
-
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -27,12 +22,10 @@ import {
   type UndergroundStation,
 } from "./transit";
 
-// The fixture's trunk runs due north up longitude -74, Alpha to Delta, so "east of the track" is
-// simply a larger longitude. 0.0003° is about 25 m across at this latitude, well clear of the
-// rule's ambiguous band; 0.00005° is about 4 m, inside it.
+// The fixture's trunk runs due north up longitude -74.
 const DEEP = { lat: 40.72, lng: -74.0 };
-const CLEAR_DEGREES = 0.0003;
-const NARROW_DEGREES = 0.00005;
+const CLEAR_DEGREES = 0.0003; // ~25 m, clear of the ambiguous band
+const NARROW_DEGREES = 0.00005; // ~4 m, inside it
 
 function door(lng: number, stationId = "C"): FeedEntrance {
   return {
@@ -76,25 +69,19 @@ test("a stair east of a northbound track serves the northbound platform", () => 
     door(DEEP.lng + NARROW_DEGREES),
   ]);
 
-  // Right-hand running: riding north, the platform on the rider's right is the one under the
-  // eastern pavement, and its stairs rise onto it. What the MTA writes on the sign above the
-  // eastern stair — "trains to Manhattan" at a station whose northbound label is Manhattan — says
-  // the same thing.
+  // Right-hand running: the northbound platform is under the eastern pavement.
   const sides = topology.entrances.map((entrance) => entrance.sides);
   expect(sides).toEqual([SOUTHBOUND_SIDE, BOTH_SIDES, NORTHBOUND_SIDE]);
   expect(topology.stations[stationNamed(topology, "Deep")].split).toBe(true);
 });
 
-// The fixture's stops sit on the line the trunk runs, so a drawn track offset east of them is a
-// station point standing off its own rails — which is Nevins St, where the MTA's point sits over the
-// northeastern pavement rather than between the tracks.
+// A station point off its own rails, like Nevins St, whose MTA point sits over the pavement.
 const TRACK_EAST_METERS = 10;
 const TRACK_EAST_DEGREES =
   TRACK_EAST_METERS /
   (Math.cos((DEEP.lat * Math.PI) / 180) * (Math.PI / 180) * 6_371_008.8);
 
-// Published running SOUTH, as half the drawn shapes are: the track says the axis, the ride order
-// says which end of it is north.
+// Published running south, as half the drawn shapes are; the ride order says which end is north.
 function trackEastOfTheStops(): RouteTracks {
   const points = [];
   for (let lat = 40.74; lat > 40.699; lat -= 0.0005) {
@@ -104,8 +91,7 @@ function trackEastOfTheStops(): RouteTracks {
 }
 
 test("an entrance is sided by the track, not by the station point beside it", () => {
-  // A meter east of the station point, and so nine meters WEST of the rails: measured from the
-  // station point this is inside the ambiguous band and would reach both platforms.
+  // 1 m east of the station point (ambiguous from it) but 9 m west of the rails.
   const near = DEEP.lng + TRACK_EAST_DEGREES / TRACK_EAST_METERS;
   const far = DEEP.lng + TRACK_EAST_DEGREES * 2;
 
@@ -177,8 +163,7 @@ test("the New York no-crossover list splits every station it names but one", () 
   const committed = decodeTopology(
     new Uint8Array(readFileSync(join(TRANSIT_DIR, "nyc.bin"))),
   );
-  // One of the 87 sits inside a transfer complex, which is one node whatever its members say: a
-  // change of train there never reaches the street, so there is no wrong side to come down on.
+  // One of the 87 is inside a transfer complex, which is one node whatever its members say.
   expect(committed.stations.filter((station) => station.split)).toHaveLength(
     86,
   );
@@ -194,8 +179,7 @@ test("every side override names a station that is actually split", () => {
   }
 });
 
-// Two stations a hundred meters apart on one street, the first of them split into a stop per
-// direction the way Muni splits its underground platforms.
+// 100 m apart; the first split into a stop per direction, as Muni splits underground platforms.
 const DOWNTOWN = { lat: 37.76, lng: -122.43 };
 const UPTOWN = { lat: 37.7609, lng: -122.43 };
 const OSM_STATIONS: UndergroundStation[] = [
@@ -267,7 +251,7 @@ test("a door a rider may not walk through is no way into the station", () => {
   expect(closed).toEqual([shut, tenants]);
 });
 
-// 37.7627 is about 200 m from Beta, past the distance cap and inside the named one.
+// 37.7627 is ~200 m from Beta: past the distance cap, inside the named one.
 test("an OSM entrance that names its station reaches it past the distance cap", () => {
   const named = matchStationEntrances(OSM_STATIONS, [
     node(37.7627, "Beta Station"),

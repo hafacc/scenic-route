@@ -1,16 +1,4 @@
-// `bun run scripts/industrial.ts [city]`: fetches a city's industrial land and writes it as
-// data/industrial/<id>.bin (magic INDL) — the lot POLYGONS, drawn by the industrial overlay and
-// sampled per edge into the graph's industrial-frontage penalty. Layout: scripts/README.md.
-//
-// No two of these places record land USE the same way, so no two share a source. New York publishes
-// a per-lot class and the whole ingest is one `where`; San Francisco publishes floor area per
-// category and a separate zoning map, and the rule that reads them lives in scripts/sf.ts; the East
-// Bay — the other half of the same region — publishes the assessor's own use code on the parcel
-// geometry, read in scripts/alameda.ts. The Bay Area artifact is the last two concatenated.
-//
-// New York's geometry comes from DCP's MAPPLUTO ArcGIS FeatureServer, not from Socrata: the Socrata
-// copy of PLUTO (`64uk-42ks`, which scripts/landuse.ts reads) carries lot CENTROIDS and its `geom`
-// column is null on all 858,602 rows.
+// NYC lots come from MAPPLUTO on ArcGIS: Socrata's PLUTO (`64uk-42ks`) has a null `geom` column.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -29,17 +17,14 @@ const INDUSTRIAL_DIR = join(DATA_DIR, "industrial");
 const INDUSTRIAL_MAGIC = "INDL";
 const INDUSTRIAL_FORMAT = 1;
 
-// DCP's MAPPLUTO (24v4, at the last probe): 856,614 lot polygons, `maxRecordCount` 2000, pagination
-// supported. Native CRS is EPSG:2263, so every query asks for `outSR=4326`.
+// `maxRecordCount` is 2000; native CRS is EPSG:2263, so every query asks for `outSR=4326`.
 const SERVICE =
   "https://services5.arcgis.com/GfwWNkhOj9bNBqoJ/arcgis/rest/services/MAPPLUTO/FeatureServer/0/query";
 const WHERE = "LandUse = '06'";
 const PAGE_SIZE = 2000;
 const MAX_ATTEMPTS = 6;
 const RETRY_BASE_MS = 5_000; // longer than the shared ladder's: this service rate-limits
-// 9,295 lots matched the `where` at the last probe (2026-08-19). A floor, not an exact count: it
-// catches a server-side page cut that would pass for the end of the layer, but tolerates the city
-// reclassifying a few lots between refreshes.
+// A floor (9,295 at the last probe) that catches a server-side page cut passing for the end.
 const EXPECTED_LOTS = 9_000;
 
 type GeoJsonGeometry =
@@ -55,8 +40,7 @@ interface LotPage {
   properties?: { exceededTransferLimit?: boolean };
 }
 
-// One page's request URL, ordered by OBJECTID so `resultOffset` paging is stable: without an order
-// an ArcGIS layer may repeat or skip rows between pages.
+// Unordered, an ArcGIS layer may repeat or skip rows between `resultOffset` pages.
 function pageUrl(offset: number): string {
   const url = new URL(SERVICE);
   url.searchParams.set("where", WHERE);
@@ -94,8 +78,6 @@ async function fetchPage(url: string): Promise<LotPage> {
   }
 }
 
-// A feature's parts as lon/lat rings, a MultiPolygon's disjoint parts one polygon each. A ring of
-// fewer than four vertices is degenerate and dropped, and a part left with none is dropped with it.
 function partsOf(geometry: GeoJsonGeometry): Polygon[] {
   const parts =
     geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
@@ -108,21 +90,17 @@ function partsOf(geometry: GeoJsonGeometry): Polygon[] {
     .filter((part) => part.length > 0);
 }
 
-// A lot is kept if any vertex of it is on land, not if its centroid is: much of this land is
-// waterfront, and a lot whose bulkhead reaches past the coastline the borough boundaries draw tests
-// as land only at the vertices that meet the shore. At the 2026-08-19 read no lot missed entirely.
+// Any vertex, not the centroid: waterfront lots reach past the coastline the boundaries draw.
 function touchesLand(part: Polygon, onLand: LandContext["onLand"]): boolean {
   return part.some((ring) => ring.some(onLand));
 }
 
 interface Lots {
   polygons: Polygon[];
-  lots: number; // features kept, as against the polygon parts they expand to
-  offLand: number; // features every part of which missed the coastline
+  lots: number; // features, not polygon parts
+  offLand: number; // features with no part on land
 }
 
-// Pages the whole `where`, each page cached by its request URL through scripts/cache.ts, so a
-// re-run — or a resume after a transient failure — serves the completed pages from disk.
 async function fetchLots(land: LandContext): Promise<Lots> {
   const polygons: Polygon[] = [];
   let fetched = 0;
@@ -164,16 +142,11 @@ async function fetchLots(land: LandContext): Promise<Lots> {
   return { polygons, lots, offLand };
 }
 
-// Each city's own read of its own sources, down to the one shape the encoder takes: the lots kept,
-// as polygon parts already clipped to that city's coastline. A city with no source at all throws
-// rather than defaulting to another's, which would clip New York's lots against a foreign shoreline
-// and write a silently empty artifact.
+// Throws: another city's lots clipped to this shoreline would write an empty artifact.
 async function fetchCityLots(cityId: string, land: LandContext): Promise<Lots> {
   if (cityId === "nyc") {
     return await fetchLots(land);
   } else if (cityId === "sf") {
-    // Two halves, two registers of land use, one artifact: San Francisco's floor-area table and
-    // Alameda County's assessor use codes. Nothing downstream reads which half a polygon came from.
     const [city, eastBay] = await Promise.all([
       fetchSfIndustrial(land.onLand),
       fetchEastBayIndustrial(land),

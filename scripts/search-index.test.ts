@@ -1,7 +1,3 @@
-// The builder's own decisions: which street a place is filed under when several share a name, how a
-// street's spellings become tokens, and what a category is worth. The encode/decode round trip and
-// the query itself are src/search/search-query.test.ts.
-
 import { expect, test } from "bun:test";
 import { parseHouseNumber } from "../src/search/address-format";
 import { type AddressIndex, decodeAddresses } from "../src/search/addresses";
@@ -96,8 +92,7 @@ test("a place that never joined carries no street, and no borough where nothing 
   expect(summary.homeless).toBe(1);
 });
 
-// The 53,507 New York places with a name and no front door — the parks, the campuses, the beaches.
-// Nothing in the Overture row says which borough one is in, so the city's own boundaries do.
+// An Overture row with no address says nothing of its borough.
 test("a place with no address takes its borough from the boundary it is inside", () => {
   const addresses = addressFile([
     address("COURT ST", "Brooklyn", "312", BROOKLYN),
@@ -111,7 +106,7 @@ test("a place with no address takes its borough from the boundary it is inside",
     [
       placeRow({ name: "Prospect Park" }),
       placeRow({ name: "Flushing Meadows", ...QUEENS }),
-      // Still the street's answer where there is one, which is the address's own and not a guess.
+      // The street's borough still wins where there is one.
       placeRow({
         name: "Brooklyn Bagel",
         street: "COURT ST",
@@ -150,14 +145,12 @@ test("a numbered street is indexed in every spelling it gets typed as", () => {
   expect(tokens).toContain("west");
   expect(tokens).toContain("st");
   expect(tokens).toContain("street");
-  // A compound spells as its words, which is how the query "two hundred seventy first" reaches it.
   const high = streetTokens("W 271 ST", "West 271st Street");
   expect(high).toContain("two");
   expect(high).toContain("hundred");
   expect(high).toContain("seventy");
   expect(high).toContain("first");
-  // A street the routing graph names has only the suffixed spelling to work from, and the query side
-  // rebuilds the words from the display name, so a suffix has to spell out just as a bare digit does.
+  // A graph-named street has only the suffixed spelling, so a suffix must spell out too.
   expect(streetTokens("West 4th Street", "West 4th Street")).toContain(
     "fourth",
   );
@@ -206,9 +199,6 @@ test("the categories that matter outrank the ones that do not", () => {
 });
 
 test("a category is read as words, not as a substring of one", () => {
-  // The four that used to carry whole tiers on an accident of spelling: a filling station is not a
-  // subway station, a car park is not a park, an advertising agency is not a greengrocer, and a
-  // named apartment block is not a landmark.
   expect(prominenceOf("gas_station", false)).toBeLessThan(
     prominenceOf("train_station", false),
   );
@@ -224,8 +214,7 @@ test("a category is read as words, not as a substring of one", () => {
 });
 
 test("a park with a house number on it is a business", () => {
-  // The Meeker Avenue storefront that Overture files under `park`, against the 213 hectares in
-  // Brooklyn. A museum keeps its tier either way: it has a front door.
+  // Overture files a Meeker Avenue storefront under `park`; a museum has a front door either way.
   expect(prominenceOf("park", true)).toBe(prominenceOf(null, false));
   expect(prominenceOf("park", true)).toBeLessThan(prominenceOf("park", false));
   expect(prominenceOf("art_museum", true)).toBe(
@@ -268,14 +257,11 @@ test("the encoder reports the corpus it wrote", () => {
   expect(encoded.docCount).toBe(4);
   expect(encoded.largestList).toEqual({ token: "pizza", postings: 2 });
   expect(encoded.postingBytes).toBeGreaterThan(0);
-  // The write buffer is sized against an upper bound and handed back trimmed to what was used.
   expect(encoded.bytes.byteLength).toBeLessThan(
     encoded.bytes.buffer.byteLength,
   );
 });
 
-// The curated sets: one document each, with the tier their own source earns them rather than an
-// Overture category they have none of.
 test("a named point is a document of its own kind", () => {
   const addresses = addressFile([
     address("COURT ST", "Brooklyn", "312", BROOKLYN),
@@ -297,9 +283,8 @@ test("a named point is a document of its own kind", () => {
   const station = docs.find((doc) => doc.name === "Borough Hall");
   expect(station?.kind).toBe("station");
   expect(station?.prominence).toBe(240);
-  // The routes ride in the category slot, which is what a station result reads with.
+  // The routes ride in the category slot.
   expect(station?.category).toBe("2/3/4/5/R");
-  // A name with no searchable word is nothing a search can reach, so it is not a document.
   expect(summary.points).toBe(1);
 });
 
@@ -334,13 +319,11 @@ test("one place two sources name is one document, and the curated one is what st
   const kept = docs.filter((doc) => doc.name === "Borough Hall");
   expect(kept.map((doc) => doc.kind)).toEqual(["place", "station"]);
   expect(summary.duplicates).toBe(1);
-  // What the dropped row knew and the station did not: the door it stands at, and the borough.
+  // The station takes the dropped row's door and borough, but keeps its own routes.
   const station = kept.find((doc) => doc.kind === "station");
   expect(station?.number).toEqual(parseHouseNumber("312"));
   expect(station?.placeIndex).toBe(0);
-  // And what it already knew stays its own: the routes are not overwritten by an Overture slug.
   expect(station?.category).toBe("2/3/4/5/R");
-  // The one in Queens is a different place with the same name, and is not a duplicate of anything.
   expect(docs.some((doc) => doc.lat === QUEENS.lat)).toBe(true);
 });
 
@@ -398,8 +381,6 @@ test("a district takes the borough of the shop on its corner and not the shop's 
   const kept = docs.filter((doc) => doc.name === "Bay Ridge");
   expect(kept.map((doc) => doc.kind)).toEqual(["neighborhood"]);
   expect(kept[0].placeIndex).toBe(0);
-  // A district is not a bank and has no front door, so neither the category nor the number the bank
-  // stands at follows the name.
   expect(kept[0].category).toBe(null);
   expect(kept[0].streetIndex).toBe(-1);
   expect(kept[0].number).toBe(null);
@@ -426,8 +407,6 @@ test("the higher of two sources' tiers is what the one document keeps", () => {
     },
   );
   const kept = docs.filter((doc) => doc.name === "Nolan Park");
-  // Each tier is what its own source can vouch for: the district that survived is also the park the
-  // row it replaced knew about.
   expect(kept.map((doc) => doc.kind)).toEqual(["neighborhood"]);
   expect(kept[0].prominence).toBe(prominenceOf("park", false));
 });
@@ -441,7 +420,6 @@ test("a street the graph names and the address file does not is still a document
   });
   const bridge = docs.find((doc) => doc.name === "Bow Bridge");
   expect(bridge?.kind).toBe("street");
-  // No addresses on it, so no ordinal and no house number to resolve — a name and a point.
   expect(bridge?.streetIndex).toBe(-1);
   expect(summary.graphStreets).toBe(1);
 });
@@ -457,9 +435,7 @@ test("a document's token count is the words of its name, however often one repea
   const index = decodeSearchIndex(encodeSearch(docs).bytes);
   const doc = docs.findIndex(({ name }) => name === "Boutique Boutique");
   expect(unpackTokenInfo(index.tokenInfo[doc]).tokenCount).toBe(2);
-  // Which is what keeps the repeated word from reading as a whole name covered: one typed word is
-  // half of "Boutique Boutique" and the whole of "Boutique", and the shorter name is the better
-  // answer to it.
+  // So one typed word covers half of "Boutique Boutique" but all of "Boutique".
   const found = searchNames(index, {
     text: "boutique",
     center: BROOKLYN,

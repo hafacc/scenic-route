@@ -1,17 +1,11 @@
-// The 1 m LiDAR canopy height model every canopy polygon's height is measured from: a 47008 x
-// 47697 uint16 GeoTIFF of decimeters over NAD83(2011) UTM 18N, thresholded to crown cores (its
-// lowest reading is 2.1 m and 95% of its cells are nodata). It is downloaded once through the disk
-// cache and named in the ingest params, where the height pass (crates/tiler/src/heights.rs) samples
-// it per polygon; nothing here reads a pixel. See scripts/README.md.
+// 1 m LiDAR canopy height model: uint16 decimeters over NAD83(2011) UTM 18N, 95% nodata.
 
 import { createHash } from "node:crypto";
 import pRetry from "p-retry";
 import { cachedFile } from "./cache";
 import { USER_AGENT } from "./http";
 
-// One file of figshare doi 10.6084/m9.figshare.20522895 — NY_CHM_10Int260m.tif, the CHM behind Ma
-// et al. 2023, "Individual structure mapping over six million trees for New York City" (Scientific
-// Data 10, 102). `ndownloader` is figshare's own direct-download endpoint for a file id.
+// NY_CHM_10Int260m.tif from figshare 10.6084/m9.figshare.20522895 (Ma et al. 2023).
 const DOWNLOAD_URL = "https://ndownloader.figshare.com/files/36733827";
 const EXPECTED_BYTES = 243_383_277;
 const EXPECTED_MD5 = "84e375d1ecfd090c8f5425a38fc6e957"; // figshare's own checksum for the file
@@ -23,9 +17,7 @@ const PROGRESS_BYTES = 32 * 1024 * 1024;
 export const CHM_ATTRIBUTION = "Canopy heights © Ma et al. 2023 (CC BY 4.0)";
 export const CHM_SOURCE_URL = "https://doi.org/10.6084/m9.figshare.20522895";
 
-// A quarter-gigabyte over one connection, so the read is streamed with progress rather than
-// awaited in silence. The size and checksum are verified before the bytes are cached: an entry
-// never expires, so a truncated download would otherwise stay truncated for good.
+// Verified before caching: cache entries never expire, so a truncated download would stick.
 async function download(): Promise<Uint8Array> {
   const response = await fetch(DOWNLOAD_URL, {
     headers: { "user-agent": USER_AGENT },
@@ -54,7 +46,6 @@ async function download(): Promise<Uint8Array> {
   return bytes;
 }
 
-// The path of the cached raster, downloaded on the first run and served from .cache/ after.
 export async function fetchChmRaster(): Promise<string> {
   return await cachedFile("figshare-nyc-chm", DOWNLOAD_URL, async () => {
     try {
