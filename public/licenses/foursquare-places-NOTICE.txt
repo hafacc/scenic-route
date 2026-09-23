@@ -29,7 +29,7 @@ We also encourage you to join our Placemaker community where you can contribute 
 suggestions to improve the accuracy of the Data for future releases for yourself and others.
 
 --------------------------------------------------------------------------------
-Notice of changes made by Scenic Route (https://github.com/hafaio/scenic-route)
+Notice of changes made by Scenic Route (https://github.com/hafacc/scenic-route)
 
 Rows reached this app through Overture Maps, which transformed them to its own schema. Scenic Route
 then kept only New York City and San Francisco, kept only each place's name, category and point,

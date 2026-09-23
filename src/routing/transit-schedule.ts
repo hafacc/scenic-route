@@ -23,7 +23,7 @@ const LANE_BYTES = 12;
 
 // Read from `main` over raw.githubusercontent.com so schedule changes skip a deploy; local in development.
 const SCHEDULE_MAIN_URL =
-  "https://raw.githubusercontent.com/hafaio/scenic-route/main/public/transit-schedule";
+  "https://raw.githubusercontent.com/hafacc/scenic-route/main/public/transit-schedule";
 const SCHEDULE_BASE =
   process.env.NEXT_PUBLIC_TRANSIT_SCHEDULE_BASE ??
   (process.env.NODE_ENV === "development"

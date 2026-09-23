@@ -48,7 +48,7 @@ export const SHED_EPOCH_DAY = new Date(EPOCH_MS).toISOString().slice(0, 10);
 
 // Read from `main` over raw.githubusercontent.com (DESIGN.md says why); local in development.
 const SHED_MAIN_URL =
-  "https://raw.githubusercontent.com/hafaio/scenic-route/main/public/sheds";
+  "https://raw.githubusercontent.com/hafacc/scenic-route/main/public/sheds";
 const SHED_BASE =
   process.env.NEXT_PUBLIC_SHED_BASE ??
   (process.env.NODE_ENV === "development" ? "sheds" : SHED_MAIN_URL);

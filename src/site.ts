@@ -4,7 +4,7 @@ import type { Metadata } from "next";
 export const SITE_ORIGIN = "https://hafa.cc";
 export const SITE_URL = `${SITE_ORIGIN}/scenic-route`; // no trailing slash
 export const SITE_NAME = "Scenic Route";
-export const REPO_URL = "https://github.com/hafaio/scenic-route";
+export const REPO_URL = "https://github.com/hafacc/scenic-route";
 
 export const SITE_TITLE =
   "Scenic Route: nicer ways to walk New York and the Bay Area";
