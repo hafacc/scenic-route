@@ -38,7 +38,7 @@ import {
 } from "./shed-permits";
 
 // New sheds must be placed on the deployed graph the client runs, not what a checkout would build.
-const SITE = process.env.SHED_SITE ?? "https://hafaio.github.io/scenic-route";
+const SITE = process.env.SHED_SITE ?? "https://hafa.cc/scenic-route";
 const GRAPH_URL = `${SITE}/routing/nyc.bin`;
 // A directory, or a URL to read the artifact over HTTP.
 const ARTIFACT = process.env.SHED_ARTIFACT ?? SHED_DIR;

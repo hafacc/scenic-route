@@ -30,7 +30,7 @@ jobs:
       # Indexes the deployed graph, so every name is one the app can route to; a 404 means absent.
       - name: what the deployed site is serving
         env:
-          SITE: https://hafaio.github.io/scenic-route
+          SITE: https://hafa.cc/scenic-route
         run: |
           mkdir -p public/routing
           for name in nyc.bin nyc.version.json sf.bin sf.version.json; do

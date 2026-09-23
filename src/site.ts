@@ -1,7 +1,7 @@
 // Metadata URLs must be absolute, though every in-app href is relative to the injected basePath.
 import type { Metadata } from "next";
 
-export const SITE_ORIGIN = "https://hafaio.github.io";
+export const SITE_ORIGIN = "https://hafa.cc";
 export const SITE_URL = `${SITE_ORIGIN}/scenic-route`; // no trailing slash
 export const SITE_NAME = "Scenic Route";
 export const REPO_URL = "https://github.com/hafaio/scenic-route";
