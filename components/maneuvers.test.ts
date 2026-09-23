@@ -1,5 +1,3 @@
-// The icon a maneuver wears, which for a station is the act and not the station: off a train, from
-// one train to the next, down a stair, or into a lift; and how far down the list the walker has got.
 
 import { expect, test } from "bun:test";
 import { MdElevator, MdLogout, MdStairs } from "react-icons/md";

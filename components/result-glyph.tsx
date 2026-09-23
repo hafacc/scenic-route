@@ -11,20 +11,14 @@ import {
 import { SUBWAY_COLOR } from "../src/overlays/colors";
 import { useMapTheme } from "./use-map-theme";
 
-// The glyph beside a result row, shared by the route fields and the search panel so a place reads
-// the same whichever box found it.
-
 const GLYPH = "h-4 w-4 shrink-0 text-slate-400 dark:text-slate-500";
 
 export default function ResultGlyph({ type }: { type: string }) {
   const theme = useMapTheme();
   if (type === ADDRESS_RESULT_TYPE) {
-    // A house number out of the city's own address file, which is a door rather than the whole
-    // street the signpost below stands for.
     return <MdOutlineHome className={GLYPH} aria-hidden="true" />;
   } else if (type === SUBWAY_RESULT_TYPE) {
-    // The layer menu's own subway color, in the theme the map is drawing in, so a station in the
-    // list and a station on the map are the same blue.
+    // The layer menu's subway color in the map's theme, so list and map show the same blue.
     return (
       <PiTrainSimpleFill
         className="h-4 w-4 shrink-0"
@@ -33,13 +27,9 @@ export default function ResultGlyph({ type }: { type: string }) {
       />
     );
   } else if (type === STREET_RESULT_TYPE) {
-    // A street is one point on the whole of it, which is a coarser answer than the rest of the list
-    // gives. Its own glyph is what says so at a glance.
     return <MdSignpost className={GLYPH} aria-hidden="true" />;
   } else if (type === INDEX_RESULT_TYPE) {
-    // A named place off the city's own index. One pin for all of them: the row carries a category,
-    // but a glyph per category is 1,639 of them, and what the pin has to say here is that this is a
-    // place rather than a door or a street.
+    // One pin for every place; a glyph per category would be 1,639 of them.
     return <MdOutlinePlace className={GLYPH} aria-hidden="true" />;
   } else {
     return null;

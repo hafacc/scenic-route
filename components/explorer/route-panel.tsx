@@ -46,25 +46,23 @@ import {
 import { useSettings } from "../use-settings";
 
 interface RoutePanelProps {
-  city: City; // the endpoint fields name it when they have no match to show
-  startLabel: string | null; // null leaves the start empty (routing falls back to the live location)
+  city: City;
+  startLabel: string | null;
   destLabel: string | null;
-  startSet: boolean; // a manual start is set (so it can be reset)
+  startSet: boolean;
   destSet: boolean;
-  needsStart: boolean; // no location and no manual start yet
-  // A live fix this city could route from, so the "My location" row can be offered. A fix in
-  // another city is not one: routing stays within one city, so the placeholder would name a start
-  // that cannot be used.
+  needsStart: boolean;
+  // A fix in another city doesn't count: routing stays within one city.
   hasLiveLocation: boolean;
   pickTarget: "start" | "dest" | null;
   status: "idle" | "loading" | "ready" | "error";
   errorMessage: string | null;
   summary: {
-    walkMeters: number; // walking-only distance; the mileage shown excludes any ferry crossing
+    walkMeters: number; // meters, excluding any ferry crossing
     travelSeconds: number;
-    rides: readonly RideSummary[]; // the trains taken, named after the two numbers
-    ferries: readonly FerrySummary[]; // the boats taken, timed beside them
-    factors: RouteFactors; // per-factor mean intensities, rendered as chips for the active sliders
+    rides: readonly RideSummary[];
+    ferries: readonly FerrySummary[];
+    factors: RouteFactors;
   } | null;
   treeWeight: number;
   ferryWeight: number;
@@ -74,33 +72,23 @@ interface RoutePanelProps {
   artWeight: number;
   highwayWeight: number;
   hillWeight: number;
-  // What the active city's own graph actually carries. Read off the artifact rather than authored
-  // per city, so a layer that is missing shows as missing instead of as a control that moves
-  // nothing: every one of these was a live slider in San Francisco costing an attribute that is 0
-  // on all 102,659 of its edges.
-  //
-  // A slider whose data is absent grays out rather than disappearing, which is what the hill slider
-  // already did — "not here" reads as a fact about the city, where a control that vanishes reads as
-  // a bug. The two gates are hidden instead: a toggle is a claim that both of its states are
-  // reachable, and in a city with no ferries at all it has nothing to say.
+  // Read off the graph. Absent sliders gray out; absent gates hide, as a toggle implies both.
   graphAvailable: FactorAvailability;
-  shedFeed: boolean; // a sidewalk-shed feed, so the scaffolding gate means something
+  shedFeed: boolean;
   commercialWeight: number;
   industrialWeight: number;
   historicWeight: number;
   bridgeWeight: number;
-  shadeWeight: number; // signed: −1 = prefer shade, +1 = prefer sun, 0 = off
-  // The per-edge sun/shade fractions did not load. Not a capability: every city bakes them, and the
-  // artifact is refetched on every clock tick, so this says the network dropped one — not that the
-  // city has nothing to say about shade.
+  shadeWeight: number; // signed: −1 shade, +1 sun, 0 off
+  // Every city bakes these, so this means a fetch failed, not missing data.
   shadeDataLost: boolean;
   shelterWeight: number;
   allowSheds: boolean;
   allowCrossings: boolean;
   directions: Maneuver[] | null;
-  progress: NavProgress | null; // live position along the route, or null when off-route/unlocated
+  progress: NavProgress | null;
   directionsOpen: boolean;
-  minimized: boolean; // shrunk to the slim peek bar
+  minimized: boolean;
   onTreeWeight: (weight: number) => void;
   onFerryWeight: (weight: number) => void;
   onTransitWeight: (weight: number) => void;
@@ -117,51 +105,35 @@ interface RoutePanelProps {
   onGate: (key: GateKey, on: boolean) => void;
   onStartSelect: (result: GeocodeResult) => void;
   onDestSelect: (result: GeocodeResult) => void;
-  // A link's textual destination that resolved to nothing certain, typed into the destination box
-  // with the answers already found for it, for the reader to pick from.
+  // Candidates for a link's destination text that didn't resolve to one place.
   destPrefill: DestPrefill | null;
   onStartClear: () => void;
   onDestClear: () => void;
-  // Exchange the two endpoints. A pure slot swap: the labels travel with the points and the route
-  // is searched again from scratch, since the costs are directional and the way back is its own
-  // question.
+  // A pure slot swap; the route is searched again because costs are directional.
   onSwap: () => void;
   onUseCurrentLocation: () => void;
   onArmStart: () => void;
   onArmDest: () => void;
   onToggleDirections: () => void;
-  // The hand-off to Google Maps, built by the app because only it holds the graph and the raw
-  // endpoints. Null until there is a route to hand over.
+  // Built by the app, which alone holds the graph and the raw endpoints.
   exportAction: ReactNode;
   onToggleMinimize: () => void;
-  // Opens the settings page. The route preferences, since that is where a hidden factor's slider
-  // went and what the reader is asking after when they tap the count.
   onSettings: (section?: string) => void;
   onClose: () => void;
 }
 
-// What this render knows about a factor that its metadata cannot: where its weight stands, what
-// moving it does, and whether the control is live at all.
 interface FactorState {
   weight: number;
   onChange: (weight: number) => void;
-  // Whether the active city has the data at all: false drops the factor from the panel entirely.
-  // Distinct from `disabled`, which is a live control the reader has switched off.
+  // false drops the factor entirely, unlike `disabled`, a live control switched off.
   available?: boolean;
   disabled?: boolean;
-  // Set when the data this factor prices exists but did not load. The control goes dead like
-  // `disabled` does, with the reason said out loud: a slider the reader did not gray themselves is
-  // otherwise just a control that has stopped working, and the route beside it is quietly priced
-  // without the thing the slider claims to be asking for.
+  // Data that exists but didn't load; the control goes dead with the reason shown.
   lost?: string;
 }
 
-// One scenic routing factor as the panel renders it: a chip when collapsed, a full slider when open.
 type PanelFactor = Factor & FactorState;
 
-// Distance, time and the rides taken; the per-factor makeup is shown as chips (factorChips below),
-// no longer folded into an ambiguous single "% shaded". The same segments Modes prints, in the order
-// this panel has always printed them.
 function summaryOf(summary: {
   walkMeters: number;
   travelSeconds: number;
@@ -243,7 +215,6 @@ export default function RoutePanel({
   const { factorOrder, hiddenFactors, hiddenGates } = useSettings();
   const hidden = new Set(hiddenFactors);
   const hiddenGate = new Set(hiddenGates);
-  // Each gate's own color when it is on, which is the layer's where it has one.
   const gateTint: Record<GateKey, string> = {
     allowFerries: "text-blue-600 dark:text-blue-400",
     allowSheds: "text-orange-600 dark:text-orange-400",
@@ -254,18 +225,14 @@ export default function RoutePanel({
     allowSheds,
     allowCrossings,
   };
-  // Whether the city has anything for this gate to act on. Crossings are not a dataset — every city
-  // has streets to cross — so it is offered everywhere.
+  // Crossings aren't a dataset, so the gate is offered everywhere.
   const gateHere: Record<GateKey, boolean> = {
     allowFerries: graphAvailable.ferry,
     allowSheds: shedFeed,
     allowCrossings: true,
   };
-  // The five scenic factors collapse to a row of value chips and expand to full sliders on demand —
-  // too many to keep all open at once. Ferries stay gated by the header boat toggle.
   const [sceneryOpen, setSceneryOpen] = useState(false);
-  // The scenery sliders and the directions list are each tall, so only one opens at a time — opening
-  // one closes the other, or the panel runs off the top of the screen.
+  // Only one of the sliders and the directions list opens, or the panel runs off the screen.
   useEffect(() => {
     if (directionsOpen) {
       setSceneryOpen(false);
@@ -283,8 +250,7 @@ export default function RoutePanel({
     shade: {
       weight: shadeWeight,
       onChange: onShadeWeight,
-      // The one factor that can go dark while the graph is perfectly healthy: the sun-position
-      // fractions are their own artifact, refetched whenever the clock moves.
+      // The sun fractions are their own artifact, so this can fail with a healthy graph.
       lost: shadeDataLost
         ? "Shade data could not be loaded — this route ignores sun and shade."
         : undefined,
@@ -339,29 +305,21 @@ export default function RoutePanel({
       weight: ferryWeight,
       onChange: onFerryWeight,
       available: graphAvailable.ferry,
-      // Present but inert while the gate is off — unlike absence, that is a state the reader chose
-      // and can undo, so the control stays visible to say so.
+      // Inert but visible while the gate is off, since the reader chose it and can undo it.
       disabled: !allowFerries,
     },
   };
-  // In the reader's order (src/settings/store.ts), which is the same list the settings page shows.
+  // In the reader's order, the same list the settings page shows.
   const allFactors: PanelFactor[] = factorRunOrder(factorOrder).flatMap(
     (key) => {
       const factor = FACTORS.find((entry) => entry.key === key);
       return factor ? [{ ...factor, ...factorState[key] }] : [];
     },
   );
-  // A factor the city has no data for is dropped outright rather than grayed. It would cost nothing
-  // and mean nothing here, and a disabled control still claims the city has the thing. A factor the
-  // reader has hidden in Settings goes the same way, though its weight keeps pricing the route.
-  // Filtered once, at the source, so the sliders, the collapsed peek row and the summary chips cannot
-  // disagree about which factors this panel offers.
+  // Filtered once so the sliders, the peek row and the summary chips agree.
   const offered = allFactors.filter((factor) => factor.available !== false);
   const factors = offered.filter((factor) => !hidden.has(factor.key));
-  // Hiding is about the panel, not the route: a hidden factor at a non-zero weight is still bending
-  // the line on the map, and nothing else on screen would say so. A factor the panel would have
-  // grayed out is not — a closed gate has taken its edges out of the graph, and lost data is priced
-  // as nothing — so counting one would name an influence that is not there.
+  // A hidden factor at non-zero weight still bends the route; a grayed-out one prices nothing.
   const hiddenApplying =
     offered.filter(
       (factor) =>
@@ -370,34 +328,23 @@ export default function RoutePanel({
         !factor.disabled &&
         factor.lost === undefined,
     ).length +
-    // A gate is either open or shut rather than weighted, so what counts is a SHUT one the reader
-    // cannot see: it is still shutting something out of every route.
+    // Gates aren't weighted, so what counts is a shut one the reader can't see.
     GATES.filter(
       (gate) =>
         hiddenGate.has(gate.key) && !gateOpen[gate.key] && gateHere[gate.key],
     ).length;
 
-  // Both chip rows are status displays, so they carry only what is acting: a preference at zero
-  // weight is not bending this route, and one the reader is not asking for is not reported on —
-  // not in the collapsed peek, not against the route it did not shape. Expanded, the same list is
-  // the control surface and stays complete: a zero slider is the only handle for raising that
-  // preference again.
+  // Chips show only what acts on this route; the expanded list stays complete to raise a zero.
   const actingFactors = factors.filter((factor) => factor.weight !== 0);
-  // The route summary chips: the slider's own icon and tint with the route's mean intensity for it.
-  // Ferry is presence-only (the "· ferry" suffix), so it stays out of the chip row. Shelter stays
-  // out too, and deliberately: a percentage beside a raindrop reads as a forecast of how dry you
-  // will stay, and the tree half of that number is extrapolated from about four studied trees. It
-  // is a preference, not a prediction.
+  // No chip for presence-only ferry, or for shelter, whose tree half rests on about four trees.
   const factorChips = actingFactors.filter(
     (factor) =>
       factor.key !== "ferry" &&
       factor.key !== "shelter" &&
-      // A ride carries no scenery, so the transit mean is 0 on every route by construction: a chip
-      // for it would report the same nothing beside every walk.
+      // A ride carries no scenery, so the transit mean is 0 on every route by construction.
       factor.key !== "transit",
   );
-  // A factor whose data is missing AND which the reader has asked for: the route on screen is not
-  // the route they asked for, and the grayed slider saying so is folded away behind "Scenery".
+  // Missing data the reader asked for: the route shown is not the route asked for.
   const ignoredFactors = factors.filter(
     (factor) => factor.lost !== undefined && factor.weight !== 0,
   );
@@ -455,8 +402,7 @@ export default function RoutePanel({
                 <gate.Icon />
               </button>
             ))}
-            {/* Disabled rather than hidden with nothing to exchange: hiding it would slide the
-                gates sideways the moment a first endpoint is set. */}
+            {/* Disabled, not hidden, so the gates don't slide sideways. */}
             <button
               type="button"
               onClick={onSwap}
@@ -543,10 +489,7 @@ export default function RoutePanel({
                 />
               )}
             </button>
-            {/* Hiding is about the panel, not the route, so a hidden preference at a non-zero weight
-                is still bending the line on the map — and this is the only thing on screen that says
-                so. A shut eye and a count rather than a sentence: it has to fit beside the heading,
-                because a line of its own is what the reader hid those preferences to get back. */}
+            {/* The only on-screen sign that a hidden preference still bends the route. */}
             {hiddenApplying > 0 ? (
               <button
                 type="button"
@@ -561,10 +504,7 @@ export default function RoutePanel({
             ) : null}
           </div>
 
-          {/* The collapsed peek, on its own row rather than beside the heading: it is eleven chips
-              wide at most, and sharing a line with the heading left it about a third of the panel to
-              do that in. Outside the button, too, so a sideways drag scrolls it rather than
-              expanding the section. */}
+          {/* Its own row, outside the button, so a sideways drag scrolls rather than expands. */}
           {sceneryOpen ? null : (
             <div className="chip-row mt-1 shrink-0 gap-2">
               {actingFactors.length > 0 ? (
@@ -684,9 +624,7 @@ export default function RoutePanel({
 
         {status === "ready" && directions && directions.length > 0 ? (
           <>
-            {/* The export sits beside the maneuvers rather than in the toolbar because this is the
-                only place a computed route exists, so the control never appears with nothing to
-                hand over. */}
+            {/* Here rather than in the toolbar, since only here does a computed route exist. */}
             <div className="mt-3 flex items-stretch gap-2">
               <button
                 type="button"

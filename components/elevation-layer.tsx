@@ -9,25 +9,17 @@ import { KEEP_BUFFER } from "../src/tiles/raster";
 import manifest from "../src/tree-cover/manifest.json";
 import { useCity } from "./city-context";
 
-// The elevation overlay: the city's ground, tinted by height and relief-shaded. The elevation pass
-// bakes the three fields behind that into public/tiles/elevation/<city>/{z}/{x}/{y}.webp — height,
-// relief and land cover, no color — and the tile worker (src/tiles/elevation.ts) colors them
-// through the palette as it draws.
+// Tiles bake height, relief and land cover, not color; the tile worker applies the palette.
 
-// Relative, so it picks up the basePath the deploy injects; the app is a single-route SPA.
+// Relative, so it picks up the basePath the deploy injects.
 const TILE_URL = "tiles/elevation/{city}/{z}/{x}/{y}.webp";
-// Under the canopy fill (z 2) and over the basemap: the terrain is the thing the rest of the map
-// sits on, and at 67% opacity it buries anything it is put on top of.
+// Under the canopy fill (z 2), since at 67% opacity it buries anything beneath it.
 const Z_INDEX = 1;
 const MIN_ZOOM = 9;
 const MAX_ZOOM = 20;
-// The finest level the elevation pass bakes. Keep in sync with ELEVATION_MAX_ZOOM in
-// crates/tiler/src/elevation.rs. Past it the worker magnifies from this level: the tint survives
-// that happily, being smooth, but the COASTLINE is the thing a reader notices, and the land mask is
-// a fractional alpha at the shore that has to be resampled across tile edges to avoid a seam.
+// Keep in sync with ELEVATION_MAX_ZOOM in crates/tiler/src/elevation.rs.
 const MAX_NATIVE_ZOOM = 16;
-// Degrees of slack on the city's box, comfortably over the 300 m the elevation pass widens by. Erring
-// wide costs nothing: a tile that was never baked 404s, which this layer already reads as no terrain.
+// Degrees, over the pass's 300 m widening. Unbaked tiles 404, which reads as no terrain.
 const BAKED_MARGIN = 0.01;
 
 export default function ElevationLayer(): null {
@@ -47,17 +39,12 @@ export default function ElevationLayer(): null {
         maxNativeZoom: MAX_NATIVE_ZOOM,
       }),
       {
-        // Clipped to the city, so panning away does not ask for tiles of ground that was never baked
-        // — but with a margin, because the pyramid deliberately runs past the city's box. The box is
-        // drawn around the same shoreline polygons the land mask uses, and the piers and port fill
-        // stand outside both; the elevation pass widens by SHORE_REACH_METERS to reach them, and
-        // asking only within the box would leave the tiles it baked out there unrequested.
+        // The pass bakes past the city box by SHORE_REACH_METERS to reach piers and port fill.
         bounds: L.latLngBounds(
           [south - BAKED_MARGIN, west - BAKED_MARGIN],
           [north + BAKED_MARGIN, east + BAKED_MARGIN],
         ),
-        // Deliberately no maxNativeZoom: it would clamp the tile grid to the baked levels, leaving
-        // Leaflet to stretch the tile again and the worker nothing to magnify.
+        // No maxNativeZoom, or Leaflet stretches tiles instead of the worker magnifying them.
         minNativeZoom: MIN_ZOOM,
         maxZoom: MAX_ZOOM,
         zIndex: Z_INDEX,

@@ -7,9 +7,7 @@ interface InstallDialogProps {
   onClose: () => void;
 }
 
-// Where a browser hides its own install command, for the ones that never offer it to the page.
-// Read off the user agent, which is the only thing that distinguishes them — none of this is
-// feature-detectable, because the feature is a menu item rather than an API.
+// Read off the user agent: an install command is a menu item, not a feature-detectable API.
 function steps(): string[] {
   const agent = window.navigator.userAgent;
   // An iPad has reported itself as a Macintosh since iPadOS 13; the touch points give it away.
@@ -17,9 +15,7 @@ function steps(): string[] {
     /iPhone|iPad|iPod/.test(agent) ||
     (/Macintosh/.test(agent) && window.navigator.maxTouchPoints > 1);
   if (isIos) {
-    // Since iOS 16.4 a browser other than Safari may carry Add to Home Screen in the share sheet,
-    // but each one has to add it and Firefox is the long-standing holdout, so it is sent to Safari
-    // rather than told to look for a command that may not be there.
+    // Since iOS 16.4 other browsers may offer Add to Home Screen, but Firefox doesn't.
     return /FxiOS/.test(agent)
       ? [
           "Firefox for iOS may not offer Add to Home Screen.",

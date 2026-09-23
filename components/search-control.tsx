@@ -12,57 +12,33 @@ import ResultList, {
   SEARCH_DEBOUNCE_MS,
 } from "./result-list";
 
-// Finding a place without asking for directions. The route panel's fields reach the same index, but
-// they reach it by making you name an endpoint first; this drops a pin and moves the map, and leaves
-// whatever route you already had alone.
-//
-// It opens where the route panel opens and wears the same card, because the two are the same kind of
-// thing — a place to type where you want to go — and they share the slot: the app closes one when it
-// opens the other (components/map-shell.tsx), so the copied classes below never have to stack.
-//
-// The rows, and the one row that stands in for them, are the route fields' own (components/
-// result-list.tsx), so the same index reads the same way in both. What is not shared is the
-// lifecycle: every commit path closes them, and they carry a map-pick crosshair and a "My location"
-// row that a search has no use for.
-//
-// The open panel is a component of its own, which is what makes closing it mean anything: the words
-// typed into it and the answer they got are held there and go with it.
-
-// The route panel's own wrapper and card, verbatim: centered on a phone, pinned bottom-right on sm+,
-// and capped in `dvh` rather than `vh` because on a phone `100vh` is the viewport with the browser
-// chrome retracted. See components/route-panel.tsx for the whole of that reasoning.
+// Copied verbatim from the route panel's wrapper and card; keep them in step.
 const PANEL =
   "fixed bottom-0 left-1/2 z-[1000] w-full max-w-md -translate-x-1/2 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:left-auto sm:right-4 sm:translate-x-0 sm:px-0";
 const CARD =
   "flex max-h-[calc(100dvh-env(safe-area-inset-top)-4rem-max(0.75rem,env(safe-area-inset-bottom)))] flex-col rounded-2xl bg-white/85 p-4 shadow-lg ring-1 ring-black/5 backdrop-blur-md dark:bg-slate-800/80 dark:ring-white/10";
 const ICON_ON = "h-4 w-4 text-brand-600 dark:text-brand-400";
 const ICON_OFF = "h-4 w-4 text-slate-500 dark:text-slate-400";
-// The floating-control surface every button on the map wears.
 const CHROME =
   "bg-white/85 shadow-lg ring-1 ring-black/5 backdrop-blur-md dark:bg-slate-800/80 dark:ring-white/10";
-// While the panel is up, so the button reads as the thing holding it open rather than as a pin the
-// reader has left somewhere: a lit icon alone cannot say which of the two it means.
 const CHROME_OPEN =
   "bg-brand-50/90 shadow-lg ring-1 ring-brand-500/30 backdrop-blur-md dark:bg-brand-500/20 dark:ring-brand-400/30";
 
-// What the index said about one query, kept together so a stale answer can never be read against
-// newer words. `results` is null when the city's index has not arrived — which is not the same
-// answer as "no such place", and is the whole reason this calls `searchPlaces` rather than
-// `searchAddress`.
+// `results` is null while the index hasn't arrived, unlike "no such place".
 interface Answer {
   query: string;
   results: GeocodeResult[] | null;
-  outside: boolean; // the map center is off the city the index covers
+  outside: boolean;
 }
 
 interface SearchControlProps {
   city: City;
-  open: boolean; // held by the app, which is what keeps this and the route panel out of one slot
-  pinned: boolean; // a result is on the map, so the icon stays lit even with the panel closed
-  center: () => LatLng | null; // read per query: the index ranks from it, and one off the city warns
+  open: boolean;
+  pinned: boolean;
+  center: () => LatLng | null;
   onOpenChange: (open: boolean) => void;
   onSelect: (result: GeocodeResult) => void;
-  onDirections: () => void; // routes to the pinned place, the same as the directions control does
+  onDirections: () => void;
   onClear: () => void;
 }
 
@@ -76,17 +52,12 @@ export default function SearchControl({
   onDirections,
   onClear,
 }: SearchControlProps) {
-  // The one thing that outlives the panel. The same split the route fields use: `draft`, down in the
-  // panel, is the in-progress typing and `label` the committed pick, so selecting a result can put
-  // its name in the box without the debounced search reading it back as a fresh query — and it is
-  // still there to read when the panel is opened again.
+  // Kept above the panel to survive a close; `label` fills the box without triggering a search.
   const [label, setLabel] = useState<string | null>(null);
 
   return (
     <>
-      {/* left-[3.75rem] is beside the follow toggle: the 12px inset, its 40px, and an 8px gap. The
-          panel it opens is at the other end of the map, so the button stays visible under it and
-          goes on saying which state the search is in. */}
+      {/* left-[3.75rem]: the 12px inset, the follow toggle's 40px, and an 8px gap. */}
       <button
         type="button"
         onClick={() => onOpenChange(!open)}
@@ -129,7 +100,7 @@ interface SearchPanelProps {
   city: City;
   pinned: boolean;
   center: () => LatLng | null;
-  label: string | null; // the last pick's name, kept above so it survives a close
+  label: string | null;
   onLabelChange: (label: string | null) => void;
   onOpenChange: (open: boolean) => void;
   onSelect: (result: GeocodeResult) => void;
@@ -137,9 +108,6 @@ interface SearchPanelProps {
   onClear: () => void;
 }
 
-// The panel's own chrome — the heading, the handoff to directions and the close — around the box
-// itself. Its lifecycle is the reason it is a component: opening and closing it is what makes the
-// words typed into it, and the answer they got, go away with it.
 function SearchPanel({
   city,
   pinned,
@@ -151,7 +119,6 @@ function SearchPanel({
   onDirections,
   onClear,
 }: SearchPanelProps) {
-  // Escape closes the panel wherever the focus sits, matching the toolbar's menus.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
@@ -169,9 +136,7 @@ function SearchPanel({
           Find a place
         </p>
         <div className="flex shrink-0 items-center gap-1">
-          {/* The same handoff the directions control performs, offered where the reader already
-            is. Disabled until something is pinned, rather than hidden, so the close button
-            does not move under a finger already going for it. */}
+          {/* Disabled rather than hidden, so the close button doesn't move under a finger. */}
           <button
             type="button"
             onClick={onDirections}
@@ -215,19 +180,15 @@ function SearchPanel({
 interface PlaceSearchProps {
   city: City;
   center: () => LatLng | null;
-  label: string | null; // the committed pick, which the caller owns and the box shows
+  label: string | null;
   placeholder: string;
-  autoFocus: boolean; // a box that opens on demand takes the caret; one that is always there does not
+  autoFocus: boolean;
   className?: string;
   onSelect: (result: GeocodeResult) => void;
   onClear: () => void;
 }
 
-// The box and the answers it gets: the words being typed, what the index said about them, and which
-// row the arrows are standing on. All of it is this component's, and none of it outlives it — words
-// left behind would fire a debounced search off the next thing to move the map, pulling the index
-// back in after the app has released it, and an answer left behind would sit on "Still loading" for
-// a query nobody is typing any more.
+// None of this state may outlive the box, or leftover words reload a released index.
 export function PlaceSearch({
   city,
   center,
@@ -252,11 +213,7 @@ export function PlaceSearch({
     }
   }, []);
 
-  // Debounced off the draft alone; an answer to words that have since been typed over is dropped, so
-  // a slow one can never overwrite a newer one. An index that has not arrived answers null, which is
-  // shown as such rather than waited on — and then asked again once it lands, because a reader who
-  // finishes typing before the file does would otherwise sit on "still loading" until they pressed
-  // another key.
+  // A stale answer is dropped; an unloaded index answers null and the draft reruns once it lands.
   useEffect(() => {
     const query = draft?.trim() ?? "";
     if (!query) {
@@ -296,9 +253,7 @@ export function PlaceSearch({
   const value = draft ?? label ?? "";
   const results = answer?.results ?? null;
 
-  // Unlike the route fields, picking a result leaves the box standing: the map has just moved, and
-  // the reader may well want to look up the next place. The blur is what drops the phone keyboard so
-  // they can see where they landed.
+  // Unlike the route fields, a pick leaves the box open; the blur drops the phone keyboard.
   const select = (result: GeocodeResult): void => {
     setDraft(null);
     setListOpen(false);
@@ -307,8 +262,7 @@ export function PlaceSearch({
     onSelect(result);
   };
 
-  // The X in the box means "get rid of this": the words and the pin both. The pin has no handle of
-  // its own on the map, so this and the next search replacing it are the two ways it goes.
+  // The pin has no handle on the map, so this and the next search are the only ways to clear it.
   const clear = (): void => {
     onClear();
     setDraft(null);
@@ -326,9 +280,7 @@ export function PlaceSearch({
     resultListKeyDown(event, rows, activeIndex, setActiveIndex, select);
   };
 
-  // Nothing to show yet is nothing drawn; once an answer lands there is either a list or the one row
-  // that stands in for it. Never both: a coverage warning printed over a list of matches contradicts
-  // itself, and where the map holds no data a list of places 150 km away is not the answer either.
+  // Never both a list and the stand-in row: a coverage warning over matches contradicts itself.
   const notice =
     answer === null
       ? null
@@ -351,8 +303,7 @@ export function PlaceSearch({
           type="text"
           value={value}
           onChange={(event) => setDraft(event.target.value)}
-          // Selects all rather than placing a caret: the box is holding the last thing found, and
-          // the next thing to type is a new search, not an edit of that name.
+          // Selects all: the next thing typed is a new search, not an edit.
           onFocus={(event) => event.currentTarget.select()}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
@@ -380,9 +331,6 @@ export function PlaceSearch({
       </div>
 
       {notice !== null || rows.length > 0 ? (
-        // Scrolls inside the card rather than lengthening it, the way the panel's own tall
-        // sections do — the cap above is what the reader's screen can hold. No skin of its
-        // own: the card is its skin, which is the other half of the route fields' asymmetry.
         <ResultList
           listId={listId}
           results={rows}

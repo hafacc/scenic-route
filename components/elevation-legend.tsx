@@ -5,10 +5,7 @@ import { PALETTES, type ThemeName } from "../src/theme/palette";
 import { useCity } from "./city-context";
 import { useMapTheme } from "./use-map-theme";
 
-// The key for the elevation overlay. The tint is stretched over each city's own height range, so a
-// reader looking at the map alone can see which streets are higher and not by how much — the range
-// travels with the pyramid in range.json for exactly that reason. The colors do not: the tiles
-// carry height rather than a tint, and the ramp they are read through is the palette's.
+// The tint stretches over each city's own height range (range.json), so a legend must show it.
 
 interface Range {
   lowMeters: number;

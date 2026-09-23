@@ -11,14 +11,6 @@ import type {
 import type { GeocodeResult } from "../src/geocode";
 import ResultGlyph from "./result-glyph";
 
-// The list of places, shared by the route panel's endpoint fields and the search panel so the same
-// index reads the same way whichever box asked it. Rows, their styling, the one row that stands in
-// for them and the combobox ids live here; where the list hangs, what opens and closes it, and who
-// asks the index stay with each caller, because those are the two surfaces' real differences — the
-// route fields open upward out of a panel whose own controls sit below them and close on every
-// commit, the search list is the body of its card and outlives a pick.
-
-// How long the typing has to stop before either box asks the index.
 export const SEARCH_DEBOUNCE_MS = 300;
 
 const ROW =
@@ -30,9 +22,7 @@ const ACTIVE =
 const BRAND =
   "font-medium text-brand-700 hover:bg-slate-50 dark:text-brand-300 dark:hover:bg-slate-700/60";
 
-// One action offered above the results — the route fields' "My location". Outside the option ids and
-// the keyboard cycle: it is not something the index found, and putting it in the cycle would either
-// break Enter picking the first match or need semantics of its own.
+// Kept out of the option ids and keyboard cycle, or Enter would stop picking the first match.
 export interface LeadingAction {
   icon: ReactNode;
   label: string;
@@ -46,9 +36,9 @@ interface ResultListProps {
   activeIndex: number; // -1 = none
   onHover: (index: number) => void;
   onPick: (result: GeocodeResult) => void;
-  notice?: string | null; // rendered instead of the rows when set
+  notice?: string | null;
   leadingAction?: LeadingAction | null;
-  className: string; // positioning and skin, which are the caller's business
+  className: string;
   style?: CSSProperties;
   listRef?: Ref<HTMLUListElement>;
 }
@@ -75,13 +65,11 @@ export default function ResultList({
       className={`space-y-0.5 overflow-y-auto overscroll-contain ${className}`}
     >
       {leadingAction ? (
-        // The rows are `li` for the markup a list wants, but a listbox owns its options directly, so
-        // each wrapper hands its own semantics through to what it holds.
+        // A listbox owns its options directly, so each `li` wrapper is `role="none"`.
         <li role="none">
           <button
             type="button"
-            // Keep the focus on the input so the click always lands; a blur here would race the
-            // route field's close timer and swallow the selection.
+            // Keep focus, or a blur races the field's close timer and swallows the pick.
             onMouseDown={(event) => event.preventDefault()}
             onClick={leadingAction.onPick}
             className={`${ROW} ${leadingAction.tone === "brand" ? BRAND : IDLE}`}
@@ -121,9 +109,7 @@ export default function ResultList({
   );
 }
 
-// The arrows and Enter both boxes answer to: the arrows wrap, and Enter takes the row under them or
-// else the first. Returns whether the key was one of them, so a caller can go on to handle Escape
-// its own way — which is the one key the two disagree about.
+// Returns whether the key was handled, so a caller can handle Escape its own way.
 export function resultListKeyDown(
   event: KeyboardEvent<HTMLElement>,
   results: readonly GeocodeResult[],

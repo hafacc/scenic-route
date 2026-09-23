@@ -9,23 +9,14 @@ import { KEEP_BUFFER } from "../src/tiles/raster";
 import manifest from "../src/tree-cover/manifest.json";
 import { useCity } from "./city-context";
 
-// Pre-rendered by `bun run build-tiles` (the canopy pass): the measured 2017 LiDAR tree
-// canopy, rasterized to a per-pixel covered fraction, blurred, and colored by the emerald ramp.
-// This is the map's cover fill; its street-line companion (StreetScoreLayer) samples the same
-// canopy at each sidewalk, so the block fill and the lines speak of one measured field.
-//
-// The tiles are drawn by the tile worker (src/tiles/canopy.ts) rather than fetched into <img>s, so
-// that past the pyramid's finest level the magnification resamples across tile boundaries instead of
-// leaving a seam at every one.
+// Measured 2017 LiDAR canopy, drawn by the tile worker so overzoom resamples across tile edges.
 
-// Relative, so it picks up the basePath the deploy injects; the app is a single-route SPA.
+// Relative, so it picks up the basePath the deploy injects.
 const TILE_URL = "tiles/canopy/{z}/{x}/{y}.webp";
-const MIN_NATIVE_ZOOM = 9; // the pyramid's coarsest zoom; below it Leaflet shrinks that level
-const MAX_NATIVE_ZOOM = 15; // the finest; above it the worker magnifies from this level
+const MIN_NATIVE_ZOOM = 9; // coarsest baked level
+const MAX_NATIVE_ZOOM = 15; // finest baked level
 const MAX_ZOOM = 20;
 
-// In the shared tile pane, directly over the basemap: the canopy is a wash on the ground rather
-// than a thing standing on it.
 const Z_INDEX = 2;
 
 export default function CanopyLayer() {
@@ -33,7 +24,6 @@ export default function CanopyLayer() {
   const active = useCity();
 
   useEffect(() => {
-    // one layer per city that has a canopy source, each clipped to its own bbox
     const layers = manifest.cities
       .filter((entry) => entry.id === active.id)
       .filter((city) => city.field.canopy)
@@ -47,9 +37,7 @@ export default function CanopyLayer() {
           }),
           {
             bounds: L.latLngBounds([south, west], [north, east]),
-            // Deliberately no maxNativeZoom: it would clamp the tile grid to the baked levels,
-            // leaving Leaflet to stretch the tile again and the worker nothing to magnify. The floor
-            // stays Leaflet's, since shrinking one baked level is all a zoom below the pyramid needs.
+            // No maxNativeZoom, or Leaflet stretches tiles instead of the worker magnifying them.
             minNativeZoom: MIN_NATIVE_ZOOM,
             maxZoom: MAX_ZOOM,
             zIndex: Z_INDEX,

@@ -9,16 +9,11 @@ import { KEEP_BUFFER } from "../src/tiles/raster";
 import manifest from "../src/tree-cover/manifest.json";
 import { useCity } from "./city-context";
 
-// The canopy score along every street, one line per sidewalk. The decoding and the drawing live in
-// the tile worker (src/tiles/street-score.ts).
-
-// Below this the lines would be hairlines, and a screen of them would pull in every chunk
-// in the city; the fill carries the map on its own.
+// Below this zoom the lines are hairlines and would fetch every chunk in the city.
 const MIN_ZOOM = 13;
 const MAX_ZOOM = 20;
 
-// Above the fill (zIndex 2) and still in the tile pane: the lines read the same canopy ramp the
-// fill does, so they belong with it rather than in a pane of their own.
+// Above the fill (zIndex 2) in the tile pane, since it reads the same canopy ramp.
 const Z_INDEX = 3;
 
 export default function StreetScoreLayer() {

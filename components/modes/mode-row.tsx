@@ -4,11 +4,7 @@ import { type KeyboardEvent, useEffect, useRef } from "react";
 import { MODE_ICONS } from "../../src/modes/icons";
 import type { Mode, ModeId } from "../../src/modes/modes";
 
-// One component in two placements: it heads the card on a phone and floats above the map on a wide
-// screen. The active chip is filled in the mode's own color, which its routes are drawn in.
-//
-// On a phone only that chip carries its name — four modes and the switches beside them do not fit a
-// 375 px row otherwise, and the icon is what the reader is picking by anyway.
+// On a phone only the active chip shows its name; four modes plus the switches don't fit 375 px.
 export default function ModeRow({
   modes,
   active,
@@ -23,9 +19,7 @@ export default function ModeRow({
   const row = useRef<HTMLDivElement | null>(null);
   const chosen = useRef<HTMLButtonElement | null>(null);
 
-  // The row is wider than a phone, and the chip that says which mode you are in is the one that
-  // must not be the one scrolled off. Written rather than `scrollIntoView` so nothing but this row
-  // can move. A wide screen has no overflow to scroll, and the write is a no-op there.
+  // Keeps the active chip in view; not `scrollIntoView`, so only this row moves.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the dep is the trigger, not a read
   useEffect(() => {
     const container = row.current;
@@ -38,7 +32,7 @@ export default function ModeRow({
     }
   }, [active]);
 
-  // Arrows move through the modes and choose as they go, which is what a radio group does.
+  // Arrows choose as they move, per the ARIA radio group pattern.
   const handleKey = (event: KeyboardEvent<HTMLDivElement>): void => {
     const step =
       event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;

@@ -27,7 +27,7 @@ import { savedIcon, searchIcon, userIcon } from "./map-icons";
 import RouteLayer, { type RouteLine } from "./route-layer";
 import { useMapTheme } from "./use-map-theme";
 
-// Every grid layer on the map inherits this, so it goes in once here rather than in each layer.
+// Patches every grid layer on the map, so it runs once here.
 installTilePrune();
 
 export interface MapTarget {
@@ -36,7 +36,6 @@ export interface MapTarget {
   zoom?: number;
 }
 
-// A place found in the search panel and left on the map. One at a time, and no route of its own.
 export interface SearchPin {
   lat: number;
   lng: number;
@@ -44,7 +43,7 @@ export interface SearchPin {
 }
 
 interface MapViewProps {
-  city: City; // frames the map when there is no camera to restore
+  city: City;
   pins: Pin[];
   draft: PinDraft | null;
   target: MapTarget | null;
@@ -52,26 +51,22 @@ interface MapViewProps {
   following: boolean;
   activeOverlays: ReadonlySet<OverlayId>;
   routeResult: RouteResult | null;
-  routeGraph: RoutingGraph | null; // the graph routeResult's edge indices point into
-  // Every route a deck is offering at once, drawn together; empty leaves routeResult the only line.
+  routeGraph: RoutingGraph | null;
   routeLines: readonly RouteLine[] | undefined;
   onSelectLine: ((index: number) => void) | undefined;
   onHoverLine: ((index: number | null) => void) | undefined;
   routeDest: { lat: number; lng: number } | null;
   routeStart: { lat: number; lng: number } | null;
   searchPin: SearchPin | null;
-  // The color the dropped pins wear, from the deck that has an accent; null keeps the app's green.
+  // null keeps the app's green.
   markerColor: string | null;
-  // A field has armed the next tap to set its point. Nothing else makes a tap place anything.
+  // A field has armed the next tap to set its point; nothing else makes a tap place anything.
   picking: boolean;
-  dragging: boolean; // an endpoint marker is being dragged; the route reframe goes zoom-out-only
-  initialCamera: Camera | null; // a shared link's camera, applied once; null leaves the map alone
-  preframedDest: { lat: number; lng: number } | null; // a dest whose framing the link already chose
-  // The settled camera, plus what it can see: the visible bounds pick the active city when only one
-  // city is on screen, which the center alone cannot tell.
+  dragging: boolean;
+  initialCamera: Camera | null;
+  preframedDest: { lat: number; lng: number } | null;
+  // The visible bounds pick the active city when only one is on screen.
   onCamera: (camera: Camera, view: CityBounds) => void;
-  // The basemap could not be fetched, so the map has no streets under the overlays. It has no row in
-  // the layers menu to badge, so the app says it in the banner instead.
   onBasemapLost: (lost: boolean) => void;
   onMapPick: (lat: number, lng: number) => void;
   onDisengageFollow: () => void;
@@ -81,13 +76,12 @@ interface MapViewProps {
     lng: number,
   ) => void;
   onEndpointDrag: (which: "start" | "dest", lat: number, lng: number) => void;
-  // The found place moved by dragging its pin: the same act as tapping the map somewhere else, so it
-  // renames the place and leaves the deck asking whether to walk there.
+  // The same as tapping the map elsewhere: it renames the place.
   onSearchPinDrag: (lat: number, lng: number) => void;
   onPinSelect: (pin: Pin) => void;
 }
 
-// Keep a dragged pin this far from the viewport edge, as a dragged endpoint is kept.
+// px from the viewport edge, as for a dragged endpoint.
 const SEARCH_PIN_AUTOPAN: [number, number] = [80, 80];
 
 const draftIcon = L.divIcon({
@@ -97,10 +91,7 @@ const draftIcon = L.divIcon({
   iconAnchor: [14, 14],
 });
 
-// A map click sets the armed field's location. Mounted only while a field has armed pick mode, so
-// ordinary browsing never intercepts clicks; pin markers stop propagation, so they still select.
-// react-leaflet freezes MapContainer's className at mount, so the crosshair is set on the live
-// container instead of being handed down as a prop.
+// react-leaflet freezes MapContainer's className at mount, so the crosshair goes on the container.
 function PickCursor({ picking }: { picking: boolean }) {
   const map = useMap();
   useEffect(() => {
@@ -141,13 +132,10 @@ interface MapZoomInternals {
   _limitZoom(zoom: number): number;
 }
 
-// Leaflet 1.9 dropped its touch `tap` handler, so this restores double-tap zoom and adds Android's
-// quick zoom: hold the second tap and drag, down to zoom in. The drag mirrors Map.TouchZoom, hence
-// the private calls. preventDefault on the second tap suppresses the browser's own double-tap zoom
-// and the synthesised dblclick.
+// Leaflet 1.9 dropped its touch `tap` handler, so this restores double-tap zoom and quick zoom.
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_SLOP = 40; // px between the two taps
-const TAP_MOVE_SLOP = 12; // px a tap may drift and still count as a tap rather than a drag
+const TAP_MOVE_SLOP = 12; // px a tap may drift
 const ZOOM_PX_PER_LEVEL = 128; // matching MapLibre's quick zoom
 
 function DoubleTapZoom({
@@ -162,7 +150,7 @@ function DoubleTapZoom({
     const container = map.getContainer();
     const internals = map as unknown as MapZoomInternals;
     let lastTap: { time: number; at: L.Point } | null = null;
-    let start: L.Point | null = null; // null when the touch began somewhere we must not zoom from
+    let start: L.Point | null = null;
     let fingers = 0;
     let armed = false;
     let dragSuspended = false;
@@ -196,7 +184,7 @@ function DoubleTapZoom({
       }
     };
 
-    // no-op unless a quick zoom ran, in which case it settles on an integer zoom
+    // No-op unless a quick zoom ran, in which case it settles on an integer zoom.
     const end = () => {
       const settled = gesture;
       reset();
@@ -214,12 +202,11 @@ function DoubleTapZoom({
     const onStart = (event: TouchEvent) => {
       fingers = event.touches.length;
       if (fingers !== 1) {
-        end(); // pinch is taking over; don't leave our move dangling
+        end();
         lastTap = null;
       } else {
         const [touch] = event.touches;
-        // a draggable marker has its own Draggable, which map.dragging doesn't cover, so zooming
-        // from a route endpoint would drag the pin at the same time
+        // A draggable marker has its own Draggable, so zooming from an endpoint would drag the pin.
         const onMarker =
           touch.target instanceof Element &&
           touch.target.closest(".leaflet-marker-draggable") !== null;
@@ -233,13 +220,10 @@ function DoubleTapZoom({
           lastTap = null;
           armed = true;
           if (!picking) {
-            // Both mobile browsers ship double-tap-and-drag as a page zoom of their own and commit
-            // to it here unless the second tap is prevented; once committed they never hand it
-            // back. Only ours to claim when we zoom instead, and only on the second tap: a first
-            // tap keeps its synthesised click, which the pick flow runs on.
+            // Otherwise mobile browsers commit to their own double-tap-drag page zoom.
             event.preventDefault();
           }
-          // while following, anchor on the center so the zoom can't drift off the user
+          // While following, anchor on the center so the zoom can't drift off the user.
           const at = following
             ? map.getSize().divideBy(2)
             : containerPoint(touch);
@@ -258,18 +242,14 @@ function DoubleTapZoom({
       ) {
         return;
       }
-      // every move of an armed gesture, the slop window included: leaving even the first few
-      // unprevented is enough for the browser to start its own double-tap-drag page zoom
+      // Any unprevented move lets the browser start its own page zoom.
       event.preventDefault();
       const [touch] = event.touches;
       if (!zoomFrom) {
-        // beat Leaflet's Draggable to its own 3px tolerance — ours is on the container, its on the
-        // document — so nothing pans and no dragstart fires to disengage follow
+        // Beat Leaflet's Draggable to its 3px tolerance, so nothing pans and follow stays on.
         if (!dragSuspended) {
           dragSuspended = true;
-          // dragging.disable() drops leaflet-touch-drag, and with it the container's
-          // `touch-action: none`, exactly as the drag starts; an inline value outranks the class
-          // rules and comes back off in reset()
+          // dragging.disable() drops the class setting `touch-action: none`; cleared in reset().
           priorTouchAction = container.style.touchAction;
           container.style.touchAction = "none";
           map.dragging.disable();
@@ -283,12 +263,12 @@ function DoubleTapZoom({
       }
       const target =
         zoomFrom.zoom + (touch.clientY - zoomFrom.clientY) / ZOOM_PX_PER_LEVEL;
-      // bounceAtZoomLimits is off, so clamp; _limitZoom would snap mid-gesture
+      // bounceAtZoomLimits is off, so clamp; _limitZoom would snap mid-gesture.
       const zoom = Math.max(
         map.getMinZoom(),
         Math.min(map.getMaxZoom(), target),
       );
-      // offset the anchor's projected position so it stays under the pixel it was tapped at
+      // Offset the anchor's projected position so it stays under the pixel it was tapped at.
       const center = map.unproject(
         map
           .project(anchor.latLng, zoom)
@@ -318,14 +298,14 @@ function DoubleTapZoom({
         end();
         lastTap = null;
         if (tapped && !picking) {
-          // suppressing the browser's own double-tap zoom is only ours to do when we zoom instead
+          // Suppressing the browser's double-tap zoom is ours to do only when we zoom instead.
           event.preventDefault();
           map.setZoomAround(tapped.latLng, map.getZoom() + 1, {
             animate: true,
           });
         }
       } else if (fingers > 1 || event.changedTouches.length !== 1) {
-        // only a clean single-finger tap counts — not the lift-off of a pinch or a drag
+        // Only a clean single-finger tap counts, not the lift-off of a pinch or a drag.
         lastTap = null;
       } else {
         const [touch] = event.changedTouches;
@@ -351,17 +331,14 @@ function DoubleTapZoom({
       container.removeEventListener("touchmove", onMove);
       container.removeEventListener("touchend", onEnd);
       container.removeEventListener("touchcancel", onCancel);
-      // end, not reset: a prop change mid-drag would otherwise strand the map on the gesture's
-      // fractional zoom, which MapController then carries into every later flyTo
+      // end, not reset, or a mid-drag prop change leaves a fractional zoom for later flyTo calls.
       end();
     };
   }, [map, following, picking]);
   return null;
 }
 
-// Reports the camera after every settled move so the share link can capture it, and applies a shared
-// link's camera once. The hash is read in an effect, so the camera arrives as a prop rather than as the
-// container's initial center — hence setView here rather than a MapContainer prop.
+// The hash is read in an effect, so a shared camera arrives as a prop after mount.
 function CameraWatcher({
   initial,
   onCamera,
@@ -420,10 +397,9 @@ function MapController({
   const hasZoomedRef = useRef<boolean>(false);
   const wasFollowingRef = useRef<boolean>(following);
 
-  // fly to an explicit target (e.g. a selected saved pin)
   useEffect(() => {
     if (!target) {
-      // clear the key so re-selecting the same target (e.g. after closing the editor) still flies
+      // Clear the key so re-selecting the same target still flies.
       lastTargetKey.current = "";
       return;
     }
@@ -433,7 +409,7 @@ function MapController({
     }
     lastTargetKey.current = key;
     const zoom = target.zoom ?? map.getZoom();
-    // A short hop is animated, a cross-city one is cut; CROSS_CITY_METERS carries why.
+    // A cross-city hop is cut, since an animated crossing draws layers over open water.
     if (
       map.distance([target.lat, target.lng], map.getCenter()) >
       CROSS_CITY_METERS
@@ -444,7 +420,6 @@ function MapController({
     }
   }, [target, map]);
 
-  // follow camera: recenter on the user while engaged
   useEffect(() => {
     const justEngaged = following && !wasFollowingRef.current;
     wasFollowingRef.current = following;
@@ -455,8 +430,7 @@ function MapController({
     const crossCity =
       map.distance([lat, lng], map.getCenter()) > CROSS_CITY_METERS;
     if (!hasZoomedRef.current) {
-      // first fix: zoom in to street level, cutting rather than flying when the map opened on a
-      // different city than the one you turn out to be in — CROSS_CITY_METERS carries why.
+      // First fix: zoom to street level, cutting rather than flying to a different city.
       hasZoomedRef.current = true;
       if (crossCity) {
         map.setView([lat, lng], 16, { animate: false });
@@ -464,20 +438,18 @@ function MapController({
         map.flyTo([lat, lng], 16, { duration: 0.8 });
       }
     } else if (justEngaged) {
-      // re-engaged: snap back at the current zoom, cutting if that means crossing to another city —
-      // reachable by panning to the other city and then tapping follow.
+      // Re-engaged: snap back at the current zoom, cutting if that crosses to another city.
       if (crossCity) {
         map.setView([lat, lng], map.getZoom(), { animate: false });
       } else {
         map.flyTo([lat, lng], map.getZoom(), { duration: 0.8 });
       }
     } else {
-      // steady state: pan to the user, keeping their zoom
       map.setView([lat, lng], map.getZoom(), { animate: true });
     }
   }, [following, userLocation, map]);
 
-  // while following, anchor zoom on the map center (the user) not the cursor, so it doesn't drift off them
+  // While following, anchor zoom on the map center (the user), not the cursor.
   useEffect(() => {
     const zoomAnchor = following ? "center" : true;
     map.options.scrollWheelZoom = zoomAnchor;
@@ -485,7 +457,7 @@ function MapController({
     map.options.touchZoom = zoomAnchor;
   }, [following, map]);
 
-  // only a pan (dragstart) releases follow; programmatic flyTo/setView don't fire dragstart, so any dragstart is a real user grab
+  // Programmatic flyTo/setView fire no dragstart, so any dragstart is a real user grab.
   useEffect(() => {
     const handleDragStart = () => {
       onDisengageFollow();
@@ -537,8 +509,7 @@ export default function MapView({
   onEndpointDrag,
   onPinSelect,
 }: MapViewProps) {
-  // Rebuilt only when the theme flips, and handed to the marker as a new icon so it repaints in
-  // place: an icon built once at import keeps its old gradient until something remounts the marker.
+  // Rebuilt on a theme flip, since an existing icon keeps its old gradient.
   const theme = useMapTheme();
   const searchMarker = useMemo(
     () => searchIcon(theme, markerColor),
@@ -581,7 +552,6 @@ export default function MapView({
       {/* The full source list lives in About; the corner carries only the basemap credit. */}
       <AttributionControl prefix={false} />
       <Basemap onLost={onBasemapLost} />
-      {/* every active overlay's Leaflet layers, from the registry; nothing when the set is empty */}
       {OVERLAYS.filter((overlay) => activeOverlays.has(overlay.id)).map(
         (overlay) => (
           <Fragment key={overlay.id}>{overlay.render()}</Fragment>
@@ -623,13 +593,7 @@ export default function MapView({
         <Marker position={[draft.lat, draft.lng]} icon={draftIcon} />
       ) : null}
       {searchPin ? (
-        // Nothing to tap — the name is in the search panel that found it, and the panel is where the
-        // pin is cleared — but it drags, as the destination does: a place found in roughly the right
-        // spot is moved by pulling it, not by tapping the map again and hoping.
-        //
-        // A draggable marker is interactive, and Leaflet stops an interactive marker's clicks at the
-        // marker: an armed "pick on the map" tap that landed on the pin did nothing at all. Bubbling
-        // hands the tap to the map, which is the one flow that arms, defers and cancels a pick.
+        // Leaflet stops a draggable marker's clicks; bubbling hands an armed pick tap to the map.
         <Marker
           position={[searchPin.lat, searchPin.lng]}
           icon={searchMarker}

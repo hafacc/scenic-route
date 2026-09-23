@@ -26,12 +26,9 @@ export interface CardView {
   chips: ChipView[];
 }
 
-// A line's own bullet, in the livery the agency publishes: the map's color, said on the card. Set
-// inline rather than as a flex item, so a summary too long for its row ellipses like any sentence.
+// Inline rather than a flex item, so a summary too long for its row ellipses like a sentence.
 const PILL_SHAPE =
   "inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 align-middle text-[11px] font-bold leading-none";
-// A ride's bullet follows its minutes ("12 min on the A"); a boat's leads them, having no name to be
-// read as part of the sentence.
 const PILL = `ml-1 ${PILL_SHAPE}`;
 const FERRY_PILL = `mr-1 ${PILL_SHAPE}`;
 
@@ -52,8 +49,6 @@ export function LinePill({
   );
 }
 
-// The summary, with the lines ridden drawn as their bullets rather than named. Same segments as
-// `cardLine`, which is what the button's label and the peek bar still say in plain words.
 function LegParts({ parts, lead }: { parts: LinePart[]; lead: boolean }) {
   return (
     <>
@@ -85,10 +80,7 @@ function LegParts({ parts, lead }: { parts: LinePart[]; lead: boolean }) {
   );
 }
 
-// `legs` says where a trip's boats and trains go. Inline they finish the sentence, which is what a
-// list card wants; "row" leaves them off, for a header narrow enough that a pill and its minutes
-// would ellipse the line away — `CardLegs` then puts them at the head of the chips row, which
-// scrolls instead of truncating.
+// "row" leaves the legs off a too-narrow header; `CardLegs` puts them in the chips row.
 export function CardLine({
   summary,
   order,
@@ -126,8 +118,7 @@ export function CardLegs({
   );
 }
 
-// No agency numbers a boat the way a line is numbered, so the bullet is the glyph the ferry layer
-// and the drawn ferry leg already wear, in the same blue.
+// No agency numbers a boat, so the bullet is the ferry layer's glyph, in the same blue.
 function FerryPill() {
   const theme = useMapTheme();
   return (
@@ -151,8 +142,7 @@ export function CardNumber({ index, color }: { index: number; color: string }) {
   );
 }
 
-// The drop an exposure reading wears (`chipReading`) instead of the shelter icon: the number counts
-// the rain you are out in, so a bigger one has to read as wetter.
+// The number counts the rain you are out in, so a bigger one has to read as wetter.
 const EXPOSURE = { Icon: MdWaterDrop, label: "Rain exposure" };
 
 export function CardChips({
@@ -189,8 +179,7 @@ export function CardChips({
   );
 }
 
-// The first sweep of all, with no cards to hold: the route already on the map, in the place its
-// card will take, so the list does not jump when the rest of them arrive.
+// Drawn where its card will sit, so the list doesn't jump when the rest arrive.
 export function GhostCard({
   line,
   color,
@@ -214,8 +203,6 @@ export function GhostCard({
   );
 }
 
-// In the plan's own order. Tapping one is the same act as tapping its line on the map; hovering one
-// draws its line the way the chosen one is drawn, which is the answer to "which of these is that".
 export default function RouteCards({
   cards,
   selected,
@@ -244,16 +231,14 @@ export default function RouteCards({
           key={index}
           type="button"
           onClick={() => onSelect(index)}
-          // A touch fires this too, and on a touch the pointer never leaves — but the tap that
-          // sends it is choosing the card anyway, so the highlight it lights is the right one.
+          // A touch never leaves, but that tap chooses the card anyway, so the highlight is right.
           onPointerEnter={(event) => {
             if (event.pointerType !== "touch") {
               onHover(index);
             }
           }}
           aria-pressed={index === selected}
-          // The rich line is bullets and numbers; a reader who hears the card rather than sees it
-          // gets the same sentence in words.
+          // A screen reader gets the same sentence in words.
           aria-label={`${index + 1} ${cardLine(card.summary)}`}
           className={`flex min-h-11 w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left transition hover:bg-slate-100 dark:hover:bg-slate-700/60 ${
             index === selected ? "bg-slate-100 dark:bg-slate-700/60" : ""

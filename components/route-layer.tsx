@@ -26,41 +26,35 @@ import { destIcon, startIcon } from "./map-icons";
 export interface RouteLine {
   result: RouteResult;
   color: string;
-  label: string; // the card number, worn by the line and by the card; empty draws no badge
+  label: string;
   selected: boolean;
-  // This line answers the plan being replaced: it stays drawn, in the unselected style, until the
-  // new one lands.
+  // Stays drawn, unselected, until the new plan lands.
   dimmed?: boolean;
 }
 
 interface RouteLayerProps {
   result: RouteResult | null;
-  // The graph `result` was computed against, handed down rather than fetched here. Both are edge
-  // indices into one city's graph, and a layer that loads its own would draw a San Francisco route
-  // through New York's edges for as long as the two disagreed — which is the whole span of a city
-  // switch, since the result lands before the new fetch does.
+  // Handed down, since the result lands before a city switch's new graph.
   graph: RoutingGraph | null;
-  // Every route on offer; empty leaves `result` as the only line, which is Explorer's map.
+  // Empty leaves `result` as the only line (Explorer's map).
   lines?: readonly RouteLine[];
   onSelectLine?: (index: number) => void;
-  // The line under the pointer, drawn as the chosen one is while it is; null on the way out.
   onHoverLine?: (index: number | null) => void;
-  dest: { lat: number; lng: number } | null; // the tapped/searched destination
-  // The color the destination teardrop wears, from a deck with an accent; null keeps the green one.
+  dest: { lat: number; lng: number } | null;
+  // null keeps the green teardrop.
   markerColor: string | null;
-  start: { lat: number; lng: number } | null; // the snapped start, for the dot
-  dragging: boolean; // an endpoint is being dragged; reframe zooms out only, never in
-  // A destination that arrived from a shared link alongside its own camera, so the shared framing is
-  // kept instead of being reframed away the moment the route lands.
+  start: { lat: number; lng: number } | null;
+  dragging: boolean;
+  // Arrived from a shared link with its own camera, so the landing route doesn't reframe it away.
   preframedDest: { lat: number; lng: number } | null;
   onDisengageFollow: () => void;
-  // Live position of a dragged endpoint, each frame: re-routes without reverse-geocoding.
+  // Each frame of a drag: re-routes without reverse-geocoding.
   onEndpointDragMove: (
     which: "start" | "dest",
     lat: number,
     lng: number,
   ) => void;
-  // Drop of a dragged endpoint: settles that end and reverse-geocodes its label.
+  // On drop: settles that end and reverse-geocodes its label.
   onEndpointDrag: (which: "start" | "dest", lat: number, lng: number) => void;
 }
 
@@ -70,23 +64,20 @@ const PANE_Z_INDEX = 450; // above tiles (~200), below markers (~600)
 const MIN_ZOOM = 3;
 const MAX_ZOOM = 20;
 
-// Keep a dragged endpoint this far from the viewport edge; Leaflet auto-pans the map to hold it there.
+// px from the viewport edge; Leaflet auto-pans the map to hold a dragged endpoint there.
 const DRAG_AUTOPAN_PADDING: [number, number] = [80, 80];
 
-// The line reads as a route ribbon: ~4.5 px at z16, growing with zoom like the street layer, drawn
-// as a neutral slate core inside a white casing. A neutral route reads clearly over the canopy — or
-// any future overlay — without competing with its color, and the white halo lifts it off the map.
+// A neutral slate core in a white casing reads over any overlay.
 const WIDTH_AT_Z16 = 4.5;
 const WIDTH_PER_ZOOM = 1.3;
 const MIN_WIDTH = 2.5;
 const CASING_EXTRA = 3; // white halo, ~1.5 px each side
 
-export const ROUTE_COLOR = "#334155"; // slate-700: a neutral route that reads over any overlay color
+export const ROUTE_COLOR = "#334155"; // slate-700
 const CASING_COLOR = "#ffffff";
 const CONNECTOR_COLOR = "#94a3b8"; // slate-400
-const CONNECTOR_MIN_METERS = 15; // draw the dashed tapped->snapped link only past this gap
-// An unselected alternative: narrower and washed well back, but not gone. Its badge wears the same
-// alpha as its line — a full-strength disc over a faint line reads as the route being highlighted.
+const CONNECTOR_MIN_METERS = 15;
+// A full-strength badge over a faint line would read as highlighted.
 const ALT_WIDTH = 0.7;
 const ALT_ALPHA = 0.35;
 // A stroke has to be painted to receive a tap, hence the near-zero opacity.
@@ -126,9 +117,7 @@ class RouteGrid extends CanvasGrid {
     return tile;
   }
 
-  // Casing across every step of a band first, then the colored lines, so the round joins meet
-  // seamlessly rather than each step's casing overpainting its neighbor's fill. Bands paint in
-  // order, so the selected line — last — lies over the rest.
+  // All casings first, then the colored lines, so round joins meet seamlessly.
   private draw(context: CanvasRenderingContext2D, coords: L.Coords): void {
     const map = this._map;
     const originX = coords.x * TILE_SIZE;
@@ -150,8 +139,7 @@ class RouteGrid extends CanvasGrid {
       const width = base * band.width;
       const walkPath = new Path2D();
       const ferryPath = new Path2D();
-      // One path per line ridden: a trip that changes trains is two colors, and each has to be
-      // cased and stroked whole so its joins meet.
+      // One path per line ridden, each cased and stroked whole so its joins meet.
       const ridePaths = new Map<string, Path2D>();
       for (const step of band.steps) {
         const count = step.lngs.length;
@@ -220,7 +208,7 @@ class RouteGrid extends CanvasGrid {
   }
 }
 
-// Thinned to a few hundred vertices: this is hit-testing, not drawing, and a route carries thousands.
+// Thinned to a few hundred vertices, since this is hit-testing, not drawing.
 function tapPositions(result: RouteResult): [number, number][] {
   const { lats, lngs } = result.path;
   const stride = Math.max(1, Math.ceil(lats.length / TAP_VERTICES));
@@ -235,14 +223,13 @@ function tapPositions(result: RouteResult): [number, number][] {
   return positions;
 }
 
-// What a route's geometry decides for the marks laid over it, worked out once per route.
 interface RouteMark {
   positions: [number, number][];
   icon: L.DivIcon;
   color: string;
   label: string;
   dimmed: boolean;
-  selected: boolean; // the badge is drawn back with its line, so a hover has to mint a new icon
+  selected: boolean;
 }
 
 function badgeIcon(line: RouteLine): L.DivIcon {
@@ -255,9 +242,7 @@ function badgeIcon(line: RouteLine): L.DivIcon {
   });
 }
 
-// One white disc ringed in the line's color, at a station the reader gets on, changes or gets off
-// at. Minted per color rather than per stop: a trip calls at two or three of them and they all
-// look the same.
+// Minted per color, not per stop: a trip calls at two or three and they all look the same.
 const stationIcons = new Map<string, L.DivIcon>();
 function stationIcon(color: string): L.DivIcon {
   const cached = stationIcons.get(color);
@@ -302,10 +287,7 @@ export default function RouteLayer({
   const cityId = useCity().id;
   const gridRef = useRef<RouteGrid | null>(null);
   const dropped = useMemo(() => destIcon(markerColor), [markerColor]);
-  // The agency's drawn track, fetched as soon as this layer has a graph that carries rail rather
-  // than when a plan first rides one: a ride whose shapes have not landed is drawn as the chord the
-  // graph carries, and waiting for the plan is waiting until there is a chord on the map to replace.
-  // Where the shapes do not answer for a line at all, the chord is what stays.
+  // Fetched once the graph has rail; until the shapes land, a ride draws as the graph's chord.
   const [loaded, setLoaded] = useState<{ city: string; subway: Subway } | null>(
     null,
   );
@@ -328,11 +310,9 @@ export default function RouteLayer({
       live = false;
     };
   }, [rail, cityId]);
-  // Held by city, so a switch draws chords for the moment before the new city's shapes land rather
-  // than projecting its stations onto the last city's track.
+  // Held by city, so a switch draws chords rather than the last city's track.
   const tracks = loaded?.city === cityId ? loaded.subway : null;
-  // The dest object last framed by the camera; a slider recompute keeps its identity, a new
-  // destination replaces it, so only the latter re-frames.
+  // A slider recompute keeps the dest object's identity, so only a new destination reframes.
   const framedDest = useRef<{ lat: number; lng: number } | null>(preframedDest);
 
   useEffect(() => {
@@ -354,10 +334,7 @@ export default function RouteLayer({
     };
   }, [map]);
 
-  // Both caches are kept against the route itself: tapping a card hands this layer a new `lines`
-  // array of the same routes, and re-decoding thousands of vertices — and minting new Leaflet icons
-  // — to move a highlight is the whole cost of the gesture. A result belongs to one graph, so the
-  // graph is not part of the key. Written during render, but only ever with what the route says.
+  // Keyed on the route, since a card tap passes a new `lines` array of the same routes.
   const marks = useRef(new WeakMap<RouteResult, RouteMark>());
   const markFor = (line: RouteLine): RouteMark => {
     const cached = marks.current.get(line.result);
@@ -381,8 +358,7 @@ export default function RouteLayer({
     marks.current.set(line.result, fresh);
     return fresh;
   };
-  // A drawing is thrown away wholesale when the track arrives, which is the one thing that changes
-  // what a route looks like without the route itself changing.
+  // Thrown away when the track arrives, the one change to a route's look without a new route.
   const drawings = useRef<{
     tracks: Subway | null;
     cache: WeakMap<RouteResult, RouteDrawing>;
@@ -403,7 +379,6 @@ export default function RouteLayer({
     return fresh;
   };
 
-  // The deck's own lines when it has them, otherwise the single route.
   // biome-ignore lint/correctness/useExhaustiveDependencies: drawingFor reads only its arguments
   const bands = useMemo(() => {
     if (!graph) {
@@ -431,8 +406,7 @@ export default function RouteLayer({
     }
   }, [graph, result, lines, tracks]);
 
-  // The dots belong to the line the reader is looking at: the chosen card, or the one the pointer is
-  // over while they are all drawn. An alternative's stations are noise on a map of three routes.
+  // Only the chosen or hovered line gets station dots, since an alternative's are noise.
   // biome-ignore lint/correctness/useExhaustiveDependencies: drawingFor reads only its arguments
   const stations = useMemo<StationDot[]>(() => {
     if (!graph) {
@@ -446,10 +420,7 @@ export default function RouteLayer({
     gridRef.current?.setBands(bands);
   }, [bands]);
 
-  // Frame a fresh destination once its route lands; slider recomputes leave the camera alone. While an
-  // endpoint is dragged we leave the camera to the marker's own autoPan (below) — any programmatic
-  // view change mid-drag desyncs the pin from the cursor — and just remember the dest so releasing the
-  // drag doesn't snap-reframe the settled route.
+  // While dragging, a programmatic view change desyncs the pin from the cursor.
   useEffect(() => {
     if (!dest) {
       // Cleared, so the next destination reframes even if it lands on the same coordinates.
@@ -473,10 +444,7 @@ export default function RouteLayer({
     framedDest.current = dest;
     const bounds = routeBounds(result);
     const padding: [number, number] = [64, 96];
-    // A route in the city on screen is flown to; one a city away is cut to, for the reason
-    // CROSS_CITY_METERS carries — an animated crossing draws this very layer over open water for the
-    // length of it. This is the third camera that can cross a city, after the explicit target and the
-    // follow centring, and it is the one a shared link reaches first.
+    // Cut to another city, since an animated crossing draws this layer over open water.
     if (map.distance(bounds.getCenter(), map.getCenter()) > CROSS_CITY_METERS) {
       map.fitBounds(bounds, { padding, animate: false });
     } else {
@@ -516,7 +484,7 @@ export default function RouteLayer({
       )}
       {lines?.map((line, index) => {
         if (line.label === "") {
-          return null; // a chosen route is the only one drawn, and a badge would number a set of one
+          return null;
         }
         const badge = graph ? drawingFor(graph, line.result).badge : null;
         return badge ? (
@@ -532,11 +500,11 @@ export default function RouteLayer({
       })}
       {stations.map((station, index) => (
         <Marker
-          // biome-ignore lint/suspicious/noArrayIndexKey: the order IS a dot's identity, and a transfer's two dots can share a platform's coordinates
+          // biome-ignore lint/suspicious/noArrayIndexKey: order is identity; coords repeat
           key={`station-${index}`}
           position={[station.lat, station.lng]}
           icon={stationIcon(station.color)}
-          zIndexOffset={850} // under the route badge, over everything the map draws itself
+          zIndexOffset={850} // under the route badge, over map marks
           interactive={false}
         />
       ))}
@@ -547,8 +515,7 @@ export default function RouteLayer({
           draggable
           autoPan
           autoPanPadding={DRAG_AUTOPAN_PADDING}
-          // Above the live-location marker (which renders later at the same spot) so the start always
-          // owns the drag gesture; otherwise the location marker can swallow it and strand the drag.
+          // Above the live-location marker, which would otherwise swallow the drag.
           zIndexOffset={1000}
           eventHandlers={{
             drag: (event) => {

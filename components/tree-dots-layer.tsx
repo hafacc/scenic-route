@@ -13,14 +13,11 @@ import {
 import manifest from "../src/tree-cover/manifest.json";
 import { useCity } from "./city-context";
 
-// The crisp half of the genus overlay. Below MIN_ZOOM the pre-rendered raster tiles carry it —
-// far too many trees to draw live across a zoomed-out screen. At and above MIN_ZOOM those tiles
-// would upscale and blur, so each tree is instead drawn as a canvas disc at the tile's own zoom.
-// The decoding and the drawing live in the tile worker (src/tiles/tree-dots.ts).
+// Below MIN_ZOOM raster tiles carry the overlay; above, they would blur, so each tree is a disc.
 
-const MIN_ZOOM = 15; // the handoff: raster tiles below, live dots at and above
+const MIN_ZOOM = 15;
 const MAX_ZOOM = 20;
-const PANE_NAME = "genus"; // shares the raster layer's pane, so the dots sit exactly where the field does
+const PANE_NAME = "genus";
 const PANE_Z_INDEX = 250;
 
 export default function TreeDotsLayer() {
@@ -28,8 +25,7 @@ export default function TreeDotsLayer() {
   const active = useCity();
 
   useEffect(() => {
-    // Share the raster layer's dedicated pane, so the dots hand off from the field at exactly the
-    // depth it was drawn at; create it if the raster layer has not.
+    // The raster layer's pane, so the handoff happens at the same depth; create it if missing.
     if (!map.getPane(PANE_NAME)) {
       const pane = map.createPane(PANE_NAME);
       pane.style.zIndex = String(PANE_Z_INDEX);
@@ -42,8 +38,7 @@ export default function TreeDotsLayer() {
         const { south, west, north, east } = city.bounds;
         const file = city.field.trees.file;
         return new WorkerTileLayer(
-          // The legend's selection travels with each tile request, so a toggle's redraw carries the
-          // new one.
+          // The selection rides on each tile request, so a toggle's redraw picks up the new one.
           () => ({ kind: "tree-dots", file, enabled: [...getEnabledGenera()] }),
           {
             pane: PANE_NAME,
@@ -60,7 +55,6 @@ export default function TreeDotsLayer() {
       layer.addTo(map);
     }
 
-    // Redraw every loaded tile when the legend toggles a genus, so the dots follow the selection.
     const unsubscribe = subscribeGenusFilter(() => {
       for (const layer of layers) {
         layer.redraw();

@@ -47,8 +47,7 @@ import { ExplorerControls, ExplorerPanels } from "./deck";
 
 const OVERLAY_KEY = "scenic-route:overlay";
 
-// The weights the settings document holds, each falling back to its default. These are what a URL key
-// overrides and what a missing one leaves in place.
+// What a URL key overrides and a missing one leaves in place.
 function storedWeights(): RouteWeights {
   const { weights, allowFerries, allowSheds, allowCrossings } =
     storedSettings();
@@ -90,33 +89,25 @@ function storedWeights(): RouteWeights {
   };
 }
 
-// The panel's slider and the settings page's move the same value, so both persist through here. A
-// weight nobody has moved stays out of the document and keeps its built-in default.
+// A weight nobody has moved stays out of the document and keeps its built-in default.
 function persistWeight(key: FactorKey, weight: number): void {
   updateSettings({ weights: { ...storedSettings().weights, [key]: weight } });
 }
 
-// The persisted overlay ids, or null when nothing was ever stored (which keeps the canopy default).
-// An empty stored string is a deliberate "all off".
+// null when nothing was ever stored; an empty string is a deliberate all-off.
 function storedOverlays(): string[] | null {
   const stored = window.localStorage.getItem(OVERLAY_KEY);
   return stored === null ? null : stored.split(",");
 }
 
 export default function Explorer() {
-  // The overlays drawn over the basemap, a freely-combinable set (tree genus is the one exception —
-  // it goes solo). The canopy cover is the only content a signed-out visitor has, so it starts on.
-  // Hydrated from the URL hash or localStorage below; an empty set hides every overlay.
+  // Canopy starts on because it is all a signed-out visitor has.
   const [activeOverlays, setActiveOverlays] = useState<ReadonlySet<OverlayId>>(
     () => new Set<OverlayId>(["canopy"]),
   );
   const [treeWeight, setTreeWeight] = useState<number>(DEFAULT_TREE_WEIGHT);
-  // Ferry preference and gate, driven by the route panel's slider and toggle. Both restore from
-  // localStorage below so a reload keeps the setting.
   const [ferryWeight, setFerryWeight] = useState<number>(DEFAULT_FERRY_WEIGHT);
   const [allowFerries, setAllowFerries] = useState<boolean>(true);
-  // The other scenic factors: landmark and public-art discounts and the highway/rail penalty. Held
-  // here at their defaults (their sliders land in a later pass), restored from localStorage below.
   const [landmarkWeight, setLandmarkWeight] = useState<number>(
     DEFAULT_LANDMARK_WEIGHT,
   );
@@ -139,19 +130,17 @@ export default function Explorer() {
   );
   // −1 = prefer shade, +1 = prefer sun, 0 = off; the shell follows the clock while this is set.
   const [shadeWeight, setShadeWeight] = useState<number>(DEFAULT_SHADE_WEIGHT);
-  // Rain shelter (decks plus canopy) and the scaffolding gate. Both read the same per-edge shed
-  // coverage, which moves only with the picked day, so a clock tick re-aims its sun.
+  // Both read the per-edge shed coverage, which moves only with the picked day.
   const [shelterWeight, setShelterWeight] = useState<number>(
     DEFAULT_SHELTER_WEIGHT,
   );
   const [allowSheds, setAllowSheds] = useState<boolean>(true);
-  // The penalty on time spent on a train, which opens at its maximum: this is a walking map.
+  // Opens at its maximum: this is a walking map.
   const [transitWeight, setTransitWeight] = useState<number>(
     DEFAULT_TRANSIT_WEIGHT,
   );
   const [allowCrossings, setAllowCrossings] = useState<boolean>(false);
 
-  // The cost context every search runs against, and what the URL and the share link carry.
   const weights: RouteWeights = useMemo(
     () => ({
       tree: treeWeight,
@@ -192,8 +181,7 @@ export default function Explorer() {
     ],
   );
 
-  // Toggle one overlay. Tree genus is exclusive: turning it on clears the rest, and turning on any
-  // normal layer clears it — so the dense per-genus recoloring never fights the other overlays.
+  // Tree genus is exclusive both ways, so its dense recoloring never fights the other overlays.
   const handleToggleOverlay = useCallback((id: OverlayId) => {
     setActiveOverlays((current) => {
       const next = new Set(current);
@@ -283,8 +271,6 @@ export default function Explorer() {
     persistWeight("transit", weight);
   }, []);
 
-  // The three switches, by key rather than a callback each: they are a table now (src/routing/
-  // factors.tsx), and a callback each would be a fourth place to add a line every time one is added.
   const handleGate = useCallback((key: GateKey, on: boolean) => {
     const setters: Record<GateKey, (on: boolean) => void> = {
       allowFerries: setAllowFerries,
@@ -295,8 +281,6 @@ export default function Explorer() {
     updateSettings({ [key]: on });
   }, []);
 
-  // The settings page edits the same weights the panel does, and sends a key and a value rather than
-  // carrying a callback per factor.
   const handleWeight = useCallback(
     (key: FactorKey, weight: number) => {
       const setters: Record<FactorKey, (weight: number) => void> = {
@@ -362,9 +346,7 @@ export default function Explorer() {
     setAllowCrossings(route.weights.allowCrossings);
     const overlays = decodeView(params).overlays ?? storedOverlays();
     if (overlays) {
-      // unknown ids (a stale "trees" from before the canopy switch) are dropped, and a set that
-      // names an exclusive layer alongside others is cut back to it — the invariant the toggle
-      // handler keeps has to hold however the set arrives
+      // Unknown ids (e.g. a stale "trees") are dropped, and exclusivity applies as in the toggle.
       setActiveOverlays(
         new Set(applyExclusivity(overlays.filter(isOverlayId))),
       );

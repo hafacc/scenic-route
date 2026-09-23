@@ -9,12 +9,7 @@ import {
 } from "../src/overlays/registry";
 import { useMapTheme } from "./use-map-theme";
 
-// The key for a map carrying overlays: which added color is which layer. One color per row, taken
-// from what that layer actually paints with, so the key cannot come to disagree with the map under
-// it. Deliberately inert — the layers menu is where a layer is turned off, and a key that also
-// toggled would be a second, half-hidden copy of it.
-//
-// It says nothing about the genus overlay, which goes solo and has a key of its own.
+// Colors come from each layer's own paint so the key can't drift. Toggling lives in the menu.
 export default function LayerLegend({
   active,
   city,

@@ -11,11 +11,7 @@ import {
 import manifest from "../src/tree-cover/manifest.json";
 import { useCity } from "./city-context";
 
-// The genus overlay's key: the 12 ranked genera (in id order) plus the "Other" bucket, each a
-// true-color swatch beside its common name. Swatches use the same palette the tiles draw with
-// and are drawn in their own colors, which are categorical and the same in both themes. Each
-// row is a toggle: clicking it hides or shows that genus across both halves of the overlay (the
-// raster tiles and the live dots), which read the same selection store.
+// Swatches use the categorical tile palette. Rows toggle a genus for both tiles and dots.
 export default function TreeLegend() {
   const active = useCity();
   const genus = manifest.cities.find((city) => city.id === active.id)?.field
@@ -32,8 +28,6 @@ export default function TreeLegend() {
   const rows = genus.table.map((entry, id) => ({ id, common: entry.common }));
   rows.push({ id: OTHER_GENUS_ID, common: "Other" });
 
-  // One button flips the whole selection: with any genus on it clears them, with none on it
-  // restores the full set — a fast way back from a single-genus view to the all-genera texture.
   const anyOn = enabled.size > 0;
 
   return (

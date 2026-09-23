@@ -1,14 +1,11 @@
 "use client";
 
-// The map's divIcons, shared by the map view and the route layer. Kept in their own module so
-// the two components can reuse the exact same markers without importing across each other.
 
 import L from "leaflet";
 import { SEARCH_PIN_COLOR } from "../src/overlays/colors";
 import { hexToRgb, type ThemeName } from "../src/theme/palette";
 
-// The teardrop both dropped pins are cut from. The gradient id has to differ between them: the two
-// SVGs sit in one document, and a repeated id paints whichever was defined first.
+// The gradient id must differ per pin, since both SVGs share one document.
 function teardropSvg(gradientId: string, from: string, to: string): string {
   return `
 <svg xmlns="http://www.w3.org/2000/svg" width="30" height="40" viewBox="0 0 30 40">
@@ -33,16 +30,13 @@ export const savedIcon = L.divIcon({
   tooltipAnchor: [0, -34],
 });
 
-// The same hue at a lower lightness, keeping the saturation, so one themed color draws the whole
-// teardrop: the gradient reads as the pin lit from above rather than as two authored colors, which
-// mixing toward black does not — that drains the color to gray.
+// Darkened by lightness at fixed saturation; mixing toward black drains the color to gray.
 function shaded(hex: string, scale: number): string {
   const { red, green, blue } = hexToRgb(hex);
   const channels = [red, green, blue].map((channel) => channel / 255);
   const lightness = (Math.max(...channels) + Math.min(...channels)) / 2;
   const darker = lightness * scale;
-  // How far each channel sits from the midpoint is rescaled by the room the darker midpoint leaves
-  // for it, which is what holds the saturation as the lightness drops.
+  // Rescaling to the room the darker midpoint leaves is what holds saturation.
   const room =
     (1 - Math.abs(2 * darker - 1)) / (1 - Math.abs(2 * lightness - 1));
   const hexOf = (channel: number): string =>
@@ -54,13 +48,7 @@ function shaded(hex: string, scale: number): string {
   return `#${channels.map(hexOf).join("")}`;
 }
 
-// A place the reader looked up, in the app's own green. That green also means the route destination
-// and an admin's saved note, so a search result and a destination read alike — the two are never far
-// apart in practice, since the directions control is what turns one into the other.
-//
-// Built per theme rather than once at import, because the green is a light/dark pair like every
-// other color on this map (src/overlays/colors.ts) and the marker is handed a fresh icon when the
-// theme flips.
+// Built per theme, since the green is a light/dark pair.
 export function searchIcon(theme: ThemeName, accent?: string | null): L.DivIcon {
   const green = accent ?? SEARCH_PIN_COLOR[theme];
   return L.divIcon({
@@ -71,8 +59,6 @@ export function searchIcon(theme: ThemeName, accent?: string | null): L.DivIcon 
   });
 }
 
-// The point a route ends at, or the pin a tap drops. Green by default, and in the deck's own accent
-// where it has one, so a mode's color reaches the marks on the map and not only its chrome.
 export function destIcon(accent: string | null): L.DivIcon {
   if (accent === null) {
     return savedIcon;
@@ -88,7 +74,7 @@ export function destIcon(accent: string | null): L.DivIcon {
   }
 }
 
-// The route start: a static dot (no pulse ring — it's a fixed endpoint, not the live location).
+// The route start: a static dot, without the live location's pulse ring.
 export const startIcon = L.divIcon({
   className: "",
   html: '<div class="scenic-draft-pin"><div class="scenic-draft-pin-dot"></div></div>',

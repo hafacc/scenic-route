@@ -48,8 +48,7 @@ import { ModesControls, ModesPanels } from "./deck";
 import ModeLayers from "./layer-list";
 import type { CardView } from "./route-cards";
 
-// One array for every render before a plan lands, so the memos below see the same identity and the
-// route grid is not told its lines changed.
+// One shared array before a plan lands, so the memos keep identity.
 const NO_ROUTES: readonly PlannedRoute[] = [];
 
 function summaryOf(result: RouteResult): CardSummary {
@@ -64,25 +63,21 @@ function summaryOf(result: RouteResult): CardSummary {
 export default function Modes() {
   const [modeId, setModeId] = useState<ModeId>(DEFAULT_MODE.id);
   const [toggles, setToggles] = useState<Toggles>(DEFAULT_TOGGLES);
-  // Which card the reader is walking, by index. Null is browsing them all.
+  // By index; null is browsing them all.
   const [alt, setAlt] = useState<number | null>(null);
-  // Which card the pointer is over, which is drawn as the chosen one is while it lasts.
   const [hovered, setHovered] = useState<number | null>(null);
   const [{ landed, pending, capturedAt }, dispatch] = useReducer(
     planReducer,
     NO_PLAN,
   );
-  // Per mode, the overlays switched off in its layer list. Read from settings when the link is,
-  // rather than at first render: the server render has no settings to read.
+  // Read when the link is, not at first render, since the server render has no settings.
   const [hiddenLayers, setHiddenLayers] = useState<
     Partial<Record<ModeId, readonly OverlayId[]>>
   >({});
-  // Whether the directions screen is up. A destination puts it there; only the close takes it away,
-  // so emptying a field asks the question again instead of dropping back to the search.
+  // Only the close takes it away, so emptying a field asks again.
   const [directionsOpen, setDirectionsOpen] = useState<boolean>(false);
   const planId = useRef<number>(0);
-  // Every way the reader changes the question, and the only thing that moves the departure time:
-  // the routes on screen answer the minute they were asked for, not the minute it is now.
+  // The only thing that moves the departure time: the routes answer the minute they were asked for.
   const recapture = useCallback(() => {
     dispatch({
       kind: "captured",
@@ -90,8 +85,7 @@ export default function Modes() {
     });
   }, []);
 
-  // Both are answers about the shell's city and its graph, so they are asked at the shell rather
-  // than mirrored into state that would trail a city switch by a render.
+  // Asked at the shell rather than mirrored into state that would trail a city switch by a render.
   const weights = useCallback(
     ({ city, available }: RoutingContext): RouteWeights =>
       effectiveWeights(modeForCity(city, modeId), toggles, available),
@@ -113,9 +107,7 @@ export default function Modes() {
     [modeId],
   );
 
-  // Keyed on the mode this city resolved to, which is the key everything above reads: a city without
-  // the stored mode shows another one, and the stored id would hide layers of a mode not on screen.
-  // The resolved `Mode` rather than its id, so the stored one cannot be handed in by mistake.
+  // Keyed on the resolved mode, not the stored id, which may name a mode this city doesn't show.
   const handleToggleLayer = useCallback(
     (mode: Mode, id: OverlayId) => {
       const hidden = hiddenLayers[mode.id] ?? [];
@@ -129,7 +121,6 @@ export default function Modes() {
     [hiddenLayers],
   );
 
-  // The mode's layers, and the only place they are turned off: the key is the menu here.
   const legend = useCallback(
     ({ city }: RoutingContext) => {
       const mode = modeForCity(city, modeId);
@@ -145,8 +136,7 @@ export default function Modes() {
     [modeId, hiddenLayers, handleToggleLayer],
   );
 
-  // The cards wait for the whole sweep: their colors and their bold chips are settled across
-  // the whole set.
+  // The cards wait for the whole sweep, since their colors and bold chips depend on the set.
   const solve = useCallback(
     async (request: SolveRequest): Promise<SolveReply | null> => {
       const id = ++planId.current;
@@ -169,7 +159,7 @@ export default function Modes() {
         throw error;
       }
       if (plan === null) {
-        // A newer plan overtook this one; the flag is that plan's now, and this one leaves it alone.
+        // A newer plan overtook this one and owns the flag now.
         dispatch({ kind: "failed", id });
         return null;
       }
@@ -186,8 +176,7 @@ export default function Modes() {
           plan,
         },
       });
-      // The link's card, or the one the reader was on before this sweep, only means something while
-      // this plan has a card there.
+      // Only meaningful while this plan has a card at that index.
       setAlt((current) => clampSelection(current, plan.routes.length));
       return { result: plan.routes[0]?.result ?? null, changed: true };
     },
@@ -195,8 +184,7 @@ export default function Modes() {
   );
 
   const routes = landed?.plan.routes ?? NO_ROUTES;
-  // Drawn full width while nothing is selected. Cards run most scenic first (`CARD_ORDER`), so the
-  // first of them is the max-scenic route, which has been on the map since the sweep started.
+  // Cards run most scenic first (`CARD_ORDER`), so the first is the route already on the map.
   const highlighted = hovered ?? alt ?? 0;
 
   const colors = useMemo<string[]>(
@@ -221,9 +209,6 @@ export default function Modes() {
 
   const planning = pending !== null;
 
-  // Choosing a card is choosing a route: the ones not taken come off the map with their badges, and
-  // going back brings them out again. While a sweep is running they all wear the unselected style,
-  // which is the map's half of the dimmed list.
   const lines: RouteLine[] = useMemo(() => {
     const all = routes.map((route, index) => ({
       result: route.result,
@@ -236,13 +221,11 @@ export default function Modes() {
     return alt === null ? all : all.filter((_, index) => index === alt);
   }, [routes, colors, highlighted, alt, planning]);
 
-  // Tapping a line is tapping its card; the chosen route's own line is the only one left to tap,
-  // and tapping it changes nothing.
   const handleSelectLine = useCallback((index: number) => {
     setAlt((current) => current ?? index);
   }, []);
 
-  // The selected card, or the max-scenic candidate while the FIRST sweep is still running.
+  // The max-scenic candidate stands in while the first sweep runs.
   const chosen = useMemo(() => {
     if (landed) {
       const result = routes[alt ?? 0]?.result;
@@ -274,18 +257,13 @@ export default function Modes() {
     [recapture],
   );
 
-  // Back to the list from the card being walked: the reader is choosing again, so they choose from
-  // routes planned now rather than from the ones this trip was planned with however long ago.
+  // Going back replans, so the reader chooses from routes planned now, not when this trip began.
   const handleBack = useCallback(() => {
     setAlt(null);
     recapture();
   }, [recapture]);
 
-  // Everything the directions screen was about, dropped together: the shell has already let go of
-  // the endpoints and the route by the time this runs. Both the close button and the shell dropping
-  // the route on its own — a region switch, which leaves the endpoints in a city nobody is looking
-  // at — come through here, so either way the card goes back to the mode rather than to an empty
-  // directions screen.
+  // Also the shell's `onRoutingReset`; either way it has already dropped the endpoints and the route.
   const handleClose = useCallback(() => {
     setDirectionsOpen(false);
     setAlt(null);
@@ -357,9 +335,7 @@ export default function Modes() {
       tapSearch={!directionsOpen}
       liveDrag={false}
       deck={(shell) => {
-        // A mode, a switch or a moved endpoint with the card shrunk away replans, so there is no
-        // chosen route left to peek at: the card comes back to show the ones there are. An act that
-        // answers false retired nothing, and the bar stays where it is.
+        // Replanning leaves no chosen route to peek at, so the shrunk card comes back.
         const expand = (act: () => boolean): void => {
           if (act() && shell.minimized) {
             shell.onToggleMinimize();
@@ -370,8 +346,7 @@ export default function Modes() {
           toggles,
           alt,
           cards,
-          // A dragged pin holds the plan on screen the way a running sweep does, and says so the
-          // same way; the sweep itself starts on the drop.
+          // A dragged pin holds the plan like a running sweep; the sweep starts on the drop.
           planning: planning || shell.dragging,
           planningLine:
             pending?.preview && landed === null

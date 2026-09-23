@@ -9,9 +9,6 @@ import type {
 import ModeRow from "./mode-row";
 import ToggleRow from "./toggle-row";
 
-// The one row of controls that is about the walk rather than about this trip: the modes, which
-// scroll, and the switches, which are pinned beside them. It heads the card on a phone and floats
-// above the map on a wide screen — one component, two placements, so the two cannot drift.
 export default function ModeBar({
   modes,
   mode,

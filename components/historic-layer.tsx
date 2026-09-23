@@ -9,13 +9,10 @@ import { KEEP_BUFFER } from "../src/tiles/raster";
 import manifest from "../src/tree-cover/manifest.json";
 import { useCity } from "./city-context";
 
-// The active city's designated historic districts (magic HDST), filled. Like the industrial lots it
-// rides in a pane of its own, and under them: it is the broadest areal wash the map draws — whole
-// neighborhoods — so anything finer put beneath it would be lost. The decoding and the drawing live
-// in the tile worker (src/tiles/historic.ts).
+// The broadest areal wash on the map, so it sits under every finer pane or would hide it.
 
 const PANE_NAME = "scenic-historic";
-const PANE_Z_INDEX = 265; // its own rung, under the industrial lots (270) and over the tree fills (250)
+const PANE_Z_INDEX = 265; // under industrial (270), over trees (250)
 const MIN_ZOOM = 11;
 const MAX_ZOOM = 20;
 

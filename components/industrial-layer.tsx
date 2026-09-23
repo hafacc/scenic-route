@@ -9,12 +9,10 @@ import { KEEP_BUFFER } from "../src/tiles/raster";
 import manifest from "../src/tree-cover/manifest.json";
 import { useCity } from "./city-context";
 
-// The manufacturing and industrial tax lots (magic INDL), filled. Like the lines it rides in a pane
-// of its own, and under them: it is an areal wash, and a highway or a ferry line drawn beneath it
-// would be lost. The decoding and the drawing live in the tile worker (src/tiles/industrial.ts).
+// Its own pane under the lines, since an areal wash would hide a line drawn beneath it.
 
 const PANE_NAME = "scenic-industrial";
-const PANE_Z_INDEX = 270; // its own rung, under the shade wash (275) and the commercial band (280)
+const PANE_Z_INDEX = 270; // under shade (275), commercial (280)
 const MIN_ZOOM = 11;
 const MAX_ZOOM = 20;
 
