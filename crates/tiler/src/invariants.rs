@@ -1,17 +1,11 @@
-//! Whole-city properties of the finished walking network. Every check here is a pure function of
-//! the edge view below, so each is unit-tested on a hand-built network and then run once, by
-//! `graph::run`, over the real city — the same shape as the existence gate's two guards. DESIGN.md,
-//! "What the whole city is held to", is why these are checked here rather than in a fixture, and how
-//! each of their bounds in `graph.rs` was chosen.
+//! Whole-city properties of the finished walking network, checked per city by `graph::run`.
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use crate::graph::{KIND_CROSSING, KIND_LINK, KIND_SIDEWALK, SIDE_EAST, SIDE_NORTH};
 
-/// One finished edge, as the checks read it. `alley` and `demoted` come from the CSCL record the
-/// edge was derived from: an alley is `rw_type` 10, and a demoted street is one the existence gate
-/// found no pavement on and dropped to its centerline.
+/// One finished edge; `alley` is `rw_type` 10, `demoted` a street with no pavement found.
 pub struct Edge {
     pub a: u32,
     pub b: u32,
@@ -27,8 +21,7 @@ pub struct Edge {
     pub bearing_b: f64,
 }
 
-/// The finished network: `node_count` nodes numbered `0..node_count`, joined by `edges`. The node
-/// coordinates are the graph's own quantized units, with `meters_per_unit` converting them.
+/// The finished network; node coordinates are the graph's quantized units.
 pub struct Walk<'a> {
     pub node_count: usize,
     pub node_x: &'a [i32],
@@ -81,12 +74,7 @@ fn percentile(sorted: &[f64], fraction: f64) -> f64 {
     sorted[rank.clamp(1, sorted.len()) - 1]
 }
 
-/// How much of the alley network hangs off the main body of the walking graph.
-///
-/// An alley is walkable in itself whether or not anything reaches it, so a break between an alley
-/// and the pavement it opens off is invisible to every local check: the alley's own edges are all
-/// present, all connected to each other, and all useless. The router answers a trip that ends on one
-/// by silently snapping to the nearest street instead, so it is invisible from the app too.
+/// How much of the alley network hangs off the main body, invisible to local checks.
 pub struct AlleyReach {
     pub total_km: f64,
     pub off_component_km: f64,
@@ -105,7 +93,7 @@ fn components(walk: &Walk) -> (u32, Vec<u32>) {
     for edge in walk.edges {
         *km.entry(roots[edge.a as usize]).or_insert(0.0) += f64::from(edge.length);
     }
-    // Ties break on the lower root so the answer does not depend on the hash order.
+    // Ties break on the lower root so the answer doesn't depend on hash order.
     let main = km
         .into_iter()
         .max_by(|left, right| {
@@ -134,12 +122,7 @@ pub fn alley_reach(walk: &Walk) -> AlleyReach {
     reach
 }
 
-/// How far an alley mouth has to walk to stand on mapped pavement.
-///
-/// A mouth is a node where the alley meets something that is not an alley. Reaching pavement is not
-/// the same as being connected to it: a mouth that can only get to the sidewalk it is five meters
-/// from by going round the block is connected, is reachable, and is wrong. The distance is measured
-/// through the graph, so that detour is what it reports.
+/// How far an alley mouth walks through the graph to mapped pavement, detours included.
 pub struct MouthWalk {
     pub mouths: usize,
     pub stranded: usize,
@@ -149,8 +132,7 @@ pub struct MouthWalk {
 
 pub fn alley_mouth_walk(walk: &Walk) -> MouthWalk {
     let incidence = walk.incidence();
-    // Multi-source Dijkstra out of every node an OSM sidewalk touches, so each node learns its walk
-    // to the nearest mapped pavement in one sweep.
+    // Multi-source Dijkstra from every OSM-sidewalk node: each node's walk to pavement.
     let mut distance = vec![f64::INFINITY; walk.node_count];
     let mut queue: BinaryHeap<(std::cmp::Reverse<u64>, u32)> = BinaryHeap::new();
     for edge in walk.edges {
@@ -206,10 +188,7 @@ pub fn alley_mouth_walk(walk: &Walk) -> MouthWalk {
     }
 }
 
-/// Crossings that stop in the middle of the road. A marked crossing of a divided street is drawn as
-/// two ways chained through the traffic island between them, so a build that loses the islands keeps
-/// the two halves and joins neither: the walker steps off the curb, reaches the median, and the
-/// route ends there. The finished shape is a crossing whose far end has nothing else on it.
+/// Crossings that stop mid-road: losing a divided street's traffic island leaves a dead-ended half.
 pub fn crossings_to_nowhere(walk: &Walk) -> usize {
     let incidence = walk.incidence();
     walk.edges
@@ -221,14 +200,7 @@ pub fn crossings_to_nowhere(walk: &Walk) -> usize {
         .count()
 }
 
-/// Pavement on the side of a street that has none. `one_sided` holds the CSCL streets the existence
-/// gate left pavement on exactly one side of; a phantom is one of those carrying sidewalk edges on
-/// two opposing sides at once, which is the graph putting a walker on ground the road runs over.
-///
-/// The test is the pair of *opposite* labels rather than the label the gate chose, because a label
-/// is taken from the chord of the edge that carries it: a street's two sides always face opposite
-/// winds, but one side broken into pieces by the conflation drifts between neighboring winds along
-/// a bend. Opposition is the part of the label that means something here.
+/// One-sided streets with sidewalk on opposite sides; opposites, since a bend drifts a wind.
 pub fn phantom_sidewalks(walk: &Walk, one_sided: &HashSet<u32>) -> usize {
     let mut sides: HashMap<u32, u8> = HashMap::new();
     for edge in walk.edges.iter().filter(|edge| edge.kind == KIND_SIDEWALK) {
@@ -236,7 +208,7 @@ pub fn phantom_sidewalks(walk: &Walk, one_sided: &HashSet<u32>) -> usize {
             *sides.entry(edge.source_id).or_insert(0) |= 1 << edge.side;
         }
     }
-    // The labels are 1 north, 2 east, 3 south, 4 west, so a wind and its opposite sit two apart.
+    // Labels are 1 north, 2 east, 3 south, 4 west, so a wind and its opposite sit two apart.
     let opposed = |mask: u8, wind: u8| mask & (1 << wind) != 0 && mask & (1 << (wind + 2)) != 0;
     sides
         .values()
@@ -244,9 +216,7 @@ pub fn phantom_sidewalks(walk: &Walk, one_sided: &HashSet<u32>) -> usize {
         .count()
 }
 
-/// The link edges' lengths: the stitches the graph draws where an entrance, a park path or a corner
-/// has to reach the pavement beside it. The router spends one of these on the way into every plaza,
-/// so a long one is a walker sent out to the roadway and back.
+/// Link edge lengths; a long link sends the walker out to the roadway and back.
 pub struct LinkLengths {
     pub links: usize,
     pub p99_meters: f64,
@@ -268,11 +238,7 @@ pub fn link_lengths(walk: &Walk) -> LinkLengths {
     }
 }
 
-/// The worst neighborhood's pavement, over a grid of `cell_meters` squares. Per cell this is the
-/// share of its walking kilometers that are streets the gate found no pavement on — an ordinary
-/// neighborhood has few, and a neighborhood nobody has mapped and whose survey went missing has
-/// nothing but. Alleys are excluded: they are demoted on purpose. Cells under `floor_km` of walking
-/// network are skipped, so a park edge or a strip of waterfront cannot be the worst cell.
+/// The worst cell's share of walking km on streets with no pavement; alleys excluded.
 pub struct PavementCells {
     pub cells: usize,
     pub p90_demoted_share: f64,
@@ -310,11 +276,7 @@ pub fn pavement_cells(walk: &Walk, cell_meters: f64, floor_km: f64) -> PavementC
     }
 }
 
-/// Hand-offs that double back. Where a derived sidewalk meets a mapped one at a node with nothing
-/// else on it, the two should carry on in roughly the same direction; a turn past a right angle is
-/// either a sliver between two mappings of the same pavement or the wrap round the head of a
-/// cul-de-sac, which is correct topology that merely draws as a hairpin. The two are not
-/// distinguishable here, so this is a count to watch rather than a property to hold.
+/// Hand-offs turning past a right angle; cul-de-sac hairpins are legitimate, so it's a count.
 pub fn seam_hairpins(walk: &Walk) -> usize {
     let incidence = walk.incidence();
     (0..walk.node_count)
@@ -337,9 +299,7 @@ pub fn seam_hairpins(walk: &Walk) -> usize {
                     edge.bearing_b
                 }
             };
-            // Both bearings point away from the shared node, so a straight-through hand-off has them
-            // opposed — a separation of half a turn. A hairpin is the two leaving within a right
-            // angle of each other, which is the walker turning back the way they came.
+            // Bearings point away from the node: straight is opposed, a hairpin within 90 degrees.
             let gap = (leaving(left) - leaving(right)).rem_euclid(std::f64::consts::TAU);
             let separation = gap.min(std::f64::consts::TAU - gap);
             separation < std::f64::consts::FRAC_PI_2
@@ -352,9 +312,7 @@ mod tests {
     use super::*;
     use crate::graph::{KIND_PATH, SIDE_SOUTH};
 
-    /// One edge of a hand-built network, straight between its two nodes and 10 m long unless said
-    /// otherwise. The bearings are the straight line's, so a hand-off between two of these bends by
-    /// whatever the geometry bends by.
+    /// One hand-built edge, straight between its nodes and 10 m long unless said otherwise.
     fn edge(a: u32, b: u32) -> Edge {
         Edge {
             a,
@@ -373,7 +331,7 @@ mod tests {
 
     const NO_SOURCE: u32 = 0xFFFF_FFFF;
 
-    /// A network over `node_count` nodes, all at the origin: the checks that read coordinates say so.
+    /// A network over `node_count` nodes, all at the origin.
     fn walk<'a>(node_count: usize, zeros: &'a [i32], edges: &'a [Edge]) -> Walk<'a> {
         Walk {
             node_count,
@@ -387,10 +345,7 @@ mod tests {
     #[test]
     fn an_alley_nothing_reaches_is_off_the_component_it_should_be_on() {
         let zeros = [0i32; 5];
-        // The city's own shape: a street's two sidewalks (0-1-2) with an alley (3-4) behind the
-        // block. The alley's mouth stands on the street's centerline with no node cut there, so
-        // nothing joins the two — which is exactly what the graph did before the mouths were noded,
-        // over 264 of 302 km of alley.
+        // Two sidewalks (0-1-2) and an alley (3-4) whose mouth sits un-noded on the centerline.
         let mut edges = vec![edge(0, 1), edge(1, 2), edge(3, 4)];
         edges[2].alley = true;
         edges[2].kind = KIND_PATH;
@@ -408,9 +363,7 @@ mod tests {
     #[test]
     fn an_alley_mouth_walks_to_the_pavement_it_can_reach_not_the_one_it_faces() {
         let zeros = [0i32; 6];
-        // The alley 0-3, whose mouth is node 3, standing beside the middle of one unbroken mapped
-        // sidewalk way 1-2 whose only nodes are at the far ends of the block. Nothing binds the two,
-        // so the mouth's only route onto that pavement is round the block, 3-4-5-1.
+        // Alley 0-3 beside a sidewalk 1-2 noded only at its ends: round the block.
         let mut edges = vec![edge(0, 3), edge(3, 4), edge(4, 5), edge(5, 1), edge(1, 2)];
         edges[4].osm = true;
         edges[0].alley = true;
@@ -419,8 +372,7 @@ mod tests {
         assert_eq!(round_the_block.mouths, 1);
         assert_eq!(round_the_block.median_meters, 30.0);
 
-        // The curb cut: the way is cut where the mouth stands beside it, and the mouth binds to the
-        // cut. The two halves keep the way's mapped provenance, so the walk is nothing at all.
+        // The way is cut beside the mouth and keeps mapped provenance, so the walk is zero.
         let mut cut = vec![
             edge(0, 3),
             edge(3, 4),
@@ -469,8 +421,7 @@ mod tests {
     fn a_one_sided_street_with_pavement_on_the_far_side_too_is_a_phantom() {
         let zeros = [0i32; 4];
         let one_sided: HashSet<u32> = [7u32].into_iter().collect();
-        // The side the gate kept, broken into two pieces by a bend, so the label drifts from north
-        // to east. Drift is not a phantom: the pieces are the same pavement.
+        // The kept side, broken by a bend so its label drifts north to east: not a phantom.
         let mut drifted = vec![edge(0, 1), edge(1, 2)];
         for piece in &mut drifted {
             piece.source_id = 7;
@@ -479,8 +430,7 @@ mod tests {
         drifted[1].side = SIDE_EAST;
         assert_eq!(phantom_sidewalks(&walk(4, &zeros, &drifted), &one_sided), 0);
 
-        // Pavement facing the opposite wind is the other side of the street, which this street does
-        // not have.
+        // Pavement facing the opposite wind is the other side, which this street lacks.
         let mut both = drifted;
         both.push(edge(2, 3));
         both[2].source_id = 7;
@@ -504,9 +454,7 @@ mod tests {
 
     #[test]
     fn a_neighborhood_of_streets_with_no_pavement_is_its_own_cell() {
-        // Two cells a kilometer apart in x: an ordinary one at the origin and one whose streets the
-        // gate found no pavement on at all. The cell scores the share of its walking kilometers that
-        // are demoted street, so the bad cell reads 1 and the good one 0.
+        // Two cells 1 km apart: an ordinary one, and one with no pavement found, reading 0 and 1.
         let node_x = [0i32, 0, 2000, 2000];
         let node_y = [0i32; 4];
         let mut edges = vec![edge(0, 1), edge(2, 3)];
@@ -548,8 +496,7 @@ mod tests {
     #[test]
     fn a_hand_off_that_doubles_back_is_a_hairpin_and_one_that_carries_on_is_not() {
         let zeros = [0i32; 3];
-        // A derived sidewalk arriving at node 1 heading east, and a mapped one leaving it heading
-        // east: the two bearings out of the shared node are opposed, which is straight through.
+        // Derived sidewalk into node 1 heading east, mapped one out east: straight through.
         let mut straight = vec![edge(0, 1), edge(1, 2)];
         straight[0].bearing_b = std::f64::consts::PI; // 0 -> 1 runs east, so it leaves 1 westward
         straight[1].bearing_a = 0.0;

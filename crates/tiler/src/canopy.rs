@@ -1,10 +1,4 @@
-//! The canopy pass: rasterizes data/canopy/<id>.bin — the measured 2017 LiDAR tree canopy,
-//! magic CNPY, ~1.08 M polygons — into a per-pixel coverage pyramid at
-//! public/tiles/canopy/{z}/{x}/{y}.webp, blurred and written as a VALUE: the covered fraction of
-//! ground lands in the tile's alpha channel and nothing here is colored. The emerald ramp lives
-//! only on the client, which applies it to the stored byte in a shader. This is the map's cover
-//! fill; the routing graph reads the same canopy through `densities`, so the block fill, the
-//! street lines and the routes all speak of one measured field. See scripts/README.md.
+//! The canopy pass: CNPY polygons into a blurred pyramid of cover in alpha, colored by the client.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,15 +16,9 @@ use crate::raster::{
     rasterize_land,
 };
 
-// The pixel is fraction-of-ground-under-canopy, so the polygon fill is antialiased by
-// rasterizing at 4x and averaging the block back down: a pixel half under canopy reads 0.5
-// rather than a hard 0/1 edge.
+// The pixel is the fraction of ground under canopy, so polygons are drawn at 4x and averaged.
 const SUPERSAMPLE: usize = 4;
-// The raw polygon coverage is too concentrated to read as density — a hard 1 under a crown, 0
-// between — and shade physically reaches past a crown's edge. So the fraction is convolved with
-// an isotropic Gaussian before coloring, the same blur the sidewalk sampler uses, at the same
-// sigma. Mirrors the ingest's FILL_SIGMA_METERS, which scripts/tree-data-fetch.ts hands to the
-// density pass and the manifest records as `field.fillSigmaMeters`.
+// Shade reaches past a crown's edge, so the fraction is blurred at FILL_SIGMA_METERS.
 const FILL_SIGMA_METERS: f64 = 15.0;
 
 pub struct Args {
@@ -39,9 +27,7 @@ pub struct Args {
     pub tiles: PathBuf,
 }
 
-/// One city's canopy, ready to rasterize: the polygons, a spatial grid so a tile touches only
-/// the polygons it must, and the land mask the coverage is clipped to so canopy never bleeds
-/// over water at the shoreline.
+/// One city's canopy, gridded for tile lookup and clipped to land so it never bleeds over water.
 struct Canopy {
     set: PolygonSet,
     grid: PolygonGrid,
@@ -50,8 +36,7 @@ struct Canopy {
     polygons: usize,
 }
 
-/// The build's totals. `land_pixels`/`canopy_sum` are accumulated only at MAX_ZOOM, where a
-/// pixel is a true patch of ground, so their ratio is the citywide mean canopy over land.
+/// Build totals, accumulated only at MAX_ZOOM so their ratio is the citywide mean canopy over land.
 #[derive(Clone, Copy, Default)]
 struct Stats {
     tiles: usize,
@@ -100,8 +85,7 @@ fn read_canopy(city: &City, data: &Path) -> Fallible<Option<Canopy>> {
     }))
 }
 
-/// The land pixels a tile contributes to the citywide mean — the denominator has to include
-/// leafless ground, not just canopy, so a tile with no polygons still counts its land.
+/// The land pixels a tile adds to the citywide mean's denominator, counted even with no polygons.
 fn land_pixel_count(land: &LandMask, rows: &[Option<usize>], cols: &[Option<usize>]) -> u64 {
     let mut total = 0;
     for base in rows.iter().flatten() {
@@ -114,19 +98,13 @@ fn land_pixel_count(land: &LandMask, rows: &[Option<usize>], cols: &[Option<usiz
     total
 }
 
-/// The per-pixel canopy fraction over one tile, or None where no canopy reaches it. Also the
-/// land pixels and summed canopy the stats want (both zero unless `want_stats`, which is set
-/// only at MAX_ZOOM). The polygons are rasterized supersampled, then the block is averaged and
-/// clipped to land.
+/// The per-pixel canopy fraction over one tile, or None where none reaches it.
 fn coverage(canopy: &Canopy, tile: &Tile, want_stats: bool) -> (Option<Vec<f32>>, u64, f64) {
     let zoom = tile.zoom;
     let origin_x = f64::from(tile.x) * TILE_SIZE as f64;
     let origin_y = f64::from(tile.y) * TILE_SIZE as f64;
 
-    // The blur runs in pixel space, so its sigma is the fill meters over this zoom's ground
-    // resolution at the tile's latitude. Below half a pixel it has nothing left to say and is
-    // skipped (the supersample average is already the field); above it the tile grows a halo of
-    // BLUR_RADII sigmas so the kernel has neighboring canopy to draw from and tiles do not seam.
+    // Sigma in pixels at this zoom and latitude; below half a pixel the blur is skipped.
     let center_lat = pixel_y_to_lat(origin_y + TILE_SIZE as f64 / 2.0, zoom);
     let meters_per_pixel =
         EQUATOR_METERS_PER_PIXEL * center_lat.to_radians().cos() / f64::from(1u32 << zoom);
@@ -198,8 +176,7 @@ fn coverage(canopy: &Canopy, tile: &Tile, want_stats: bool) -> (Option<Vec<f32>>
         return (None, land_pixels, 0.0);
     }
 
-    // Average each supersample block down to its pixel's covered fraction over the padded grid,
-    // then blur the field so shade grades out past a crown rather than stopping at its edge.
+    // Average each supersample block to its pixel, then blur so shade grades past a crown.
     let subpixels = (SUPERSAMPLE * SUPERSAMPLE) as f32;
     let mut field = vec![0.0f32; padded * padded];
     for pixel_y in 0..padded {
@@ -220,8 +197,7 @@ fn coverage(canopy: &Canopy, tile: &Tile, want_stats: bool) -> (Option<Vec<f32>>
         field
     };
 
-    // Crop the halo back off and clip to land: the kernel spread canopy over the shoreline, and
-    // only ground under the field counts, both for the pixel and for the citywide mean.
+    // Crop the halo and clip to land: the kernel spread canopy over the shoreline.
     let mut fraction = vec![0.0f32; TILE_SIZE * TILE_SIZE];
     let mut painted = false;
     let mut land_pixels = 0u64;
@@ -249,12 +225,7 @@ fn coverage(canopy: &Canopy, tile: &Tile, want_stats: bool) -> (Option<Vec<f32>>
     )
 }
 
-/// Write the canopy fraction itself into the tile's alpha channel, RGB left at zero, for the
-/// client to color. This is an EXACT re-encoding of what the pass used to bake, not a new
-/// quantization: the ramp LUT was indexed by `round_half_up(cover * 255.0)`, the identical 8-bit
-/// step of the identical fraction, so applying that ramp to the stored byte reproduces the old
-/// tiles pixel for pixel. The old `ramp[stop + 3] < MIN_ALPHA` skip is reproduced by `alpha == 0`,
-/// since the ramp's alpha only falls under MIN_ALPHA at cover 0.
+/// The canopy fraction in the alpha channel, RGB zero, for the client to color.
 fn paint(pixels: &mut [u8], fraction: &[f32]) -> bool {
     let mut painted = false;
     for (pixel, value) in fraction.iter().enumerate() {
@@ -293,9 +264,7 @@ fn render(
         }
     }
 
-    // Lossy, even though the tile is data now: WebP's lossy mode compresses the ALPHA plane
-    // losslessly, so the cover byte survives exactly, and the RGB it does quantize is a constant
-    // zero plane that costs almost nothing.
+    // Lossy WebP still stores alpha losslessly, so the cover byte survives exactly.
     let rendered = if painted {
         Some(encode_webp(&pixels)?)
     } else {

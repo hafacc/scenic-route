@@ -1,14 +1,4 @@
-//! The covered fraction at both sidewalks of every street vertex, and the cover distribution the
-//! manifest records. The second half of `tiler ingest`, run once scripts/tree-data-fetch.ts has
-//! written the source `.bin`s — the street file arrives with a zeroed density blob and leaves with
-//! it filled, in place.
-//!
-//! Cover is the measured 2017 LiDAR canopy, lightly blurred: a Gaussian convolution of the
-//! canopy indicator, sampled at each sidewalk offset. The street kernel is oriented — broad
-//! along the road so the color runs smooth, tight across it so the two sidewalks stay distinct
-//! — while the reported land distribution reads the isotropic fill kernel, the field the pyramid
-//! renders. The value is in [0, 1] by construction, and the byte it quantizes to is clamped to
-//! 254 so a closed-canopy sidewalk never reads a routing-free 255.
+//! Per-sidewalk canopy cover at every street vertex, and the manifest's cover distribution.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -30,8 +20,7 @@ use crate::sidewalks;
 
 const MAX_REJECTION_RATIO: usize = 100; // draws per accepted sample before the land is called empty
 
-/// Everything the ingest knows and the model needs. The paths are passed rather than derived
-/// so the binary has no opinion about where the repo's data lives.
+/// Everything the ingest knows and the model needs; paths are passed in, not derived.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Params {
@@ -51,8 +40,7 @@ pub struct Params {
 }
 
 impl Params {
-    /// The canopy blob, which `tiler ingest` also hands to the height pass that fills its crown
-    /// heights before this one convolves its polygons.
+    /// The canopy blob, whose crown heights the height pass fills before this convolves it.
     pub fn canopy(&self) -> &Path {
         &self.canopy
     }
@@ -69,19 +57,14 @@ pub struct Report {
     path_density: Option<Distribution>, // only when the params carried a paths file
 }
 
-/// Points drawn uniformly over the city's *ground area* and kept if they land on it — the
-/// population the reported cover distribution is taken over. Latitude is drawn uniform in
-/// sin(lat) rather than in degrees, so a degree at the top of the city is not worth more than
-/// one at the bottom.
+/// Points uniform over the city's land, latitude drawn uniform in sin(lat) so area weighs evenly.
 struct LandPoints {
     lngs: Vec<f64>,
     lats: Vec<f64>,
     draws: usize, // including the ones that missed the land
 }
 
-/// The mean cover the draw reports is a committed manifest value, so the draw is seeded: ChaCha8
-/// because `rand` documents it as reproducible across releases, which `SmallRng` — and `StdRng`
-/// across a major — explicitly are not.
+/// ChaCha8, since the mean is committed and `rand` guarantees only it reproducible across releases.
 fn sample_land_points(
     land: &mut PolygonIndex,
     box_: &Bounds,
@@ -144,10 +127,7 @@ fn distribution_of(values: &[f64], percentiles: &[u32]) -> Distribution {
     }
 }
 
-// The covered fraction at both sidewalks of every vertex of one network, in the vertex order of
-// its coordinate blob (left then right). A street is offset to its two sidewalks; a path, a
-// boardwalk or a step street has offset 0, so `half_offset_meters` returns 0 and the single
-// sample on the line stands for both of its sides. Shared by the street and path passes.
+// Covered fraction at both sidewalks of every vertex (left, right); an offset-0 path samples once.
 fn cover_at_vertices(
     network: &binfmt::Streets,
     projection: &Projection,
@@ -177,9 +157,7 @@ fn cover_at_vertices(
 
             let mut sampled = Vec::with_capacity(binfmt::SIDES * (to - from));
             for (vertex, bearing) in sidewalks::bearings(&xs, &ys).into_iter().enumerate() {
-                // The offset is placed in meter space, then handed back to the lng/lat field; the
-                // kernel is oriented to the street's bearing, tight across it so the two sidewalks
-                // do not blur into one.
+                // Oriented to the street's bearing so the two sidewalks don't blur into one.
                 let mut at = |x: f64, y: f64| {
                     blurred_cover(
                         canopy,
@@ -215,10 +193,7 @@ fn cover_at_vertices(
         .collect()
 }
 
-// Quantizes the sampled fractions into the file's density blob, in place: a covered fraction of
-// 0..1 to a byte of 0..254, left then right per vertex. The 254 ceiling is load-bearing — a
-// closed-canopy sidewalk that reached 255 would leave routing (`cost.ts`) with a free edge, its
-// `maxCover < 1` invariant broken.
+// Bytes 0..254: a 255 would give routing (`cost.ts`) a free edge, breaking `maxCover < 1`.
 fn fill_densities(network: &mut binfmt::Streets, densities: &[f64]) {
     for (byte, density) in network.densities_mut().iter_mut().zip(densities) {
         *byte = round_half_up(density * 255.0).min(254.0) as u8;
@@ -247,9 +222,7 @@ pub fn run(params: &Params) -> Fallible<Report> {
         params.cover_seed,
     )?;
 
-    // The reported cover over land is the field the pyramid renders — the isotropic fill kernel,
-    // not the street's oriented one — so `meanCoverOverLand` is the map's own mean. This is the
-    // figure the sanity check reads against the ~22% all-sources measurement.
+    // Land cover reads the isotropic fill kernel, so `meanCoverOverLand` matches the map.
     let isotropic = Bearing {
         along_x: 1.0,
         along_y: 0.0,
@@ -279,9 +252,7 @@ pub fn run(params: &Params) -> Fallible<Report> {
     fill_densities(&mut streets, &street_densities);
     fs::write(&params.streets, &streets.bytes)?;
 
-    // The OSM path network, when the ingest committed one: sampled with the identical loop (its
-    // records carry offset 0, so one line sample stands for both sides) and its own zeroed
-    // density blob filled in place, exactly as the streets file's was.
+    // The OSM path network, when present, filled in place by the same loop as the streets.
     let path_density = match &params.paths {
         Some(path) => {
             let mut paths = binfmt::read_paths(path)?;

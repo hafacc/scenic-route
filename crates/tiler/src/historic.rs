@@ -1,23 +1,5 @@
-//! The per-edge historic-district byte (GRPH v10, record byte 37): how much of a walk runs inside a
-//! designated historic district.
-//!
-//! The source (HDST) is a city's designating body's district BOUNDARIES — New York's Landmarks
-//! Preservation Commission, San Francisco's Planning Department — which are area outlines drawn
-//! around whole neighborhoods, street beds included, so a walker on an interior sidewalk is
-//! simply inside one,
-//! and the byte is the length-fraction of the edge that is: the underfoot containment integral of
-//! `geometry::contained_fraction`, the same shape the direct-canopy byte is measured with.
-//!
-//! Deliberately NOT industrial's sideways probes, though both read polygons. Industrial probes
-//! sideways because a walker is never *in* a tax lot — what it measures is what stands beside the
-//! walk. A district covers the walk itself, so probing would report the same thing on every interior
-//! street and would smear the discount one street-width past a boundary the designation drew where
-//! it did on purpose. Deliberately not the landmark fan-out either: a district is not a point with a
-//! decaying influence, it has a hard edge, and containment honours it exactly.
-//!
-//! A bridge or tunnel deck counts here where it does not for industrial, and for the reason that
-//! exemption exists: a rail yard passes UNDER a viaduct, where a viaduct through a district is still
-//! amid its fabric.
+//! Per-edge historic-district byte (GRPH v10, byte 37): the share of a walk inside a district.
+//! Districts include their street beds and have hard edges, so no sideways probe, and decks count.
 
 use std::path::Path;
 
@@ -28,9 +10,7 @@ use crate::binfmt::{self, Coord};
 use crate::geometry::{METERS_PER_DEGREE_LAT, PolygonGrid, PolygonSet, flatten, round_half_up};
 use crate::sampling::contained_fraction;
 
-/// Kept here rather than beside the other format constants in binfmt.rs, which is where it
-/// belongs by convention: the shade pass names binfmt.rs in its own code scope, so a constant
-/// added there re-renders the whole twenty-minute pyramid for a format shade never reads.
+/// Kept out of binfmt.rs, since shade hashes that module and would re-render for nothing.
 const HISTORIC_FORMAT: u16 = 1;
 
 const BYTE_CEILING: f64 = 254.0; // as the cover, scenic and direct-canopy bytes
@@ -58,8 +38,7 @@ fn fractions(
         .collect()
 }
 
-/// The historic-district byte of every edge. `reference_lat` is the graph origin's latitude, the one
-/// east-west scale the whole city is measured at, as the other per-edge bakes use.
+/// The historic-district byte of every edge.
 pub fn historic(
     edge_polys: &[Vec<Coord>],
     districts: &Path,
@@ -102,8 +81,7 @@ mod tests {
 
     const LAT: f64 = 40.7;
 
-    /// A point `east_meters` east and `north_meters` north of a reference in the middle of New
-    /// York, so the tests read in meters and still exercise the cos(lat) scaling of the real bake.
+    /// A point in meters from a reference in New York, so tests exercise the real cos(lat) scaling.
     fn at(east_meters: f64, north_meters: f64) -> Coord {
         Coord {
             lng: -74.0 + east_meters / meters_per_degree_lng(),
@@ -131,8 +109,7 @@ mod tests {
         fractions(&[poly.to_vec()], &set, &grid, meters_per_degree_lng())[0]
     }
 
-    /// The fraction of a 100 m east-west walk along the reference latitude that runs inside
-    /// `districts`.
+    /// The fraction of a 100 m east-west walk along the reference latitude inside `districts`.
     fn walk_fraction(districts: &[Polygon]) -> f64 {
         fraction_of(&[at(0.0, 0.0), at(100.0, 0.0)], districts)
     }
@@ -141,8 +118,7 @@ mod tests {
         round_half_up(fraction * 255.0).min(BYTE_CEILING) as u8
     }
 
-    /// The whole reason the boundaries can be read underfoot: a district outline includes the street
-    /// beds it encloses, so an interior sidewalk is inside it for its whole length.
+    /// A district includes its street beds, so an interior sidewalk is inside for its whole length.
     #[test]
     fn a_walk_down_an_interior_street_is_inside_for_its_whole_length() {
         let fraction = walk_fraction(&[vec![rectangle(-50.0, -50.0, 150.0, 50.0)]]);
@@ -151,8 +127,7 @@ mod tests {
         assert_eq!(byte_of(fraction), 254); // never 255: the client's maxHistoric must stay < 1
     }
 
-    /// The hard edge is the point. Industrial's probes reach 27 m to either side; a district's
-    /// discount stops at the boundary, so the block across the street from one reads nothing.
+    /// Unlike industrial's 27 m probe, the discount stops at the boundary.
     #[test]
     fn a_walk_beside_a_district_is_not_in_it() {
         assert_eq!(
@@ -170,9 +145,7 @@ mod tests {
             (fraction - 0.4).abs() < 0.01,
             "40 m of a 100 m walk reads {fraction}"
         );
-        // 0.4 of 255 is 102, but the fixture's walk is a hair over 100 m once its degrees are
-        // meters, so it takes 101 samples rather than 100 and the share lands one step under. The
-        // byte follows the share the sampler measured, not the round number the fixture meant.
+        // The walk is a hair over 100 m, so it takes 101 samples and lands one step under 102.
         assert!(
             matches!(byte_of(fraction), 101 | 102),
             "{fraction} reads {}",
@@ -180,10 +153,7 @@ mod tests {
         );
     }
 
-    /// Districts nest: four of New York's sit inside larger ones (Carnegie Hill in Expanded Carnegie
-    /// Hill, and so on). `contains_point` ORs its candidates, so an overlap reads as the union it is
-    /// rather than canceling to a hole — which is why no city's parts need a dissolve before the
-    /// bake.
+    /// Districts nest, and `contains_point` ORs candidates, so an overlap is a union, not a hole.
     #[test]
     fn a_district_inside_another_reads_as_the_union_of_the_two() {
         let enclosing = vec![rectangle(-50.0, -50.0, 150.0, 50.0)];
@@ -200,7 +170,7 @@ mod tests {
         );
     }
 
-    /// A ferry carries no polyline, and must not lift the graph-wide max the A* floor is taken from.
+    /// A ferry carries no polyline and must not lift the graph-wide max the A* floor uses.
     #[test]
     fn an_edge_with_no_polyline_reads_nothing() {
         assert_eq!(

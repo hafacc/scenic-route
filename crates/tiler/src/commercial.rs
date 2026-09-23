@@ -1,16 +1,5 @@
-//! The commercial pass, over the chunks just written: precomputes the overlay's per-segment
-//! SIGNALS and writes them as public/commercial/{x}/{y}.bin, one file per served STCK street chunk,
-//! in the SAME segment order (aligned by index). The signals are heavy to snap (≈800k land-use lots
-//! and ≈1M building footprints against every street segment), and the building set is ~30 MB — far
-//! too much to snap in the browser on toggle. So the snapping happens here; the overlay reads the
-//! signals and applies the (tunable) THRESHOLDS client-side, so the gate can be retuned without a
-//! rebuild.
-//!
-//! Per segment we write three bytes: the commercial fraction (commercial lots / all fronting lots,
-//! 0..255), the median snapped roof height in meters (0..255, 255 when none — so a bare block reads
-//! as not-low-rise), and flags (bit0 an Open Street sample snapped, bit1 a dining/seating point
-//! snapped). The same gate the client applies by default also runs here, to emit the qualifying
-//! blocks' centerlines for the routing bake. Layouts: scripts/README.md.
+//! The commercial pass: per-segment signals, snapped here and aligned by index to STCK chunks.
+//! The client applies the thresholds, so the gate is retunable without a rebuild.
 
 use std::collections::HashMap;
 use std::fs;
@@ -25,32 +14,23 @@ use crate::raster::{lat_to_pixel_y, lng_to_pixel_x, tile_index};
 
 const CHUNK_ZOOM: u32 = 12;
 
-// layouts: scripts/README.md
 const SIGNAL_MAGIC: &[u8; 4] = b"CMRC";
 const SIGNAL_FORMAT: u16 = 1;
 const SIGNAL_HEADER_BYTES: usize = 12; // magic(4) + version(2) + headerSize(2) + count(4)
 const SIGNAL_BYTES: usize = 3; // commercial fraction, median roof height, flags
-// The qualifying-block centerlines for the ROUTING bake, one file per city (magic CMLN, the LAND
-// polygon layout — each segment is a single-ring "polygon"). The graph pass proximity-bakes these
-// into a per-edge commercial discount.
+// The qualifying-block centerlines for the routing bake, one CMLN file per city in the LAND layout.
 const LINE_MAGIC: &[u8; 4] = b"CMLN";
 const LINE_HEADER_BYTES: usize = 40;
 const LINE_COORD_SCALE: f64 = 1e-6; // degrees per quantized unit, ~0.1 m
 
-// A lot / point / building centroid is attributed to the segment it FRONTS: its perpendicular
-// projection must fall ON a piece of the segment (not past the ends) and within this ground distance.
-// The in-span requirement — not the reach — is what keeps corner and cross-street lots out (their
-// projection onto a block's segment falls beyond its endpoints), so the reach can be generous enough
-// to pull in deep frontage lots. Lots reach ~35 m; a set-back building centroid ~40 m; the flag
-// points ~30 m.
+// A point fronts a segment when its foot lands within the span, which keeps corner lots out.
 const FRONTAGE_METERS: f64 = 35.0;
 const BUILDING_FRONTAGE_METERS: f64 = 40.0;
 const FLAG_FRONTAGE_METERS: f64 = 30.0;
-// A block needs at least this many fronting lots before its commercial fraction is trusted; below
-// it, the fraction is written 0 (can't pass the client gate).
+// Fewer fronting lots than this writes a fraction of 0, which can't pass the client gate.
 const MIN_LOTS: u32 = 4;
 
-// The land-use digit split the overlay's old client snap used: 4/5 commercial, 1..3 residential.
+// The land-use digit split: 4/5 commercial, 1..3 residential.
 const COMMERCIAL_CLASS: u8 = 4; // this class and above (4 mixed-res/commercial, 5 commercial/office)
 
 // The default client thresholds, mirrored here to pick the segments the routing bake rewards.
@@ -61,8 +41,7 @@ const NO_BUILDINGS: u8 = 255; // the median-height byte of a segment nothing sna
 const OPEN_STREET_FLAG: u8 = 1;
 const SEATING_FLAG: u8 = 2;
 
-// The spatial grid the snap searches: each segment is registered in every ~330 m cell its bounding
-// box overlaps, and a source point scans the cells within its snap radius.
+// Segments register in every ~330 m cell their box overlaps; a point scans its radius.
 const SEGMENT_CELL_DEG: f64 = 0.003;
 
 pub struct Args {
@@ -76,7 +55,7 @@ pub struct Args {
 }
 
 /// Where each city's qualifying-block centerlines landed, for the graph pass's commercial bake.
-/// A city whose chunks hold no segment writes no file and appears here not at all.
+/// Where each city's qualifying-block centerlines landed; a city with no segment has no entry.
 #[derive(Default)]
 pub struct Lines {
     by_city: HashMap<String, PathBuf>,
@@ -87,9 +66,7 @@ impl Lines {
         self.by_city.get(city).map(PathBuf::as_path)
     }
 
-    /// What a run of this pass left in `dir` last time, for a build that found the pass already
-    /// fresh and skipped it. Read off the disk rather than assumed, so a city that wrote no file
-    /// hands the graph the same `None` a run of the pass would have.
+    /// What this pass left in `dir` last time, read off disk so a skipped run matches a real one.
     pub fn written(dir: &Path, manifest: &Manifest) -> Lines {
         let mut lines = Lines::default();
         for city in &manifest.cities {
@@ -104,8 +81,7 @@ impl Lines {
 
 type Segment = Vec<Coord>;
 
-/// One served STCK chunk: its tile coordinates, and where its segments start in the flat city array
-/// (so a signal read back at `start + local` writes this chunk's file in its own order).
+/// One served STCK chunk: its tile, and where its segments start in the flat city array.
 struct Chunk {
     tile_x: u32,
     tile_y: u32,
@@ -119,8 +95,7 @@ struct Signals {
     flags: Vec<u8>,
 }
 
-/// The z12 slippy-tile range a lat/lng box covers, the same way the chunks pass placed the files:
-/// north maps to the smaller tile y. Used to group the served chunks by city.
+/// The z12 tile range a lat/lng box covers; north maps to the smaller tile y.
 fn tile_range(bounds: &Bounds) -> (u32, u32, u32, u32) {
     (
         tile_index(lng_to_pixel_x(bounds.west, CHUNK_ZOOM), CHUNK_ZOOM),
@@ -130,8 +105,7 @@ fn tile_range(bounds: &Bounds) -> (u32, u32, u32, u32) {
     )
 }
 
-// Sorted, so the flat segment index a city's signals are keyed on is a function of the chunk set
-// alone rather than of the order the filesystem happens to hand the directory back in.
+// Sorted, so the flat segment index doesn't depend on the filesystem's directory order.
 fn sorted_names(dir: &Path) -> Fallible<Vec<String>> {
     let mut names = Vec::new();
     for entry in fs::read_dir(dir)? {
@@ -141,8 +115,7 @@ fn sorted_names(dir: &Path) -> Fallible<Vec<String>> {
     Ok(names)
 }
 
-/// Every served STCK chunk whose tile falls in the city's z12 range, decoded, with each chunk's
-/// start index into the flat segment array recorded.
+/// Every served STCK chunk in the city's z12 range, decoded, with each chunk's start index.
 fn load_city_chunks(bounds: &Bounds, chunk_dir: &Path) -> Fallible<(Vec<Chunk>, Vec<Segment>)> {
     let (min_x, max_x, min_y, max_y) = tile_range(bounds);
     let mut chunks = Vec::new();
@@ -173,8 +146,7 @@ fn load_city_chunks(bounds: &Bounds, chunk_dir: &Path) -> Fallible<(Vec<Chunk>, 
     Ok((chunks, segments))
 }
 
-/// A grid of segment bounding boxes: each segment is registered in every ~330 m cell its box
-/// overlaps.
+/// A grid of segment bounding boxes, each registered in every ~330 m cell its box overlaps.
 fn build_segment_index(segments: &[Segment]) -> HashMap<(i64, i64), Vec<u32>> {
     let mut buckets: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
     for (index, segment) in segments.iter().enumerate() {
@@ -208,11 +180,7 @@ fn cell(degrees: f64) -> i64 {
     (degrees / SEGMENT_CELL_DEG).floor() as i64
 }
 
-/// Perpendicular distance squared from the origin to the piece (ax, ay)-(bx, by), in a local planar
-/// (meters) frame, but ONLY when the perpendicular foot falls within the piece; otherwise infinity.
-/// Squared to avoid a sqrt. This is the frontage test: a point counts for a piece only when it sits
-/// alongside it, so a corner or cross-street point — whose foot lands past an endpoint — is rejected
-/// rather than snapped to the nearest end.
+/// Squared perpendicular distance to a piece in meters, or infinity when the foot falls outside it.
 fn perpendicular_in_span_squared(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
     let dx = bx - ax;
     let dy = by - ay;
@@ -229,12 +197,7 @@ fn perpendicular_in_span_squared(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
     closest_x * closest_x + closest_y * closest_y
 }
 
-/// Attributes a point to the segment it FRONTS, over the shared index. `seen` + `generation` dedup a
-/// candidate found in two cells without a per-call allocation. Among every candidate piece whose
-/// perpendicular foot from the point falls on the piece (in-span) and within `reach_meters`, it
-/// returns the segment of the closest; a point that fronts no piece (e.g. a lot at a corner, whose
-/// foot on every nearby block segment lands past an endpoint) returns `None`. The hot path — called
-/// once per lot, per building, and per flag point.
+/// The segment a point fronts, or None; `seen` and `generation` dedup without allocating.
 struct Attributor<'a> {
     segments: &'a [Segment],
     buckets: HashMap<(i64, i64), Vec<u32>>,
@@ -272,8 +235,7 @@ impl<'a> Attributor<'a> {
                         continue;
                     }
                     self.seen[index] = self.generation;
-                    // The perpendicular-in-span distance to the closest FRONTED piece of this
-                    // segment; infinite if the point fronts no piece of it.
+                    // The in-span distance to this segment's closest fronted piece, or infinity.
                     let mut nearest = f64::INFINITY;
                     let segment = &self.segments[index];
                     let Some(first) = segment.first() else {
@@ -313,8 +275,7 @@ fn source(data: &Path, kind: &str, city_id: &str) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-/// The share of a block's fronting lots that are commercial, as the signal byte. A block with too
-/// few lots to speak for itself reads 0, which cannot pass the client gate.
+/// The commercial share of a block's fronting lots, as the signal byte; too few lots reads 0.
 fn commercial_fraction(commercial: u32, total: u32) -> u8 {
     if total >= MIN_LOTS {
         round_half_up(255.0 * f64::from(commercial) / f64::from(total)) as u8
@@ -323,7 +284,7 @@ fn commercial_fraction(commercial: u32, total: u32) -> u8 {
     }
 }
 
-/// Attribute every source to the segment it fronts and reduce to the three per-segment signal bytes.
+/// Attribute every source to the segment it fronts, reduced to three signal bytes per segment.
 fn compute_signals(data: &Path, city_id: &str, segments: &[Segment]) -> Fallible<Signals> {
     let mut attributor = Attributor::new(segments);
     let count = segments.len();
@@ -355,7 +316,7 @@ fn compute_signals(data: &Path, city_id: &str, segments: &[Segment]) -> Fallible
         let (footprints, heights) = binfmt::read_buildings(&path)?;
         let mut per_segment: Vec<Vec<f64>> = vec![Vec::new(); count];
         for (footprint, height) in footprints.iter().zip(&heights) {
-            // The centroid is the mean of the OUTER ring's vertices; inner rings (holes) are skipped.
+            // The centroid is the mean of the outer ring's vertices; holes are skipped.
             let Some(outer) = footprint.first().filter(|ring| !ring.is_empty()) else {
                 continue;
             };
@@ -398,8 +359,7 @@ fn compute_signals(data: &Path, city_id: &str, segments: &[Segment]) -> Fallible
     Ok(signals)
 }
 
-/// Serialize one chunk's slice of the signals as a CMRC file: the 12-byte header, then 3 bytes per
-/// segment in the chunk's own order.
+/// One chunk's signals as a CMRC file: the 12-byte header, then 3 bytes per segment.
 fn encode_signals(chunk: &Chunk, signals: &Signals) -> Vec<u8> {
     let mut bytes = vec![0u8; SIGNAL_HEADER_BYTES + chunk.count * SIGNAL_BYTES];
     bytes[0..4].copy_from_slice(SIGNAL_MAGIC);
@@ -416,20 +376,14 @@ fn encode_signals(chunk: &Chunk, signals: &Signals) -> Vec<u8> {
     bytes
 }
 
-/// The default gate the overlay applies client-side, mirrored here to pick the segments the routing
-/// bake rewards: over-half commercial frontage, low-rise, and either an open street or seating
-/// fronting.
+/// The overlay's default gate: over-half commercial, low-rise, and an open street or seating.
 fn qualifies(signals: &Signals, index: usize) -> bool {
     f64::from(signals.commercial_frac[index]) / 255.0 >= GATE_COMMERCIAL_FRACTION
         && signals.median_height[index] <= GATE_LOW_RISE_METERS
         && signals.flags[index] & (OPEN_STREET_FLAG | SEATING_FLAG) != 0
 }
 
-/// The qualifying segments' polylines as a CMLN line file: each becomes one single-ring polygon —
-/// the exact LAND layout the graph pass reads via `read_polygons` — so the routing bake needs no new
-/// format. The origin is the south-west corner of what is written, which for a city with no
-/// qualifying block is the infinity the running minimum started at; the count is then 0 and no
-/// reader looks.
+/// The qualifying polylines as CMLN single-ring LAND polygons; an empty city's origin is infinity.
 fn encode_qualifying_lines(segments: &[Segment], signals: &Signals) -> (Vec<u8>, usize) {
     let lines: Vec<&Segment> = segments
         .iter()
@@ -521,8 +475,7 @@ mod tests {
 
     const CELL_METERS: f64 = SEGMENT_CELL_DEG * METERS_PER_DEGREE_LAT;
 
-    /// A point `north_meters` north and `east_meters` east of a reference near the middle of New
-    /// York, so the tests read in meters and still exercise the cos(lat) scaling of the real snap.
+    /// A point in meters from a reference in New York, so tests exercise the real cos(lat) scaling.
     fn at(east_meters: f64, north_meters: f64) -> Coord {
         const LAT: f64 = 40.7;
         Coord {
@@ -565,8 +518,7 @@ mod tests {
         let segments = two_blocks();
         let mut attributor = Attributor::new(&segments);
 
-        // Ten meters off the block's own line but beyond its end: the corner case the in-span test
-        // exists for, and the reason the reach can be as generous as it is.
+        // Ten meters off the block's line but past its end: the corner case of the in-span test.
         assert_eq!(attributor.frontage(at(110.0, 10.0), FRONTAGE_METERS), None);
     }
 
@@ -597,9 +549,7 @@ mod tests {
         );
     }
 
-    /// A segment reaching across a cell boundary is registered in both cells, so the scan that finds
-    /// it twice must not let the second sighting displace the first — and a point whose reach spans
-    /// the boundary must still find a segment that lives only on the far side.
+    /// A segment spanning a cell boundary, found from both cells, keeps its first sighting.
     #[test]
     fn a_block_spanning_two_index_cells_is_found_once_from_either_side() {
         let segments = vec![vec![at(-CELL_METERS, 0.0), at(CELL_METERS, 0.0)]];
@@ -612,8 +562,7 @@ mod tests {
         assert_eq!(attributor.frontage(at(1.0, 10.0), FRONTAGE_METERS), Some(0));
     }
 
-    /// The far side of a wide street is still frontage, and the near side of the next block over is
-    /// not: what decides is the perpendicular distance, not which side the point sits on.
+    /// Perpendicular distance decides frontage, not which side of the street the point sits on.
     #[test]
     fn a_lot_across_the_street_still_fronts_the_block() {
         let segments = vec![vec![at(0.0, 0.0), at(100.0, 0.0)]];
@@ -638,8 +587,7 @@ mod tests {
         assert!(!qualifies(&signals(200, NO_BUILDINGS, SEATING_FLAG), 0));
     }
 
-    /// A block with too few fronting lots is written 0 rather than a fraction of two or three, which
-    /// is the difference between a commercial strip and a corner shop with a driveway beside it.
+    /// Too few fronting lots reads 0, separating a commercial strip from a corner shop.
     #[test]
     fn a_block_with_too_few_lots_reports_no_commercial_fraction() {
         assert_eq!(commercial_fraction(3, 3), 0);

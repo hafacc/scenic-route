@@ -1,5 +1,4 @@
-//! The parts of src/tree-cover/manifest.json the tiler reads. The manifest is the single
-//! source of the model constants: they are never redeclared here.
+//! The parts of src/tree-cover/manifest.json the tiler reads, the one source of model constants.
 
 use std::collections::BTreeMap;
 
@@ -18,15 +17,13 @@ pub struct SourceFile {
     pub file: String,
 }
 
-/// The measured LiDAR canopy source, when a city has one. Only the file is read here — the
-/// tiler rasterizes the polygons themselves; the counts and provenance stay in the JSON.
+/// The measured LiDAR canopy polygons, when a city has them; the tiler rasterizes them itself.
 #[derive(Deserialize)]
 pub struct CanopyLayer {
     pub file: String,
 }
 
-/// Presence marks a city the genus overlay renders; the tiler reads the trees blob and the shared
-/// palette, not this, so nothing inside is needed here.
+/// Presence marks a city the genus overlay renders.
 #[derive(Deserialize)]
 pub struct GenusLayer {}
 
@@ -66,8 +63,7 @@ pub struct Manifest {
     pub cities: Vec<City>,
 }
 
-/// What the density pass reports back for the manifest, in the shape scripts/manifest.ts
-/// declares. The percentile labels are the ingest's; this only fills them in.
+/// What the density pass reports back for the manifest, in the shape scripts/manifest.ts declares.
 #[derive(Serialize)]
 pub struct Distribution {
     pub min: f64,

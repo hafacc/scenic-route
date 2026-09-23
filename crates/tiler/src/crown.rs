@@ -1,14 +1,4 @@
-//! The slices a tree crown's shadow is swept between, shared by both halves of the shade model.
-//!
-//! A crown is not a flat sheet. It spans `CROWN_BASE_FRACTION * h` up to `h`, and its shadow is the
-//! union over that range of heights — which at a 5 degree sun is a smear tens of meters long, not the
-//! outline translated sideways. This module cuts a crown into `CROWN_SEGMENTS` nested rings, each
-//! standing for the band of heights over which the crown is at least that wide, so a caster can sweep
-//! ring `j` between where that band's two ends land and union the lot.
-//!
-//! The shade pass bakes that union into the raster pyramid and the caster-chunks pass ships the same
-//! rings for the client to sweep itself; both call `slice_crowns`, so the two halves cannot disagree
-//! about the geometry at the zoom where they hand over.
+//! Cuts tree crowns into the nested rings both the shade pyramid and the client's sweep cast from.
 
 use cavalier_contours::polyline::{
     PlineCreation, PlineOffsetOptions, PlineSource, PlineSourceMut, Polyline,
@@ -18,134 +8,66 @@ use rayon::prelude::*;
 use crate::binfmt::{Coord, Polygon, Ring};
 use crate::geometry::METERS_PER_DEGREE_LAT;
 
-/// Where a crown starts, as a share of the tree's height: the foliage runs from here to `h` and the
-/// trunk carries it the rest of the way down. Everything the shadow does follows from that span — the
-/// silhouette is cast from inside it, never from the polygon's own height, which would model the crown
-/// as a flat sheet at the very top of the tree and throw the shadow about a crown radius too far, far
-/// enough at a low sun to detach it from its tree.
-///
-/// 0.4 is an ASSUMPTION, not a measurement, but it is anchored on the quantity that means it: crown
-/// ratio, crown length over tree height, is 0.39-0.60 for hardwoods across ~7000 trees in Russell &
-/// Weiskittel 2011, "Maximum and Largest Crown Width Equations for 15 Tree Species in Maine", Table 1,
-/// which puts the crown base near 0.4h. What is NOT sourced is where in that span the crown is widest
-/// — height to largest crown width, a standard forestry quantity (Hann 1999, Forest Science 45(2)
-/// 217-225, splits the crown profile at exactly this point) for which no published figure for urban
-/// broadleaves could be found: the numeric work is all conifer, whose conic crowns are widest at the
-/// base by construction and answer differently. `crown_segments` takes the midpoint of the span.
+/// Crown base as a share of tree height; the shadow casts from this span, not the polygon's height.
+/// Assumed from a 0.39-0.60 hardwood crown ratio (Russell & Weiskittel 2011, Table 1).
 pub const CROWN_BASE_FRACTION: f64 = 0.4;
 
-/// Where the crown is widest, as a share of tree height, and so how far up the trunk stands: the
-/// crown's shadow is at its widest here and swallows the trunk's end, where standing it to the crown
-/// BASE would leave the last of it beyond the narrow tip the crown reaches that low.
+/// Where the crown is widest, as a share of tree height; the trunk stands up to here.
 pub const CROWN_WIDEST_FRACTION: f64 = (1.0 + CROWN_BASE_FRACTION) / 2.0;
 
-/// How many bands a crown is cut into. The slices are nested and overlap almost entirely, so the
-/// union's residual error is a step in WIDTH across the shadow wherever one ring gives way to the
-/// next — INDEPENDENT of the sun's altitude, which is what makes four enough where translating four
-/// copies of the outline would leave along-sun gaps that need dozens. Along the shadow it stops
-/// `1 - CROWN_TIP_FRACTION` of the smear short of either extreme, since the innermost ring still has
-/// width and so cannot reach the crown's two points.
-///
-/// A caster may use fewer when the whole smear is only a pixel or two long, but only a divisor of
-/// this: the inset rings ship at these fixed levels, so k slices means taking every
-/// `CROWN_SEGMENTS / k`-th of them.
+/// Bands a crown is cut into; a caster may use only a divisor, since the insets ship at fixed levels.
 pub const CROWN_SEGMENTS: usize = 4;
 
-/// How far up the crown's half-height the innermost ring is sampled at. Short of 1.0 because the
-/// spheroid comes to a POINT there, and a ring of no width casts nothing over the band it would
-/// otherwise be the only slice covering; at 0.99 it still reaches all but 1% of the smear.
+/// How far up the half-height the innermost ring sits; short of 1.0, where the spheroid is a point.
 const CROWN_TIP_FRACTION: f64 = 0.99;
 
 // Arc length the outline is resampled at before its curvature is read.
 const RESAMPLE_METERS: f64 = 1.0;
-// Half-width of the circular moving average the resampled outline is smoothed with. The raw trace is
-// a 1-foot raster staircase whose alternating right-angle turns read as a radius of ~0.64 m at every
-// sample; this is what separates the signal (crown radii of 2.5-8 m) from that noise.
+// Smoothing half-width; separates crown radii (2.5-8 m) from the 1-foot raster staircase's noise.
 const SMOOTH_METERS: f64 = 2.0;
-// Smoothing windows one curvature chord spans. Two is what the disc test settles on: one chord is too
-// short to outrun the residual staircase and reads a five-meter disc at three, three starts flattening
-// the small scallops that carry the answer over a park.
+// Smoothing windows per curvature chord; two is what the disc test settles on.
 const CHORD_WINDOWS: usize = 2;
-// The radii one scallop is allowed to imply, as outlier hygiene: below the first a sample is raster
-// noise, above the second it is a stretch of outline too straight to be any crown's edge.
+// Radius guard rails: below is raster noise, above is outline too straight to be a crown.
 const MIN_RADIUS_METERS: f64 = 1.0;
 const MAX_RADIUS_METERS: f64 = 30.0;
-// Resampled samples below which an outline has no curvature to read and is taken for the single small
-// crown it must be, whose own circle radius is `perimeter / 2 pi`.
+// Below this many samples an outline is one small crown of radius `perimeter / 2 pi`.
 const MIN_SAMPLES: usize = 12;
 
-// Douglas-Peucker tolerance EVERY ring ships at, the outline included, and it is two thirds of a z17
-// pixel (0.91 m), the finest ground either half of the model draws a crown at.
-//
-// It runs HERE rather than in each caster so that the pyramid and the chunks sweep the same rings: the
-// chunks simplified for display and the pyramid did not, which left the two halves half a meter apart
-// at the zoom they hand over. It runs after the curvature, which wants the exact trace — Douglas-
-// Peucker sharpens corners, the worst input a curvature estimate could have.
+// Douglas-Peucker tolerance for every ring (2/3 of a z17 pixel), applied here so both halves agree.
 const CROWN_SIMPLIFY_METERS: f64 = 0.6;
-// Chord tolerance for the arcs an inward offset opens at concave corners. Far under
-// CROWN_SIMPLIFY_METERS, so the ring's own simplification is what sets how far it may sit from the
-// geometry it stands for.
+// Chord tolerance for arcs an inward offset opens at concave corners.
 const JOIN_ARC_METERS: f64 = 0.05;
-// Consecutive vertices closer than this are one vertex, and a repeated position has no direction to
-// offset along.
+// Vertices closer than this are one; a repeated position has no direction to offset along.
 const REPEAT_POSITION_METERS: f64 = 1e-6;
 
-// Pixels of shadow smear one slice is allowed to step by. Below this the whole smear is shorter than
-// a couple of pixels and one slice says everything the four would, which is what keeps a high sun's
-// bins at the cost they have today.
+// Pixels of smear one slice may step by; a shorter smear takes a single slice.
 const SMEAR_PIXELS_PER_SEGMENT: f64 = 2.0;
 
-/// One crown, cut. `levels[0]` is the outline and `levels[j]` is that same outline inset to
-/// `radius_m * ring_share(j)`, the cross-section the crown keeps over the band of heights where it is
-/// at least that wide. A level can hold several rings: insetting a blob splits it long before it
-/// vanishes. Empty for a crown with no ring to cut.
+/// One crown, cut: `levels[j]` is the outline inset to `radius_m * ring_share(j)`, in 1+ rings.
 pub struct Crown {
     pub levels: Vec<Vec<Ring>>,
-    pub radius_m: f64, // the radius of the crowns forming the outline, from its own curvature
+    pub radius_m: f64, // radius of the crowns forming the outline, from its curvature
 }
 
-/// One swept slice: which inset level's rings to sweep, and the two shadow displacements, in meters,
-/// to sweep them between.
+/// One swept slice: an inset level and the two shadow displacements (m) to sweep it between.
 pub struct Segment {
     pub level: usize,
     pub from_m: f64,
     pub to_m: f64,
 }
 
-/// Where slice `level`'s ring sits, as an offset from the crown's widest section in units of its own
-/// half-height — half a band, since the crown is at least that ring's width over `+/- this`. Spacing
-/// these EVENLY is what samples the crown at evenly spaced heights.
+/// Slice `level`'s offset from the widest section in half-heights, spaced at even heights.
 fn band_offset(level: usize) -> f64 {
     level as f64 / (CROWN_SEGMENTS - 1) as f64 * CROWN_TIP_FRACTION
 }
 
-/// The radius slice `level`'s ring keeps, as a share of the crown's own: the spheroid's profile
-/// `radius(u) = r * sqrt(1 - u^2)` read at that slice's height.
+/// Slice `level`'s radius as a share of the crown's: the spheroid profile `sqrt(1 - u^2)`.
 fn ring_share(level: usize) -> f64 {
     (1.0 - band_offset(level).powi(2)).max(0.0).sqrt()
 }
 
-/// The slices one crown's shadow is swept in for one sun and one ground resolution. Slice `j` sweeps
-/// the ring at its own inset between the ground displacements of the two heights where the crown
-/// draws in to that ring's radius, so the union is gapless at any sun altitude — the segments are
-/// nested and overlap almost entirely, and the whole point is that they go through ONE union rather
-/// than compositing one at a time.
-///
-/// The crown is a SPHEROID over `CROWN_BASE_FRACTION * h .. h`: a point at the bole, widest at the
-/// midpoint of that span, a point at the top. So each band is centered on the widest section and the
-/// bands nest OUTWARD from it — the full-radius outline spans a single height and sweeps nothing,
-/// while the innermost ring spans nearly the whole crown and sweeps nearly the whole smear. That
-/// inversion is what makes the silhouette a lens rather than a bar: a shadow that narrows at the end
-/// nearest its tree as well as at its tip.
-///
-/// The rings are spaced by equal HEIGHT, not by equal inset: slice `j` is the cross-section at
-/// `j / (k - 1) * CROWN_TIP_FRACTION` of the way from the widest section to the crown's point, so its
-/// radius is `r * sqrt(1 - u^2)`. Spacing by equal inset instead — rings at `d_j = j * r / k` — samples
-/// the spheroid where its profile is flat and misses where it is not: three of the four rings land
-/// within 25% of each other in width, which pins two thirds of the shadow's length at a single width
-/// and caps the widest swept section at `r * sqrt(1 - 1/k^2)`, so the silhouette comes out a bar. At
-/// equal height the same four rings hold one width over a third of the length and reach 94% of the
-/// crown's true width, for the same four sweeps. Nothing is returned for a crown that casts nothing.
+/// The slices one crown's shadow sweeps for one sun and resolution; empty if it casts nothing.
+/// The crown is a spheroid; rings are spaced by equal height, since equal inset renders a bar.
 pub fn crown_segments(
     height_m: f64,
     shadow_per_height: f64,
@@ -157,11 +79,7 @@ pub fn crown_segments(
     }
     let smear_m = (1.0 - CROWN_BASE_FRACTION) * height_m * shadow_per_height;
     let wanted = (smear_m / meters_per_pixel / SMEAR_PIXELS_PER_SEGMENT).ceil();
-    // Halved down to a divisor of CROWN_SEGMENTS, since the slices ship at fixed inset levels and
-    // taking every stride-th of them is the only way to keep the two halves on the same rings. What
-    // dropping to `k` costs is the far ends of the smear, which only the rings inside `r / k` reach:
-    // a quarter of a pixel at two slices, and at one the whole smear — which by then is under two
-    // pixels itself, so under one at each end.
+    // Halved to a divisor of CROWN_SEGMENTS so both halves stay on the same shipped rings.
     let mut count = CROWN_SEGMENTS;
     while count > 1 && (count / 2) as f64 >= wanted {
         count /= 2;
@@ -178,8 +96,7 @@ pub fn crown_segments(
         let half = band_offset(level);
         let from_m = displacement(middle - half_height * half);
         let to_m = displacement(middle + half_height * half);
-        // Slice 0 is the widest section, which spans one height and so sweeps nothing; past the shadow
-        // clip every other slice lands on the same ground, where slice 0's ring covers them all.
+        // Slice 0 spans one height and sweeps nothing; past the clip its ring covers all the others.
         if to_m > from_m || slice == 0 {
             segments.push(Segment {
                 level,
@@ -191,9 +108,7 @@ pub fn crown_segments(
     segments
 }
 
-/// Every crown cut into its slices, in the canopy file's own order so a caster can zip them against
-/// the heights. Parallel because the insetting is the expensive half of it: the city's outlines carry
-/// 31 million vertices between them.
+/// Every crown cut, in the canopy file's order; parallel since insetting is the costly part.
 pub fn slice_crowns(crowns: &[Polygon]) -> Vec<Crown> {
     crowns
         .par_iter()
@@ -208,16 +123,7 @@ pub fn slice_crowns(crowns: &[Polygon]) -> Vec<Crown> {
 }
 
 /// One outline cut into its nested rings.
-///
-/// The outline is simplified BEFORE it is inset, not after, and the inner rings are the offsets of the
-/// simplified ring rather than of the raw trace. That is not the cheaper order merely — though it is
-/// three times the speed — it is the more faithful one. A raw trace is a 1-foot raster staircase, and
-/// an inward offset opens every one of its concave steps into an arc of the offset's own depth, so the
-/// staircase bites a meter or two out of a ring it should not touch; clearing the steps first is the
-/// difference between 1.7% and 3.3% of area lost at the deepest inset. It also makes the rings
-/// genuinely nested, since each is now an offset of the ring shipped as level 0 rather than of a curve
-/// nobody ships. What kept the simplification last before was the curvature estimate, which is read
-/// off the raw trace — and still is, above.
+/// Simplify before insetting: an offset opens each raster step into an arc that bites the ring.
 pub fn crown_slices(outer: &Ring) -> Crown {
     let frame = Frame::of(outer);
     let meters = frame.to_meters(outer);
@@ -228,17 +134,14 @@ pub fn crown_slices(outer: &Ring) -> Crown {
     let outline = simplified_or_whole(&meters);
     let mut levels = Vec::with_capacity(CROWN_SEGMENTS);
     levels.push(vec![frame.to_degrees(&outline)]);
-    // Cut from the EXACT trace: what separates one crown from the next in a merged blob is the neck
-    // between them, and the shipping tolerance is entitled to drop a neck. Drop it first and a whole
-    // park comes back as one shape that never breaks into its trees.
+    // Cut from the exact trace, since simplifying may drop the neck separating two crowns.
     for inset in offset_rings(&meters, &insets) {
         levels.push(inset.iter().map(|ring| frame.to_degrees(ring)).collect());
     }
     Crown { levels, radius_m }
 }
 
-/// One ring with everything the tolerance can drop dropped — or whole, if that would leave it below a
-/// triangle, since a ring the tolerance collapses is smaller than the tolerance itself.
+/// A ring simplified, or kept whole if simplifying would leave it below a triangle.
 fn simplified_or_whole(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
     let simplified = simplify_closed(points, CROWN_SIMPLIFY_METERS);
     if simplified.len() >= 3 {
@@ -251,9 +154,7 @@ fn simplified_or_whole(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
 /// The upper edge of each histogram bucket the build log reports the radii in.
 pub const RADIUS_BUCKETS: [f64; 9] = [1.25, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 20.0, MAX_RADIUS_METERS];
 
-/// How many crowns landed in each `RADIUS_BUCKETS` bucket, plus a final one for the top clamp. The
-/// estimator's answer should pile up over a street tree's few meters; a peak against either guard rail
-/// would mean the smoothing window is reading raster noise rather than scallops.
+/// Crown counts per `RADIUS_BUCKETS` bucket plus the top clamp; a peak at a guard rail means noise.
 pub fn radius_histogram(crowns: &[Crown]) -> Vec<usize> {
     let mut counts = vec![0usize; RADIUS_BUCKETS.len() + 1];
     for crown in crowns.iter().filter(|crown| !crown.levels.is_empty()) {
@@ -266,9 +167,7 @@ pub fn radius_histogram(crowns: &[Crown]) -> Vec<usize> {
     counts
 }
 
-/// The local meter space one crown is cut in: its own first vertex as the origin and the east-west
-/// scale at that latitude. A crown spans meters, so one reference latitude is exact enough that the
-/// round trip through it is lossless at the decimeter the rings are stored on.
+/// The local meter space one crown is cut in, origin at its first vertex; lossless at decimeters.
 struct Frame {
     lng: f64,
     lat: f64,
@@ -285,8 +184,7 @@ impl Frame {
         }
     }
 
-    /// The ring in meters, oriented POSITIVELY — the curvature reads a left turn as convex and the
-    /// tracer emits its rings the same way, so both need the source's winding gone.
+    /// The ring in meters, wound positively as the curvature and the tracer both expect.
     fn to_meters(&self, ring: &Ring) -> Vec<(f64, f64)> {
         let mut points: Vec<(f64, f64)> = ring
             .iter()
@@ -324,28 +222,8 @@ fn signed_double_area(points: &[(f64, f64)]) -> f64 {
     -sum
 }
 
-/// The radius of the crowns that FORM an outline, read off how sharply it turns.
-///
-/// A merged canopy blob's edge is scalloped by the crowns standing along it, so the local radius of
-/// curvature of that edge is the radius of those trees — and a lone crown's outline is one circle, so
-/// the same measurement gives its own radius. That self-calibration is why this is not estimated from
-/// area, which a blob's size would swamp.
-///
-/// The estimate is the TURNING-WEIGHTED MEDIAN of `ds / dtheta` over the convex samples, which is what
-/// it is for two reasons. A signed mean collapses to `perimeter / 2 pi` for any closed ring
-/// whatsoever, since its total turning is exactly one revolution; and a plain mean of the radii is
-/// unbounded, because a traced stretch that happens to run straight has `dtheta -> 0` and pours its
-/// whole length into the average. Weighting by turning makes each unit of turning vote once, so the
-/// scallop caps dominate and the straight stretches carry no weight at all, and the median then
-/// shrugs off what is left of both tails.
-///
-/// The tangent is read across a CHORD, not between neighboring samples. A traced outline is a
-/// staircase, and no amount of position smoothing stops it concentrating its turning at a handful of
-/// samples and leaving the rest dead straight; measuring between adjacent samples therefore reads only
-/// those concentrations and comes back at half the radius. A chord pair spans an arc however that arc
-/// arrived, and the two chords and the angle between them are the three parts of the circle through
-/// the three points — which is the radius exactly, at any chord length, so a small crown traced in
-/// twenty samples is read as accurately as a large one.
+/// The radius of the crowns forming an outline, from how sharply it turns.
+/// A turning-weighted median of `ds / dtheta` across chords, since means and neighbors mislead.
 fn curvature_radius(points: &[(f64, f64)]) -> f64 {
     let perimeter = closed_length(points);
     let samples = (perimeter / RESAMPLE_METERS).round() as usize;
@@ -437,8 +315,7 @@ fn resample_closed(points: &[(f64, f64)], count: usize, perimeter: f64) -> Vec<(
     traced
 }
 
-/// Each point replaced by the mean of itself and the `window` points either side of it, around the
-/// ring. Prefix sums, so the whole trace costs one pass whatever the window.
+/// Each point averaged with the `window` points either side around the ring, via prefix sums.
 fn circular_mean(points: &[(f64, f64)], window: usize) -> Vec<(f64, f64)> {
     let count = points.len();
     let width = 2 * window + 1;
@@ -475,14 +352,7 @@ fn circular_mean(points: &[(f64, f64)], window: usize) -> Vec<(f64, f64)> {
         .collect()
 }
 
-/// The outline offset INWARD by each of `insets`, as rings in the same meter space.
-///
-/// An inward offset with ROUND joins IS Euclidean erosion: a concave corner of the outline opens into
-/// an arc of the offset's own depth, which is the one place a mitred or squared join would answer with
-/// a different shape rather than a coarser one. The offset also handles a blob pinching itself in two
-/// on the way in — the pieces come back as separate rings, which is ordinary output for a merged
-/// canopy and not a failure — and each ring is simplified at the shipping tolerance, since a segment
-/// that mattered on the outline can fall under it once the ring it belongs to has drawn in by a meter.
+/// The outline offset inward by each of `insets` with round joins, i.e. Euclidean erosion.
 fn offset_rings(outline: &[(f64, f64)], insets: &[f64]) -> Vec<Vec<Vec<(f64, f64)>>> {
     let mut source: Polyline<f64> = Polyline::with_capacity(outline.len(), true);
     for (x, y) in outline {
@@ -492,21 +362,17 @@ fn offset_rings(outline: &[(f64, f64)], insets: &[f64]) -> Vec<Vec<Vec<(f64, f64
         .remove_repeat_pos(REPEAT_POSITION_METERS)
         .unwrap_or(source);
     let index = source.create_approx_aabb_index();
-    // The offset's own check that a piece stands clear of the outline measures distance without a
-    // side, so one lying OUTSIDE at that distance passes too. The guards below catch those; the
-    // crate's self-intersection path costs twice the bake and finds nothing they do not.
+    // The offset's clearance check is unsigned, so the guards below catch pieces lying outside.
     let options = PlineOffsetOptions {
         aabb_index: Some(&index),
         ..Default::default()
     };
-    // Each level is cut from the one above, so it winds the same way and encloses less. Carrying the
-    // bound down catches a loop small against the whole crown but larger than the ring it stands in.
+    // Each level is cut from the one above, so carrying the bound down catches stray loops.
     let mut enclosed = signed_double_area(outline);
     insets
         .iter()
         .map(|inset| {
-            // Cutting by less than the vertex noise is where the offset crosses itself, and the
-            // outline IS that ring to within the tolerance both would ship at.
+            // Insetting under the vertex noise self-crosses; the outline is that ring within tolerance.
             if *inset < CROWN_SIMPLIFY_METERS {
                 return vec![outline.to_vec()];
             }
@@ -531,8 +397,7 @@ fn offset_rings(outline: &[(f64, f64)], insets: &[f64]) -> Vec<Vec<Vec<(f64, f64
                     Some(meters)
                 })
                 .collect();
-            // A level the offset had nothing to say about bounds nothing: carrying its zero down would
-            // drop every level below it as well.
+            // An empty level bounds nothing, or every level below it would drop too.
             let total: f64 = level.iter().map(|ring| signed_double_area(ring)).sum();
             if total > 0.0 {
                 enclosed = total;
@@ -542,8 +407,7 @@ fn offset_rings(outline: &[(f64, f64)], insets: &[f64]) -> Vec<Vec<Vec<(f64, f64
         .collect()
 }
 
-/// One closed ring with everything Douglas-Peucker can drop dropped. Cut at its first vertex and the
-/// one farthest from it, since a closed ring has no pair of fixed ends to run the recursion between.
+/// A closed ring simplified by Douglas-Peucker, cut at its first vertex and the farthest one.
 fn simplify_closed(points: &[(f64, f64)], tolerance: f64) -> Vec<(f64, f64)> {
     let count = points.len();
     let reach =
@@ -593,11 +457,7 @@ mod tests {
 
     use super::*;
 
-    /// The outline of the cells a `cell`-meter raster sets, as the staircase of right angles the
-    /// canopy file's own outlines are. Every set cell contributes the sides it shows to an unset
-    /// neighbor, directed so the region stays on its left, and the sides are chained end to end; the
-    /// runs along one straight edge then collapse to their two ends. The masks here are single blobs
-    /// with no diagonal pinch, so one side leaves each corner and the chain is unambiguous.
+    /// The staircase outline of a single-blob `cell`-meter raster, like the canopy file's outlines.
     fn traced(inside: impl Fn(f64, f64) -> bool, span: i64, cell: f64) -> Vec<(f64, f64)> {
         let cells = (2 * span) as usize;
         let at = |col: usize, row: usize| {
@@ -664,9 +524,7 @@ mod tests {
         )
     }
 
-    /// The estimator against discs of a known radius, which is the whole calibration of the smoothing
-    /// window: too narrow and it reads the raster staircase's own right angles, too wide and it flattens
-    /// the scallops it is there to measure.
+    /// The estimator against discs of known radius, which calibrates the smoothing window.
     #[test]
     fn reads_a_disc_radius() {
         for radius in [3.0, 5.0, 8.0] {
@@ -678,9 +536,7 @@ mod tests {
         }
     }
 
-    /// Two discs merged into one blob read as ONE disc's radius, not as the blob's: the outline's
-    /// curvature is the crowns forming it, which is what makes the estimate self-calibrating over a
-    /// park where nothing else could say how big its trees are.
+    /// Two merged discs read as one disc's radius, not the blob's.
     #[test]
     fn reads_the_crowns_a_blob_is_made_of() {
         let blob = traced(
@@ -695,9 +551,7 @@ mod tests {
         );
     }
 
-    /// An inward offset of a disc is a concentric disc of `radius - inset`, positively wound so a
-    /// nonzero fill unions the slices instead of canceling them. The source is sampled smoothly
-    /// rather than traced, so what is measured here is the offset alone.
+    /// An inward offset of a disc is a concentric, positively wound disc of `radius - inset`.
     #[test]
     fn insets_a_disc_by_its_offset() {
         let radius = 30.0;
@@ -719,10 +573,7 @@ mod tests {
         }
     }
 
-    /// A concave corner opens into an ARC of the offset's own depth, which is the one place a mitred
-    /// or squared join answers with a different shape rather than a coarser one: both would run the
-    /// two offset edges on to where they cross and cut the corner off there, losing everything
-    /// between that point and the arc — `(1 - pi/4) * inset^2` at a right angle.
+    /// A concave corner opens into an arc; a mitred join would lose `(1 - pi/4) * inset^2` at 90°.
     #[test]
     fn rounds_the_joins_a_concave_corner_opens() {
         let ell = [
@@ -764,8 +615,7 @@ mod tests {
         );
     }
 
-    /// A dumbbell pinches into two rings before it vanishes, which is the case a polygon offset has to
-    /// carry and the one an outline translated sideways never would.
+    /// A dumbbell pinches into two rings before it vanishes.
     #[test]
     fn splits_a_blob_that_pinches_in_two() {
         let waist = |x: f64, y: f64| y.abs() < 2.0 && x.abs() < 9.0;
@@ -785,10 +635,7 @@ mod tests {
         }
     }
 
-    /// The slices NEST around the crown's widest section rather than stacking away from its base: the
-    /// widest ring sweeps nothing in the middle of the smear and each narrower one reaches further out
-    /// at both ends, which is what makes the silhouette a lens. A smear under a couple of pixels
-    /// collapses to the widest ring alone, which is what keeps a high sun at the cost it has today.
+    /// Slices nest around the widest section; a sub-two-pixel smear collapses to the widest ring.
     #[test]
     fn nests_the_slices_around_the_widest_section() {
         // A 10 m crown at a 5 degree sun: 0.6 * 10 * 11.43 = 68.6 m of smear over 3.6 m pixels.
@@ -821,9 +668,7 @@ mod tests {
         assert!((high[0].to_m - high[0].from_m).abs() < 1e-9);
     }
 
-    /// The rings sample the crown at evenly spaced HEIGHTS, which is what keeps the silhouette a lens.
-    /// Spacing the same four rings by equal inset instead puts two thirds of the shadow's length at one
-    /// width and caps that width at 75% of the crown's, so it renders as a bar.
+    /// Rings sample evenly spaced heights; equal inset caps the width at 75% and renders a bar.
     #[test]
     fn spaces_the_rings_by_equal_height() {
         let offsets: Vec<f64> = (0..CROWN_SEGMENTS).map(band_offset).collect();
@@ -836,8 +681,7 @@ mod tests {
         }
         assert!((offsets[CROWN_SEGMENTS - 1] - CROWN_TIP_FRACTION).abs() < 1e-12);
 
-        // Slice 0 spans a single height and sweeps nothing, so the widest ring the shadow is ever as
-        // wide as is slice 1's — 94% of the crown's radius here, 75% under equal inset.
+        // Slice 0 sweeps nothing, so slice 1 sets the width: 94% of r, 75% under equal inset.
         assert!((ring_share(0) - 1.0).abs() < 1e-12);
         assert!(ring_share(1) > 0.94);
         assert!(
@@ -848,8 +692,7 @@ mod tests {
         assert!(band_offset(1) < 0.34);
     }
 
-    /// Two slices take every other LEVEL, since the rings ship at fixed insets, and past the shadow
-    /// clip the flattened inner slices are dropped in favor of the widest ring that covers them.
+    /// Two slices take every other level, and past the shadow clip only the widest covering ring.
     #[test]
     fn steps_by_stride_and_drops_the_slices_the_clip_flattens() {
         let coarse = crown_segments(10.0, 5.0, 500.0, 8.0);
@@ -862,10 +705,8 @@ mod tests {
         assert!(clipped.iter().all(|segment| segment.to_m <= 21.0));
     }
 
-    /// The bands both halves of the model cut, in meters of shadow displacement, for
-    /// (height, shadow per height, meters per pixel). Duplicated verbatim in the matching case of
-    /// src/tiles/sweep.test.ts: the pyramid hands over to the client's own sweep at one zoom, and a
-    /// table on each side is what catches either drifting from the other.
+    /// Bands both halves cut, in meters of displacement, per (height, shadow per height, m/px).
+    /// Duplicated in src/tiles/sweep.test.ts so either side drifting fails.
     #[test]
     fn cuts_the_bands_the_client_cuts() {
         let cases: [(f64, f64, f64, &[(usize, f64, f64)]); 3] = [
