@@ -1,20 +1,5 @@
-//! The scenic per-edge routing attributes, baked into GRPH v5 from the committed POI and nuisance
-//! sources plus the derived commercial-frontage lines. Each quantizes to a 0..254 byte per edge (the 254 ceiling keeps a discount
-//! edge from ever reading free — the cost model's `maxAttr < 1` invariant, as cover already relies
-//! on); a later phase reads the discount bytes as `1 - w*attr` and the penalty byte as `1 + w*attr`.
-//!
-//! - **Landmark and public-art amenity — a DISCOUNT, by network fan-out.** A landmark or mural only
-//!   rewards you if your walking path passes it, so its reach is geodesic, not Euclidean: each POI
-//!   snaps to the nearest walking node and a bounded Dijkstra deposits a network-distance-decaying
-//!   contribution on the edges it reaches. Contributions accumulate across POIs and saturate
-//!   `1 - e^{-k·field}`, so a dense cluster stops stacking linearly. The kernel is per-mood —
-//!   landmarks reach further and saturate fast, art stays tight and keeps rewarding a rich corridor.
-//! - **Highway / elevated-rail nuisance — a PENALTY, by an areal proximity field.** Noise and grime
-//!   carry through the air regardless of the street grid, so this is Euclidean: each edge's penalty
-//!   is a Gaussian of its meter distance to the nearest nuisance line.
-//! - **Nice commercial frontage — a DISCOUNT, by the same proximity field over the qualifying blocks.**
-//!   A commercial street is walked ALONG, so a tight Euclidean σ keeps the reward on the block's own
-//!   sidewalks and off the parallel residential street a block over.
+//! Scenic per-edge bytes (GRPH v5), 0..254 so no discount edge reads free (`maxAttr < 1`).
+//! Landmarks and art fan out over the network; highway and commercial proximity is Euclidean.
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
@@ -25,8 +10,7 @@ use crate::geometry::{point_segment_dist2, round_half_up};
 const BYTE_CEILING: f64 = 254.0; // a discount edge is never free: keeps maxAttr < 1, as cover does
 const FANOUT_SIGMAS: f64 = 3.0; // the Gaussian is negligible past 3σ; searches and fan-outs stop there
 
-// Landmarks read from a distance and one is plenty (wide σ, fast saturation); art is experienced up
-// close and a rich corridor keeps giving (tight σ, slower saturation). Tunable by eye in Phase 3.
+// Landmarks read from afar and saturate fast; art is up close and a rich corridor keeps giving.
 pub const LANDMARK_PARAMS: PoiParams = PoiParams {
     sigma_meters: 120.0,
     saturation: 1.0,
@@ -39,8 +23,7 @@ pub const ART_PARAMS: PoiParams = PoiParams {
 const POI_SNAP_RADIUS_METERS: f64 = 150.0;
 // The nuisance field's reach: walking within ~a σ of a highway or el is unpleasant.
 const HIGHWAY_SIGMA_METERS: f64 = 35.0;
-// The commercial-frontage reach: tight enough that the reward lands on the qualifying block's own
-// street and its sidewalks, not a parallel residential block ~a σ or two over.
+// Tight enough that the reward stays on the block's own sidewalks, not a parallel block over.
 const COMMERCIAL_SIGMA_METERS: f64 = 20.0;
 
 pub struct PoiParams {
@@ -48,8 +31,7 @@ pub struct PoiParams {
     pub saturation: f64,
 }
 
-/// The finished walking graph as flat slices, everything the scenic passes need. Coordinates are
-/// the quantized graph units; `mpu_*` convert a unit to meters at the origin latitude.
+/// The walking graph as flat slices in quantized units; `mpu_*` convert a unit to meters.
 pub struct Network<'a> {
     pub node_x: &'a [i32],
     pub node_y: &'a [i32],
@@ -58,9 +40,7 @@ pub struct Network<'a> {
     pub edge_a: &'a [u32],
     pub edge_b: &'a [u32],
     pub edge_len_m: &'a [f64],
-    /// Whether an edge is one a walker uses. The fan-out below walks the graph, and the graph now
-    /// holds a transit topology: a station's board edge is zero meters long, so without this a
-    /// landmark beside one station would deposit its discount on the pavement beside the next.
+    /// Whether a walker uses an edge; zero-length station board edges would carry discounts across.
     pub edge_walkable: &'a [bool],
     pub origin_lng: f64,
     pub origin_lat: f64,
@@ -85,9 +65,7 @@ impl Network<'_> {
         )
     }
 
-    /// A node a walker can stand on: one with a walking edge on it. A station and its platforms
-    /// carry nothing but transit edges, and a POI that snapped onto one would fan out into a dead
-    /// end and deposit its discount on nothing.
+    /// A node with a walking edge on it; a POI snapped to a station would fan out into a dead end.
     fn walkable_nodes(&self) -> Vec<bool> {
         (0..self.node_count())
             .map(|node| {
@@ -129,8 +107,7 @@ impl PartialOrd for HeapItem {
     }
 }
 
-/// A grid of the WALKABLE node ids in meter space, cells `cell_meters` on a side, for a
-/// nearest-node snap.
+/// A grid of the walkable node ids in meter space, for a nearest-node snap.
 fn node_grid(net: &Network, cell_meters: f64) -> HashMap<(i32, i32), Vec<u32>> {
     let walkable = net.walkable_nodes();
     let mut grid: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
@@ -154,10 +131,7 @@ pub struct PoiStats {
     pub max_byte: u8,
 }
 
-/// The per-edge amenity byte for one POI mood. Each point snaps to the nearest walking node within
-/// `POI_SNAP_RADIUS_METERS`; a bounded Dijkstra out to `FANOUT_SIGMAS·σ` deposits `e^{-(d/σ)²/2}` on
-/// every edge reached (`d` = the network distance to the edge's near end); the summed field
-/// saturates `1 - e^{-k·field}`. Sequential — a few thousand small balls, each cheap.
+/// The per-edge amenity byte for one POI mood: snap, bounded Dijkstra, Gaussian deposit, saturate.
 pub fn poi_amenity(net: &Network, params: &PoiParams, pois: &[Coord]) -> (Vec<u8>, PoiStats) {
     let node_count = net.node_count();
     let edge_count = net.edge_count();
@@ -169,8 +143,7 @@ pub fn poi_amenity(net: &Network, params: &PoiParams, pois: &[Coord]) -> (Vec<u8
     let mut acc = vec![0.0f64; edge_count];
     let mut dist = vec![f64::INFINITY; node_count];
     let mut touched: Vec<u32> = Vec::new();
-    // Dedups an edge within one POI's fan-out (an edge is seen from both its endpoints): stamped
-    // with the POI index the first time it is deposited on.
+    // Dedups an edge seen from both endpoints in one POI's fan-out, stamped with the POI index.
     let mut edge_stamp = vec![u32::MAX; edge_count];
     let mut heap: BinaryHeap<HeapItem> = BinaryHeap::new();
     let mut snapped = 0usize;
@@ -214,7 +187,7 @@ pub fn poi_amenity(net: &Network, params: &PoiParams, pois: &[Coord]) -> (Vec<u8
                 if !net.edge_walkable[edge] {
                     continue;
                 }
-                // Deposit once per POI, keyed on the edge's near end (both ends give the same min).
+                // Deposit once per POI, keyed on the edge's near end.
                 if edge_stamp[edge] != stamp {
                     edge_stamp[edge] = stamp;
                     let near = dist[net.edge_a[edge] as usize].min(dist[net.edge_b[edge] as usize]);
@@ -255,24 +228,17 @@ pub fn poi_amenity(net: &Network, params: &PoiParams, pois: &[Coord]) -> (Vec<u8
     (bytes, PoiStats { snapped, max_byte })
 }
 
-/// The per-edge nuisance-penalty byte: `e^{-(d/σ)²/2}` of the meter distance `d` from the edge to
-/// the nearest highway or elevated-rail segment. A later phase reads it as a `1 + w·attr` penalty.
+/// The per-edge nuisance byte: `e^{-(d/σ)²/2}` of the meter distance to the nearest highway or el.
 pub fn highway_penalty(net: &Network, lines: &[Polygon]) -> (Vec<u8>, u8) {
     line_proximity(net, lines, HIGHWAY_SIGMA_METERS)
 }
 
-/// The per-edge commercial-frontage byte, the same proximity field as the highway penalty but over
-/// the qualifying commercial-block lines and read as a `1 - w·attr` DISCOUNT: an edge running along a
-/// nice commercial street reads high, so the router will prefer it. Tight σ keeps it off parallel blocks.
+/// The per-edge commercial-frontage byte: the highway field over commercial lines, as a discount.
 pub fn commercial_amenity(net: &Network, lines: &[Polygon]) -> (Vec<u8>, u8) {
     line_proximity(net, lines, COMMERCIAL_SIGMA_METERS)
 }
 
-/// The per-edge proximity byte to a set of lines: `e^{-(d/σ)²/2}` of the meter distance `d` from the
-/// edge to the nearest line segment. The edge is sampled at its two endpoints and its midpoint, and
-/// the nearest of the three stands for it — if any part runs near a line, the whole edge reads near.
-/// Each `Polygon` is one line as a single ring. The caller decides whether the byte is a discount or
-/// a penalty. Returns the bytes and their max.
+/// The per-edge proximity byte to a set of lines, sampled at both endpoints and the midpoint.
 fn line_proximity(net: &Network, lines: &[Polygon], sigma_meters: f64) -> (Vec<u8>, u8) {
     let mut segments: Vec<(f64, f64, f64, f64)> = Vec::new();
     for polygon in lines {

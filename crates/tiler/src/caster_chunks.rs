@@ -1,20 +1,5 @@
-//! The caster-chunks pass: bakes the shadow CASTERS — building footprints with their roof heights,
-//! canopy crowns with their measured ones, census trunks holding those crowns up — into one chunk
-//! per z15 tile at public/casters/{x}/{y}.bin, so the client can sweep the shadows itself past where
-//! the baked raster pyramid stops. The chunks pass is the model: the same bucketing, the same
-//! varint-delta codec, the same manifest conventions.
-//!
-//! A caster is CLIPPED to the chunk it ships in, so a canopy blob spanning fifty tiles costs its
-//! own area once rather than fifty whole copies. That is lossless for what the client does with
-//! it: a Minkowski sweep distributes over a union, so sweeping the pieces and unioning gives the
-//! same shadow as sweeping the whole, and the pieces union back to the same footprint for the base
-//! punch-out.
-//!
-//! Footprints ship at full source detail. A crown ships as the nested SLICES of crates/tiler/src/
-//! crown.rs — its outline and the rings that outline insets to, one per band of the crown's height —
-//! since a crown's shadow is the union over the heights it spans and not its outline moved sideways.
-//! The slices are cut once per crown, before any of this, so the pyramid the shade pass bakes and the
-//! chunks the client sweeps are built from the same rings. See scripts/README.md.
+//! The caster-chunks pass: bakes shadow casters into one chunk per z15 tile for the client to sweep.
+//! Casters are clipped to their chunk, lossless since a Minkowski sweep distributes over a union.
 
 use std::collections::HashMap;
 use std::fs;
@@ -36,21 +21,15 @@ use crate::shade;
 // layouts: scripts/README.md
 const CASTER_FORMAT: u16 = 3;
 const CASTER_HEADER_BYTES: usize = 44;
-// Degrees per quantized unit, ~0.1 m — the grid the two sources are themselves stored on, so the
-// only coordinate error a chunk adds is the half unit of re-quantizing about its own origin.
+// Degrees per quantized unit (~0.1 m), the grid both sources are already stored on.
 const CASTER_COORD_SCALE: f64 = 1e-6;
 // The zoom the baked pyramid stops at, so it is also the grid the client fetches its casters on.
 const CHUNK_ZOOM: u32 = 15;
-// The crown allometry of scripts/tree-data-fetch.ts run BACKWARDS, to recover the trunk the crown
-// radius was grown from: crownDiameter = exp(a + b*ln(ln(dbh_cm + 1)) + bias) is monotone in dbh, so
-// the inversion is exact wherever a dbh was what produced the crown.
+// scripts/tree-data-fetch.ts's crown allometry, inverted exactly since it is monotone in dbh.
 const CROWN_A: f64 = -0.752;
 const CROWN_B: f64 = 2.414;
 const CROWN_LOG_BIAS: f64 = 0.00988;
-// The dbh the inversion is allowed to return, 1 and 60 inches in centimeters. Only the upper bound
-// mirrors the forward pass, which clamps there (MAX_DBH_INCHES in scripts/tree-data-fetch.ts); the
-// lower one is this side's own floor, since the forward pass imputes a missing dbh to its median
-// rather than clamping and so never produces a small one to mirror.
+// Dbh clamps (1 and 60 in, as cm); only the upper mirrors the forward pass's MAX_DBH_INCHES.
 const MIN_DBH_CM: f64 = 2.54;
 const MAX_DBH_CM: f64 = 152.4;
 const CENTIMETERS_PER_METER: f64 = 100.0;
@@ -59,33 +38,25 @@ pub struct Args {
     pub manifest: PathBuf,
     pub data: PathBuf,
     pub chunks: PathBuf,
-    // The same sun-position grid the shade pass bakes from, for its max_shadow_meters alone: the
-    // chunks carry no sun position, so any city's grid does.
+    // Only max_shadow_meters is read, so any city's grid does.
     pub params: shade::Params,
 }
 
-/// One shadow caster as it ships: its rings in degrees, in GROUPS, and the height it casts from in
-/// decimeters — the unit both source files store.
-///
-/// A building is one group: its outer ring first and its holes after. A crown is one group per SLICE,
-/// group `j` being its outline inset by `j / CROWN_SEGMENTS` of the crown radius, every ring of it a
-/// positively wound piece. Which group a ring is in is what says how far down the shadow it is swept.
+/// One shadow caster as shipped: ring groups in degrees and a height in decimeters.
+/// A building is one group (outer, then holes); a crown has a group per slice, setting its sweep.
 struct Caster {
     groups: Vec<Vec<Ring>>,
     height_dm: u16,
 }
 
 impl Caster {
-    /// The ring a caster is placed and clipped by: its outer one, which for a crown is its widest
-    /// slice and therefore contains every other.
+    /// The ring a caster is placed and clipped by: its outer one, for a crown the widest slice.
     fn outer(&self) -> &Ring {
         &self.groups[0][0]
     }
 }
 
-/// One trunk as it ships: where it stands, how thick it is in centimeters of RADIUS — the decimeter
-/// the crown byte is quantized on is coarser than a whole median trunk — and how high it stands
-/// before its crown starts, in the decimeters the crown heights are stored in.
+/// One trunk as shipped: position, radius in cm (a decimeter is too coarse) and height in dm.
 struct Trunk {
     coord: Coord,
     radius_cm: u8,
@@ -100,10 +71,7 @@ struct Members {
     trunks: Vec<u32>,
 }
 
-/// What the client needs before it can fetch anything: the grid the chunks are cut on, the codec's
-/// quantization, the halo radius a viewport has to gather casters over — a shadow reaches into the
-/// view from that far outside it — and which chunks exist, since a 500 m halo spans dozens of z15
-/// tiles and this is what keeps the empty ones from being dozens of 404s.
+/// What the client needs before fetching: grid, quantization, halo radius and which chunks exist.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ChunkManifest {
@@ -120,14 +88,8 @@ struct ChunkEntry {
     bytes: usize,
 }
 
-/// The casters one source contributes: every polygon that casts something, at full source detail. A
-/// polygon that casts nothing is dropped exactly as the shade pass drops it: no height (the canopy
-/// file's 0 unknown sentinel, a footprint with no roof) or no ring to sweep.
-///
-/// `holes` keeps the inner rings. A footprint needs them, since the display path punches a
-/// building's base back out of the shade and a courtyard would otherwise punch as though it were
-/// roof; they cost 21k vertices across the city. A crown is never punched and the shade pass
-/// translates its outer ring alone, and its LiDAR gaps would be a quarter of everything shipped.
+/// One source's casters at full detail, dropping any with no height or ring as the shade pass does.
+/// `holes` keeps inner rings: footprints need them for the base punch-out; crowns never punch.
 fn casters(polygons: &[Polygon], heights: &[f64], holes: bool) -> Vec<Caster> {
     polygons
         .iter()
@@ -149,9 +111,7 @@ fn casters(polygons: &[Polygon], heights: &[f64], holes: bool) -> Vec<Caster> {
         .collect()
 }
 
-/// The crowns as casters, each carrying its slices. A crown whose outline casts nothing — the canopy
-/// file's 0 unknown-height sentinel, or a ring with no area — is dropped exactly as the shade pass
-/// drops it.
+/// The crowns as casters with their slices, dropping any that cast nothing as the shade pass does.
 fn crown_casters(crowns: Vec<crown::Crown>, heights: &[f64]) -> Vec<Caster> {
     crowns
         .into_iter()
@@ -168,10 +128,7 @@ fn crown_casters(crowns: Vec<crown::Crown>, heights: &[f64]) -> Vec<Caster> {
         .collect()
 }
 
-/// The city's crowns that cast anything and their measured heights, empty when it has no canopy layer
-/// or the file is missing. The 0 unknown-height sentinel is dropped HERE rather than downstream, since
-/// slicing a crown is the expensive half of this pass and half the file's polygons carry it — the same
-/// filter the shade pass applies before it slices.
+/// The city's casting crowns and heights, dropping the 0 sentinel before the costly slicing.
 fn city_crowns(city: &City, data: &Path) -> Fallible<(Vec<Polygon>, Vec<f64>)> {
     let Some(layer) = &city.field.canopy else {
         return Ok((Vec::new(), Vec::new()));
@@ -190,18 +147,14 @@ fn city_crowns(city: &City, data: &Path) -> Fallible<(Vec<Polygon>, Vec<f64>)> {
         .unzip())
 }
 
-/// The trunk radius a shipped crown radius implies, in meters. Two trees the inversion cannot know
-/// about ride through it: one whose dbh was MISSING carries the imputed median (crown byte 39, 7.1%
-/// of the city), and an OSM tree's crown is a RECORDED diameter that was never a dbh at all, which
-/// the clamp below is what keeps from inverting into a meter-thick trunk.
+/// The trunk radius (m) a crown radius implies, clamped since OSM crowns were never grown from a dbh.
 fn trunk_radius_m(crown_radius_m: f64) -> f64 {
     let log_log = ((2.0 * crown_radius_m).ln() - CROWN_A - CROWN_LOG_BIAS) / CROWN_B;
     let dbh_cm = (log_log.exp().exp() - 1.0).clamp(MIN_DBH_CM, MAX_DBH_CM);
     dbh_cm / 2.0 / CENTIMETERS_PER_METER
 }
 
-/// The city's trunks, one per census tree, empty when the trees blob is missing. Their heights are
-/// filled in by `stand_trunks`, which is also what decides which of them ship at all.
+/// One trunk per census tree, empty without a trees blob; `stand_trunks` sets heights and drops some.
 fn city_trunks(city: &City, data: &Path) -> Fallible<Vec<Trunk>> {
     let path = data.join("trees").join(&city.field.trees.file);
     if !path.exists() {
@@ -237,17 +190,8 @@ fn ring_box(ring: &Ring) -> Rect {
     rect
 }
 
-/// Every trunk given the height it stands to, with the ones that have none DROPPED: a trunk rises to
-/// the crown BASE of the canopy polygon it stands under, which is the very height that polygon's own
-/// shadow is now cast from, so the two shadows meet rather than leaving bare ground between them.
-///
-/// A census tree under no measured crown — 342,619 of NYC's 925,338, the polygon over it carrying
-/// the canopy file's 0 unknown-height sentinel, or the tree being too young for the 2017 LiDAR to
-/// have caught it — ships nothing. There is no crown shadow over it to join, so a trunk there would
-/// be a sliver of shade the model never casts.
-///
-/// The search is per z15 tile, on the same buckets the chunks are cut on, and the box test is what
-/// keeps it off the rings: a trunk touches a handful of outlines out of its tile's hundreds.
+/// Every trunk raised to the crown base of the canopy polygon over it, so the two shadows meet.
+/// Trunks under no measured crown (342k of NYC's 925k) are dropped: no crown shadow joins them.
 fn stand_trunks(trunks: Vec<Trunk>, crowns: &[Caster]) -> Vec<Trunk> {
     let boxes: Vec<Rect> = crowns.iter().map(|crown| ring_box(crown.outer())).collect();
     let mut by_tile: HashMap<(u32, u32), Vec<u32>> = HashMap::new();
@@ -276,11 +220,7 @@ fn stand_trunks(trunks: Vec<Trunk>, crowns: &[Caster]) -> Vec<Trunk> {
         .collect()
 }
 
-/// Buckets casters into every z15 tile their outer ring's bounding box touches, as the chunks pass
-/// does its segments. The box only has to cover the tiles a caster could reach — the clip decides
-/// what it actually leaves there, and a tile the box overshoots into is one the clip empties. A
-/// caster lands where it STANDS, not where its shadow falls; gathering the casters beyond the
-/// viewport is the client's halo, which is what the manifest's `maxShadowMeters` is for.
+/// Buckets casters into every z15 tile their outer ring's bbox touches; the clip empties overshoot.
 fn bucket(casters: &[Caster], mut push: impl FnMut((u32, u32), u32)) {
     for (index, caster) in casters.iter().enumerate() {
         let rect = ring_box(caster.outer());
@@ -296,8 +236,7 @@ fn bucket(casters: &[Caster], mut push: impl FnMut((u32, u32), u32)) {
     }
 }
 
-/// Buckets trunks into the one z15 tile each stands in. A trunk is a point, so there is nothing to
-/// clip and nothing to overlap: it ships whole into exactly one chunk.
+/// Buckets each trunk into the one z15 tile it stands in.
 fn bucket_trunks(trunks: &[Trunk], mut push: impl FnMut((u32, u32), u32)) {
     for (index, trunk) in trunks.iter().enumerate() {
         let tile_x = tile_index(lng_to_pixel_x(trunk.coord.lng, CHUNK_ZOOM), CHUNK_ZOOM);
@@ -306,9 +245,7 @@ fn bucket_trunks(trunks: &[Trunk], mut push: impl FnMut((u32, u32), u32)) {
     }
 }
 
-/// The rectangle one chunk covers: its z15 tile's own bounds, in degrees. Tile seams are lines of
-/// constant longitude and latitude, so the clip is axis-aligned in the coordinates the casters are
-/// already stored in and needs no projection.
+/// One chunk's rectangle in degrees; tile seams are axis-aligned there, so no projection is needed.
 #[derive(Clone, Copy)]
 struct Rect {
     west: f64,
@@ -325,8 +262,7 @@ impl Rect {
             && point.lat <= self.north
     }
 
-    /// The four corners counter-clockwise from the south-west, so corner `index` sits at perimeter
-    /// position `index`.
+    /// The corners counter-clockwise from the south-west, corner `index` at perimeter `index`.
     fn corners(&self) -> [Coord; 4] {
         [
             Coord {
@@ -348,11 +284,8 @@ impl Rect {
         ]
     }
 
-    /// Where a point on the rectangle's boundary lies along it, in [0, 4) counter-clockwise from the
-    /// south-west corner — one unit per side. Ordering these is what says which piece of a clipped
-    /// ring the boundary walk reaches next. Clip points are snapped exactly onto the side they were
-    /// cut against, so the equality tests here are exact; the arms are ordered so a corner belongs
-    /// to the side it starts.
+    /// A boundary point's position in [0, 4), counter-clockwise from the south-west.
+    /// Clip points are snapped onto their side, so the tests are exact; a corner starts its side.
     fn perimeter(&self, point: &Coord) -> f64 {
         if point.lat == self.south && point.lng < self.east {
             (point.lng - self.west) / (self.east - self.west)
@@ -365,8 +298,7 @@ impl Rect {
         }
     }
 
-    /// The rectangle itself as a ring wound the given way — what a ring that swallows the whole
-    /// chunk clips to.
+    /// The rectangle as a ring of the given winding, what a ring swallowing the chunk clips to.
     fn ring(&self, counter_clockwise: bool) -> Ring {
         let mut ring = self.corners().to_vec();
         if !counter_clockwise {
@@ -391,8 +323,7 @@ fn same(left: &Coord, right: &Coord) -> bool {
     left.lng == right.lng && left.lat == right.lat
 }
 
-/// Twice the area the ring encloses by the shoelace sum, SIGNED: positive counter-clockwise. The
-/// clip preserves a ring's winding, and this is what it reads the winding off.
+/// Twice the signed area of a ring (shoelace), positive counter-clockwise.
 fn signed_double_area(ring: &[Coord]) -> f64 {
     let mut sum = 0.0;
     let mut previous = ring.len() - 1;
@@ -403,8 +334,7 @@ fn signed_double_area(ring: &[Coord]) -> f64 {
     -sum
 }
 
-/// Whether a point is inside a ring, by the even-odd crossing count — asked only of a chunk's
-/// center, to tell a ring that misses the chunk from one that swallows it whole.
+/// Even-odd point-in-ring test, used on a chunk's center to tell a missed ring from a swallowing one.
 fn point_inside_ring(ring: &[Coord], point: &Coord) -> bool {
     let mut inside = false;
     let mut previous = ring.len() - 1;
@@ -421,11 +351,8 @@ fn point_inside_ring(ring: &[Coord], point: &Coord) -> bool {
     inside
 }
 
-/// The part of one segment inside the rectangle, by Liang-Barsky: the two ends of the surviving
-/// span, or None when the segment misses entirely. An end that was cut lands exactly on the side it
-/// was cut against rather than wherever the interpolation fell, and an end that was already inside
-/// comes back as the original vertex — which is what lets the ring walk join spans by plain
-/// equality, and what keeps a caster that never leaves its chunk byte-identical.
+/// The part of a segment inside the rectangle by Liang-Barsky, None if it misses.
+/// Cut ends snap onto their side and inside ends stay the original vertex, so spans join by equality.
 fn clip_segment(rect: &Rect, from: &Coord, to: &Coord) -> Option<(Coord, Coord)> {
     let mut enter = 0.0f64;
     let mut leave = 1.0f64;
@@ -488,23 +415,15 @@ fn advance(from: f64, to: f64, counter_clockwise: bool) -> f64 {
     }
 }
 
-/// A ring clipped to the rectangle: the closed pieces of ring ∩ rect, each wound the way the source
-/// ring was. A ring that never leaves comes back untouched, which is the overwhelmingly common case
-/// and the one that must stay free.
-///
-/// The walk is Weiler-Atherton, not Sutherland-Hodgman: a ring that leaves the chunk and comes back
-/// makes SEVERAL pieces, and Sutherland-Hodgman would join them with a zero-area bridge along the
-/// seam — invisible to a fill, but a sweep would drag that bridge into a shadow that is not there.
-/// So the spans inside are collected first, then closed by walking the rectangle's own sides from
-/// each span's exit to the next span's entry, picking up the corners passed on the way.
+/// A ring clipped to the rectangle as closed pieces of the source winding; one inside is untouched.
+/// Weiler-Atherton, since Sutherland-Hodgman's zero-area seam bridges would sweep into false shadow.
 fn clip_ring(ring: &[Coord], rect: &Rect) -> Vec<Ring> {
     let Some(start) = ring.iter().position(|point| !rect.contains(point)) else {
         return vec![ring.to_vec()];
     };
     let counter_clockwise = signed_double_area(ring) > 0.0;
 
-    // The spans of the ring that lie inside, in the ring's own direction. Starting the walk at a
-    // vertex outside is what keeps a span from wrapping around the ring's end.
+    // Start the walk at a vertex outside so a span never wraps around the ring's end.
     let mut spans: Vec<Ring> = Vec::new();
     let mut span: Ring = Vec::new();
     let close = |span: &mut Ring, spans: &mut Vec<Ring>| {
@@ -571,8 +490,7 @@ fn clip_ring(ring: &[Coord], rect: &Rect) -> Vec<Ring> {
                     piece.push(*point);
                 }
             }
-            // The span the walk reaches next along the boundary. The piece's own first span is
-            // always a candidate, so the walk always closes.
+            // The next span along the boundary; the piece's own first is a candidate, so it closes.
             let exit = exits[current];
             let next = (0..spans.len())
                 .filter(|index| !used[*index] || *index == first)
@@ -613,15 +531,8 @@ fn clip_ring(ring: &[Coord], rect: &Rect) -> Vec<Ring> {
     pieces
 }
 
-/// One BUILDING as it ships in one chunk: its rings clipped to that chunk. A ring can clip into
-/// several disjoint pieces, which the record format cannot hold — its ring list is one outer ring
-/// and its holes — so each piece ships as its own record, at the same height. That is exactly what
-/// the client already does with two casters that overlap: it unions their shadows and unions their
-/// bases, and a union of the pieces is the whole.
-///
-/// A footprint that splits AND has holes is the one case with nowhere to put a hole, since nothing
-/// in the format says which piece it belongs to; it ships whole, as it did before, which is
-/// trivially still correct because the pieces it duplicates are subsets of it.
+/// One building clipped to a chunk, each piece its own record at the same height.
+/// A footprint that splits and has holes ships whole, since the format can't assign a hole a piece.
 fn clip_building(caster: &Caster, rect: &Rect, out: &mut Vec<Caster>) {
     let rings = &caster.groups[0];
     let mut pieces = clip_ring(&rings[0], rect);
@@ -637,8 +548,7 @@ fn clip_building(caster: &Caster, rect: &Rect, out: &mut Vec<Caster>) {
             height_dm: caster.height_dm,
         }));
     } else if let Some(outer) = pieces.pop() {
-        // The clipped holes are the same intersection taken against the same rectangle, so they cut
-        // the clipped outer exactly where they cut the whole one.
+        // Holes clip against the same rectangle, so they cut the clipped outer as they cut the whole.
         let mut kept = vec![outer];
         for hole in holes {
             kept.extend(clip_ring(hole, rect));
@@ -650,11 +560,7 @@ fn clip_building(caster: &Caster, rect: &Rect, out: &mut Vec<Caster>) {
     }
 }
 
-/// One CROWN as it ships in one chunk: every slice clipped to it, each staying in its own group. The
-/// pieces a slice breaks into are not split across records the way a building's are — which slice a
-/// ring belongs to is what says how far it is swept, and a record is what carries that. Nothing ships
-/// when the outline misses the chunk; a deeper slice that clips away just leaves its group empty, and
-/// the client sweeps whatever the group holds.
+/// One crown clipped to a chunk as one record, pieces kept by slice; none if the outline misses.
 fn clip_crown(caster: &Caster, rect: &Rect) -> Option<Caster> {
     let groups: Vec<Vec<Ring>> = caster
         .groups
@@ -675,8 +581,7 @@ fn clip_crown(caster: &Caster, rect: &Rect) -> Option<Caster> {
         })
 }
 
-/// A ring's vertex count and its varint deltas, carrying the record's running delta chain on — so a
-/// ring after the first starts from the one before it rather than from the chunk origin again.
+/// A ring's vertex count and varint deltas, continuing the record's running delta chain.
 fn encode_ring(
     ring: &Ring,
     origin_lng: f64,
@@ -704,9 +609,7 @@ fn encode_building(caster: &Caster, origin_lng: f64, origin_lat: f64, bytes: &mu
     }
 }
 
-/// One crown: its height, how many slices it carries, then per slice a ring count and those rings.
-/// The slice count rides in the record rather than being assumed, so a chunk stays readable whatever
-/// the slicer is cutting crowns into.
+/// One crown: its height, slice count, then per slice a ring count and those rings.
 fn encode_crown(caster: &Caster, origin_lng: f64, origin_lat: f64, bytes: &mut Vec<u8>) {
     write_varint(bytes, u64::from(caster.height_dm));
     write_varint(bytes, caster.groups.len() as u64);
@@ -719,9 +622,7 @@ fn encode_crown(caster: &Caster, origin_lng: f64, origin_lat: f64, bytes: &mut V
     }
 }
 
-/// The trunk section: per trunk a zigzag varint step in x and y from the trunk before it, a varint
-/// radius in centimeters and a varint height in decimeters. The steps are taken in the chunk's own
-/// row-major order rather than the city's, which is what keeps them short.
+/// The trunk section: zigzag varint x/y steps in chunk row-major order, radius (cm), height (dm).
 fn encode_trunks(
     trunks: &[Trunk],
     indices: &[u32],
@@ -753,12 +654,7 @@ fn encode_trunks(
     }
 }
 
-// The three sections back to back, buildings then crowns then trunks: a footprint is SWEPT (its ring
-// together with its translate, since a wall connects the roof to the ground) while a crown floats
-// free and is only TRANSLATED, so which section a record came from is what it casts by. A trunk is a
-// building the size of a fence post — swept, and swept OPAQUELY, since wood does not thin out in
-// October the way the crown above it does. Every polygon caster is clipped to the chunk on the way
-// in, so a record count is a count of clipped PIECES rather than of members.
+// Buildings, crowns, then trunks: the section says how a record casts; counts are clipped pieces.
 // layout: scripts/README.md
 fn encode_chunk(
     buildings: &[Caster],
@@ -800,8 +696,7 @@ fn encode_chunk(
     bytes
 }
 
-/// Every chunk one city's casters land in, written, and what each cost. A chunk's origin is its own
-/// tile's north-west corner, which keeps the first delta of every record small.
+/// Writes every chunk a city's casters land in, each with its tile's north-west corner as origin.
 fn write_chunks(
     buildings: &[Caster],
     crowns: &[Caster],
@@ -828,8 +723,7 @@ fn write_chunks(
             members,
             &tile_rect(*tile_x, *tile_y),
         );
-        // Bucketing is by bounding box, so a chunk can hold nothing once its members are clipped to
-        // it; an empty chunk is a request for a bare header and is left unwritten.
+        // Box bucketing can leave a chunk empty after clipping; it is left unwritten.
         if encoded.len() == CASTER_HEADER_BYTES {
             continue;
         }
@@ -855,8 +749,7 @@ pub fn run(args: &Args) -> Fallible<()> {
 
     let mut entries: Vec<ChunkEntry> = Vec::new();
     for city in &manifest.cities {
-        // Either source alone still makes chunks worth having; a city with neither is skipped, and
-        // the client simply finds no chunk over it.
+        // Either source alone makes chunks worth having; a city with neither is skipped.
         let footprints = args.data.join("buildings").join(format!("{}.bin", city.id));
         let (polygons, heights) = if footprints.exists() {
             binfmt::read_buildings(&footprints)?
@@ -932,18 +825,14 @@ mod tests {
         Coord { lng, lat }
     }
 
-    /// One chunk read back: its buildings as a height and their rings, its crowns as a height and
-    /// their rings BY SLICE, and its trunks as a point, a radius in meters and a height in decimeters.
+    /// One chunk read back: buildings, crowns by slice, and trunks (point, radius m, height dm).
     struct Decoded {
         buildings: Vec<(u16, Vec<Ring>)>,
         crowns: Vec<(u16, Vec<Vec<Ring>>)>,
         trunks: Vec<(Coord, f64, u16)>,
     }
 
-    /// Walks a chunk back the way the client will: the header, then the buildings as a height, a ring
-    /// count and per ring a vertex count and the running varint deltas; then the crowns the same way
-    /// but with a slice count and a ring count per slice; then the trunks as their own running deltas,
-    /// a radius and a height.
+    /// Walks a chunk back the way the client will.
     fn decode(bytes: &[u8]) -> Decoded {
         assert_eq!(&bytes[0..4], b"CSTR");
         let counts = [
@@ -1035,8 +924,7 @@ mod tests {
         }
     }
 
-    // A stand-in chunk, the shape of a z15 tile but on round numbers so the expected clips can be
-    // written down. Its origin — the north-west corner — is what the records are encoded about.
+    // A stand-in chunk on round numbers, encoded about its north-west corner.
     const CHUNK: Rect = Rect {
         west: -74.0114,
         east: -74.0050,
@@ -1049,8 +937,7 @@ mod tests {
             && (left.lat - right.lat).abs() <= CASTER_COORD_SCALE / 2.0
     }
 
-    /// A ring matches a source ring up to the codec's half unit, starting anywhere on it — the clip
-    /// closes a piece wherever the ring first entered the chunk.
+    /// A ring matches a source ring within the codec's half unit, from any starting vertex.
     fn matches(ring: &[Coord], expected: &[Coord]) -> bool {
         ring.len() == expected.len()
             && (0..expected.len()).any(|shift| {
@@ -1060,11 +947,7 @@ mod tests {
             })
     }
 
-    /// A courtyard building and a crown, both well inside the chunk, plus the two ways a caster can
-    /// straddle its edge. Encoded about the chunk origin and read back: the footprint's rings survive
-    /// within the half unit quantization allows, the two sections stay apart — the client casts a
-    /// footprint and a crown differently — and a caster that leaves the chunk ships only the part
-    /// inside it, closed along the chunk's own edge.
+    /// Inside and straddling casters round-trip, sections apart, straddlers clipped to the chunk.
     #[test]
     fn round_trips_a_chunk() {
         let courtyard: Polygon = vec![
@@ -1109,8 +992,7 @@ mod tests {
             coord(-74.0045, 40.7090),
         ]];
         let buildings = casters(&[courtyard.clone(), straddler.clone()], &[42.5, 12.0], true);
-        // A whole crown, then one whose body sits outside the chunk with two prongs reaching in — and
-        // a second slice on it, so the record's slice structure has to survive the clip as well.
+        // A whole crown, then a two-pronged straddler with a second slice that must survive the clip.
         let inset: Polygon = vec![vec![
             coord(-74.0058, 40.7116),
             coord(-74.0052, 40.7116),
@@ -1140,9 +1022,7 @@ mod tests {
             ..
         } = decode(&encoded);
 
-        // Two building records, since the straddler is one piece; the crowns stay ONE record apiece,
-        // their pieces gathered into the slice they came from rather than split into records of their
-        // own — which slice a ring is in is what says how far it is swept.
+        // Two building records (the straddler is one piece); crowns stay one record, pieces by slice.
         assert_eq!(decoded_buildings.len(), 2);
         assert_eq!(decoded_crowns.len(), 2);
         assert_eq!(decoded_buildings[0].0, 425);
@@ -1201,9 +1081,7 @@ mod tests {
         }
     }
 
-    /// The clip keeps a ring's winding whichever way it runs, and gives back the same ground either
-    /// way: the sweep and the base punch-out both read the winding, and a piece wound against its
-    /// source would cancel rather than fill.
+    /// The clip keeps a ring's winding, since a piece wound against its source would cancel.
     #[test]
     fn preserves_winding() {
         let ring = vec![
@@ -1226,8 +1104,7 @@ mod tests {
         assert!(matches(&forward[0], &flipped));
     }
 
-    /// A ring big enough to swallow the whole chunk has no vertex and no crossing inside it, and
-    /// clips to the chunk's own rectangle rather than to nothing.
+    /// A ring swallowing the whole chunk clips to the chunk's rectangle, not to nothing.
     #[test]
     fn clips_a_swallowed_chunk() {
         let ring = vec![
@@ -1248,8 +1125,7 @@ mod tests {
         assert!(clip_ring(&missing, &CHUNK).is_empty());
     }
 
-    /// A hole is clipped against the same rectangle as its outer ring, so a courtyard straddling the
-    /// chunk edge still punches exactly the part of itself that is inside.
+    /// A hole straddling the chunk edge punches exactly its inside part.
     #[test]
     fn clips_a_hole_with_its_outer_ring() {
         let courtyard: Polygon = vec![
@@ -1282,10 +1158,7 @@ mod tests {
         ));
     }
 
-    /// The inversion recovers the dbh the crown was grown from exactly, and still within 1.5 mm once
-    /// the crown has been through the decimeter byte it ships in — checked at the 22.86 cm (9 inch)
-    /// dbh the ingest imputes for a missing one, which is where 7.1% of the city sits. A crown no dbh
-    /// could have grown (an OSM tree's recorded 20 m radius) and a crown of nothing land on the clamps.
+    /// The inversion recovers dbh within 1.5 mm through the decimeter byte; impossible crowns clamp.
     #[test]
     fn inverts_the_crown_allometry() {
         let median_dbh_cm: f64 = 22.86;
@@ -1305,9 +1178,7 @@ mod tests {
         );
     }
 
-    /// A trunk stands to the crown BASE of the polygon it is under — 0.4 of that polygon's height,
-    /// which is where the crown's own shadow is now cast from — and a census tree under no measured
-    /// crown is dropped rather than shipped holding nothing up.
+    /// A trunk stands to its crown base, and a tree under no measured crown is dropped.
     #[test]
     fn stands_trunks_under_their_crowns() {
         let square = |lng: f64| -> Polygon {
@@ -1344,8 +1215,7 @@ mod tests {
         assert_eq!(standing[1].height_dm, 56);
     }
 
-    /// Trunks ride in their own section, needing no clip: every one that stands in the chunk comes
-    /// back where it stood, as thick and as tall as it went in, whatever order it was handed over in.
+    /// Trunks ship unclipped and come back as they went in, whatever order they were given.
     #[test]
     fn round_trips_trunks() {
         let standing = [

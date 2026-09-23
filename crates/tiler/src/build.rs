@@ -1,28 +1,4 @@
-//! `tiler build`: a tile build end to end in ONE process — which passes to run at all, the output
-//! directories, every pass, and the stamp each one records for itself — driven by a plan file.
-//!
-//! The TypeScript half spawns nothing: scripts/serve-sources.ts puts the verbatim sources where the
-//! client can fetch them, scripts/write-plan.ts emits the plan, and package.json sequences the three.
-//! So everything after the inputs are on disk is decided here, including the decision to do nothing.
-//!
-//! The driver used to spawn eight subcommand invocations in sequence, and one of the orderings
-//! between them was load-bearing and enforced by nothing but a comment: the chunks have to be cut a
-//! second time once the graph has said which walks its island drop stranded. Two more orderings are
-//! new, because the commercial signals used to be built by a script nobody's build ran — they are
-//! keyed on the segment order INSIDE the chunks, and the graph's commercial discount is baked from
-//! the lines that pass writes. Here each stage is a function over values, so a stranded set cannot
-//! be handed to the chunk pass before the graph that computes it has run.
-//!
-//! The plan carries what those argv lists carried, including the one thing that must come from
-//! TypeScript because the client imports the very same module — the per-city sun-position grid
-//! (scripts/shade-schedule.ts). Its schema is documented in scripts/README.md.
-//!
-//! `tiler graph-inputs` is here for the same reason: which sources a city hands `graph::run`, and
-//! under which flags, is decided in this file, so the stamp the shed guard gates on is taken from
-//! the same expressions rather than from a second reading of the plan somewhere else. The keys that
-//! pass caches its topology and its attribute columns under (graph_cache.rs) are computed here for
-//! that reason too — they ARE its stamp, so what it thinks is current and what it reads back off
-//! the disk cannot come apart.
+//! `tiler build`: every pass of a tile build in one process, each stamped, driven by a plan file.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -42,10 +18,7 @@ use crate::{
     graph_cache, heights, shade,
 };
 
-/// The by-convention sources: `data/<kind>/<id>.bin`, listed rather than pathed because the passes
-/// that read them resolve the same convention themselves. They are outside the manifest because its
-/// versioned city schema would throw for existing cities if bumped, so the driver states which of
-/// them it actually has on disk.
+/// The by-convention sources, `data/<kind>/<id>.bin`, kept out of the versioned manifest schema.
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum Source {
@@ -61,8 +34,7 @@ enum Source {
 }
 
 impl Source {
-    /// Every variant, so `key_space_files` can decide about each one by name and a new source
-    /// cannot slip past it.
+    /// Every variant, so `key_space_files` must decide about each one by name.
     const ALL: [Source; 9] = [
         Source::Sidewalks,
         Source::Ferries,
@@ -90,13 +62,9 @@ impl Source {
     }
 }
 
-/// Where the plan's code map names the crate's modules, its keys being repo-relative.
 const SRC: &str = "crates/tiler/src";
 
-/// The modules the shade pyramid is a function of: shade.rs, and everything it reads through. The
-/// list is the transitive closure of its imports and nothing wider, because the pyramid is most of
-/// the build's twenty minutes and an edit to the graph is no reason to render it again — which is
-/// the whole reason this pass declines the whole-crate epoch every other pass folds in.
+/// The shade pyramid's modules: the transitive closure of shade.rs's imports and nothing wider.
 const SHADE_CODE: [&str; 6] = [
     "shade.rs",
     "crown.rs",
@@ -106,12 +74,7 @@ const SHADE_CODE: [&str; 6] = [
     "manifest.rs",
 ];
 
-/// What the graph pass's TOPOLOGY is a function of: graph.rs, and everything it reads through. The
-/// base entry is keyed on this rather than on the whole crate, and every column of the graph cache
-/// folds the base, so it is what decides whether the two dearest of them — the relief bytes behind
-/// the DEM resample and the per-edge shade bake — come back off the disk. An edit to a module the
-/// graph never calls used to cost both: 400 MB of GeoTIFF decoded single-threaded and twenty-odd
-/// minutes of ray casting, five and a half hours of wall clock between them on New York.
+/// The graph topology's modules: the transitive closure of graph.rs's imports; keys the base.
 const GRAPH_CODE: [&str; 22] = [
     "graph.rs",
     "association.rs",
@@ -137,9 +100,7 @@ const GRAPH_CODE: [&str; 22] = [
     "sidewalks.rs",
 ];
 
-/// And what the relief column alone is: the ascent and descent bytes, and the resample of the DEM
-/// they are read off. Narrower than the graph's scope above, which the entry also folds through the
-/// base — it is stated so that the resample's own dependencies are written down where the cost is.
+/// The relief column's modules: the DEM resample and the ascent/descent bytes read off it.
 const RELIEF_CODE: [&str; 7] = [
     "relief.rs",
     "dem.rs",
@@ -150,11 +111,7 @@ const RELIEF_CODE: [&str; 7] = [
     "raster.rs",
 ];
 
-/// The rest of the crate. No other pass names its own modules yet, so these reach every stamp
-/// through the whole-crate epoch and this list decides nothing — it exists so that the two together
-/// are the directory, which a test asserts. A module added to neither would otherwise be a module
-/// no scope is a function of, and the one edit that leaves a stale pyramid standing. Nothing but
-/// that test reads it, since the epoch these belong to is every file the plan carries.
+/// Every other module, so that together with the scopes above the lists cover the directory.
 #[cfg(test)]
 const OUTSIDE_SHADE: [&str; 27] = [
     "association.rs",
@@ -186,9 +143,7 @@ const OUTSIDE_SHADE: [&str; 27] = [
     "sidewalks.rs",
 ];
 
-/// In every scope beside the modules: a dependency's bytes can move the geometry without a line of
-/// this crate changing, a feature flag can move what the compiler does with it, and a compiler bump
-/// can move a low bit of `sin` through std or libm — which is a shadow in a different place.
+/// Build inputs in every scope: a dependency, feature flag or compiler bump can move the output.
 const BUILD_FILES: [&str; 4] = [
     "Cargo.toml",
     "Cargo.lock",
@@ -196,13 +151,7 @@ const BUILD_FILES: [&str; 4] = [
     "rust-toolchain.toml",
 ];
 
-/// One mosaic of a city's DEM. A mosaic is several hundred tiles, so the plan lists them; the
-/// projection is named because a GeoTIFF carries an EPSG code and not the parameters, so something
-/// has to know what 7131 is.
-///
-/// A city carries a LIST of these, because a city need not lie inside one survey: the Bay Area's
-/// ground is San Francisco's five-band 3DEP product on the city's own state-plane zone plus the East
-/// Bay's staged bare-earth DEM on UTM 10N, and the two share neither a grid nor a band.
+/// One DEM mosaic; the projection is named because a GeoTIFF carries only an EPSG code.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Elevation {
@@ -216,21 +165,17 @@ struct Elevation {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PlanCity {
     id: String,
-    /// Whether this city's centerline classifies alleys, for the graph's alley invariants. New
-    /// York's meaning, so a city that says nothing is asked about it.
+    /// Whether this city's centerline classifies alleys; defaults to true, New York's meaning.
     #[serde(default = "classifies_alleys")]
     alleys: bool,
-    /// The existence gate's two ceilings, for a region whose sidewalk coverage is not what a
-    /// municipal survey implies. Absent leaves it held to `graph::SURVEYED_CEILINGS`.
+    /// The existence gate's ceilings; absent means `graph::SURVEYED_CEILINGS`.
     #[serde(default)]
     existence_ceilings: Option<graph::ExistenceCeilings>,
     #[serde(default)]
     sources: Vec<Source>,
-    /// The sun-position grid, absent for a city whose year yields no above-horizon bin.
     #[serde(default)]
     shade: Option<shade::Params>,
-    /// Empty for a city with no elevation product; then every edge is flat and no terrain overlay
-    /// is rendered.
+    /// Empty for a city with no elevation product, whose edges are then flat.
     #[serde(default)]
     elevation: Vec<Elevation>,
 }
@@ -247,9 +192,7 @@ impl PlanCity {
     }
 }
 
-/// One module hashed by its token stream: `proc_macro2` drops ordinary `//` and `/* */` comments and
-/// normalizes whitespace, so what is left is what the compiler is handed. `None` for a file that
-/// cannot be read or lexed, whose caller keeps the hash of its bytes.
+/// One module hashed by its token stream, ignoring comments and whitespace; `None` if unlexable.
 fn token_oid(path: &Path) -> Option<String> {
     let source = fs::read_to_string(path).ok()?;
     let stream = proc_macro2::TokenStream::from_str(&source).ok()?;
@@ -258,47 +201,29 @@ fn token_oid(path: &Path) -> Option<String> {
     Some(hex(&digest.finalize()))
 }
 
-/// The whole build, as the driver states it. Unknown fields are rejected: a driver that misspells a
-/// directory would otherwise write a pyramid nothing serves and report success.
+/// The whole build; unknown fields are rejected so a misspelled directory fails loudly.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Plan {
-    /// The tiler crate file by file — its sources, both Cargo.tomls and the workspace lockfile,
-    /// each under its repo-relative path — hashed by scripts/write-plan.ts over the same file list
-    /// this binary is compiled from. Whole, it is what every pass but one folds into its stamp, so
-    /// any edit to the tiler invalidates them: they declare no modules of their own, and an output
-    /// whose format changed would otherwise go on being served from the last build's bytes. It
-    /// arrives file by file rather than as one hash because the shade pass DOES name the modules it
-    /// is a function of, and can only hash those if the plan carries them apart. The `.rs` entries
-    /// are rehashed here over their token streams before anything folds them — `hash_source_tokens`.
+    /// The tiler crate's files by repo-relative path, per file so a pass can scope to its modules.
     code: BTreeMap<String, String>,
     manifest: PathBuf,
-    /// The committed sources, `data/`: every pass resolves its own files under it.
     data: PathBuf,
     chunks: PathBuf,
     casters: PathBuf,
     commercial_signals: PathBuf,
     commercial_lines: PathBuf,
-    /// The tile pyramid root, `public/tiles`: the shade, tree-shade and elevation passes each write
-    /// their own `<name>/<city>` under it.
     tiles: PathBuf,
     canopy_tiles: PathBuf,
     genus_field_tiles: PathBuf,
-    /// `public/routing`: each city's graph, its stranded list beside it, and the per-edge shade bake
-    /// under `shade/<city>`.
     routing: PathBuf,
-    /// `.build/graph-cache`: the graph pass's own cache, one `<city>` directory of content-keyed
-    /// entries under it. Gitignored build glue rather than output — a build that finds it empty
-    /// computes everything, which is what every build did before it existed.
+    /// `.build/graph-cache`: the graph pass's content-keyed entries, safe to delete.
     graph_cache: PathBuf,
     cities: Vec<PlanCity>,
 }
 
 impl Plan {
-    /// Each manifest city beside its plan entry, in manifest order. Both directions are checked:
-    /// a plan naming a city the manifest does not carry is a typo, and a manifest city the plan
-    /// leaves out would otherwise be silently skipped by every per-city stage while the whole-
-    /// manifest ones (chunks, commercial, canopy) rendered it anyway.
+    /// Each manifest city beside its plan entry in manifest order; a city on one side only errors.
     fn pair<'a>(&'a self, manifest: &'a Manifest) -> Fallible<Vec<(&'a City, &'a PlanCity)>> {
         let mut seen: HashSet<&str> = HashSet::new();
         for city in &self.cities {
@@ -325,21 +250,7 @@ impl Plan {
             .collect()
     }
 
-    /// Every `.rs` entry of the code map, rehashed over the module's TOKEN stream in place of its
-    /// bytes, before a single stamp is folded. A comment or a `cargo fmt` run then moves nothing:
-    /// the epoch reaches nearly every pass, so an edit that cannot change what the tiler produces
-    /// used to cost a rebake of the per-sun-position shade rows.
-    ///
-    /// Sound only while nothing that produces an artifact is a function of its own source layout —
-    /// no `line!`, `file!`, `column!` or `#[track_caller]`, and no `include_str!`/`include_bytes!`
-    /// of a file the code map does not carry. Neither appears anywhere in the crate today.
-    ///
-    /// Doc comments survive as `#[doc]` tokens and go on counting, since filtering them means
-    /// walking attribute groups and over-invalidation is the safe direction. A file that will not
-    /// read or lex keeps the byte hash it arrived with for the same reason — it is never skipped.
-    ///
-    /// The modules are read from the crate this binary was compiled from rather than from the
-    /// plan's repo-relative keys, which would be resolved against whatever the cwd happens to be.
+    /// Rehashes `.rs` entries over their tokens; sound only without `line!`/`file!`/`include_*!`.
     fn hash_source_tokens(&mut self) {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let prefix = format!("{SRC}/");
@@ -353,8 +264,6 @@ impl Plan {
         }
     }
 
-    /// The whole crate as one hash, which is what a pass that names no modules of its own is a
-    /// function of.
     fn code_epoch(&self) -> String {
         let mut digest = Sha256::new();
         for (path, oid) in &self.code {
@@ -364,9 +273,7 @@ impl Plan {
         hex(&digest.finalize())
     }
 
-    /// One pass's own scope as a hash: the modules it reads through, and the crate's build inputs.
-    /// A named file the plan does not carry is an error rather than a field quietly left out — the
-    /// scope is only worth anything if it is the code that ran.
+    /// One pass's scope as a hash; a named module the plan doesn't carry is an error.
     fn code_scope(&self, modules: &[&str]) -> Fallible<String> {
         let mut named: Vec<String> = modules
             .iter()
@@ -386,18 +293,9 @@ impl Plan {
         Ok(hex(&digest.finalize()))
     }
 
-    /// The pyramids written one `<name>/<city>` at a time under `public/tiles`, so no pass ever
-    /// sees the whole directory.
     const PYRAMIDS: [&'static str; 3] = ["shade", "tree-shade", "elevation"];
 
-    /// Output no pass of this build claims: a city the manifest dropped, a pyramid a city stopped
-    /// rendering. Every pass now clears only its own roots, so a directory belonging to a city the
-    /// plan no longer names is a directory nothing would ever look at again — it used to be swept
-    /// away by emptying every root before the first pass, and that sweep is what this replaces.
-    ///
-    /// Only what a pass would have written is considered. An unrecognized name under `routing` is
-    /// left alone rather than guessed about: `public/routing` is a directory this build shares with
-    /// whatever a later one decides to put there.
+    /// Removes output no pass claims, such as a dropped city's; unknown names are left alone.
     fn reconcile(&self, manifest: &Manifest) -> Fallible<()> {
         let claimed: HashSet<&str> = manifest
             .cities
@@ -423,8 +321,7 @@ impl Plan {
         }
         for entry in listing(&self.routing)? {
             let name = file_name(&entry);
-            // <id>.bin, <id>.stranded.bin, <id>.version.json and the pass's own .stamp-<id>; the
-            // shade bake is a directory of its own, swept above.
+            // <id>.bin, <id>.stranded.bin, <id>.version.json, .stamp-<id>; the shade bake is swept above.
             let named = name
                 .strip_prefix(".stamp-")
                 .map(str::to_owned)
@@ -440,37 +337,22 @@ impl Plan {
     }
 }
 
-/// What a pass's claim is called wherever it lives inside a directory it owns.
 const STAMP: &str = ".stamp";
 
-/// One pass's freshness, and the output it owns the lifecycle of.
-///
-/// The stamp covers everything the pass reads — the plan values it acts on, the content of every
-/// input file, and the stamps of the passes whose output it consumes — and it lives INSIDE that
-/// pass's own output, so a directory restored from a cache carries the claim that describes it and
-/// a directory that was never restored carries none.
+/// One pass's freshness; the stamp lives inside its output, so a cache restore carries it.
 struct Pass {
     stamp: String,
-    /// Written only once the pass has succeeded, so a run killed halfway through leaves no claim
-    /// that its half-written directory is current — and leaves every earlier pass's claim intact.
+    /// Written only after the pass succeeds, so a killed run leaves no claim.
     stamp_file: PathBuf,
-    /// A whole-build directory this pass owns outright: emptied and recreated before it reruns, so
-    /// a bin, a chunk or a tile the new run does not write cannot survive from the last one. Absent
-    /// for a pass that writes into a directory other cities also write into.
+    /// A whole-build directory this pass owns, emptied and recreated before it reruns.
     root: Option<PathBuf>,
-    /// One city's share of such a directory, or one city's graph blob. Removed before the pass
-    /// reruns and NOT recreated: a city with no buildings bakes no shade and one with no DEM bakes
-    /// no terrain, so absence is how the client tells "no such layer here" from "an empty layer".
+    /// A per-city piece, removed and not recreated: absence means "no such layer here".
     pieces: Vec<PathBuf>,
-    /// What must be on disk for the stamp to be believed. The stamp says the inputs have not moved,
-    /// not that the output is still there, and a hand-deleted directory or a cache that restored
-    /// only some of them has to rebuild. Existence, not completeness — an empty directory still
-    /// passes, which is the limit of doing this without hashing the output.
+    /// Paths that must exist for the stamp to be believed; existence only, not completeness.
     witnesses: Vec<PathBuf>,
 }
 
 impl Pass {
-    /// A pass that owns one whole-build directory, whose being there is what says it ran.
     fn whole(stamp: String, root: &Path) -> Pass {
         Pass {
             stamp,
@@ -488,9 +370,7 @@ impl Pass {
         recorded.trim() == self.stamp && self.witnesses.iter().all(|path| path.exists())
     }
 
-    /// Clear this pass's output and make the directory its stamp will land in: a pass that writes
-    /// only row directories under its root still has a manifest to put at the top of it, so the
-    /// root has to be there before the pass runs and not only when it records.
+    /// Clears the output and creates the root, which the pass's manifest is written into.
     fn restart(&self) -> Fallible<()> {
         self.clear()?;
         if let Some(parent) = self.stamp_file.parent() {
@@ -499,10 +379,7 @@ impl Pass {
         Ok(())
     }
 
-    /// Take away what the last build left without claiming anything for this one: a whole-build root
-    /// goes back to the empty directory it was before its first render, a per-city piece goes away
-    /// outright. Also what a pass that renders nothing this time does INSTEAD of `restart` — it then
-    /// records no stamp, and reaching the same decision again next build costs nothing.
+    /// Clears the output without recording a stamp, also for a pass rendering nothing this build.
     fn clear(&self) -> Fallible<()> {
         for path in self.root.iter().chain(&self.pieces) {
             discard(path)?;
@@ -521,37 +398,19 @@ impl Pass {
     }
 }
 
-/// One city's shade pyramid, whose freshness is decided a sun bucket at a time.
-///
-/// A bucket's tiles are a pure function of what casts a shadow in that city, of where the sun stands
-/// in THAT bucket, and of how deep and how far the pyramid is rendered — not of the other buckets,
-/// and not of the schedule's shape. So the pass that costs most of the build reruns a bucket at a
-/// time, and a schedule that gained a bin has not moved the other fifty-odd.
-///
-/// The trap is that a bucket's directory is named after its POSITION in the schedule, which sorts
-/// stably by (season, hour angle): insert one bin and every later index shifts by one. Matching
-/// directories to buckets by position would then re-render the whole pyramid for the one schedule
-/// tweak this exists to make cheap. So nothing here matches by position — each directory records its
-/// own content key, the keys are matched against the buckets wanted, and a directory that matched is
-/// RENAMED into its new index.
+/// One city's shade pyramid; bucket directories are matched to buckets by content key, not index.
 struct ShadePyramid {
-    /// `<tiles>/shade/<city>`, where the bucket directories and their keys live.
     buildings: PathBuf,
-    /// `<tiles>/tree-shade/<city>`, which the same key claims: the twin comes out of the same render
-    /// over the same casters. Whether it is produced at all turns on the canopy carrying a measured
-    /// height, which only the pass finds out, so a bucket claims it without asking for it.
+    /// `<tiles>/tree-shade/<city>`, claimed by the same key since the same render writes it.
     trees: PathBuf,
-    /// One content key per bucket the schedule wants, in schedule order.
     keys: Vec<String>,
 }
 
-/// Where a directory that is moving between indices waits. Inside the pyramid, so the moves stay
-/// renames within the one filesystem.
+/// A staging prefix inside the pyramid, so moves stay renames on one filesystem.
 const MOVING: &str = ".moving-";
 
 impl ShadePyramid {
-    /// Take both pyramids away, for a city that casts no shadow this build. Not recreated: absence
-    /// is how the client tells "no shade layer here" from "an empty one".
+    /// Removes both pyramids, not recreated: absence means "no shade layer here".
     fn clear(&self) -> Fallible<()> {
         discard(&self.buildings)?;
         discard(&self.trees)
@@ -561,8 +420,7 @@ impl ShadePyramid {
         root.join(index.to_string())
     }
 
-    /// The key a bucket directory records, or none for one that holds no claim — a render killed
-    /// before it recorded leaves a directory of half a bucket's tiles.
+    /// The key a bucket directory records, or none if its render was killed before recording.
     fn key_of(directory: &Path) -> Fallible<Option<String>> {
         match fs::read_to_string(directory.join(STAMP)) {
             Ok(key) => Ok(Some(key.trim().to_owned())),
@@ -571,18 +429,13 @@ impl ShadePyramid {
         }
     }
 
-    /// Bring what is on disk in line with the schedule, and say which buckets are left to render:
-    /// the matched directories are moved into their new indices, the unclaimed ones go away, and
-    /// what no directory claimed is what the pass renders.
+    /// Moves matched directories to their new indices, discards the rest, returns what to render.
     fn reconcile(&self) -> Fallible<Vec<shade::Render>> {
         let mut held: Vec<(usize, Option<String>)> = Vec::new();
         for entry in listing(&self.buildings)? {
             match file_name(&entry).parse::<usize>() {
                 Ok(index) if entry.is_dir() => held.push((index, Self::key_of(&entry)?)),
-                // Everything else under a directory this pass owns outright: a staging name a killed
-                // run left behind, a stamp an older build wrote at the top of the pyramid, and
-                // buckets.json itself, which is written again from the schedule the moment this
-                // returns — an old one would name the indices the renames below are about to move.
+                // Staging leftovers, old stamps, and buckets.json, which is rewritten afterwards.
                 _ => discard(&entry)?,
             }
         }
@@ -597,8 +450,7 @@ impl ShadePyramid {
         let mut moves: Vec<(usize, usize)> = Vec::new();
         let mut render: Vec<shade::Render> = Vec::new();
         for (index, key) in self.keys.iter().enumerate() {
-            // Taken rather than read, so two buckets that hashed alike cannot both be answered by
-            // the one directory that holds their tiles.
+            // Taken rather than read, so two buckets with one key can't both claim one directory.
             match by_key.remove(key.as_str()) {
                 Some(from) => {
                     claimed.insert(from);
@@ -619,8 +471,6 @@ impl ShadePyramid {
                 discard(&Self::bucket(&self.buildings, *index))?;
             }
         }
-        // The twin is claimed by its bucket's key and holds none of its own, so an index the
-        // buildings' pyramid no longer keeps is one nothing would ever look at again.
         for entry in listing(&self.trees)? {
             let index = file_name(&entry).parse::<usize>();
             if !index.is_ok_and(|index| claimed.contains(&index)) {
@@ -634,9 +484,7 @@ impl ShadePyramid {
     }
 }
 
-/// Move each bucket directory that matched into its new index. In two passes through a staging
-/// name, because one bucket's new index is very often another's old one, and a rename onto a
-/// directory that has not moved out of the way yet would carry the wrong tiles into it.
+/// Moves buckets via a staging name, since one bucket's new index is often another's old one.
 fn shift(root: &Path, moves: &[(usize, usize)]) -> Fallible<()> {
     for (from, to) in moves {
         let source = ShadePyramid::bucket(root, *from);
@@ -661,7 +509,6 @@ fn absent(error: std::io::Error) -> std::io::Result<()> {
     }
 }
 
-/// Remove a path whether it is a directory or a file, and say nothing about one that is not there.
 fn discard(path: &Path) -> Fallible<()> {
     if path.is_dir() {
         fs::remove_dir_all(path).or_else(absent)?;
@@ -678,15 +525,13 @@ fn file_name(path: &Path) -> String {
         .into_owned()
 }
 
-/// Which city an output path belongs to: the pyramids name a directory after the city, and the
-/// routing artifacts prefix theirs with it.
+/// The city an output path belongs to: pyramids name a directory after it, routing prefixes files.
 fn city_of(path: &Path) -> String {
     let name = file_name(path);
     name.split_once('.')
         .map_or(name.clone(), |(id, _)| id.to_owned())
 }
 
-/// A directory's entries, or none at all when the directory has never been made.
 fn listing(dir: &Path) -> Fallible<Vec<PathBuf>> {
     match fs::read_dir(dir) {
         Ok(entries) => {
@@ -701,28 +546,18 @@ fn listing(dir: &Path) -> Fallible<Vec<PathBuf>> {
     }
 }
 
-/// One field of a stamp, NUL-terminated so two values that abut cannot read as the same digest
-/// under a different split between them.
+/// One stamp field, NUL-terminated so abutting values can't collide.
 fn field(digest: &mut Sha256, bytes: &[u8]) {
     digest.update(bytes);
     digest.update([0]);
 }
 
-/// A DEM's identity: for every mosaic, which tiles, how big, and how they are georeferenced — not
-/// 1.77 GB of pixels. The 3DEP tiles are immutable upstream products fetched into content-named
-/// cache entries, so hashing them every build would buy nothing for the ten seconds of reading.
-///
-/// Every mosaic, so a city that gains a second survey re-runs the elevation and relief passes rather
-/// than keeping a pyramid that stops at the county line. In the plan's order, which is the order the
-/// tiles are read in and so the order an overlap between two surveys is settled by; the tiles within
-/// a mosaic are sorted, since which cache entries a fetch happened to fill first says nothing.
+/// A DEM's identity from its tiles' names, sizes and georeferencing, not its (immutable) pixels.
 fn dem_identity(digest: &mut Sha256, elevation: &[Elevation]) -> Fallible<()> {
     if elevation.is_empty() {
         field(digest, b"no elevation");
         return Ok(());
     }
-    // The counts, so the boundary between one mosaic's tiles and the next mosaic's projection is in
-    // the digest and not merely implied by the order the fields happen to fall in.
     field(digest, &elevation.len().to_le_bytes());
     for mosaic in elevation {
         field(digest, mosaic.crs.as_bytes());
@@ -747,32 +582,14 @@ fn dem_identity(digest: &mut Sha256, elevation: &[Elevation]) -> Fallible<()> {
     Ok(())
 }
 
-/// The per-pass stamps, computed from the plan and the inputs on disk.
-///
-/// Each is a SHA-256 over which pass it is, the tiler's own code, the manifest, the plan values
-/// that pass acts on, the content of every file it reads, and the stamps of the passes whose output
-/// it consumes. That last part makes the set a hash DAG, which is sound because the passes are
-/// deterministic — the same property the commercial signals already rest on, keyed as they are on
-/// the segment order inside the chunks.
-///
-/// Deliberately NOT the plan verbatim, for `key_space_stamp`'s reason: the data root, the
-/// manifest's location and the DEM's `.cache` tiles are all where this checkout happens to keep
-/// things, and a stamp that moved with them could never be compared against one CI recorded. So a
-/// file enters as its path relative to the data root, and the cities in `pair`'s manifest order.
+/// Per-pass stamps: SHA-256 over code, manifest, plan values, input contents and upstream stamps.
 struct Stamps<'a> {
     plan: &'a Plan,
-    /// The whole crate, hashed once: what a pass that names no modules of its own is a function of.
     code: String,
-    /// The shade pass's own scope, which is what keeps an edit to the graph from re-rendering
-    /// twenty minutes of pyramid.
     shade_code: String,
-    /// The graph topology's own scope, and the relief column's, which between them keep an edit the
-    /// graph never reads from re-baking the DEM and the per-edge shade.
     graph_code: String,
     relief_code: String,
     manifest_oid: String,
-    /// Each input hashed once: the commercial pass, the shade pass and the graph all read the same
-    /// buildings, and `data/` is 168 MB.
     oids: HashMap<PathBuf, String>,
 }
 
@@ -789,14 +606,11 @@ impl<'a> Stamps<'a> {
         })
     }
 
-    /// A digest seeded with what every pass shares. Folding the whole manifest into all of them is
-    /// coarse — one city's bounds moving re-renders another city's pyramid — and cheap, because the
-    /// manifest changes about as often as the code beside it does.
+    /// A digest seeded with the manifest and code every pass shares.
     fn open(&self, pass: &str) -> Sha256 {
         self.scoped(pass, &self.code)
     }
 
-    /// The same, for a pass that is a function of some of the crate rather than all of it.
     fn scoped(&self, pass: &str, code: &str) -> Sha256 {
         let mut digest = Sha256::new();
         field(&mut digest, pass.as_bytes());
@@ -805,9 +619,7 @@ impl<'a> Stamps<'a> {
         digest
     }
 
-    /// One input as the pass will find it: its path relative to the data root, then its content —
-    /// or the fact that it is not there, since most of these are read only if they exist and a
-    /// source appearing has to rebuild as surely as one changing.
+    /// One input: its data-relative path, then its content or absence, since appearing rebuilds.
     fn file(&mut self, digest: &mut Sha256, path: &Path) -> Fallible<()> {
         let name = path
             .strip_prefix(&self.plan.data)
@@ -832,8 +644,6 @@ impl<'a> Stamps<'a> {
         Ok(())
     }
 
-    /// Pass 1. The densities the overlay draws are baked into these files by the ingest, so nothing
-    /// about the tree model reaches this pass except through their bytes.
     fn chunks(&mut self, cities: &[(&City, &PlanCity)]) -> Fallible<String> {
         let mut digest = self.open("chunks");
         for (city, _) in cities {
@@ -848,9 +658,7 @@ impl<'a> Stamps<'a> {
         Ok(hex(&digest.finalize()))
     }
 
-    /// Pass 2, over pass 1's stamp because its signals are keyed on the segment order inside the
-    /// chunks. It reads whichever of its four sources are on disk rather than what the plan's
-    /// `sources` decision names, so presence is asked of the disk here too.
+    /// Pass 2, over pass 1's stamp since its signals are keyed on the chunks' segment order.
     fn commercial(&mut self, cities: &[(&City, &PlanCity)], chunks: &str) -> Fallible<String> {
         let mut digest = self.open("commercial");
         field(&mut digest, chunks.as_bytes());
@@ -864,10 +672,7 @@ impl<'a> Stamps<'a> {
         Ok(hex(&digest.finalize()))
     }
 
-    /// Pass 3. The chunks carry no sun position at all: what they take from the grid is
-    /// `maxShadowMeters` alone, the halo radius a viewport gathers casters over, which rides in
-    /// their manifest. So that is what enters here and not the grid — an inserted bin moves every
-    /// bin index and not one of these 166 MB of chunks, and the pass is four minutes.
+    /// Pass 3: only the grid's `maxShadowMeters` enters, since the chunks carry no sun position.
     fn casters(
         &mut self,
         cities: &[(&City, &PlanCity)],
@@ -897,15 +702,7 @@ impl<'a> Stamps<'a> {
         Ok(hex(&digest.finalize()))
     }
 
-    /// Pass 4, one city and ONE of its sun buckets: what casts a shadow there, where the sun stands
-    /// in this bucket, and how deep and how far the pyramid is rendered. Both pyramids the bucket
-    /// writes, the buildings' and the trees', come out of this.
-    ///
-    /// What is deliberately absent is the rest of the schedule: a bucket rendered under a grid of
-    /// fifty-eight bins is the same tiles as one rendered under a grid of fifty-nine, so an inserted
-    /// bin costs one render and the moving of some directory names. The city's buildings are in it
-    /// whole, since a footprint file is opaque and city-wide — a re-ingest correctly re-renders
-    /// every bucket.
+    /// Pass 4, one sun bucket of one city; the rest of the schedule is deliberately absent.
     fn shade_bucket(
         &mut self,
         city: &City,
@@ -916,8 +713,7 @@ impl<'a> Stamps<'a> {
         field(&mut digest, city.id.as_bytes());
         field(&mut digest, &params.max_zoom.to_le_bytes());
         field(&mut digest, &params.max_shadow_meters.to_le_bytes());
-        // Serialized rather than walked field by field, so a bin that gained a sun-disk sample
-        // cannot slip past.
+        // Serialized so a new bin field can't be missed.
         field(&mut digest, &serde_json::to_vec(bucket)?);
         let mut inputs = vec![
             self.plan
@@ -935,7 +731,6 @@ impl<'a> Stamps<'a> {
         Ok(hex(&digest.finalize()))
     }
 
-    /// Pass 5, one city: the mosaic, and the land the overlay is clipped to.
     fn elevation(&mut self, city: &City, planned: &PlanCity) -> Fallible<String> {
         let mut digest = self.open("elevation");
         field(&mut digest, city.id.as_bytes());
@@ -945,7 +740,6 @@ impl<'a> Stamps<'a> {
         Ok(hex(&digest.finalize()))
     }
 
-    /// Pass 6.
     fn canopy(&mut self, cities: &[(&City, &PlanCity)]) -> Fallible<String> {
         let mut digest = self.open("canopy");
         for (city, _) in cities {
@@ -960,7 +754,6 @@ impl<'a> Stamps<'a> {
         Ok(hex(&digest.finalize()))
     }
 
-    /// Pass 7.
     fn genus_field(&mut self, cities: &[(&City, &PlanCity)]) -> Fallible<String> {
         let mut digest = self.open("genus-field");
         for (city, _) in cities {
@@ -972,24 +765,7 @@ impl<'a> Stamps<'a> {
         Ok(hex(&digest.finalize()))
     }
 
-    /// Pass 8's keys, one city: the topology's own, and one per attribute column baked over it.
-    ///
-    /// The base is what the sequential half of `graph::run` is a function of — the streets, the
-    /// paths, the OSM sidewalks, the ferries and the alley flag — and nothing else, because nothing
-    /// else can move an edge. Every column key folds it, which is what makes merging a column back
-    /// in by position sound: a base that moved renames every column with it, so a row can never be
-    /// read back beside an edge list it was not baked over.
-    ///
-    /// The match over `Source` is exhaustive for `key_space_files`'s reason: a source wired into the
-    /// graph later must reach these keys without anyone remembering to add it, and every one of them
-    /// is genuinely read by `graph::run`. The commercial lines are pass 2's output rather than a
-    /// committed source, so that pass's whole stamp stands in for them.
-    ///
-    /// Three of the keys name their own modules instead of the whole crate: the base, the relief
-    /// column and each sun bin's shade. The rest of the columns are seconds to bake and stay on the
-    /// epoch; those three are hours, and an edit to a module the graph never calls is no reason to
-    /// spend them. What they cannot dodge is an edit to the graph itself, which moves the base and
-    /// with it every column over it — the merge by position is what that pays for.
+    /// Pass 8's keys: the topology base, and one per attribute column that folds the base.
     fn graph_keys(
         &mut self,
         city: &City,
@@ -1012,8 +788,7 @@ impl<'a> Stamps<'a> {
         for source in Source::ALL {
             let topology = match source {
                 Source::Sidewalks | Source::Ferries | Source::Transit => true,
-                // Each of these bakes one column over edges that were final before it ran, so it
-                // keys that column and stays out of the base.
+                // Each bakes one column over final edges, so it stays out of the base.
                 Source::Landmarks
                 | Source::Art
                 | Source::Highways
@@ -1033,7 +808,7 @@ impl<'a> Stamps<'a> {
             .canopy
             .as_ref()
             .map(|layer| self.plan.data.join("canopy").join(&layer.file));
-        // Committed rather than planned, and every city carries one: the bridge column reads it.
+        // Every city carries one: the bridge column reads it.
         let land_file = self.plan.data.join("land").join(&city.field.land.file);
         let buildings = planned.source(&self.plan.data, Source::Buildings);
         let mut shade = Vec::new();
@@ -1045,9 +820,7 @@ impl<'a> Stamps<'a> {
                 field(&mut digest, base.as_bytes());
                 field(&mut digest, &params.max_zoom.to_le_bytes());
                 field(&mut digest, &params.max_shadow_meters.to_le_bytes());
-                // Serialized rather than walked field by field, so a bin that gained a sun-disk
-                // sample cannot slip past. Deliberately this bin alone — a schedule that gained one
-                // bakes the one, exactly as the pyramid renders the one.
+                // Serialized so a new bin field can't be missed; this bin alone, like the pyramid.
                 field(&mut digest, &serde_json::to_vec(bucket)?);
                 let files: Vec<PathBuf> = buildings.iter().chain(&canopy_file).cloned().collect();
                 self.files(&mut digest, &files)?;
@@ -1097,7 +870,6 @@ impl<'a> Stamps<'a> {
         })
     }
 
-    /// One column's key: the base it was baked over, and the one file it reads.
     fn graph_column(
         &mut self,
         base: &str,
@@ -1113,9 +885,7 @@ impl<'a> Stamps<'a> {
         Ok(hex(&digest.finalize()))
     }
 
-    /// Pass 8's stamp: its keys, and nothing besides. They are between them everything the pass
-    /// reads, so the artifacts it writes are current exactly when none of them has moved — and when
-    /// one has, the cache those same keys name is what keeps the rerun to the part that did.
+    /// Pass 8's stamp, which is exactly its keys.
     fn graph(&self, keys: &graph_cache::Keys) -> String {
         let mut digest = self.open("graph");
         for key in [
@@ -1127,14 +897,13 @@ impl<'a> Stamps<'a> {
             &keys.relief,
             &keys.canopy,
             &keys.industrial,
-            // Nothing but this line makes a re-ingested district file rerun the pass: the cache is
-            // asked what to recompute only once the STAMP has said the pass is stale at all.
+            // Only this makes a re-ingested district file rerun the pass.
             &keys.historic,
             &keys.bridge,
         ] {
             field(&mut digest, key.as_bytes());
         }
-        // The count as well as the keys, so a city that stopped baking shade at all moves it.
+        // The count too, so a city that stopped baking shade moves the stamp.
         field(&mut digest, &keys.shade.len().to_le_bytes());
         for key in &keys.shade {
             field(&mut digest, key.as_bytes());
@@ -1142,9 +911,7 @@ impl<'a> Stamps<'a> {
         hex(&digest.finalize())
     }
 
-    /// Pass 9: pass 1's answer, plus what the graph decided to strand. The stranded set rather than
-    /// the graph's stamp, so a graph that reran and landed on the same islands leaves the chunks
-    /// alone — which is most of what a graph rerun does.
+    /// Pass 9: pass 1's stamp plus the stranded set, so a rerun with the same islands skips it.
     fn stranded_chunks(
         &mut self,
         cities: &[(&City, &PlanCity)],
@@ -1163,7 +930,6 @@ impl<'a> Stamps<'a> {
     }
 }
 
-/// The nine passes, in the order the build has always run them.
 const STAGES: usize = 9;
 
 fn stage(number: usize, name: &str, started: &Instant) {
@@ -1173,7 +939,6 @@ fn stage(number: usize, name: &str, started: &Instant) {
     );
 }
 
-/// One pass, as `--only` names it on the command line, in the order the build runs them.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum PassName {
     Chunks,
@@ -1214,9 +979,7 @@ impl PassName {
         }
     }
 
-    /// Whether the pass is stamped one city at a time, and so can be narrowed to one. The rest are
-    /// cut or rendered over every city at once, so a `chunks:nyc` would name work that does not
-    /// exist.
+    /// Whether the pass is stamped per city and so can be narrowed to one.
     fn per_city(self) -> bool {
         matches!(
             self,
@@ -1225,30 +988,19 @@ impl PassName {
     }
 }
 
-/// Which cities one `--only` term left in for its pass.
 enum Cities {
     All,
     Named(HashSet<String>),
 }
 
-/// Which passes this build may run, and whether it believes their stamps.
-///
-/// `--only` is what supersedes hand-editing the plan to delete a pass's block. It restricts which
-/// passes may run and nothing else: a pass it leaves out does not run, records no stamp and clears
-/// no directory, so whatever claim that pass already held stands — stale if it was stale — and the
-/// next full build reruns it. Deleting a block could not do that. It took the pass's inputs out of
-/// what the build hashed, so the build recorded a stamp saying everything was current over inputs
-/// it had never looked at, and the staleness was then invisible for good. Nothing here writes a
-/// stamp a full build would not have written, which is why this cannot forge freshness the same way.
+/// Which passes this build may run and whether it believes their stamps.
 pub struct Selection {
-    /// `None` for every pass, which is what a build with no `--only` is.
     only: Option<HashMap<PassName, Cities>>,
     force: bool,
 }
 
 impl Selection {
-    /// `--only` as it was typed: pass names, each optionally narrowed to one city as `<pass>:<city>`.
-    /// An empty list is a build of all nine.
+    /// `--only` as typed: pass names, each optionally `<pass>:<city>`; empty means all nine.
     pub fn new(only: &[String], force: bool) -> Fallible<Selection> {
         if only.is_empty() {
             Ok(Selection { only: None, force })
@@ -1299,8 +1051,7 @@ impl Selection {
         self.only.is_some()
     }
 
-    /// Every city a term narrowed a pass to, checked against the manifest: a typo would otherwise
-    /// select no work at all and report the build that did none as a success.
+    /// Checks every narrowed city against the manifest, since a typo would select no work.
     fn check(&self, manifest: &Manifest) -> Fallible<()> {
         let known: HashSet<&str> = manifest
             .cities
@@ -1323,8 +1074,7 @@ impl Selection {
         Ok(())
     }
 
-    /// Whether `--only` left this pass in. Asked without a city of a per-city pass, whether it left
-    /// the pass in for any city at all.
+    /// Whether `--only` left this pass in; without a city, whether it did for any city.
     fn selected(&self, pass: PassName, city: Option<&str>) -> bool {
         match &self.only {
             None => true,
@@ -1336,15 +1086,12 @@ impl Selection {
         }
     }
 
-    /// Whether this pass is one whose stamp `--force` set aside. Only ever the selected ones: the
-    /// flag is about the passes this build is running, and cannot reach across to the others.
+    /// Whether `--force` set aside this pass's stamp, which it does only for selected passes.
     fn forces(&self, pass: PassName, city: Option<&str>) -> bool {
         self.force && self.selected(pass, city)
     }
 
-    /// Whether a selected pass would run over output whose writer this build is not running. The
-    /// city is the consumer's and the producer's alike, so a graph narrowed to New York is not taken
-    /// for one that is going to write San Francisco's stranded set.
+    /// Whether a selected pass would read output from a producer this build isn't running.
     fn handoff(&self, consumer: PassName, producer: PassName, city: Option<&str>) -> bool {
         self.selected(consumer, city) && !self.selected(producer, city)
     }
@@ -1360,13 +1107,10 @@ impl Selection {
     }
 }
 
-/// What this build does about one pass.
 #[derive(Clone, Copy)]
 enum Verdict {
-    /// `--only` left it out. It does not run, and neither what it wrote last build nor what it would
-    /// have swept away is touched.
+    /// Left out by `--only`: not run, and nothing of its output touched.
     Excluded,
-    /// Its stamp matched and its output is still there.
     Current,
     Run,
 }
@@ -1376,8 +1120,7 @@ impl Verdict {
         matches!(self, Verdict::Run)
     }
 
-    /// What a pass prints instead of running. Named for a city on the passes that are stamped one
-    /// city at a time; silent for a pass that is running, which does its own talking.
+    /// Prints what a pass does instead of running; silent for a pass that runs.
     fn announce(self, city: Option<&str>) {
         let why = match self {
             Verdict::Excluded => Some("not selected"),
@@ -1393,15 +1136,7 @@ impl Verdict {
     }
 }
 
-/// The stamp a pass downstream of this one has to fold: the one this build will leave behind.
-///
-/// A pass `--only` selected leaves the stamp just computed, since it is going to run if that stamp
-/// does not already hold. A pass it left out leaves whatever it recorded last time — which is the
-/// claim over the output the selected pass is actually about to read — or, if it has recorded
-/// nothing at all, `UNRECORDED`. Folding the computed stamp regardless is the hole this closes: a
-/// partial build would then record a downstream claim saying it had been built over output nobody
-/// has produced yet, and the next full build, having reran the upstream onto exactly that stamp,
-/// would find the downstream current and leave it standing over the stale bytes for good.
+/// The stamp a downstream pass folds: the computed one if selected, else the recorded one.
 fn upstream(selection: &Selection, name: PassName, pass: &Pass) -> Fallible<String> {
     if selection.selected(name, None) {
         Ok(pass.stamp.clone())
@@ -1414,17 +1149,10 @@ fn upstream(selection: &Selection, name: PassName, pass: &Pass) -> Fallible<Stri
     }
 }
 
-/// What an upstream pass that has claimed nothing enters a downstream stamp as. Not a stamp any pass
-/// could compute — those are 64 hex digits — so a downstream keyed on it is rerun by the first build
-/// that records a real one.
+/// Stands in for an unrecorded upstream stamp; never 64 hex digits, so the next real one reruns.
 const UNRECORDED: &str = "unrecorded";
 
-/// What a pass `--only` selected needs an earlier pass to have written, checked before the first of
-/// them runs rather than when the read fails.
-///
-/// A partial build deliberately runs over output that is STALE — that is what it is for — but never
-/// over output that is not there at all. The graph would otherwise be baked from commercial lines
-/// nobody has written, carry no commercial discount, and then record a stamp saying it had one.
+/// Checks that a selected pass's upstream output exists; stale is fine, missing is not.
 fn handoffs(plan: &Plan, cities: &[(&City, &PlanCity)], selection: &Selection) -> Fallible<()> {
     let mut wanted: Vec<(PassName, PassName, PathBuf)> = Vec::new();
     if selection.handoff(PassName::Commercial, PassName::Chunks, None) {
@@ -1465,10 +1193,7 @@ fn handoffs(plan: &Plan, cities: &[(&City, &PlanCity)], selection: &Selection) -
     }
 }
 
-/// A build, on `jobs` rayon threads or on rayon's own default of one per core when that is `None`.
-/// Every pass parallelizes through the global pool and none builds one of its own, so sizing it here
-/// — before the first parallel iterator, which would otherwise build the default pool and leave
-/// `build_global` with nothing left to size — sizes the whole build.
+/// A build on `jobs` rayon threads, sized before any parallel iterator builds the default pool.
 pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fallible<()> {
     let started = Instant::now();
     if let Some(threads) = jobs {
@@ -1487,23 +1212,18 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
     let cities = plan.pair(&manifest)?;
     selection.check(&manifest)?;
     handoffs(&plan, &cities, selection)?;
-    // A partial build sweeps nothing. What the reconcile takes away is output for a city the
-    // manifest dropped, and every directory it reaches for belongs to some pass — which `--only` may
-    // not have selected, and which owns the lifecycle of its own output.
+    // A partial build sweeps nothing, since the reconcile reaches into unselected passes' output.
     if !selection.partial() {
         plan.reconcile(&manifest)?;
     }
 
-    // The caster chunks are geometry on a shared x/y grid and carry no sun position, so they are cut
-    // once over every city; any city's grid carries the halo the client gathers them over.
+    // The caster chunks carry no sun position, so any city's grid supplies the halo.
     let sun = cities
         .iter()
         .find_map(|(_, planned)| planned.shade.as_ref());
     let any_casters = cities.iter().any(|(city, planned)| {
         planned.source(&plan.data, Source::Buildings).is_some() || city.field.canopy.is_some()
     });
-    // The per-edge shade bake rides on the same invocation as the graph and needs both the
-    // footprints and the sun grid, so a city gets all of it or none of it.
     let baked: Vec<Option<PathBuf>> = cities
         .iter()
         .map(|(city, planned)| {
@@ -1512,19 +1232,15 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
         })
         .collect();
 
-    // Every stamp before the first pass runs, because what the build does next depends on which of
-    // them are stale — the mosaics below are opened for the passes that will read them, and that
-    // decision cannot wait until pass five.
+    // Every stamp before any pass runs, since which DEMs to open depends on which passes are stale.
     let mut stamps = Stamps::new(&plan)?;
     let chunk_pass = Pass::whole(stamps.chunks(&cities)?, &plan.chunks);
-    // The two handovers between passes enter the downstream stamp as what THIS build will leave, so
-    // a partial build never claims to have been built over output it has not produced.
+    // Handovers enter as what this build will leave, so a partial build claims nothing unbuilt.
     let chunks_upstream = upstream(selection, PassName::Chunks, &chunk_pass)?;
     let commercial_pass = Pass {
         stamp: stamps.commercial(&cities, &chunks_upstream)?,
         stamp_file: plan.commercial_signals.join(STAMP),
-        // That pass empties both of its own directories, since it is the one that knows a city with
-        // no served chunk writes no file at all.
+        // That pass clears its own directories, since only it knows which cities write no file.
         root: None,
         pieces: Vec::new(),
         witnesses: vec![
@@ -1533,8 +1249,7 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
         ],
     };
     let caster_pass = Pass::whole(stamps.casters(&cities, sun)?, &plan.casters);
-    // Alone among the passes, shade is stamped below itself: one key per sun bucket rather than one
-    // for the city, since the pyramid is most of the build and no bucket is a function of another.
+    // Shade is stamped per sun bucket, since no bucket is a function of another.
     let shade_pyramids: Vec<ShadePyramid> = cities
         .iter()
         .map(|(city, planned)| {
@@ -1567,8 +1282,6 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
         .collect::<Fallible<Vec<Pass>>>()?;
     let canopy_pass = Pass::whole(stamps.canopy(&cities)?, &plan.canopy_tiles);
     let genus_pass = Pass::whole(stamps.genus_field(&cities)?, &plan.genus_field_tiles);
-    // The graph's keys before its stamp, because the stamp IS its keys: the base's, and one per
-    // attribute column over it. What the pass rebuilds when it reruns is decided by the same set.
     let commercial_upstream = upstream(selection, PassName::Commercial, &commercial_pass)?;
     let graph_keys: Vec<graph_cache::Keys> = cities
         .iter()
@@ -1599,21 +1312,13 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
         })
         .collect::<Fallible<Vec<Pass>>>()?;
 
-    // Every mosaic a stale pass will read is opened here, before the first pass: the tiles are read
-    // for their georeferencing alone, so this is seconds, and a mistyped projection or a missing DEM
-    // tile then fails in those seconds rather than twenty minutes later when the graph reaches its
-    // relief bake. One `Dem` per city, shared by the terrain overlay and that bake — they resample
-    // different grids over different bounds and decode their own pixels, but San Francisco's 1.77 GB
-    // of tiles are georeferenced and indexed once rather than twice. A build whose terrain and graph
-    // are both current opens nothing, which is what makes a no-op build a matter of milliseconds.
+    // Opens each stale pass's DEMs up front (georeferencing only, seconds), once per city.
     let mut dems: HashMap<&str, Dem> = HashMap::new();
     for (index, (_, planned)) in cities.iter().enumerate() {
-        // A stale graph that already holds its relief column reads no DEM: the bake is what wants
-        // the pixels, and its column is keyed on the mosaic's identity.
+        // A graph whose relief column is cached reads no DEM.
         let keys = &graph_keys[index];
         let city = cities[index].0.id.as_str();
-        // A forced graph recomputes the columns it would otherwise have read back, the relief among
-        // them, so it opens the mosaic a cached one leaves alone.
+        // A forced graph recomputes its relief column, so it opens the DEM.
         let graph_reads_dem = selection
             .verdict(PassName::Graph, Some(city), graph_passes[index].is_fresh())
             .runs()
@@ -1650,8 +1355,6 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
         chunks: plan.chunks.clone(),
     };
     stage(1, "chunks", &started);
-    // Nothing of the first pass's answer but the directory it filled, which the commercial pass
-    // reads back file by file — so a skipped pass 1 hands over the same value a run of it would.
     let chunks_verdict = selection.verdict(PassName::Chunks, None, chunk_pass.is_fresh());
     let chunk_files = if chunks_verdict.runs() {
         chunk_pass.restart()?;
@@ -1665,8 +1368,7 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
         }
     };
 
-    // The commercial overlay's per-segment signals are snapped onto the chunks just written and
-    // keyed on their segment index, which is why this takes the chunks themselves.
+    // The commercial signals are keyed on the chunks' segment index.
     stage(2, "commercial", &started);
     let commercial_verdict =
         selection.verdict(PassName::Commercial, None, commercial_pass.is_fresh());
@@ -1712,24 +1414,19 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
         }
     }
 
-    // One shade pyramid per city, because a bin's sun position is synthesised at the city's own
-    // latitude: two cities share neither a bin index nor a pyramid.
+    // One pyramid per city, since a bin's sun position is synthesized at the city's latitude.
     stage(4, "shade", &started);
     for ((city, planned), pyramid) in cities.iter().zip(&shade_pyramids) {
         let footprints = planned.source(&plan.data, Source::Buildings).is_some();
         let selected = selection.selected(PassName::Shade, Some(&city.id));
         match &planned.shade {
             Some(params) if footprints && selected => {
-                // A forced pyramid comes down before it is reconciled, so every key the schedule
-                // wants is one nothing on disk claims and every bin is rendered again.
+                // A forced pyramid is removed first, so every bin renders again.
                 if selection.forces(PassName::Shade, Some(&city.id)) {
                     pyramid.clear()?;
                 }
                 let render = pyramid.reconcile()?;
-                // Written before a tile is rendered rather than after: the reconcile has already
-                // moved the kept buckets into their new indices, and a schedule naming the old ones
-                // would send the client to another bin's tiles. A bucket the render has not reached
-                // yet is a directory of 404s, which it reads as no shade at all.
+                // Written before rendering, since the reconcile has moved buckets to new indices.
                 shade::write_schedule(&pyramid.buildings, params)?;
                 if render.is_empty() {
                     Verdict::Current.announce(Some(&city.id));
@@ -1774,8 +1471,7 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
                     manifest: plan.manifest.clone(),
                     tiles: plan.tiles.clone(),
                     city: city.id.clone(),
-                    // The DEM answers over water too, so the overlay is clipped to the city's own
-                    // land.
+                    // The DEM answers over water too, so the overlay is clipped to land.
                     land: plan.data.join("land").join(&city.field.land.file),
                 },
                 dem,
@@ -1784,8 +1480,6 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
         }
     }
 
-    // Both pyramid passes render every manifest city that carries the layer, so each runs once when
-    // any city does.
     stage(6, "canopy", &started);
     let canopy_verdict = selection.verdict(PassName::Canopy, None, canopy_pass.is_fresh());
     if !selection.selected(PassName::Canopy, None) {
@@ -1842,18 +1536,13 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
         let verdict = selection.verdict(PassName::Graph, Some(&city.id), pass.is_fresh());
         if !verdict.runs() {
             verdict.announce(Some(&city.id));
-            // The re-chunk below wants this city's stranded ways whether or not the graph that
-            // computed them ran, and the artifact beside the graph is where they were written. Read
-            // only when that pass is going to run: `--only graph:nyc` has no business opening San
-            // Francisco's.
+            // Read only when the re-chunk runs, so `--only graph:nyc` opens no other city's file.
             if selection.selected(PassName::ChunksStranded, None) {
                 stranded.insert(&city.id, graph::read_stranded(&stranded_file)?);
             }
             continue;
         }
-        // A forced graph recomputes what it cached rather than reading it back, so the entries go
-        // the way the stamp does. Only this city's: the cache directory is per city, and a pass
-        // narrowed to one has no business in another's.
+        // A forced graph clears this city's cache entries along with its stamp.
         if selection.forces(PassName::Graph, Some(&city.id)) {
             discard(&graph_keys[index].dir)?;
         }
@@ -1880,21 +1569,17 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
                 landmarks: planned.source(&plan.data, Source::Landmarks),
                 art: planned.source(&plan.data, Source::Art),
                 highways: planned.source(&plan.data, Source::Highways),
-                // Derived by the commercial pass rather than committed, so it is the value that pass
-                // returned and not a path assembled here.
                 commercial: lines.get(&city.id).map(Path::to_path_buf),
                 industrial: planned.source(&plan.data, Source::Industrial),
                 historic: planned.source(&plan.data, Source::Historic),
                 land: Some(plan.data.join("land").join(&city.field.land.file)),
                 out: plan.routing.join(format!("{}.bin", city.id)),
-                // Written for the record — public/routing/<city>.stranded.bin is a documented
-                // artifact — while the re-chunk below reads the same ids straight out of memory.
+                // Written for the record; the re-chunk reads the same ids from memory.
                 stranded_out: Some(stranded_file),
                 buildings,
                 shade_params,
                 shade_dir,
-                // The measured canopy does two jobs here: integrated along every sidewalk into the
-                // per-edge direct-canopy byte, and occluding the edges alongside the buildings.
+                // The measured canopy feeds the direct-canopy byte and also occludes edges.
                 canopy: city
                     .field
                     .canopy
@@ -1915,14 +1600,9 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
         stranded.insert(&city.id, ways);
     }
 
-    // The chunks above were cut before the graph existed, so they still offer every OSM path the
-    // source network carries — including the ones the island drop took away, which the overlay would
-    // draw as a tree-lined walk no route can follow. Re-cut over the same inputs with the graph's
-    // answer: only the trailing stranded bitmap changes, so the commercial signals keyed on the
-    // segment index stay aligned and need no rebuild.
+    // Re-cut with the graph's stranded set; only the trailing bitmap changes.
     stage(9, "chunks (stranded)", &started);
-    // It rewrites what pass 1 wrote, in place, so it clears nothing: its stamp sits beside that
-    // pass's own inside the same directory.
+    // Rewrites pass 1's output in place, so it clears nothing.
     let stranded_pass = Pass {
         stamp: stamps.stranded_chunks(&cities, &chunks_upstream, &stranded)?,
         stamp_file: plan.chunks.join(".stamp-stranded"),
@@ -1950,9 +1630,8 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
     Ok(())
 }
 
-/// A Git LFS pointer's first line.
 const LFS_POINTER: &str = "version https://git-lfs.github.com/spec/v1";
-/// A pointer is ~130 bytes; this reads its head without decoding a blob.
+/// A pointer is ~130 bytes.
 const POINTER_HEAD: usize = 512;
 const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
@@ -1969,7 +1648,6 @@ fn hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// The oid an LFS pointer names, or `None` for bytes that are not one.
 fn pointer_oid(bytes: &[u8]) -> Fallible<Option<String>> {
     let head = String::from_utf8_lossy(&bytes[..bytes.len().min(POINTER_HEAD)]);
     if head.starts_with(LFS_POINTER) {
@@ -1986,10 +1664,7 @@ fn pointer_oid(bytes: &[u8]) -> Fallible<Option<String>> {
     }
 }
 
-/// What one input is, in the form both kinds of checkout agree on: an LFS pointer's oid IS the
-/// sha256 of the object it stands for, so the pointer and the object hash to the same string. Every
-/// blob under `data/` is LFS-tracked, and this is what lets the push/PR job that runs the shed guard
-/// keep `lfs: false` and download not one byte of them.
+/// An input's oid; an LFS pointer's oid is its object's sha256, so both checkouts hash alike.
 fn input_oid(path: &Path) -> Fallible<String> {
     let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
     match pointer_oid(&bytes)? {
@@ -1998,34 +1673,9 @@ fn input_oid(path: &Path) -> Fallible<String> {
     }
 }
 
-/// What the graph's DURABLE KEY SPACE is a function of, stamped for the committed shed artifact.
-///
-/// A shed is pinned to an edge by `(source id, side, ordinal)` and resolves through nothing else, so
-/// the question is not what can change the graph — it is what can change the SET OF KEYS, and most
-/// of what a graph is built from cannot. An input that only bakes a per-edge attribute byte moves no
-/// key, because the edge it is written onto was final before the bake ran.
-///
-/// This is the half a hash of the data answers. The other half is `tiler key-probe`, which reports
-/// what the key assignment DOES rather than what its source text says. scripts/README.md has both.
+/// What the graph's durable key space is a function of, stamped for the committed shed artifact.
 impl Plan {
-    /// The files handed to `graph::run` that can put a key in the space. These are three of the
-    /// arguments the build assembles above, built here by the same expressions, and everything else
-    /// that call takes is argued out:
-    ///
-    /// - ferries and the transit stations, platforms and rides carry `NO_SOURCE_ID` and are appended
-    ///   after the walking sort and the node renumber, so `assign_ordinals` skips them and no
-    ///   earlier edge moves;
-    /// - landmarks, art, highways, the commercial lines, the industrial lots and the historic
-    ///   districts are each one per-edge attribute byte, read after the last edge is pushed;
-    /// - the buildings and the sun grid drive the SHDE bake, which runs after the graph blob is
-    ///   written, and the DEM the relief byte, baked over the same finished edges.
-    ///
-    /// The match over `Source` is exhaustive on purpose, and the arms that decline are written out
-    /// rather than swept up by a wildcard. `key-probe` is protected the same way, by building a
-    /// `graph::Args` literal that will not compile until a new field is given a value; without the
-    /// match, a source added later could be wired into the graph and reach the keys while both
-    /// halves of the guard stayed silent about it, which is the one failure this whole file exists
-    /// to make impossible.
+    /// The files that can put a key in the space; the exhaustive match forces a call per source.
     fn key_space_files(&self, city: &City, planned: &PlanCity) -> Vec<PathBuf> {
         let mut files = vec![
             Some(self.data.join("streets").join(&city.streets.file)),
@@ -2049,23 +1699,13 @@ impl Plan {
         files.into_iter().flatten().collect()
     }
 
-    /// The stamp, and how many files it covers: the plan's own resolved decision — which sources
-    /// this city gets, under which flags — plus the bytes of each file that decision names.
-    ///
-    /// Deliberately NOT the plan verbatim. The data root, the manifest's location and the DEM's
-    /// `.cache` tiles are all where this checkout happens to keep things; a stamp that moved with
-    /// them could never be compared against one a different machine recorded. So each file enters as
-    /// its path relative to the data root, which every checkout agrees on, and the cities come in
-    /// `pair`'s manifest order rather than in whatever order the plan happened to list them.
+    /// The stamp and its file count, over data-relative paths in manifest order.
     fn key_space_stamp(&self, cities: &[(&City, &PlanCity)]) -> Fallible<(String, usize)> {
         let mut digest = Sha256::new();
         let mut files = 0;
         for (city, planned) in cities {
             digest.update(planned.id.as_bytes());
             digest.update([0]);
-            // Only the whole-city invariants read this, so it steers no edge — but it is the plan's
-            // statement about what this city's network IS, which is the kind of thing the stamp is
-            // for, and a city flips it about once ever.
             digest.update(if planned.alleys { "alleys" } else { "none" });
             digest.update([0]);
             for path in self.key_space_files(city, planned) {
@@ -2083,9 +1723,7 @@ impl Plan {
     }
 }
 
-/// What `bun run check-shed-inputs` compares against `public/sheds/inputs.json`, beside the key
-/// probe's own report. The count is carried so a set that quietly shrank shows up in the diff rather
-/// than only inside a digest.
+/// What `bun run check-shed-inputs` compares against `public/sheds/inputs.json`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GraphInputs {
@@ -2093,9 +1731,7 @@ struct GraphInputs {
     files: usize,
 }
 
-/// `tiler graph-inputs`: stamp the key space of the plan's sources decision, without building
-/// anything. The plan is the artifact that decision lands in, so this reads what `tiler build` would
-/// act on rather than the TypeScript that worked it out.
+/// `tiler graph-inputs`: stamps the key space of the plan's sources decision without building.
 pub fn graph_inputs(plan_file: &Path, report: &Path) -> Fallible<()> {
     let plan: Plan = serde_json::from_slice(&fs::read(plan_file)?)?;
     let manifest: Manifest = serde_json::from_slice(&fs::read(&plan.manifest)?)?;
@@ -2111,8 +1747,7 @@ mod tests {
 
     use super::*;
 
-    /// A manifest of two cities, one of which carries neither a canopy nor a genus layer, in the
-    /// shape crates/tiler/src/manifest.rs reads.
+    /// Two cities, one with neither a canopy nor a genus layer.
     const MANIFEST: &str = r#"{
       "cities": [
         {
@@ -2136,7 +1771,6 @@ mod tests {
       ]
     }"#;
 
-    /// A plan over that manifest.
     fn plan_json(cities: &str) -> String {
         format!(
             r#"{{
@@ -2163,8 +1797,7 @@ mod tests {
         plan
     }
 
-    /// The crate as the plan carries it: every file some scope claims, hashed to its own name, so a
-    /// test can move one module and ask which scopes noticed.
+    /// Every file some scope claims, hashed to its own name.
     fn code_map() -> BTreeMap<String, String> {
         SHADE_CODE
             .iter()
@@ -2175,8 +1808,7 @@ mod tests {
             .collect()
     }
 
-    /// New York with a two-bin sun grid and the footprints to cast it, since the shade pass is now
-    /// stamped one bin at a time and has nothing to say about a city with no grid.
+    /// New York with a two-bin sun grid and footprints to cast it.
     const SUNNY: &str = r#"[
       {"id": "nyc", "sources": ["buildings", "landmarks", "industrial", "historic"],
        "shade": {"maxZoom": 14, "maxShadowMeters": 500,
@@ -2284,8 +1916,6 @@ mod tests {
         assert!(error.to_string().contains("sf"), "{error}");
     }
 
-    /// An empty directory of this test's own, so what it asks about is a state it set up rather than
-    /// whatever the last real build left.
     fn scratch(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
             "tiler-build-{name}-{}-{:?}",
@@ -2298,7 +1928,6 @@ mod tests {
         root
     }
 
-    /// A plan whose output directories are a scratch tree, so freshness can be asked about it.
     fn planted(name: &str) -> Plan {
         let root = scratch(name);
         let mut plan = plan(BOTH);
@@ -2324,8 +1953,6 @@ mod tests {
         pass.record().expect("the stamp");
         assert!(pass.is_fresh());
 
-        // The stamp says only that the inputs held, never that the output is still there — a
-        // hand-deleted directory or a cache that restored only some of them has to rebuild.
         fs::remove_dir_all(root.join("streets")).expect("a removal");
         assert!(!pass.is_fresh());
     }
@@ -2354,9 +1981,7 @@ mod tests {
         );
     }
 
-    /// A pyramid or a graph blob is removed and NOT recreated: a city that renders nothing must
-    /// leave no directory at all, since absence is how the client tells "no such layer here" from
-    /// "an empty layer".
+    /// A pyramid or graph blob is removed and not recreated, since absence means "no such layer".
     #[test]
     fn a_city_that_stops_rendering_leaves_no_directory_behind() {
         let root = scratch("pieces");
@@ -2428,7 +2053,6 @@ mod tests {
         assert!(!plan.graph_cache.join("boston").exists(), "its cache too");
     }
 
-    /// `--only` as the command line hands it over.
     fn only(terms: &[&str]) -> Selection {
         let terms: Vec<String> = terms.iter().map(|term| (*term).to_owned()).collect();
         Selection::new(&terms, false).expect("a selection")
@@ -2450,7 +2074,6 @@ mod tests {
         ));
     }
 
-    /// A term narrowed to a city selects that city's share of the pass and no other's.
     #[test]
     fn a_pass_narrowed_to_a_city_leaves_the_other_cities_out() {
         let selection = only(&["graph:nyc"]);
@@ -2466,8 +2089,6 @@ mod tests {
         ));
     }
 
-    /// The whole-build passes are cut or rendered over every city at once, so a city named for one
-    /// would name work that does not exist.
     #[test]
     fn a_city_on_a_pass_that_has_no_cities_is_rejected() {
         let error = Selection::new(&["chunks:nyc".to_owned()], false)
@@ -2486,8 +2107,6 @@ mod tests {
         assert!(error.to_string().contains("pyramid"), "{error}");
     }
 
-    /// A misspelled city would otherwise select no work at all and report the build that did none
-    /// as a success.
     #[test]
     fn a_city_the_manifest_does_not_carry_is_rejected() {
         let error = only(&["graph:bosotn"])
@@ -2498,9 +2117,7 @@ mod tests {
         assert!(error.to_string().contains("bosotn"), "{error}");
     }
 
-    /// The property that makes `--only` safe where a hand-edited plan was not: a pass it left out is
-    /// not run, records nothing, and clears nothing — so the claim it already held stands, stale, and
-    /// the next full build reruns it.
+    /// A pass `--only` leaves out runs nothing and clears nothing, so its stale claim stands.
     #[test]
     fn a_pass_left_out_keeps_its_stale_stamp_for_the_next_full_build() {
         let root = scratch("only-untouched");
@@ -2508,7 +2125,6 @@ mod tests {
         last.restart().expect("a directory");
         fs::write(last.stamp_file.with_file_name("chunk.bin"), b"last build").expect("a chunk");
         last.record().expect("a stamp");
-        // The same pass this build, over an input that moved.
         let now = Pass::whole("what this one reads".to_owned(), &root.join("casters"));
         assert!(!now.is_fresh(), "its inputs moved");
 
@@ -2540,8 +2156,6 @@ mod tests {
         assert!(forced.forces(PassName::Shade, Some("nyc")));
     }
 
-    /// `--force` is about the passes this build is running and cannot reach across to the others: a
-    /// stamp it set aside for one pass is not a stamp set aside for all of them.
     #[test]
     fn force_does_not_reach_a_pass_only_left_out() {
         let forced = Selection::new(&["shade".to_owned()], true).expect("a selection");
@@ -2553,9 +2167,7 @@ mod tests {
         assert!(!forced.forces(PassName::Graph, Some("nyc")));
     }
 
-    /// A selected pass runs over output that is STALE — that is what `--only` is for — but not over
-    /// output that is not there at all: a graph baked from commercial lines nobody has written would
-    /// carry no commercial discount and then stamp itself as though it had.
+    /// A selected pass may run over stale output but not over missing output.
     #[test]
     fn a_selected_pass_whose_upstream_output_is_missing_says_which_pass_to_run_first() {
         let plan = planted("handoff-graph");
@@ -2588,9 +2200,7 @@ mod tests {
         assert!(error.to_string().contains("--only graph"), "{error}");
     }
 
-    /// A partial build never claims to have been built over output nobody has produced: a pass keyed
-    /// on an upstream stamp this build is not going to write folds the one recorded on disk, so the
-    /// full build that later reruns that upstream reruns this pass with it.
+    /// A pass keyed on an upstream this build won't run folds the recorded upstream stamp.
     #[test]
     fn a_selected_pass_folds_the_upstream_stamp_that_is_actually_on_disk() {
         let root = scratch("upstream");
@@ -2621,16 +2231,13 @@ mod tests {
         );
     }
 
-    /// A pass narrowed to one city writes only that city's share, so it does not stand in for the
-    /// cities it left out.
     #[test]
     fn a_graph_narrowed_to_one_city_does_not_answer_for_the_others() {
         let plan = planted("handoff-narrowed");
         let manifest = manifest();
         let cities = plan.pair(&manifest).expect("a pairing");
         fs::create_dir_all(&plan.chunks).expect("the chunks");
-        // The graph reads these too, and that handoff is checked first, so without them the error
-        // would be about the commercial lines rather than the city this test is narrowing to.
+        // The graph's handoff is checked first, so these keep the error on the narrowed city.
         fs::create_dir_all(&plan.commercial_lines).expect("the commercial lines");
         fs::create_dir_all(&plan.routing).expect("the routing directory");
         fs::write(plan.routing.join("nyc.stranded.bin"), b"a stranded set")
@@ -2643,8 +2250,6 @@ mod tests {
         assert!(error.to_string().contains("sf.stranded.bin"), "{error}");
     }
 
-    /// A full build asks nothing of the disk up front: every pass it consumes is a pass it is also
-    /// running, and one that has nothing to read simply reruns.
     #[test]
     fn a_full_build_needs_no_handoff() {
         let plan = planted("handoff-full");
@@ -2654,7 +2259,6 @@ mod tests {
         handoffs(&plan, &cities, &only(&[])).expect("nothing to ask for");
     }
 
-    /// A pyramid over a scratch tree, wanting the buckets these keys stand for.
     fn planted_pyramid(name: &str, keys: &[&str]) -> ShadePyramid {
         let root = scratch(name);
         ShadePyramid {
@@ -2664,9 +2268,7 @@ mod tests {
         }
     }
 
-    /// A bucket directory as a finished render left it: a tile named after the bin it came from, so
-    /// a directory can be followed across a move, and the key that render recorded. `None` for the
-    /// key is a render killed before it recorded one.
+    /// A finished bucket: a tile named after its bin, and its key (`None` for a killed render).
     fn plant_bucket(root: &Path, index: usize, key: Option<&str>) {
         let directory = root.join(index.to_string());
         fs::create_dir_all(&directory).expect("a bucket");
@@ -2676,14 +2278,11 @@ mod tests {
         }
     }
 
-    /// Which render a bucket directory's tiles came out of, by the marker `plant_bucket` left.
     fn tile_of(root: &Path, index: usize) -> Option<String> {
         fs::read_to_string(root.join(index.to_string()).join("tile.webp")).ok()
     }
 
-    /// The whole point of matching by content key. The schedule sorts by (season, hour angle), so a
-    /// bin inserted at the front shifts every later index — and every later bin is nonetheless the
-    /// same tiles, so it is moved into its new index rather than rendered again.
+    /// A bin inserted at the front shifts every index; the later bins move rather than re-render.
     #[test]
     fn a_bucket_the_schedule_kept_is_moved_into_its_new_index_rather_than_rendered() {
         let pyramid = planted_pyramid("shade-insert", &["new", "morning", "noon"]);
@@ -2701,7 +2300,6 @@ mod tests {
         assert!(!pyramid.buildings.join("0").exists(), "the bin to render");
     }
 
-    /// The mirror case: a bin taken out of the schedule costs the moves and no render at all.
     #[test]
     fn a_bucket_the_schedule_dropped_costs_moves_and_nothing_else() {
         let pyramid = planted_pyramid("shade-drop", &["morning", "noon"]);
@@ -2717,8 +2315,6 @@ mod tests {
         assert!(!pyramid.buildings.join("2").exists());
     }
 
-    /// A bin whose key nothing wants is a directory no build would ever look at again — and, since
-    /// the pyramid is served as it stands, one the client would otherwise go on reading.
     #[test]
     fn a_bucket_nothing_claims_is_deleted() {
         let pyramid = planted_pyramid("shade-zombie", &["morning"]);
@@ -2738,8 +2334,6 @@ mod tests {
         assert!(!pyramid.trees.join("1").exists(), "the twin goes with it");
     }
 
-    /// The trees' pyramid records no key of its own: it is written by the same render over the same
-    /// casters, so it is claimed by the buildings' bucket and moves with it.
     #[test]
     fn the_tree_twin_moves_with_its_bucket() {
         let pyramid = planted_pyramid("shade-twin", &["new", "morning"]);
@@ -2753,8 +2347,6 @@ mod tests {
         assert!(!pyramid.trees.join("0").exists());
     }
 
-    /// A build killed inside a bin leaves its tiles and no key, and the tiles are half a bin's — so
-    /// the directory claims nothing and is rendered again.
     #[test]
     fn a_bucket_left_half_written_claims_nothing() {
         let pyramid = planted_pyramid("shade-killed", &["morning"]);
@@ -2767,9 +2359,7 @@ mod tests {
         assert!(!pyramid.buildings.join("0").exists());
     }
 
-    /// The schedule names which directory holds which sun position, and the reconcile has just
-    /// moved the directories, so the one on disk is wrong the moment a bin shifts. It is swept and
-    /// written again from the grid every build, whether or not anything was rendered.
+    /// The schedule is rewritten every build, since the reconcile moves directories.
     #[test]
     fn the_schedule_is_written_again_every_build() {
         let pyramid = planted_pyramid("shade-schedule", &["morning"]);
@@ -2794,8 +2384,6 @@ mod tests {
         assert!(schedule.is_file());
     }
 
-    /// A city that stops casting a shadow leaves neither pyramid behind, since absence is how the
-    /// client tells "no shade here" from "an empty layer".
     #[test]
     fn a_city_that_stops_casting_leaves_neither_pyramid_behind() {
         let pyramid = planted_pyramid("shade-cleared", &[]);
@@ -2808,10 +2396,7 @@ mod tests {
         assert!(!pyramid.trees.exists());
     }
 
-    /// Every file a pass of this build could name, given the manifest above and a plan that hands
-    /// over both sidewalk extracts, each with its own path as its contents so a file read in
-    /// another's place is caught. What is missing is deliberate: the commercial pass's dining and
-    /// open-streets sources are read only if they exist, and the stamps have to say so.
+    /// Every file a pass could name, each containing its path; dining and open streets absent.
     const INPUTS: [(&str, &str); 15] = [
         ("streets", "nyc.bin"),
         ("streets", "sf.bin"),
@@ -2830,8 +2415,6 @@ mod tests {
         ("historic", "nyc.bin"),
     ];
 
-    /// A plan whose data root and manifest are a scratch tree of this test's own, so the per-pass
-    /// stamps answer about inputs it controls.
     fn stamping_plan(name: &str) -> Plan {
         let root = scratch(name);
         let data = root.join("data");
@@ -2847,23 +2430,19 @@ mod tests {
         plan
     }
 
-    /// One stamp per pass, so a test can say which passes a change would rerun. The per-city ones
-    /// are New York's, the city the manifest above gives every layer to.
+    /// One stamp per pass, per-city ones being New York's.
     struct Stamped {
         chunks: String,
         commercial: String,
         casters: String,
-        /// One key per sun bin, in schedule order.
         buckets: Vec<String>,
         elevation: String,
         canopy: String,
         genus_field: String,
         graph: String,
-        /// Pass 8 one level down: the topology's key, and one per attribute column over it.
         keys: graph_cache::Keys,
     }
 
-    /// New York's bucket keys, in schedule order.
     fn bucket_keys(plan: &Plan) -> Vec<String> {
         let manifest = manifest();
         let cities = plan.pair(&manifest).expect("a pairing");
@@ -2926,9 +2505,7 @@ mod tests {
         assert_eq!(again.graph, before.graph);
     }
 
-    /// The whole point: one re-ingested source reruns the passes that read it and nothing else. The
-    /// lots are read by the commercial pass alone, and the graph follows only because it bakes its
-    /// commercial discount from the lines that pass writes.
+    /// A re-ingested source reruns the passes that read it and nothing else.
     #[test]
     fn a_re_ingested_source_moves_only_the_stamps_of_the_passes_that_read_it() {
         let plan = stamping_plan("stamps-moved");
@@ -2947,8 +2524,7 @@ mod tests {
         assert_eq!(after.genus_field, before.genus_field);
     }
 
-    /// A pass reruns when the pass it consumes reruns, even though nothing it reads for itself
-    /// moved: the commercial signals are keyed on the segment order inside the chunks.
+    /// A pass reruns when its upstream does: commercial signals are keyed on chunk segment order.
     #[test]
     fn a_pass_reruns_when_the_pass_it_consumes_does() {
         let plan = stamping_plan("stamps-upstream");
@@ -2964,8 +2540,6 @@ mod tests {
         assert_eq!(after.canopy, before.canopy);
     }
 
-    /// A source appearing has to rebuild as surely as one changing, which is why absence is stamped
-    /// rather than left out of the digest.
     #[test]
     fn a_source_that_was_not_there_last_build_moves_the_stamp_by_appearing() {
         let plan = stamping_plan("stamps-appeared");
@@ -2977,14 +2551,12 @@ mod tests {
         assert_ne!(stamped_passes(&plan).commercial, before.commercial);
     }
 
-    /// A module edited, as the plan would carry it.
     fn edited(plan: &mut Plan, module: &str) {
         plan.code
             .insert(format!("{SRC}/{module}"), "a different tiler".to_owned());
     }
 
-    /// Every pass but shade declares no modules of its own, so any edit to the tiler invalidates all
-    /// of them — an output whose FORMAT changed moves no input file.
+    /// Every pass but shade folds the whole crate, since a format change moves no input file.
     #[test]
     fn a_new_tiler_reruns_every_pass_that_names_no_modules() {
         let mut plan = stamping_plan("stamps-epoch");
@@ -3005,8 +2577,6 @@ mod tests {
         );
     }
 
-    /// What the shade pass's own scope is for: the pyramid is most of the build, and an edit to the
-    /// graph is not a reason to render it a second time.
     #[test]
     fn an_edit_the_shade_pass_does_not_read_leaves_the_pyramid_standing() {
         let mut plan = stamping_plan("stamps-scope");
@@ -3019,9 +2589,7 @@ mod tests {
         assert_eq!(after.buckets, before.buckets);
     }
 
-    /// And what the graph's own scope is for. The pass still reruns — its stamp is the epoch's, so
-    /// any tiler is a new one — but it reruns onto a cache that still holds the two entries worth
-    /// hours: the relief bytes, whose bake is where the DEM is decoded, and every sun bin's shade.
+    /// A graph edit reruns the graph pass but keeps the cached relief and shade columns.
     #[test]
     fn an_edit_the_graph_never_reads_keeps_the_dem_and_the_shade_bakes() {
         let mut plan = stamping_plan("stamps-graph-scope");
@@ -3038,7 +2606,6 @@ mod tests {
         assert_eq!(after.keys.shade, before.keys.shade, "nor casts a ray");
     }
 
-    /// The other direction, which is the one that has to hold for the cache to be sound at all.
     #[test]
     fn an_edit_the_relief_bake_reads_rebakes_it() {
         let mut plan = stamping_plan("stamps-relief-scope");
@@ -3047,12 +2614,10 @@ mod tests {
         let after = stamped_passes(&plan);
 
         assert_ne!(after.keys.relief, before.keys.relief);
-        // The graph reads the DEM through its own module list too, so the whole base moves with it.
         assert_ne!(after.keys.base, before.keys.base);
     }
 
-    /// What the token hash buys: a comment and a reformat are not a new tiler, and the epoch they
-    /// used to move is folded into nearly every pass. Doc comments are counted on purpose.
+    /// Comments and reformatting don't move the hash; doc comments do.
     #[test]
     fn a_comment_moves_no_module_hash_and_a_line_of_code_does() {
         let root = scratch("token-hash");
@@ -3070,8 +2635,7 @@ mod tests {
         assert_ne!(token_oid(&module).as_ref(), Some(&before), "a doc comment");
     }
 
-    /// The substitution reaches the map the stamps are folded from, and only its modules: a
-    /// lockfile has no token stream to hash.
+    /// Only `.rs` entries are rehashed; a lockfile has no token stream.
     #[test]
     fn the_code_map_carries_token_hashes_for_its_modules_alone() {
         let mut plan = plan(BOTH);
@@ -3085,8 +2649,7 @@ mod tests {
         assert_eq!(plan.code["Cargo.lock"], lockfile);
     }
 
-    /// A bucket is stamped on its own bin and not on the schedule's shape, which is what makes an
-    /// inserted bin cost one render rather than fifty-eight.
+    /// A bucket is stamped on its own bin, not on the schedule's shape.
     #[test]
     fn a_bucket_key_says_nothing_about_the_rest_of_the_schedule() {
         let plan = stamping_plan("stamps-bucket");
@@ -3097,8 +2660,7 @@ mod tests {
         assert_eq!(after[1..], before[..], "the bins that did not move");
     }
 
-    /// A schedule that gained a bin, as the plan would carry it: the driver's own grid with one more
-    /// bin at the front, which is where a (season, hour angle) sort puts an earlier hour.
+    /// The driver's grid with one more bin at the front, where an earlier hour sorts.
     fn grown(name: &str) -> Plan {
         let mut plan = stamping_plan(name);
         let inserted = r#"{"season": 0, "hourAngle": 0.0, "elevation": 30.0, "azimuth": 180.0,
@@ -3111,8 +2673,7 @@ mod tests {
         plan
     }
 
-    /// What the split is for: a re-ingested attribute source keys ITS column anew and nothing else,
-    /// so the pass reruns to bake one byte per edge over a topology it reads back whole.
+    /// A re-ingested attribute source rekeys only its column.
     #[test]
     fn a_re_ingested_attribute_moves_one_column_and_leaves_the_topology_standing() {
         let plan = stamping_plan("keys-column");
@@ -3134,11 +2695,7 @@ mod tests {
         );
     }
 
-    /// The one touchpoint of a new column that nothing else enforces. The struct literal, the
-    /// exhaustive matches and the args list all stop compiling until a column is wired in, but the
-    /// key reaching pass 8's own STAMP is enforced by this test alone — and it is the stamp, not the
-    /// cache, that decides whether the pass runs at all. Leave it out and a re-ingested district
-    /// file keys a cache entry no build ever asks for: the bake simply never reruns.
+    /// Enforces that each column key reaches pass 8's stamp, which decides if the pass runs.
     #[test]
     fn a_re_ingested_historic_source_moves_the_graph_stamp() {
         let plan = stamping_plan("keys-historic");
@@ -3158,9 +2715,7 @@ mod tests {
         );
     }
 
-    /// And the other way about, which is the whole correctness argument for merging a column back in
-    /// by position: a street input moves the base, so every column is keyed anew and none of them
-    /// can be read back beside an edge list it was not baked over.
+    /// A street input moves the base and so rekeys every column.
     #[test]
     fn a_street_that_moved_moves_the_base_and_every_column_with_it() {
         let plan = stamping_plan("keys-base");
@@ -3192,8 +2747,7 @@ mod tests {
         );
     }
 
-    /// The per-edge shade bake is keyed a bin at a time, exactly as the pyramid's buckets are: an
-    /// inserted bin bakes the one bin, where the whole grid in the key used to bake all fifty-eight.
+    /// The shade bake is keyed per bin, so an inserted bin bakes only that bin.
     #[test]
     fn an_inserted_sun_bin_leaves_the_other_bins_shade_columns_alone() {
         let before = stamped_passes(&stamping_plan("keys-bins")).keys.shade;
@@ -3203,8 +2757,6 @@ mod tests {
         assert_eq!(after[1..], before[..], "the bins that did not move");
     }
 
-    /// A city that stops baking shade at all — its footprints gone — moves the pass's stamp even
-    /// though every column key it still has is where it was.
     #[test]
     fn a_city_that_stops_baking_shade_moves_the_graph_stamp() {
         let plan = stamping_plan("keys-unshaded");
@@ -3224,9 +2776,7 @@ mod tests {
         assert_ne!(stamps.graph(&baked), stamps.graph(&unbaked));
     }
 
-    /// The caster chunks carry no sun position: what they take from the grid is the halo radius a
-    /// viewport gathers them over. So an inserted bin leaves the four-minute pass alone, and a
-    /// changed halo does not.
+    /// An inserted bin leaves the caster chunks alone; a changed halo does not.
     #[test]
     fn the_caster_chunks_follow_the_halo_and_not_the_schedule() {
         let plan = stamping_plan("casters-halo");
@@ -3246,8 +2796,7 @@ mod tests {
         assert_ne!(stamped_passes(&widened).casters, before);
     }
 
-    /// The footprints are one opaque city-wide file, so a re-ingest correctly re-renders the whole
-    /// pyramid — the coarseness this stops at, and the reason per-tile diffing was not attempted.
+    /// The footprints are one city-wide file, so a re-ingest re-renders the whole pyramid.
     #[test]
     fn a_building_re_ingest_moves_every_bucket_key() {
         let plan = stamping_plan("stamps-buildings");
@@ -3263,10 +2812,7 @@ mod tests {
         );
     }
 
-    /// A module claimed by no scope is a module no stamp is a function of: edit it and the pyramid
-    /// it renders differently goes on being served. The lists are checked against the DIRECTORY
-    /// rather than against each other, so a module added later fails here until someone says which
-    /// side of the shade pass's line it is on.
+    /// Every module must be in some scope, checked against the directory.
     #[test]
     fn every_module_of_the_tiler_is_claimed_by_a_code_scope() {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -3293,11 +2839,7 @@ mod tests {
         assert_eq!(found, claimed);
     }
 
-    /// Every module a `crate::` path in these tokens names — the head of the path, and each head
-    /// inside a `use crate::{…}` group. Tokens rather than lines, so that `pub use`, the second and
-    /// later modules of a brace group, and a fully-qualified `crate::foo::bar` written with no `use`
-    /// at all are all counted; each of the three used to read as no import, which is the direction
-    /// that passes a scope that is not closed.
+    /// Every module a `crate::` path names, including `pub use`, brace groups and qualified paths.
     fn crate_heads(stream: TokenStream, found: &mut Vec<String>) {
         let trees: Vec<TokenTree> = stream.into_iter().collect();
         let colon = |tree: Option<&TokenTree>| matches!(tree, Some(TokenTree::Punct(punct)) if punct.as_char() == ':');
@@ -3311,8 +2853,7 @@ mod tests {
                 {
                     match trees.get(index + 3) {
                         Some(TokenTree::Ident(name)) => found.push(name.to_string()),
-                        // `use crate::{a, b::c}`: the head of every path the group lists, the
-                        // nested groups of which this loop reaches on its own.
+                        // `use crate::{a, b::c}`: each path's head; the loop reaches nested groups.
                         Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Brace => {
                             let mut head = true;
                             for tree in group.stream() {
@@ -3336,8 +2877,7 @@ mod tests {
         }
     }
 
-    /// Every module reachable from the given heads through `crate::` paths, sorted: what a scope
-    /// declaring those heads has to name, and nothing wider.
+    /// Every module reachable from the heads through `crate::` paths, sorted.
     fn closure_of(heads: &[&str]) -> Vec<String> {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut reached: Vec<String> = heads.iter().map(|head| (*head).to_owned()).collect();
@@ -3351,7 +2891,7 @@ mod tests {
             );
             for name in named {
                 let file = format!("{name}.rs");
-                // `use crate::Fallible` and friends name an item of lib.rs, not a module of its own.
+                // Items of lib.rs like `Fallible` are not modules.
                 if !src.join(&file).is_file() || reached.contains(&file) {
                     continue;
                 }
@@ -3369,11 +2909,7 @@ mod tests {
         declared
     }
 
-    /// A scope has to be CLOSED under what its modules import, not merely a list someone believed
-    /// was closed. These are the scopes narrower than the whole crate, so a module that slipped into
-    /// one unnamed — `crown.rs` reaching for the DEM to sample terrain under a canopy, say — would
-    /// be a module the artifact is a function of and its key cannot see, and the artifact would
-    /// stand stale with nothing to catch it.
+    /// Each narrow scope must be closed under its modules' imports.
     #[test]
     fn the_shade_scope_is_closed_under_its_own_imports() {
         assert_eq!(closure_of(&[SHADE_CODE[0]]), sorted(&SHADE_CODE));
@@ -3388,8 +2924,7 @@ mod tests {
         );
     }
 
-    /// The second chunks pass is stamped on what the graph STRANDED rather than on the graph's own
-    /// stamp, so a graph that reran and landed on the same islands leaves the chunks alone.
+    /// The second chunks pass is stamped on the stranded set, not on the graph's stamp.
     #[test]
     fn the_second_chunks_pass_follows_the_stranded_set_and_not_the_graph() {
         let plan = stamping_plan("stamps-stranded");
@@ -3433,16 +2968,13 @@ mod tests {
         assert!(error.to_string().contains("twice"), "{error}");
     }
 
-    /// The two cities as the shed guard's plan states them: New York hands over its sidewalks and
-    /// three sources that only bake an attribute byte, San Francisco its sidewalks alone, and the
-    /// two disagree about alleys.
+    /// NY: sidewalks and three attribute sources; SF: sidewalks only; they differ on alleys.
     const KEY_SPACE: &str = r#"[
       {"id": "nyc", "alleys": true, "sources": ["sidewalks", "ferries", "buildings"]},
       {"id": "sf", "alleys": false, "sources": ["sidewalks"]}
     ]"#;
 
-    /// Every file the manifest above and a plan that hands over both sidewalk extracts can name,
-    /// with its own path as its contents so a file read in another's place is caught.
+    /// Every file the manifest and plan can name, each containing its own path.
     const SOURCES: [(&str, &str); 5] = [
         ("streets", "nyc.bin"),
         ("streets", "sf.bin"),
@@ -3472,7 +3004,6 @@ mod tests {
         plan.key_space_stamp(&cities).expect("a stamp")
     }
 
-    /// What a checkout that took the LFS pointers holds in place of the object.
     fn pointer_for(bytes: &[u8]) -> String {
         format!(
             "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize {}\n",
@@ -3486,13 +3017,11 @@ mod tests {
         let data = planted_data("stamp");
         let (_, files) = stamped(&key_space_plan(&data, KEY_SPACE));
 
-        // New York's streets, paths and sidewalks; San Francisco's streets and sidewalks, its
-        // manifest entry carrying no OSM paths. The ferries and the buildings are not among them.
+        // New York's streets, paths, sidewalks; SF's streets, sidewalks. No ferries or buildings.
         assert_eq!(files, 5);
     }
 
-    /// The property the whole arrangement rests on: the recorded stamp is compared against one
-    /// another machine computes, so nothing about where this checkout keeps its files may enter it.
+    /// The stamp is compared across machines, so no checkout-local path may enter it.
     #[test]
     fn two_checkouts_holding_the_same_sources_stamp_alike() {
         let here = planted_data("stamp-here");
@@ -3513,8 +3042,7 @@ mod tests {
             fs::write(pointers.join(kind).join(file), pointer_for(&object)).expect("a pointer");
         }
 
-        // The pointer's oid IS the object's sha256, so the fast CI job — which checks out data/**
-        // with `lfs: false` and never downloads a byte of it — computes the stamp a laptop does.
+        // The pointer's oid is the object's sha256, so the `lfs: false` CI job agrees.
         assert_eq!(
             stamped(&key_space_plan(&smudged, KEY_SPACE)),
             stamped(&key_space_plan(&pointers, KEY_SPACE))
@@ -3530,8 +3058,7 @@ mod tests {
         assert_ne!(stamped(&key_space_plan(&data, KEY_SPACE)), before);
     }
 
-    /// A source withheld puts no key in the space, so the decision to hand one over is as much of
-    /// the stamp as the file's bytes are.
+    /// A withheld source moves the stamp as much as a changed file.
     #[test]
     fn a_city_that_stops_handing_over_its_sidewalks_moves_the_stamp() {
         let data = planted_data("stamp-withheld");
@@ -3558,8 +3085,7 @@ mod tests {
         );
     }
 
-    /// The exclusions, which are the point of the stamp being this small: each of these is a source
-    /// `graph::run` genuinely reads, and each is baked onto edges that were final before it ran.
+    /// Attribute-only sources `graph::run` reads are excluded: their edges were final.
     #[test]
     fn the_sources_that_only_bake_an_attribute_byte_are_not_in_the_stamp() {
         let data = planted_data("stamp-attributes");
@@ -3577,8 +3103,7 @@ mod tests {
         );
     }
 
-    /// A file the plan names and the disk lacks is the hole this all exists to close, so it is an
-    /// error rather than an input quietly left out of the digest.
+    /// A named file missing on disk is an error rather than silently left out.
     #[test]
     fn a_source_the_plan_names_and_the_checkout_lacks_is_rejected() {
         let data = planted_data("stamp-missing");

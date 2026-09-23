@@ -1,9 +1,4 @@
-//! The corner fan at one graph node: given the street- and path-ends leaving it, where the corner
-//! nodes sit and which corner each departing end binds to. The graph pass turns every street into a
-//! sidewalk on each side, the two sides meet at these corners, a crossing links the two corners
-//! flanking a street, and a path links to the corner whose angular gap it departs into. The caller
-//! passes the street-ends already in counter-clockwise order (street-ends first, then path-ends),
-//! and reads the corners back per slot. See scripts/README.md.
+//! The corner fan at a graph node: where corners sit and which one each departing end binds to.
 
 use std::f64::consts::TAU;
 
@@ -11,13 +6,10 @@ use crate::geometry::round_half_up;
 
 const RADIUS_MIN_METERS: f64 = 1.0;
 const RADIUS_MAX_METERS: f64 = 30.0;
-// A near-straight joint (gap ~= pi) would otherwise fire a corner far up the bisector; this floor
-// caps the miter so a sliver gap cannot throw a corner into the next block.
+// Caps the miter so a near-straight joint's sliver gap cannot throw a corner into the next block.
 const SINE_FLOOR: f64 = 0.25;
 
-/// One end of a base edge as it leaves a node: which edge, whether this is its `a` end, the
-/// departure bearing in the local meter frame (`atan2(north, east)`), and whether the edge is a
-/// path surface rather than a street with sidewalks.
+/// One end of a base edge leaving a node; the bearing is `atan2(north, east)` in the meter frame.
 pub struct EdgeEnd {
     pub edge: u32,
     pub at_a: bool,
@@ -25,11 +17,7 @@ pub struct EdgeEnd {
     pub pathlike: bool,
 }
 
-/// The corners of one node and the binding from each end to them. `corner_x`/`corner_y` hold the
-/// `s` corner coordinates in the counter-clockwise gap order the street-ends arrived in — corner
-/// `k` fills the gap after street-end `k`. `corner_left`/`corner_right` are indexed per street-end
-/// slot and give that street its counter-clockwise (left) and clockwise (right) corner;
-/// `path_corner` is indexed per path-end slot and gives the containing corner.
+/// A node's corners in gap order (corner `k` follows street-end `k`), and each end's binding.
 pub struct CornerFan {
     pub corner_x: Vec<i32>,
     pub corner_y: Vec<i32>,
@@ -47,8 +35,7 @@ fn norm_tau(angle: f64) -> f64 {
     }
 }
 
-/// The gap of `s` street-ends whose counter-clockwise arc contains `bearing`; a bearing exactly on
-/// a street-end falls into the gap that starts there.
+/// The street-end gap whose counter-clockwise arc contains `bearing`; a tie takes the gap after.
 fn containing_gap(street_bearings: &[f64], bearing: f64) -> u32 {
     let count = street_bearings.len();
     if count == 1 {
@@ -71,11 +58,7 @@ fn containing_gap(street_bearings: &[f64], bearing: f64) -> u32 {
     (count - 1) as u32
 }
 
-/// `ends` lists every end at the node with the street-ends first, already sorted counter-clockwise
-/// by bearing, then the path-ends in any order; `half_offsets_m` is parallel (the sidewalk
-/// half-offset of each street-end, ignored for path-ends). Corners are placed on the bisector of
-/// each street gap, a half-offset out, with the miter capped by the sine floor and the radius
-/// clamped to [1, 30] m.
+/// Street-ends first, sorted counter-clockwise, then path-ends; the radius is clamped to [1, 30] m.
 pub fn build_fan(
     node_x: i32,
     node_y: i32,
@@ -160,8 +143,7 @@ mod tests {
         }
     }
 
-    // A corner is placed roughly on the bisector of its gap, so its bearing from the node should
-    // land inside that gap's arc.
+    // A corner sits near its gap's bisector, so its bearing should land inside that gap.
     fn corner_bearing(fan: &CornerFan, slot: usize) -> f64 {
         let east = f64::from(fan.corner_x[slot]) * MPU_LNG;
         let north = f64::from(fan.corner_y[slot]) * MPU_LAT;
@@ -217,8 +199,7 @@ mod tests {
 
     #[test]
     fn five_way_with_a_path_binds_the_path_to_its_gap() {
-        // Five streets roughly at 0, 72, 144, 216, 288 degrees, plus a path at ~36 degrees which
-        // sits in the gap after street 0.
+        // Five streets ~72 degrees apart, plus a path at ~36 degrees in the gap after street 0.
         let step = TAU / 5.0;
         let ends = [
             street(0, 0.0),

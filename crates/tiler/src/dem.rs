@@ -1,25 +1,4 @@
-//! The ground surface, as a mosaic of GeoTIFF tiles that can be sampled at a longitude and latitude.
-//!
-//! A canopy height model arrives as one large raster and a 3DEP campaign arrives as several hundred
-//! small ones, so the thing both have in common is not a file but a set of georeferenced grids. This
-//! reads a set, indexes it by ground extent, and resamples it onto a regular longitude/latitude
-//! grid — the `Field` everything downstream actually reads.
-//!
-//! A set can be several MOSAICS rather than one. A city is not obliged to lie inside a single
-//! survey: the Bay Area's ground is San Francisco's five-band 3DEP product on the city's own
-//! state-plane zone plus the East Bay's staged bare-earth DEM on UTM 10N, published years apart on
-//! grids that share no origin. So a `Dem` holds a list of mosaics, each with its own projection,
-//! band and spatial index, over one shared list of tiles.
-//!
-//! Only one decoded tile is held at a time, because a city of float32 at one meter is gigabytes. So
-//! the resample visits points GROUPED BY TILE rather than in grid order, and decodes each tile
-//! exactly once per resample; the same sweep in row order re-decodes every tile on every row.
-//!
-//! A build resamples TWICE — the elevation pass at the pyramid's finest zoom and the graph pass at a
-//! finer one for the relief bake — because the two want different grids over different bounds and
-//! neither field is written down. What `tiler build` shares is the OPEN: it hands the same `Dem` to
-//! both, so San Francisco's 1.77 GB of tiles are georeferenced and indexed once rather than twice.
-//! The pixels are not — only one decoded tile is ever held, and `release` drops it between passes.
+//! The ground surface: a mosaic of GeoTIFF tiles resampled onto a regular longitude/latitude grid.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -34,8 +13,7 @@ use crate::heights::Tmerc;
 use crate::manifest::Bounds;
 use crate::raster::{lat_to_pixel_y, lng_to_pixel_x};
 
-/// A value at or below this is the nodata of every product read here — 3DEP writes -9999 and the
-/// canopy models write their own large sentinel, and no real ground or crown height comes near it.
+/// At or below this is nodata: 3DEP writes -9999 and the canopy models a larger sentinel.
 const NODATA_BELOW: f32 = -9000.0;
 
 const METERS_PER_DEGREE_LAT: f64 = 111_320.0;
@@ -50,9 +28,7 @@ pub struct TileGrid {
     pub origin_y: f64,
     pub cell: f64,
     pub bands: usize,
-    /// Which of a `Dem`'s mosaics this tile came from, and so which projection its ground
-    /// coordinates are in and which band of it carries the surface. A tile read on its own belongs
-    /// to the only mosaic there is.
+    /// Index into the `Dem`'s mosaics, which gives this tile's projection and band.
     pub mosaic: usize,
 }
 
@@ -102,48 +78,34 @@ pub fn read_tile_grid(path: &Path) -> Fallible<TileGrid> {
     })
 }
 
-/// A mosaic as a caller hands it over: the tiles of one survey, the projection they are published
-/// on, and which band of them carries the surface to read.
+/// One survey's tiles, their projection, and the band that carries the surface.
 pub struct MosaicTiles {
     pub projection: Tmerc,
     pub band: usize,
     pub paths: Vec<PathBuf>,
 }
 
-/// A mosaic as an open `Dem` holds it. Its tiles live in the `Dem`'s one list, so what is left here
-/// is how to get onto its grid and how to find a tile on it.
+/// An open mosaic; its tiles live in the `Dem`'s shared list.
 struct Mosaic {
     projection: Tmerc,
     band: usize,
-    /// A coarse grid over this mosaic's extent, so finding the tile under a point is a lookup rather
-    /// than a scan of several hundred boxes.
-    ///
-    /// One index per mosaic rather than one keyed by (mosaic, x, y), because the keys are PROJECTED
-    /// METERS and two projections are two different spaces: San Francisco's CS13 puts its origin
-    /// under Twin Peaks and UTM 10N puts its own on the equator, so the same ground falls in cells
-    /// thousands apart and a cell that is one tile wide on one grid is meaningless on the other.
-    /// Keying by mosaic as well would keep the spaces apart but would still leave one `index_cell`
-    /// for both, sized to whichever survey stages the bigger tiles — 10 km squares against 2 km
-    /// ones here. A lookup then costs one probe per mosaic, of which a city has one or two.
+    /// Coarse tile index in projected meters; one per mosaic, as meters on two projections don't compare.
     index: HashMap<(i64, i64), Vec<usize>>,
     index_cell: f64,
 }
 
-/// A ground surface: one or more mosaics, each on its own projection and band, sampled at a
-/// longitude and latitude.
+/// A ground surface of one or more mosaics, sampled by longitude and latitude.
 pub struct Dem {
     mosaics: Vec<Mosaic>,
-    /// Every mosaic's tiles in one list, each carrying the index of the mosaic it came from, so a
-    /// tile position means the same thing to every reader here and to every caller holding one.
+    /// Every mosaic's tiles in one list, so a tile position means the same thing everywhere.
     tiles: Vec<TileGrid>,
-    /// The tile whose samples are currently decoded, and its values. Only one is held: a caller that
-    /// sweeps in raster order never revisits, and holding a whole city of float32 would be gigabytes.
+    /// The one decoded tile; holding a city of float32 would be gigabytes.
     loaded: Option<(usize, Vec<f32>)>,
     pub decoded: usize,
 }
 
 impl Dem {
-    /// One mosaic, which is what a caller reading a single survey's tiles wants.
+    /// A `Dem` of a single mosaic.
     pub fn open(paths: &[PathBuf], projection: Tmerc, band: usize) -> Fallible<Dem> {
         Dem::open_mosaics(&[MosaicTiles {
             projection,
@@ -152,8 +114,7 @@ impl Dem {
         }])
     }
 
-    /// Reads every tile's georeferencing up front — a few hundred header reads — and indexes them,
-    /// mosaic by mosaic. No pixels are decoded until a resample asks for them.
+    /// Reads and indexes every tile's georeferencing; no pixels are decoded until a resample.
     pub fn open_mosaics(mosaics: &[MosaicTiles]) -> Fallible<Dem> {
         if mosaics.is_empty() {
             return Err("an elevation source with no mosaics".into());
@@ -180,8 +141,7 @@ impl Dem {
             if own.is_empty() {
                 return Err("an elevation mosaic with no tiles".into());
             }
-            // One index cell per tile-sized square of ground, taken from the largest tile so no tile
-            // spans more cells than it has to.
+            // One index cell per largest tile, so no tile spans more cells than it has to.
             let index_cell = own
                 .iter()
                 .map(|tile| (tile.max_x() - tile.min_x()).max(tile.max_y() - tile.min_y()))
@@ -213,10 +173,7 @@ impl Dem {
         })
     }
 
-    /// Which tile covers a longitude and latitude, without decoding anything. Every mosaic is asked,
-    /// since they are on different grids: the point is projected once per mosaic, and each answer is
-    /// compared only against that mosaic's own tiles. Two surveys that overlap on the ground — the
-    /// bay is flown from both sides — are settled by the plan's order, first mosaic wins.
+    /// The tile covering a point, without decoding; where surveys overlap, the first mosaic wins.
     pub fn tile_of(&mut self, lng: f64, lat: f64) -> Option<usize> {
         for mosaic in &self.mosaics {
             let (x, y) = mosaic.projection.forward(lng, lat);
@@ -237,8 +194,7 @@ impl Dem {
         None
     }
 
-    /// The reading at a point that is known to fall in `position`, decoding that tile if it is not
-    /// the one already held. Callers that visit points grouped by tile pay one decode per tile.
+    /// The reading at a point known to fall in `position`, decoding that tile if it isn't held.
     pub fn sample_in(&mut self, position: usize, lng: f64, lat: f64) -> Fallible<Option<f32>> {
         self.load(position)?;
         let (x, y) = self.mosaics[self.tiles[position].mosaic]
@@ -247,19 +203,7 @@ impl Dem {
         Ok(self.read(position, x, y))
     }
 
-    /// The mosaic's readings over a regular grid in the mosaic's OWN projection: the upper-left
-    /// corner of cell (0, 0) at (`origin_x`, `origin_y`), cells `cell` meters square, row-major, NaN
-    /// where no tile covers a cell.
-    ///
-    /// The other readers take a longitude and latitude, which a caller already working in projected
-    /// meters cannot supply — nothing here inverts the projection. Filled tile by tile for the same
-    /// reason `resample` buckets by tile: a grid a kilometer wide crosses tiles on every row, and
-    /// sweeping in row order would decode each of them once per row.
-    ///
-    /// Refused outright on a `Dem` of several mosaics: "projected meters" would then name more than
-    /// one space, and the tiles of the wrong one would be picked up by a box comparison that is
-    /// arithmetically fine and geographically nonsense. A caller in projected meters has one grid in
-    /// mind and has to open the mosaic it belongs to.
+    /// Readings over a row-major grid in the one mosaic's projected meters, NaN where uncovered.
     pub fn sample_grid(
         &mut self,
         origin_x: f64,
@@ -310,8 +254,7 @@ impl Dem {
                 let y = origin_y - (row as f64 + 0.5) * cell;
                 for column in columns.clone() {
                     let x = origin_x + (column as f64 + 0.5) * cell;
-                    // Tiles overlap by a few pixels, so a cell two of them cover keeps whichever
-                    // carried a reading rather than the last one visited.
+                    // Tiles overlap by a few pixels; keep whichever carried a reading, not the last visited.
                     if let Some(value) = self.read(position, x, y) {
                         values[row * width + column] = value;
                     }
@@ -349,10 +292,7 @@ impl Dem {
             return Ok(());
         }
         let tile = &self.tiles[position];
-        // The decoder's default ceiling is half a gigabyte of decoded image and it rejects anything
-        // over it outright. San Francisco's tiles are 2.7 MB each and never came near it; the staged
-        // 1 m DEM is 10012 x 10012 float32, 401 MB a tile, and every one of them failed to open.
-        // Holding one is what this already promises to do.
+        // The default decode limit rejects the staged 1 m DEM's 401 MB tiles.
         let mut decoder =
             Decoder::new(BufReader::new(File::open(&tile.path)?))?.with_limits(Limits::unlimited());
         let values = match decoder.read_image()? {
@@ -376,16 +316,13 @@ impl Dem {
         self.tiles.len()
     }
 
-    /// Drops the decoded tile. A caller that has finished resampling but is still holding the `Dem`
-    /// for a later pass — `tiler build` hands one mosaic to both readers — would otherwise keep a
-    /// tile of float32 alive across the tile render that follows.
+    /// Drops the decoded tile, for a caller holding the `Dem` for a later pass.
     pub fn release(&mut self) {
         self.loaded = None;
     }
 }
 
-/// The resampled ground surface: a regular longitude/latitude grid over the city's bounds, at the
-/// resolution the deepest baked zoom draws at.
+/// The resampled ground surface on a regular longitude/latitude grid over the city's bounds.
 pub struct Field {
     west: f64,
     north: f64,
@@ -420,24 +357,8 @@ impl Field {
         self.meters[row * self.width + column]
     }
 
-    /// Drops every cell the predicate rejects, and answers how many it dropped. The range is
-    /// recomputed from what survives, which is the point of doing this on the field rather than at
-    /// render time: the tint is stretched over `low..high`, and water sitting at sea level anchors
-    /// the low end to 0 for a city whose ground never gets there.
-    ///
-    /// The predicate takes the cell's center, and is `&mut` because a polygon index carries scratch
-    /// state between queries.
-    /// A cell outside the mask survives when the mask lies within `reach_meters` of it AND its
-    /// surface stands at least `deck_meters` up, which is what tells a pier from the water it is
-    /// built over.
-    ///
-    /// A shoreline polygon set stops at the natural shore. San Francisco's does, and the ground it
-    /// leaves out is not water: the port's piers, the fill along the Embarcadero and the built edges
-    /// of Treasure Island are all surveyed surface with no polygon under them, and masking them off
-    /// punched holes through the middle of the city. Widening the polygons instead would drag the
-    /// tint out over the bay everywhere, which is the thing the mask exists to stop — hence the two
-    /// conditions rather than one. The height test is what keeps the reach honest: the bay's own
-    /// returns sit at the water plane, a pier deck stands several meters over it.
+    /// NaNs cells outside `keep` unless within `reach_meters` of it and `deck_meters` up (a pier).
+    /// Recomputes `low..high` so sea-level water doesn't anchor the tint; returns the count dropped.
     pub fn retain(
         &mut self,
         reach_meters: f64,
@@ -461,8 +382,7 @@ impl Field {
             if !self.meters[cell].is_finite() {
                 continue;
             }
-            // Inside the polygons the height is not asked about at all: a beach and a tidal flat are
-            // ground the city walks on and both sit below any deck.
+            // Inside the mask height isn't asked: beaches and tidal flats sit below any deck.
             let keep_cell = inside[cell] || (reached[cell] && self.meters[cell] >= deck_meters);
             if !keep_cell {
                 self.meters[cell] = f32::NAN;
@@ -480,15 +400,7 @@ impl Field {
         dropped
     }
 
-    /// How much of the ground around a point is ground at all, 0 to 1, bilinear over the same four
-    /// cells `sample` blends.
-    ///
-    /// `sample` deliberately refuses to blend across a missing corner — averaging real land with
-    /// absent sea would drag the coast out over the water — so the height it returns steps from
-    /// "land" to "nothing" over one cell and the coastline comes out as a staircase of whole cells,
-    /// which magnifies into visible blocks. This gives the renderer a soft edge to fade the tint out
-    /// over instead, without moving where the land is: the value stays whatever `sample` says, only
-    /// its opacity follows the coverage.
+    /// Fraction of the four cells `sample` blends that hold ground, so the coastline can fade.
     pub fn coverage(&self, lng: f64, lat: f64) -> f32 {
         let x = (lng - self.west) / self.step_lng - 0.5;
         let y = (self.north - lat) / self.step_lat - 0.5;
@@ -515,18 +427,9 @@ impl Field {
         top + (bottom - top) * fy
     }
 
-    /// The value under a longitude and latitude, or NaN outside the field. Bilinear between the four
-    /// cells around the point, not the cell it falls in.
-    ///
-    /// The difference matters because the cells are meters across and the things that read this are
-    /// far smaller than a cell. Nearest-cell hands a sub-meter edge the whole height step between two
-    /// neighboring cells — the TERRAIN's slope charged as that EDGE's climb — and on a hillside that
-    /// saturates it. Measured over San Francisco it saturated 6,396 edges, the shortest of them 0.9 m
-    /// long. Interpolating makes a short edge's climb proportional to its length, which is the only
-    /// answer that means anything.
+    /// Bilinear value at a point, NaN outside; nearest-cell would charge a short edge a cell's climb.
     pub fn sample(&self, lng: f64, lat: f64) -> f32 {
-        // Cell centers sit at half-steps, so shift by half a cell before flooring: a point at a
-        // center has to come back as that cell's own value, not a blend with its neighbor.
+        // Cell centers sit at half-steps, so a point at a center returns that cell's own value.
         let x = (lng - self.west) / self.step_lng - 0.5;
         let y = (self.north - lat) / self.step_lat - 0.5;
         let at = |column: f64, row: f64| -> f32 {
@@ -546,12 +449,7 @@ impl Field {
         let top_right = at(column + 1.0, row);
         let bottom_left = at(column, row + 1.0);
         let bottom_right = at(column + 1.0, row + 1.0);
-        // A blend is only as good as its corners. At a shoreline three of the four are NaN and the
-        // fourth is real land; averaging what is there would drag the coast out over the water, so a
-        // missing corner falls back to the cell the point is actually in — NOT to the nearest cell
-        // that exists. Clamping the index to zero here, as this did, read every point west or north
-        // of the field as its edge column at any distance, while east and south correctly came back
-        // NaN: a border tile could smear the outermost strip of terrain out to the tile plan's edge.
+        // At a shoreline a missing corner falls back to the point's own cell, so land isn't smeared.
         if !top_left.is_finite()
             || !top_right.is_finite()
             || !bottom_left.is_finite()
@@ -567,42 +465,17 @@ impl Field {
     }
 }
 
-/// Resamples a mosaic onto a regular longitude/latitude grid over `bounds`, at the resolution one
-/// web-mercator pixel covers at `zoom`. One pass over the tiles: a caller that then queries the grid
-/// pays nothing per query, where querying the mosaic directly would decode a tile per stray point.
-/// How far a fill may reach into a gap, **in meters of ground**, so the widest hole it closes is
-/// twice this. Bounded rather than run to convergence because the field's largest missing region is
-/// the ocean, and an unbounded fill would march across the whole bay inventing terrain; small enough
-/// that the shore creeps less than a block, which the land mask then clips away.
-///
-/// In meters and not in cells, which is what it was and what broke it. A ring is one cell, so a
-/// fixed ring count means a reach that shrinks as the field gets finer: at the z14 field four rings
-/// spanned about 38 m and closed the inland ponds and reservoirs the LiDAR gets no return from, and
-/// at z16 the same four rings spanned 9.6 m and every one of those holes came back.
+/// The fill's reach in meters, not rings (which shrink as the field gets finer); bounded by the bay.
 const FILL_REACH_METERS: f64 = 40.0;
 
-/// A hard cap on the rings that reach converts to, so a pathologically fine field cannot turn this
-/// into hundreds of full passes over tens of millions of cells.
+/// Caps the rings the reach converts to on a very fine field.
 const MAX_FILL_RINGS: usize = 24;
 
-/// Closes small gaps in the sampled field, in place, and answers how many cells it filled.
-///
-/// The 3DEP mosaic has scattered cells its returns never resolved — single pixels and short runs,
-/// mostly over water-adjacent ground and building interiors. They matter out of proportion to their
-/// number because the hillshade reads the field's own slope: one missing cell blanks a pixel and
-/// puts a false edge in each of its four neighbors' gradients.
-///
-/// Each ring averages the valid 8-neighbors of every still-missing cell. Written to a scratch copy
-/// per ring so the result cannot depend on the order cells are visited — filling in place would let
-/// a cell read a neighbor this same ring had just invented, and the gap would fill directionally.
-/// Every cell within `radius` cells of a set one, as a square rather than a disc — separable, so it
-/// costs two linear passes over the grid instead of one per ring, and the corners it adds over a
-/// disc are a fraction of a cell at the reaches this is called with.
+/// Every cell within `radius` cells of a set one, as a square so it takes two separable passes.
 fn dilate(set: &[bool], width: usize, height: usize, radius: usize) -> Vec<bool> {
     if radius == 0 {
         return set.to_vec();
     }
-    // A running count of set cells in the window, so each pass is one add and one subtract per cell.
     let mut spread = vec![false; set.len()];
     for row in 0..height {
         let mut count = 0usize;
@@ -640,6 +513,7 @@ fn dilate(set: &[bool], width: usize, height: usize, radius: usize) -> Vec<bool>
     out
 }
 
+/// Fills gaps ring by ring from the mean of valid 8-neighbors; returns how many cells it filled.
 fn close_holes(meters: &mut [f32], width: usize, height: usize, cell_meters: f64) -> usize {
     let rings =
         ((FILL_REACH_METERS / cell_meters.max(0.01)).round() as usize).clamp(1, MAX_FILL_RINGS);
@@ -673,11 +547,7 @@ fn close_holes(meters: &mut [f32], width: usize, height: usize, cell_meters: f64
                         }
                     }
                 }
-                // Three of eight, so a reading is interpolated from a neighborhood rather than
-                // copied off a single cell. It does NOT stop the fill reaching open water — along a
-                // straight coast a seaward cell has three valid neighbors like any other — and
-                // nothing here does. What bounds the sea is MAX_FILL_RINGS, and after that the land
-                // mask the overlay renders through.
+                // At least three neighbors, so a fill interpolates rather than copies one cell.
                 if count >= 3 {
                     filled.push((cell, total / count as f32));
                 }
@@ -694,9 +564,9 @@ fn close_holes(meters: &mut [f32], width: usize, height: usize, cell_meters: f64
     patched
 }
 
+/// Resamples the mosaic onto a longitude/latitude grid at `zoom`'s pixel size, one decode per tile.
 pub fn resample(bounds: &Bounds, zoom: u32, dem: &mut Dem) -> Fallible<Field> {
-    // The ground a pixel covers at the deepest baked zoom, expressed back in degrees so the field
-    // lines up with the tiles that will read it.
+    // Cells the size of a pixel at `zoom`, in degrees, so the field lines up with the tiles.
     let west = bounds.west;
     let east = bounds.east;
     let south = bounds.south;
@@ -713,10 +583,7 @@ pub fn resample(bounds: &Bounds, zoom: u32, dem: &mut Dem) -> Fallible<Field> {
     let mut high = f32::NEG_INFINITY;
     let mut filled = 0usize;
 
-    // Grouped by DEM tile, not swept in field order. A field row crosses tens of tiles, so a
-    // row-major sweep re-decodes every one of them on every row — measured over San Francisco that
-    // was 37,204 decodes of 651 tiles and six minutes. Bucketing first costs one cheap forward
-    // projection per cell and decodes each tile exactly once.
+    // Bucketed by tile, since a row-major sweep re-decodes every tile on every row.
     let mut by_tile: HashMap<usize, Vec<usize>> = HashMap::new();
     for row in 0..height {
         let lat = north - (row as f64 + 0.5) * step_lat;
@@ -749,8 +616,7 @@ pub fn resample(bounds: &Bounds, zoom: u32, dem: &mut Dem) -> Fallible<Field> {
     if filled == 0 {
         return Err("the DEM covered none of the city".into());
     }
-    // The field's own cell size on the ground, so the fill's reach is the same distance whatever
-    // zoom the field was built at.
+    // The cell size in meters, so the fill's reach doesn't depend on zoom.
     let cell_meters = step_lat * METERS_PER_DEGREE_LAT;
     let patched = close_holes(&mut meters, width, height, cell_meters);
     eprintln!(
@@ -772,8 +638,7 @@ pub fn resample(bounds: &Bounds, zoom: u32, dem: &mut Dem) -> Fallible<Field> {
 
 #[cfg(test)]
 impl Field {
-    /// A field built straight from values instead of from a mosaic. Row-major, `width * height`,
-    /// NaN where there is no ground.
+    /// A field built straight from row-major values, NaN where there is no ground.
     pub fn from_grid(
         west: f64,
         north: f64,
@@ -809,7 +674,7 @@ impl Field {
 mod tests {
     use super::{FILL_REACH_METERS, close_holes, dilate};
 
-    /// A cell size that makes the reach exactly four rings, which is what these fixtures are sized for.
+    /// A cell size that makes the reach exactly four rings.
     const FOUR_RINGS: f64 = FILL_REACH_METERS / 4.0;
     const MAX_FILL_RINGS: usize = 4;
 
@@ -828,8 +693,7 @@ mod tests {
 
     #[test]
     fn a_hole_fills_from_the_ground_around_it_not_across_it() {
-        // A step: 0 m on the left, 100 m on the right, one missing cell in the middle of the seam.
-        // The fill has to land between them, not take either side's value whole.
+        // A 0 m to 100 m step with a hole on the seam: the fill must land between.
         let mut field = vec![
             0.0, 0.0, 100.0, 100.0, //
             0.0, 0.0, NAN, 100.0, //
@@ -841,10 +705,7 @@ mod tests {
 
     #[test]
     fn the_fill_reaches_open_water_by_no_more_than_its_ring_bound() {
-        // A coast: ground down the left column, open sea to the right. The fill does creep seaward —
-        // one ring per pass, since a cell against the shore has three valid neighbors like any
-        // other — so what is asserted is the bound, which is the only thing that holds it. Raising
-        // MAX_FILL_RINGS marches the coastline further out to sea by exactly that much.
+        // Ground down the left column, sea to the right: the fill creeps seaward only its rings.
         let width = 12;
         let height = 5;
         let mut field = vec![NAN; width * height];
@@ -862,17 +723,12 @@ mod tests {
                 }
             }
         }
-        // It does creep — the cell against the shore fills — so the bound is what holds the sea
-        // back, not some property of the coastline. The frontier narrows as it goes (each ring needs
-        // three valid neighbors, and the ring behind it is one cell shorter at each end), so how
-        // far it actually reaches depends on how wide the shore is; only the bound is guaranteed.
         assert!(field[(height / 2) * width + 1].is_finite());
     }
 
     #[test]
     fn a_hole_wider_than_the_fill_can_reach_keeps_a_missing_core() {
-        // Ground all round a 20-cell-wide void: the rings close in from every side but stop, so the
-        // bound is what it claims to be rather than convergence by another name.
+        // Ground round a 20-cell void: the fill stops short, so the bound isn't convergence.
         let width = 24;
         let height = 24;
         let mut field = vec![NAN; width * height];
@@ -887,9 +743,7 @@ mod tests {
         close_holes(&mut field, width, height, FOUR_RINGS);
         assert!(field[(height / 2) * width + width / 2].is_nan());
     }
-    // The reach that lets a pier survive a shoreline mask: square, symmetric, and bounded — a mask
-    // that grew without bound would put the tint out over open water, which is what it exists to
-    // prevent.
+    // The reach that lets a pier survive the mask: square, symmetric, and bounded.
     #[test]
     fn the_reach_spreads_one_cell_by_its_radius_and_stops() {
         let width = 11;
@@ -928,9 +782,7 @@ mod mosaic_tests {
 
     const SIDE: usize = 40;
 
-    /// A tile file of this test's own. The tests run at once, and one of them truncating a tile
-    /// another is part way through reading is an end-of-file error with nothing to say about the
-    /// code under it.
+    /// A tile file per test, so parallel tests don't truncate each other's tiles.
     fn scratch(test: &str, name: &str) -> PathBuf {
         let dir = std::env::temp_dir()
             .join(format!("tiler-dem-test-{}", std::process::id()))
@@ -970,8 +822,7 @@ mod mosaic_tests {
             .expect("the samples");
     }
 
-    /// The same, three bands a pixel — the shape of the 3DEP product, whose ground is one band of
-    /// five.
+    /// Three bands a pixel, like the 3DEP product whose ground is one band of five.
     fn write_three_band(path: &Path, origin_x: f64, origin_y: f64, bands: [f32; 3]) {
         let mut encoder =
             TiffEncoder::new(BufWriter::new(File::create(path).expect("a tile"))).expect("a tiff");
@@ -983,8 +834,7 @@ mod mosaic_tests {
         image.write_data(&samples).expect("the samples");
     }
 
-    /// San Francisco on CS13 reading its only band, the East Bay on UTM 10N reading its third: two
-    /// surveys whose meters are thousands apart and whose bands are not the same number.
+    /// San Francisco on CS13 band 0 and the East Bay on UTM 10N band 2.
     fn two_surveys(test: &str) -> Dem {
         let (sf_x, sf_y) = SF_CS13.forward(IN_SAN_FRANCISCO.0, IN_SAN_FRANCISCO.1);
         let (east_x, east_y) = UTM_10N.forward(IN_THE_EAST_BAY.0, IN_THE_EAST_BAY.1);
@@ -1017,8 +867,7 @@ mod mosaic_tests {
             .tile_of(IN_THE_EAST_BAY.0, IN_THE_EAST_BAY.1)
             .expect("the east bay's tile");
         assert_ne!(west, east);
-        // One projection for both would put each point in the other grid's empty quarter of the
-        // world, and neither tile would be found at all.
+        // One projection for both would find neither tile.
         assert_eq!(
             dem.sample_in(west, IN_SAN_FRANCISCO.0, IN_SAN_FRANCISCO.1)
                 .expect("a reading"),

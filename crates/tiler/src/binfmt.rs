@@ -1,30 +1,28 @@
-//! The varint coordinate codec every `.bin` is written with, and the readers for the four
-//! source files. TypeScript writes these; Rust only reads them (and patches the street
-//! density blob back in place). Layouts are documented in scripts/README.md.
+//! The varint coordinate codec and readers for the `.bin` files TypeScript writes (scripts/README.md).
 
 use std::fs;
 use std::path::Path;
 
 use crate::Fallible;
 
-pub const TREE_FORMAT: u16 = 3; // v3 adds a genus byte per tree; v2 added the crown byte
-pub const CANOPY_FORMAT: u16 = 2; // the measured 2017 LiDAR canopy under magic CNPY; v2 adds a trailing crown-height u16 per polygon
-pub const BLDG_FORMAT: u16 = 1; // building footprints with trailing roof-height/base-elevation u16s, magic BLDG
+pub const TREE_FORMAT: u16 = 3; // a crown byte and a genus byte per tree
+pub const CANOPY_FORMAT: u16 = 2; // magic CNPY, a trailing crown-height u16 per polygon
+pub const BLDG_FORMAT: u16 = 1; // magic BLDG, trailing roof-height and base-elevation u16s
 pub const LAND_FORMAT: u16 = 1;
-pub const STREET_FORMAT: u16 = 6; // v6 adds the per-side sidewalk bits to the record's flags byte
+pub const STREET_FORMAT: u16 = 6; // the record's flags byte carries per-side sidewalk bits
 pub const PATH_FORMAT: u16 = 1; // OSM pedestrian/park ways: STRT's layout, magic "PATH"
-pub const SIDEWALK_FORMAT: u16 = 1; // OSM sidewalk/crossing/traffic-island ways: STRT's layout, magic "SWLK"
-pub const FERRY_FORMAT: u16 = 2; // the time-independent NYC ferry graph, magic "FERR"; v2 adds a route name id
-pub const TRANSIT_FORMAT: u16 = 2; // the rail topology the router rides, magic "TRNS"; v2 adds the station entrances and the split-station flag
+pub const SIDEWALK_FORMAT: u16 = 1; // OSM sidewalk/crossing/island ways: STRT's layout, magic "SWLK"
+pub const FERRY_FORMAT: u16 = 2; // the NYC ferry graph, magic "FERR"
+pub const TRANSIT_FORMAT: u16 = 2; // the rail topology, magic "TRNS"
 pub const LANDMARK_FORMAT: u16 = 1; // scenic POI points, the shared point layout, magic "LMRK"
 pub const ART_FORMAT: u16 = 1; // public-art POI points, the shared point layout, magic "ARTW"
-pub const HIGHWAY_FORMAT: u16 = 1; // highway/elevated-rail nuisance lines, the LAND polygon layout, magic "HWAY"
-pub const COMMERCIAL_FORMAT: u16 = 1; // qualifying commercial-block lines, the LAND polygon layout, magic "CMLN"
-pub const INDUSTRIAL_FORMAT: u16 = 1; // industrial & manufacturing tax lots, the LAND polygon layout, magic "INDL"
+pub const HIGHWAY_FORMAT: u16 = 1; // highway/elevated-rail lines, LAND's layout, magic "HWAY"
+pub const COMMERCIAL_FORMAT: u16 = 1; // commercial-block lines, LAND's layout, magic "CMLN"
+pub const INDUSTRIAL_FORMAT: u16 = 1; // industrial tax lots, LAND's layout, magic "INDL"
 pub const LANDUSE_FORMAT: u16 = 1; // tax lots carrying a land-use class byte, magic "PLUT"
 pub const DINING_FORMAT: u16 = 1; // outdoor-dining points, the shared point layout, magic "DINE"
-pub const OPENSTREET_FORMAT: u16 = 1; // Open Streets corridor samples, the shared point layout, magic "OSTR"
-pub const CHUNK_FORMAT: u16 = 4; // the served z12 street chunk, magic "STCK"; v4 adds the stranded bitmap
+pub const OPENSTREET_FORMAT: u16 = 1; // Open Streets samples, the point layout, magic "OSTR"
+pub const CHUNK_FORMAT: u16 = 4; // the served z12 street chunk, magic "STCK"
 
 pub const SIDES: usize = 2; // the two sidewalks a density blob carries per vertex, left then right
 pub const DECIMETERS_PER_METER: f64 = 10.0; // the crown byte's unit: a decimeter of crown radius
@@ -44,9 +42,7 @@ struct Cursor<'a> {
 }
 
 impl Cursor<'_> {
-    // Zigzag LEB128. The shift is masked to five bits, as JavaScript's is, so a corrupt file
-    // decodes to nonsense rather than panicking on the shift itself; the magic check is what
-    // is meant to catch it.
+    // Zigzag LEB128; the shift wraps as JavaScript's does, so a corrupt file decodes rather than panics.
     fn varint(&mut self) -> i32 {
         let mut value: u32 = 0;
         let mut shift: u32 = 0;
@@ -97,8 +93,7 @@ fn f64_at(bytes: &[u8], offset: usize) -> f64 {
     f64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("8 bytes"))
 }
 
-// Also the guard against an unresolved Git LFS pointer file, which is ~130 bytes of text and
-// would otherwise decode into nonsense.
+// Also catches an unresolved Git LFS pointer file.
 fn check_magic(bytes: &[u8], expected: &str, format: u16, path: &Path) -> Fallible<()> {
     let magic = bytes
         .get(..4)
@@ -120,8 +115,7 @@ fn check_magic(bytes: &[u8], expected: &str, format: u16, path: &Path) -> Fallib
     }
 }
 
-// A header the three source layouts share: count, then the origin and scale the varint
-// deltas are relative to.
+// The header the point and polygon layouts share: count, then the varint deltas' origin and scale.
 struct Header {
     count: usize,
     origin_lng: f64,
@@ -140,17 +134,14 @@ fn header(bytes: &[u8]) -> Header {
     }
 }
 
-/// The tree inventory: a point per tree, the radius of the crown disc it shades the ground with
-/// (decoded from the trailing crown byte, decimeters to meters), and its genus id (0..11, from the
-/// genus byte block after the crowns). The three arrays are parallel — index `i` is one tree.
+/// The tree inventory as parallel arrays: points, crown radii in meters, and genus ids (0..11).
 pub struct Trees {
     pub coords: Vec<Coord>,
     pub crown_radii_m: Vec<f64>,
     pub genus_ids: Vec<u8>,
 }
 
-/// The points, then the `count` crown bytes, then the `count` genus bytes — each a fixed-size
-/// trailing region in the same sorted order, so index `i` is one tree across all three. TREE v3.
+/// TREE v3: the points, then `count` crown bytes, then `count` genus bytes.
 pub fn read_trees(path: &Path) -> Fallible<Trees> {
     let bytes = fs::read(path)?;
     check_magic(&bytes, "TREE", TREE_FORMAT, path)?;
@@ -171,8 +162,6 @@ pub fn read_trees(path: &Path) -> Fallible<Trees> {
             lat: head.origin_lat + y as f64 * head.scale,
         });
     }
-    // The crown bytes then the genus bytes are the two fixed-size trailing regions, one byte each
-    // per point, written after the variable-length coordinate stream the cursor just walked.
     let crowns = cursor.offset;
     let genera = crowns + head.count;
     let end = genera + head.count;
@@ -198,9 +187,7 @@ pub fn read_trees(path: &Path) -> Fallible<Trees> {
     })
 }
 
-// The shared polygon body: `count` polygons, each a u16 ring count then per-ring a u32 vertex
-// count and the zigzag-varint lng/lat deltas. Advances the cursor to the byte after the body, so
-// a caller with trailing regions (BLDG's heights) can read on from there.
+// Polygons: u16 ring count, per ring a u32 vertex count and varint deltas; leaves the cursor after.
 fn decode_polygons(cursor: &mut Cursor, head: &Header) -> Vec<Polygon> {
     let mut polygons = Vec::with_capacity(head.count);
     for _ in 0..head.count {
@@ -239,11 +226,7 @@ pub fn read_polygons(path: &Path, magic: &str, format: u16) -> Fallible<Vec<Poly
     Ok(decode_polygons(&mut cursor, &head))
 }
 
-/// BLDG v1: building footprints in the shared polygon layout, then two trailing parallel u16
-/// regions in polygon order — first roof heights in decimeters, then base elevations (ignored).
-/// A MultiPolygon was split into one footprint per part upstream, each part repeating its height,
-/// so the returned footprints and meter heights are aligned one-to-one. Returns the footprints
-/// and each polygon's roof height in meters.
+/// BLDG v1: footprints (one per MultiPolygon part), then u16 roof heights and base elevations.
 pub fn read_buildings(path: &Path) -> Fallible<(Vec<Polygon>, Vec<f64>)> {
     let bytes = fs::read(path)?;
     check_magic(&bytes, "BLDG", BLDG_FORMAT, path)?;
@@ -253,8 +236,6 @@ pub fn read_buildings(path: &Path) -> Fallible<(Vec<Polygon>, Vec<f64>)> {
         offset: head.body,
     };
     let polygons = decode_polygons(&mut cursor, &head);
-    // The heights then the base elevations are the two fixed-size trailing regions, one u16 each
-    // per polygon, after the variable-length body the cursor just walked.
     let heights_start = cursor.offset;
     let elevations_start = heights_start + head.count * 2;
     let end = elevations_start + head.count * 2;
@@ -276,8 +257,7 @@ pub fn read_buildings(path: &Path) -> Fallible<(Vec<Polygon>, Vec<f64>)> {
     Ok((polygons, heights))
 }
 
-/// The measured canopy polygons, plus the file they came from: the height pass patches the
-/// trailing height region back into `bytes` and rewrites it, so the region is not decoded away.
+/// The canopy polygons plus the raw file, whose trailing height region the height pass patches.
 pub struct Canopy {
     pub bytes: Vec<u8>,
     pub polygons: Vec<Polygon>,
@@ -285,9 +265,7 @@ pub struct Canopy {
 }
 
 impl Canopy {
-    /// Each polygon's crown height in meters, in polygon order. 0 means the height model saw no
-    /// cell inside the polygon: it is a sentinel no real reading collides with, the model being
-    /// thresholded at 2.1 m.
+    /// Crown heights in meters; 0 means no cell was measured, below any real reading.
     pub fn heights_m(&self) -> Vec<f64> {
         (0..self.polygons.len())
             .map(|polygon| {
@@ -305,9 +283,7 @@ impl Canopy {
     }
 }
 
-/// CNPY v2: the measured LiDAR canopy in the shared polygon layout, then ONE trailing u16 region
-/// in polygon order — the crown height in decimeters — exactly as BLDG carries its roof heights.
-/// The generic `read_polygons` still reads the geometry alone for the callers wanting no height.
+/// CNPY v2: the canopy polygons, then one u16 crown height in decimeters per polygon.
 pub fn read_canopy(path: &Path) -> Fallible<Canopy> {
     let bytes = fs::read(path)?;
     check_magic(&bytes, "CNPY", CANOPY_FORMAT, path)?;
@@ -335,8 +311,7 @@ pub fn read_canopy(path: &Path) -> Fallible<Canopy> {
     })
 }
 
-// The shared point body: `count` zigzag-varint (lng, lat) deltas. Advances the cursor past them,
-// so a caller with a trailing region (PLUT's class bytes) can read on from there.
+// `count` varint (lng, lat) deltas; leaves the cursor after them for any trailing region.
 fn decode_points(cursor: &mut Cursor, head: &Header) -> Vec<Coord> {
     let mut coords = Vec::with_capacity(head.count);
     let mut x: i64 = 0;
@@ -352,10 +327,7 @@ fn decode_points(cursor: &mut Cursor, head: &Header) -> Vec<Coord> {
     coords
 }
 
-/// A bare point set (the scenic POI sources: `LMRK` landmarks, `ARTW` public art; the commercial
-/// overlay's `DINE` and `OSTR` samples). The shared point layout — the header, then `count` (lng,
-/// lat) varint deltas. A trailing name blob, where the source wrote one, is left unread. `tiler
-/// graph` snaps each to the nearest walking node and fans it out into a per-edge discount.
+/// A bare point set (`LMRK`, `ARTW`, `DINE`, `OSTR`); any trailing name blob is left unread.
 pub fn read_points(path: &Path, magic: &str, format: u16) -> Fallible<Vec<Coord>> {
     let bytes = fs::read(path)?;
     check_magic(&bytes, magic, format, path)?;
@@ -367,9 +339,7 @@ pub fn read_points(path: &Path, magic: &str, format: u16) -> Fallible<Vec<Coord>
     Ok(decode_points(&mut cursor, &head))
 }
 
-/// PLUT v1: the tax lots, in the shared point layout plus ONE trailing region of one class byte per
-/// point in the same sorted order, as TREE carries its crowns. Returns the points and their
-/// land-use classes, parallel — index `i` is one lot.
+/// PLUT v1: tax-lot points, then one land-use class byte per point, returned in parallel.
 pub fn read_classified_points(
     path: &Path,
     magic: &str,
@@ -397,10 +367,7 @@ pub fn read_classified_points(
     Ok((coords, bytes[classes..end].to_vec()))
 }
 
-/// STCK v4: one served z12 street chunk read back into the segment polylines it carries, in file
-/// order — the commercial pass keys its per-segment signals on that order, and so does the client.
-/// The per-vertex density bytes are stepped over to keep the cursor aligned and the trailing
-/// stranded bitmap is left unread: a signal is computed for every segment the chunk carries.
+/// STCK v4: a z12 street chunk's segment polylines in file order, which signals are keyed on.
 pub fn read_chunk(path: &Path) -> Fallible<Vec<Vec<Coord>>> {
     let bytes = fs::read(path)?;
     check_magic(&bytes, "STCK", CHUNK_FORMAT, path)?;
@@ -412,7 +379,7 @@ pub fn read_chunk(path: &Path) -> Fallible<Vec<Vec<Coord>>> {
     let mut segments = Vec::with_capacity(head.count);
     for _ in 0..head.count {
         let vertices = usize::from(u16_at(cursor.bytes, cursor.offset));
-        cursor.offset += 3; // the vertex count, then the sidewalk-offset byte the snap has no use for
+        cursor.offset += 3; // the vertex count, then the unused sidewalk-offset byte
         let mut polyline = Vec::with_capacity(vertices);
         let mut x: i64 = 0;
         let mut y: i64 = 0;
@@ -430,20 +397,17 @@ pub fn read_chunk(path: &Path) -> Fallible<Vec<Vec<Coord>>> {
     Ok(segments)
 }
 
-/// The street network, plus the file it came from: the density pass patches the trailing
-/// density blob back into `bytes` and rewrites it, so the blob is not decoded away.
+/// The street network plus the raw file, whose density blob the density pass patches in place.
 pub struct Streets {
     pub bytes: Vec<u8>,
     pub lngs: Vec<f64>, // every vertex of every segment, concatenated
     pub lats: Vec<f64>,
     pub starts: Vec<u32>, // segments + 1 entries; segment i owns [starts[i], starts[i + 1])
-    pub ids: Vec<u32>, // per segment: the CSCL physicalid (STRT) or the OSM way id (PATH), record offset 0
-    pub road_types: Vec<u8>, // per segment: 1 street, 3 bridge, 4 tunnel, 5 boardwalk, 6 path, 7 step, 10 alley
-    pub width_feet: Vec<u8>, // curb to curb, 0 unknown — what the sidewalk offset is derived from
-    // per segment: bit0 vehicular-only, bit1 non-vehicular deck, bit2 structure; on STRT bits 3-6
-    // are the per-side sidewalk bits — OSM-mapped left/right, then surveyed left/right (the city's
-    // planimetric ROW polygons) — which `graph.rs`'s existence gate reads, while on PATH and SWLK
-    // bit 3 is instead the tunnel one OSM's own tags supply
+    pub ids: Vec<u32>,    // CSCL physicalid (STRT) or OSM way id (PATH)
+    pub road_types: Vec<u8>, // 1 street, 3 bridge, 4 tunnel, 5 boardwalk, 6 path, 7 step, 10 alley
+    pub width_feet: Vec<u8>, // curb to curb, 0 unknown
+    // bit0 vehicular-only, bit1 non-vehicular deck, bit2 structure; on PATH and SWLK bit3 is tunnel
+    // on STRT bits 3-6 are sidewalks: OSM-mapped left/right, then surveyed left/right
     pub flags: Vec<u8>,
     pub name_ids: Vec<u16>, // per segment: index into `names`, 0xFFFF when the row carried no label
     pub names: Vec<String>, // the distinct street names, decoded from the trailing name blob
@@ -477,30 +441,22 @@ impl Streets {
     }
 }
 
-/// STRT v6: the CSCL street network. `road_types` is rw_type, `width_feet` the curb-to-curb
-/// width, `flags` the vehicular/deck/structure bits and the four per-side sidewalk bits above.
+/// STRT v6: the CSCL street network.
 pub fn read_streets(path: &Path) -> Fallible<Streets> {
     read_network(path, "STRT", STREET_FORMAT)
 }
 
-/// PATH v1: the OSM pedestrian/park network. Same byte layout, reinterpreted per the PATH table
-/// (scripts/README.md) — `road_types` is the kind (6 path, 7 steps), `width_feet` is 0 (a path
-/// has no roadway, so `half_offset_meters` returns 0 and one sample stands for both sides), and
-/// `flags` carries only bit2 structure.
+/// PATH v1: STRT's layout; `road_types` 6 path or 7 steps, `width_feet` 0, only the structure flag.
 pub fn read_paths(path: &Path) -> Fallible<Streets> {
     read_network(path, "PATH", PATH_FORMAT)
 }
 
-/// SWLK v1: OSM's own sidewalk network. Same byte layout again — `road_types` is the kind (20
-/// sidewalk, 21 crossing, 22 traffic island), `width_feet` and the density blob are zero (the way
-/// *is* the walking line, and the ingest never samples cover on it), and `flags` carries only bit2
-/// structure.
+/// SWLK v1: STRT's layout; `road_types` 20 sidewalk, 21 crossing, 22 island, no widths or densities.
 pub fn read_sidewalks(path: &Path) -> Fallible<Streets> {
     read_network(path, "SWLK", SIDEWALK_FORMAT)
 }
 
-// STRT's reader, shared by the networks: the files are byte-identical in shape, so only the magic
-// and format version differ. The field meanings above are the caller's to know.
+// The networks share STRT's layout; only the magic and version differ.
 fn read_network(path: &Path, magic: &str, format: u16) -> Fallible<Streets> {
     let bytes = fs::read(path)?;
     check_magic(&bytes, magic, format, path)?;
@@ -515,8 +471,7 @@ fn read_network(path: &Path, magic: &str, format: u16) -> Fallible<Streets> {
     let density_bytes = u32_at(&bytes, 52) as usize;
     let name_offset = u32_at(&bytes, 56) as usize;
     let name_bytes = u32_at(&bytes, 60) as usize;
-    // The name blob is the final region, so this covers the records, coordinates and densities
-    // before it too.
+    // The name blob is the last region, so this bounds the whole file.
     if bytes.len() < name_offset + name_bytes {
         return Err(format!(
             "{} is truncated: {} bytes, {} needed for {count} segments",
@@ -564,8 +519,7 @@ fn read_network(path: &Path, magic: &str, format: u16) -> Fallible<Streets> {
         }
     }
     starts.push(lngs.len() as u32);
-    // Two densities a vertex, and the blob is sized from the records the coordinates were just
-    // decoded against: a disagreement means the two halves of the file are not the same network.
+    // Two densities per vertex; a mismatch means records and blob disagree on the network.
     if density_bytes != SIDES * lngs.len() {
         return Err(format!(
             "{} carries {density_bytes} density bytes for {} vertices, not {}",
@@ -607,19 +561,15 @@ fn read_network(path: &Path, magic: &str, format: u16) -> Fallible<Streets> {
     })
 }
 
-/// One ferry stop, in final geographic coordinates with its GTFS name — unsnapped in the file;
-/// the graph pass snaps it to the nearest walking node.
+/// A ferry stop, unsnapped, with its GTFS name.
 pub struct FerryStop {
     pub lng: f64,
     pub lat: f64,
     pub name: String,
 }
 
-/// One ferry segment: an unordered stop pair (`stop_a` is the lexicographically smaller key), the
-/// combined crossing-plus-wait time the later phase costs it by, the primary route's display name
-/// ("Staten Island Ferry", "East River"; empty when the feed named none), and the drawing polyline
-/// oriented A -> B (first and last vertices are the two stops' own coordinates, else `None` for a
-/// straight leg).
+/// A stop pair (`stop_a` the smaller key), its crossing-plus-wait time and route name (maybe empty).
+/// `geometry` runs A -> B between the stops' own points, `None` for a straight leg.
 pub struct FerrySegment {
     pub stop_a: u32,
     pub stop_b: u32,
@@ -633,11 +583,7 @@ pub struct Ferries {
     pub segments: Vec<FerrySegment>,
 }
 
-/// FERR v2: the consolidated NYC ferry graph. A 56-byte header, a stop table (quantized lng/lat and
-/// a name id), a segment table (a stop pair, the raw time, a geometry pointer, and a route name id),
-/// a varint geometry blob, and a trailing name blob that holds the stop names and the route names
-/// together — the shared codec, coordinates quantized about the south-west origin. Layout:
-/// scripts/README.md.
+/// FERR v2: the NYC ferry graph (layout: scripts/README.md).
 pub fn read_ferries(path: &Path) -> Fallible<Ferries> {
     const STOP_BYTES: usize = 12;
     const SEGMENT_BYTES: usize = 20;
@@ -742,25 +688,18 @@ pub fn read_ferries(path: &Path) -> Fallible<Ferries> {
     Ok(Ferries { stops, segments })
 }
 
-/// One station of the rail topology: the point the graph snaps to the pavement, and what it is
-/// called. `surface` is a stop entered off the curb rather than down a stair, which is the whole of
-/// what separates a Muni shelter from a subway mezzanine and is why the two cost different access.
-/// `complex` is the agency's own transfer complex, 0 where the feed puts a station in none; the
-/// graph gives one node to each complex, so a change of train inside one never reaches the street.
+/// `surface`: entered off the curb, not down a stair; `complex`: agency transfer complex, 0 for none.
 pub struct TransitStation {
     pub lng: f64,
     pub lat: f64,
     pub name: String,
     pub complex: u16,
     pub surface: bool,
-    /// No free crossover: a rider who goes down the wrong stair has to come back up and cross the
-    /// street, so the graph gives the station one node per direction and each entrance reaches only
-    /// the platform it was cut for. Never set on a station that shares a transfer complex.
+    /// No free crossover, so one node per direction; never set on a station sharing a complex.
     pub split: bool,
 }
 
-/// What a rider goes down, in the order the `kind` byte numbers them; `Passage` is every way in
-/// that is a corridor rather than a descent.
+/// Entrance kinds in `kind` byte order; `Passage` is any corridor rather than a descent.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EntranceKind {
     Stair,
@@ -771,10 +710,7 @@ pub enum EntranceKind {
     Passage,
 }
 
-/// One published way into a station: where it stands, which station it belongs to, which of that
-/// station's platforms it reaches (`sides` bit d for the pattern direction d, 3 for both or
-/// unknown) and whether a rider may enter and leave by it. A station the agency publishes no
-/// entrance for carries none, and the graph falls back to entering at the station's own point.
+/// A way into a station; `sides` bit d reaches platform direction d (3 both or unknown).
 pub struct TransitEntrance {
     pub lng: f64,
     pub lat: f64,
@@ -785,8 +721,7 @@ pub struct TransitEntrance {
     pub exit: bool,
 }
 
-/// One route as its feed publishes it, colors included, so the client can draw a ride in the
-/// livery a rider expects.
+/// A feed route, with the colors the client draws its rides in.
 pub struct TransitRoute {
     pub color: [u8; 3],
     pub text_color: [u8; 3],
@@ -795,15 +730,11 @@ pub struct TransitRoute {
     pub id: String,
 }
 
-/// One (route, direction, ordered stop list) a route actually runs. `stops` indexes `stations` and
-/// `offsets` is the seconds since the pattern's first stop, so the ride between two consecutive
-/// stops is the difference of their offsets. The record's GTFS direction is left in the file: the
-/// lane id already separates the two directions.
+/// A route direction's ordered `stops` (station indexes) and `offsets` in seconds from the first stop.
 pub struct TransitPattern {
     pub lane_id: u32,
     pub route_index: u16,
-    /// The GTFS `direction_id`, which at every feed here is also the platform side: a station split
-    /// in two boards this pattern from side `direction`.
+    /// GTFS `direction_id`, also the platform side a split station boards this from.
     pub direction: u8,
     pub stops: Vec<u32>,
     pub offsets: Vec<u32>,
@@ -816,11 +747,7 @@ pub struct Transit {
     pub patterns: Vec<TransitPattern>,
 }
 
-/// TRNS v2: the rail topology the graph pass bakes into stations, platforms and rides. A 64-byte
-/// header, a station table, an entrance table, a route table, a pattern table, a varint
-/// pattern-stop blob (per stop a station index and the seconds since the previous stop, both plain
-/// LEB128) and a GRPH-shaped name table. `decodeTopology` in scripts/transit.ts is the reference
-/// decoder; layout: scripts/README.md.
+/// TRNS v2: the rail topology; `decodeTopology` in scripts/transit.ts is the reference decoder.
 pub fn read_transit(path: &Path) -> Fallible<Transit> {
     const STATION_BYTES: usize = 16;
     const ENTRANCE_BYTES: usize = 16;
@@ -997,10 +924,7 @@ pub fn write_varint(bytes: &mut Vec<u8>, value: u64) {
 mod tests {
     use super::*;
 
-    // TRNS as scripts/transit.ts writes it, small enough to read by eye: two stations — the first
-    // split, with two entrances, one of them exit-only — one route and one pattern riding both.
-    // Written here rather than committed so a layout change breaks the encoder and this decoder
-    // against each other rather than against a stale file.
+    // A tiny TRNS: two stations (the first split, with two entrances), one route, one pattern.
     fn transit_fixture() -> Vec<u8> {
         const HEADER: usize = 64;
         let names = ["Court Sq", "Bergen St", "G", "Crosstown", "gtfs:G"];
@@ -1021,8 +945,7 @@ mod tests {
             stations.push(0);
         }
 
-        // Station 0's two doors: a stair onto the northbound side, and an exit-only elevator that
-        // reaches both.
+        // Station 0's doors: a northbound stair, and an exit-only elevator to both sides.
         let mut entrances = Vec::new();
         for (index, (x, y, station, sides, kind, flags)) in [
             (1_100i32, 2_050i32, 0u16, 0b01u8, 0u8, 0b11u8),
@@ -1146,15 +1069,14 @@ mod tests {
         fs::remove_file(&path).expect("the fixture removed");
     }
 
-    /// The committed artifacts themselves, which is the only thing that proves this reader and the
-    /// TypeScript encoder agree about a real file rather than about a fixture written twice.
+    /// The committed artifacts, the only proof this reader agrees with the TypeScript encoder.
     #[test]
     fn the_committed_topologies_decode() {
         let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/transit");
         for city in ["nyc", "sf"] {
             let path = data.join(format!("{city}.bin"));
             if !path.exists() {
-                continue; // a checkout without the committed source, e.g. a sparse CI clone
+                continue; // a sparse checkout without the committed data
             }
             let transit = read_transit(&path).expect("a topology");
             assert!(transit.stations.len() > 100, "{city} has stations");

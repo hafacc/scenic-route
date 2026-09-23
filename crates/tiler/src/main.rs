@@ -1,14 +1,6 @@
-//! The tree-cover model, end to end: the blurred measured-canopy cover field, the Monte-Carlo
-//! cover distribution, the tile pyramids and the street chunks. TypeScript fetches the sources,
-//! encodes the `.bin`s and owns the manifest and the color ramp; everything numeric is here.
-//! See scripts/README.md.
-//!
-//! Four subcommands, and package.json is the only thing that runs any of them — no TypeScript
-//! spawns cargo. The nine passes a tile build is made of used to be subcommands too, each an argv
-//! wrapper over the module function `build` now calls directly.
+//! The tree-cover model's numeric half: cover field and distribution, tile pyramids, street chunks.
 
-// graph.rs's stats object is one `serde_json::json!` literal with more keys than the default 128
-// expansion steps allow, and the whole-city invariants added another dozen.
+// graph.rs's stats `json!` literal has more keys than the default 128 expansion steps allow.
 #![recursion_limit = "512"]
 
 mod association;
@@ -53,9 +45,7 @@ use serde::Serialize;
 
 pub type Fallible<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
-/// A pass's report, as a file rather than as stdout: what reads it is the next command in a
-/// package.json chain, which holds no pipe. The directory is created because `.build/` is
-/// gitignored build glue that need not exist yet.
+/// A pass's report as a file, since the next package.json command reads it without a pipe.
 pub fn write_report<T: Serialize>(path: &Path, report: &T) -> Fallible<()> {
     if let Some(directory) = path.parent() {
         std::fs::create_dir_all(directory)?;
@@ -63,9 +53,7 @@ pub fn write_report<T: Serialize>(path: &Path, report: &T) -> Fallible<()> {
     Ok(std::fs::write(path, serde_json::to_string(report)?)?)
 }
 
-/// `--jobs`: how many rayon threads the build runs on, a positive integer or `half` for half the
-/// machine's cores. Absent, rayon keeps its own default of one per core, which for the twenty
-/// minutes a full build takes leaves nothing of the machine to work on.
+/// `--jobs`: rayon threads, a count or `half`; rayon's one-per-core default starves the machine.
 fn jobs(value: &str) -> Result<usize, String> {
     if value == "half" {
         let cores = std::thread::available_parallelism()
@@ -100,43 +88,35 @@ enum Command {
         plan: PathBuf,
         #[arg(long, value_parser = jobs)]
         jobs: Option<usize>,
-        /// Which passes may run, comma-separated and each optionally narrowed to one city:
-        /// `--only graph,shade`, `--only graph:nyc`. Absent, all nine run. A pass left out neither
-        /// runs nor records a stamp nor clears anything, so what it would have rebuilt stays stale
-        /// for the next full build to catch — which is what a hand-edited plan could not promise.
+        /// Passes to run, each optionally narrowed to a city: `graph,shade` or `graph:nyc`.
         #[arg(long, value_delimiter = ',')]
         only: Vec<String>,
-        /// Rerun the passes `--only` selected whether or not their stamps hold. With no `--only`
-        /// that is all nine, which is a build from scratch.
+        /// Rerun the selected passes even if their stamps hold; with no `--only`, a full rebuild.
         #[arg(long)]
         force: bool,
     },
-    /// Fill the canopy file's crown heights and the street and path density blobs, in place, and
-    /// report the cover distribution the manifest records.
+    /// Fill the canopy crown heights and the density blobs in place; report cover stats.
     Ingest {
         #[arg(long)]
         params: PathBuf,
         #[arg(long)]
         report: PathBuf,
     },
-    /// Bin a LiDAR point cloud into a height-above-ground raster and measure the roof height of
-    /// every footprint over it. The cloud and the ground tiles arrive cached by scripts/lidar.ts.
+    /// Bin a LiDAR point cloud into a height-above-ground raster and measure each footprint's roof.
     Ndsm {
         #[arg(long)]
         params: PathBuf,
         #[arg(long)]
         report: PathBuf,
     },
-    /// Stamp what the graph's durable key space is a function of — the plan's own per-city sources
-    /// decision, and the bytes of the files it names — for the shed guard. Builds nothing.
+    /// Stamp the inputs the graph's durable key space depends on, for the shed guard.
     GraphInputs {
         #[arg(long)]
         plan: PathBuf,
         #[arg(long)]
         report: PathBuf,
     },
-    /// Run the graph pipeline over the committed fixture and report the durable key hash the shed
-    /// gate stamps. The fixture paths default so the package.json line carries only its report.
+    /// Run the graph pipeline over the committed fixture and report the durable key hash.
     KeyProbe {
         #[arg(long, default_value = "crates/tiler/fixtures/key-probe/streets.bin")]
         streets: PathBuf,
@@ -163,14 +143,8 @@ fn run() -> Fallible<()> {
         Command::Ingest { params, report } => ingest::run(&params, &report),
         Command::Ndsm { params, report } => ndsm::run(&params, &report),
         Command::GraphInputs { plan, report } => build::graph_inputs(&plan, &report),
-        // The durable-key probe: the graph pipeline over a committed fixture, reported as the
-        // `keyHash` of its stats line. It is handed only the three sources that can put a key in the
-        // space at all — everything else `graph::run` takes bakes a per-edge attribute byte over
-        // edges already final, and moves no key — so what comes back is a stamp of the key
-        // assignment's BEHAVIOR, which is what scripts/graph-inputs.ts wants and what a hash of the
-        // crate's source text can only stand in for. Every field is written out rather than
-        // defaulted: a new graph input then fails to compile here until someone says which side of
-        // the line it is on.
+        // Only key-bearing sources are passed, so the hash stamps key assignment behavior.
+        // Every field is spelled out so a new graph input won't compile until it is classified.
         Command::KeyProbe {
             streets,
             paths,

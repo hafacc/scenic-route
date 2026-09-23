@@ -1,7 +1,4 @@
-//! The raster machinery the canopy pyramid and the street chunks both stand on: the web-mercator
-//! pixel projection, the tile plan, the shoreline land mask, and the PNG encoder. The canopy pass
-//! renders the cover pyramid over this; the chunks pass uses the same projection to bucket streets
-//! into z12 tiles. See scripts/README.md.
+//! Web-mercator projection, tile plan, shoreline land mask and tile encoders.
 
 use std::collections::HashMap;
 
@@ -17,9 +14,7 @@ pub(crate) const MIN_ALPHA: u8 = 2; // below this the fill is invisible, and the
 pub(crate) const EQUATOR_METERS_PER_PIXEL: f64 = 156_543.033_92; // web mercator, at the equator, at z0
 pub(crate) const MIN_FEATHER_PIXELS: f64 = 0.5; // below this the blur has nothing to say and is skipped
 const WEBP_QUALITY: f32 = 80.0; // lossy tile color; alpha and the density blobs are untouched
-// The shoreline clip, rasterized once. Only canopy within a cell of the water can care, and the
-// field this replaced clipped land on a 20 m grid too — rasterizing the boroughs into every tile
-// instead costs a quarter of the whole build and buys nothing.
+// The shoreline clip, rasterized once; clipping per tile instead costs a quarter of the build.
 const LAND_METERS: f64 = 20.0;
 
 /// The land, on a regular LAND_METERS grid in the local meter space.
@@ -118,28 +113,19 @@ pub(crate) fn rasterize_land(
     }
 }
 
-// Lossy WebP at WEBP_QUALITY: the smooth color gradient the blur produces — which PNG stores
-// poorly, in a way that tripled the pyramid — compresses to a fraction of the size. These tiles
-// are a cosmetic overlay; the densities the routing and street lines read live in the .bin
-// blobs, not in these pixels, so lossy color costs nothing real.
+// Lossy is fine: these tiles are cosmetic, and the densities routing reads live in the .bin blobs.
 pub(crate) fn encode_webp(pixels: &[u8]) -> Fallible<Vec<u8>> {
     let encoder = webp::Encoder::from_rgba(pixels, TILE_SIZE as u32, TILE_SIZE as u32);
     Ok(encoder.encode(WEBP_QUALITY).to_vec())
 }
 
-/// Lossless WebP: for tiles whose channels carry DATA, not color — the genus-field pyramid packs a
-/// per-genus density byte into each channel, which the client reads back exactly, so any lossy
-/// quantization would corrupt the numbers; the shade pyramid is a constant slate whose alpha is a
-/// quantized opacity lattice that lossy encoding smears. Lossless still compresses both well, since
-/// a constant color plane costs almost nothing and the varying channels are locally flat.
+/// Lossless WebP for tiles whose channels carry data (genus densities, shade alpha).
 pub(crate) fn encode_webp_lossless(pixels: &[u8]) -> Vec<u8> {
     let encoder = webp::Encoder::from_rgba(pixels, TILE_SIZE as u32, TILE_SIZE as u32);
     encoder.encode_lossless().to_vec()
 }
 
-/// Cities can share a tile at low zoom, so tiles are keyed globally and every city touching one
-/// paints into the same buffer rather than overwriting it. `max_zoom` is the pyramid's finest
-/// level — MAX_ZOOM for the canopy fill, one deeper for the genus dots, which upscale worse.
+/// Tiles are keyed globally so cities sharing one at low zoom paint into the same buffer.
 pub(crate) fn plan_tiles(cities: &[City], max_zoom: u32) -> Vec<Tile> {
     let mut plan: Vec<Tile> = Vec::new();
     let mut seen: HashMap<(u32, u32, u32), usize> = HashMap::new();

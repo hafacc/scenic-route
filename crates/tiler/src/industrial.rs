@@ -1,18 +1,5 @@
-//! The per-edge industrial-frontage byte (GRPH v10, record byte 36): how much of a walk runs past
-//! industrial land, and on how many sides.
-//!
-//! The source (INDL) is tax-lot POLYGONS, not the lines the highway and commercial factors are
-//! proximity-baked from, and this pass deliberately does not turn them into lines to reuse that
-//! machinery. A Gaussian is the wrong shape twice over: its tail reaches a block past the lot, which
-//! puts a penalty on the residential street T-ing into a yard, and its peak is a distance rather
-//! than an amount, so a single depot prices a whole block the same as a mile of warehouses. What a
-//! walker minds is how much of the walk has industry beside it, so that is what the byte is — the
-//! length-fraction of the edge fronting an industrial lot, each side counted for half.
-//!
-//! Shape follows direct_canopy.rs: one sample per meter along the edge's own baked polyline, each
-//! tested against a bbox-gridded polygon set. Here each sample probes perpendicular to the walk
-//! instead of underfoot, so the two sides of a street are asked separately and a street with yards
-//! on both sides costs exactly twice one with yards on one.
+//! Per-edge industrial-frontage byte (GRPH v10, byte 36): the share of a walk fronting industry.
+//! Each side probes sideways for half; a Gaussian would reach past the lot and scale by distance.
 
 use std::path::Path;
 
@@ -25,10 +12,9 @@ use crate::manifest::Bounds;
 
 const BYTE_CEILING: f64 = 254.0; // as the cover, scenic and direct-canopy bytes
 const SAMPLE_STEP_METERS: f64 = 1.0; // as direct_canopy: fine enough for the shortest crossing
-// Where each side is asked: out past the curb, roughly the middle of the lots fronting the walk.
+// Out past the curb, roughly the middle of the lots fronting the walk.
 const PROBE_METERS: f64 = 15.0;
-// How far past the probe a lot still counts, so the far side of a wide street reaches ~27 m — about
-// one New York roadway from the pavement, and nothing beyond the lots facing it.
+// Tolerance past the probe, so the far side of a wide street reaches ~27 m and nothing beyond.
 const PROBE_TOLERANCE_METERS: f64 = 12.0;
 const PROBE_REACH_METERS: f64 = PROBE_METERS + PROBE_TOLERANCE_METERS;
 
@@ -40,10 +26,7 @@ pub struct Industrial {
     pub max_byte: u8,
 }
 
-/// The industrial-frontage fraction of one edge: its polyline walked at `SAMPLE_STEP_METERS` by arc
-/// length, each sample probing `PROBE_METERS` to either side of the direction of travel, and a side
-/// scoring half where its probe lands in a lot or within `PROBE_TOLERANCE_METERS` of one. A ferry
-/// carries no polyline and reads 0.
+/// One edge's frontage fraction: each side scores half where its probe lands in or near a lot.
 fn frontage_fraction(
     poly: &[Coord],
     set: &PolygonSet,
@@ -128,8 +111,7 @@ fn frontage_fraction(
     score / samples as f64
 }
 
-/// Every edge's frontage fraction, in the graph's edge order. An edge on a bridge or tunnel deck
-/// reads 0 however much industry is under it: a viaduct over a rail yard does not front the yard.
+/// Every edge's frontage fraction in graph order; a deck reads 0, as a viaduct fronts nothing.
 fn fractions(
     edge_polys: &[Vec<Coord>],
     on_structure: &[bool],
@@ -150,8 +132,7 @@ fn fractions(
         .collect()
 }
 
-/// The industrial byte of every edge. `reference_lat` is the graph origin's latitude, the one
-/// east-west scale the whole city is measured at, as the other per-edge bakes use.
+/// The industrial byte of every edge.
 pub fn industrial(
     edge_polys: &[Vec<Coord>],
     on_structure: &[bool],
@@ -195,8 +176,7 @@ mod tests {
 
     const LAT: f64 = 40.7;
 
-    /// A point `east_meters` east and `north_meters` north of a reference in the middle of New
-    /// York, so the tests read in meters and still exercise the cos(lat) scaling of the real bake.
+    /// A point in meters from a reference in New York, so tests exercise the real cos(lat) scaling.
     fn at(east_meters: f64, north_meters: f64) -> Coord {
         Coord {
             lng: -74.0 + east_meters / meters_per_degree_lng(),
@@ -269,8 +249,7 @@ mod tests {
         );
     }
 
-    /// The reach is a tolerance past the probe, not a Gaussian tail: a lot the far side of a wide
-    /// street still counts, and one a block back does not.
+    /// The reach is a tolerance: a lot across a wide street counts, one a block back doesn't.
     #[test]
     fn the_reach_stops_one_roadway_out() {
         assert_eq!(
@@ -283,8 +262,7 @@ mod tests {
         );
     }
 
-    /// INDL keeps a lot's inner rings, and the containment test is even-odd over all of them
-    /// together, so a walk through the hole in a doughnut lot is outside it.
+    /// INDL keeps inner rings and containment is even-odd, so a doughnut's hole is outside.
     #[test]
     fn a_walk_in_a_lot_s_hole_fronts_nothing() {
         let doughnut = vec![
@@ -310,10 +288,7 @@ mod tests {
         );
     }
 
-    /// A depot on one end of an otherwise plain block prices that share of the block and no more —
-    /// the whole reason the byte is a fraction rather than a gate. The 20 m of lot reads as 32 m of
-    /// frontage because the tolerance dilates it lengthwise too, which is why it is one street
-    /// width and not one block.
+    /// A depot at one end prices only its share; the tolerance dilates 20 m of lot to 32 m.
     #[test]
     fn a_single_depot_prices_only_the_length_it_fronts() {
         let fraction = walk_fraction(&[vec![rectangle(0.0, 5.0, 20.0, 200.0)]]);

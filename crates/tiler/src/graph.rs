@@ -1,30 +1,4 @@
-//! The graph pass: contracts STRT v6 into the pedestrian routing graph the client searches, then
-//! places the pavement a walker uses — where OSM maps a sidewalk that way is the edge, a street's
-//! own offset is derived only on the sides OSM leaves, the two are joined at corner nodes, a
-//! crossing is synthesized at every corner pair OSM does not serve for itself, and paths are
-//! stitched in by links — and writes it as GRPH to public/routing/<id>.bin. Ferry terminals snap to
-//! the nearest walking node so a ferry edge joins the two boroughs it serves. The tile pyramid and
-//! the street chunks draw every walkable segment; this drops the vehicular-only ones, collapses the
-//! shape joints, and turns "which side" from a display choice into topology, so a router settles a
-//! cross-borough query in tens of milliseconds. v4 bakes three scenic-factor bytes per edge
-//! (landmark and public-art amenity discounts, a highway/rail nuisance penalty) via `scenic.rs`. v6
-//! adds two things. The direct-canopy byte, via `direct_canopy.rs` — the raw unblurred canopy
-//! indicator integrated along each sidewalk, which the smoothed cover byte cannot stand in for. And
-//! the durable edge key: a source record id (a CSCL physicalid, or an OSM way id for a conflated
-//! path) plus an ordinal that, with the side label already in the record, picks it out within that
-//! source. v10 grows the record to 40 bytes for the industrial-frontage penalty (`industrial.rs`)
-//! and the historic-district discount (`historic.rs`); the bridge-over-water discount
-//! (`bridge.rs`) took the first of the two zeros it left, and one remains.
-//!
-//! DESIGN.md, "The walking network", is why the pavement is placed the way it is — which source
-//! answers which question, what the seam rules are, and what the alternatives cost when they were
-//! measured. scripts/README.md is the layout.
-//!
-//! The pass is three stages, because they cost such different things: `topology` settles the edge
-//! list and is inherently sequential, `bake` fans out the attribute columns over it, and `assemble`
-//! lays the two out as the blob. Only the first is a function of the streets, and only the last
-//! writes anything, so the driver can hand over a key per stage and `graph_cache.rs` keeps a
-//! re-ingested landmark file to the one column it moved.
+//! The graph pass: contracts STRT into the pedestrian routing graph and writes it as GRPH.
 
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::TAU;
@@ -51,38 +25,24 @@ use crate::scenic;
 use crate::shade;
 use crate::sidewalks::{self, FLAG_NON_VEHICULAR};
 
-// STRT record flags (byte 23). FLAG_NON_VEHICULAR lives in sidewalks.rs, where the chunk offsets
-// already consume it; these two were deferred from Phase 1 because a binary crate's `clippy -D
-// warnings` rejects an unused `pub const`, and their only consumer is here.
+// STRT record flags (byte 23); FLAG_NON_VEHICULAR lives in sidewalks.rs.
 pub const FLAG_VEHICULAR_ONLY: u8 = 1 << 0;
 pub const FLAG_STRUCTURE: u8 = 1 << 2;
-// PATH and SWLK only: OSM tagged the way a tunnel, or covered. A STRT record spends this bit on
-// FLAG_OSM_LEFT and says the same thing with road type 4.
+// PATH and SWLK only: tunnel or covered; STRT spends this bit on FLAG_OSM_LEFT and uses rw_type 4.
 pub const FLAG_TUNNEL: u8 = 1 << 3;
-// The per-side sidewalk bits `scripts/sidewalks.ts` stamps into every offsetted record: whether OSM
-// maps a sidewalk way on that side, and whether a survey says there is pavement there — the city's
-// own where it publishes one, and OSM's `sidewalk=*` tag on the road itself where it does not.
+// Per-side STRT bits: OSM maps a sidewalk way there, and a survey says there is pavement there.
 const FLAG_OSM_LEFT: u8 = 1 << 3;
 const FLAG_OSM_RIGHT: u8 = 1 << 4;
 const FLAG_SURVEYED_LEFT: u8 = 1 << 5;
 const FLAG_SURVEYED_RIGHT: u8 = 1 << 6;
 
-// The existence gate's two guards, checked against the finished build: an implausible drop is a
-// STRT file whose per-side bits were never stamped, and a build the gate does not take the alleys in
-// has the rule the wrong way round. DESIGN.md, "The existence gate".
+// Gate guards: a big drop means unstamped side bits; few demoted alleys, a flipped rule.
 const MIN_DEMOTED_ALLEY_FRACTION: f64 = 0.95;
 const ALLEY: u8 = 10;
-// SWLK record byte 20: the kind of OSM way. 21 is a crossing and 22 a traffic island, both of which
-// become crossing edges — the island is the middle of the crossing it chains through.
+// SWLK byte 20; a traffic island becomes a crossing edge, being the middle of its crossing.
 const SWLK_SIDEWALK: u8 = 20;
 
-/// The two ceilings the existence gate is held to: the share of derived sidewalk km the gate
-/// dropped, and the 90th-percentile share of one half-kilometer cell's street km left with no
-/// pavement at all. Both bound the same failure — a STRT file whose per-side bits went unstamped
-/// reads as a region with no pavement anywhere — but what counts as an implausible silence depends
-/// on how much of the region anybody ever surveyed, so they are authored per region in the plan
-/// (scripts/write-plan.ts, which carries what each region's numbers were measured against), on the
-/// pattern of `maxFerryWaitSeconds` in src/cities.ts.
+/// Per-region existence-gate ceilings: share of derived km dropped, and p90 unpaved share per cell.
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExistenceCeilings {
@@ -90,54 +50,31 @@ pub struct ExistenceCeilings {
     pub cell_demoted_share: f64,
 }
 
-/// What a region with a municipal sidewalk survey is held to, and what a plan naming no ceiling of
-/// its own gets: where a survey exists, a side coming back silent really is evidence that the bits
-/// were never stamped. New York is the only region taking these now, and it reads 0.144 dropped and
-/// 0.094 at the cell 90th percentile, against a ceiling at two to three times that.
+/// Ceilings for a region with a municipal sidewalk survey, and the default.
 pub const SURVEYED_CEILINGS: ExistenceCeilings = ExistenceCeilings {
     dropped_sidewalk_fraction: 0.30,
     cell_demoted_share: 0.30,
 };
 
-// GRPH edge flags, distinct from the STRT record flags above. Contraction requires equal GRPH
-// flags, so they never mix within one edge.
+// GRPH edge flags; contraction requires equal flags, so they never mix within one edge.
 const GRPH_STRUCTURE: u8 = 1 << 0; // on a bridge or tunnel deck
 const GRPH_STEPS: u8 = 1 << 1; // a step street (rw_type 7)
-// A walking line the graph takes as drawn rather than offsetting from a centerline: a boardwalk,
-// path, steps or non-vehicular deck, a street the gate demoted to its middle, and every OSM way.
-// NOT the same as a zero half-offset any more — a matched OSM sidewalk keeps this flag and borrows
-// its street's half-offset, which is what the shed's deck depth infers the curb from.
+// A line taken as drawn, not offset; a matched OSM sidewalk keeps it but borrows a half-offset.
 const GRPH_PATHLIKE: u8 = 1 << 2;
-// Written into the final edge record's flags byte (byte 23, bit 3): an OSM-sourced walking edge —
-// a path, or a sidewalk or crossing OSM drew — as against a CSCL-derived one. The crossing
-// suppression and the invariants feed below both key on it, and the client masks the bits it reads.
-// Provenance rides in `Edge::osm` through construction and only lands in the byte at write.
+// An OSM-sourced walking edge (flags bit 3); it rides in `Edge::osm` until the write.
 const GRPH_OSM: u8 = 1 << 3;
-// Under the deck rather than on it: a tunnel street (rw_type 4), an OSM way tagged tunnel or
-// covered, and whatever sidewalk or crossing was conflated to one. The structure bit carries both
-// and cannot tell them apart, which is what left the bridge bake crediting a tube under a channel
-// as a view. Written into the record's flags byte (bit 4), which an older graph reads as 0.
+// Under the deck rather than on it (flags bit 4); the structure bit cannot tell the two apart.
 const GRPH_TUNNEL: u8 = 1 << 4;
-// Internal only, masked out at write: this walking line has the buildings to its geometry-right, so
-// the record it writes carries FLAG_GEOMETRY_RIGHT. A derived sidewalk knows this from which side it
-// was offset to; an OSM way is digitized whichever way its mapper drew it, so the association
-// measures it. The shed placement reads that flag to know which side of the pavement a frontage is
-// on, and a walking line that lies about it places its scaffolding across the road.
+// Internal, masked at write: buildings lie geometry-right, written as FLAG_GEOMETRY_RIGHT.
 const GRPH_BUILDING_RIGHT: u8 = 1 << 5;
 
-// v3 edge kinds (record byte 22, bits 0-2) and side labels (bits 3-5). A crossing carries no side,
-// and no geometry unless OSM drew it — a mapped crossing keeps its own polyline, a synthesized one is
-// the straight line between its two corners; a sidewalk is the only kind with a half-offset and a
-// ferry reuses the two cover/half-offset bytes (20-21) to carry a u16 crossing-plus-wait duration.
+// Edge kinds (byte 22 bits 0-2) and sides (bits 3-5); a ferry reuses bytes 20-21 as a u16 duration.
 pub const KIND_SIDEWALK: u8 = 0;
 pub const KIND_CROSSING: u8 = 1;
 pub const KIND_LINK: u8 = 2;
 pub const KIND_PATH: u8 = 3;
 const KIND_FERRY: u8 = 4;
-// The three transit kinds, which take the last of the eight the 3-bit field holds. An access edge
-// is the walk in and out of a station (pavement to station, and platform back to station); a board
-// edge is the station-to-platform step whose wait the timetable answers at route time, so it bakes
-// no duration; a ride is one platform to the next, and the only one carrying distance.
+// Transit kinds; a board edge bakes no duration since the timetable answers its wait at route time.
 const KIND_ACCESS: u8 = 5;
 const KIND_BOARD: u8 = 6;
 const KIND_RIDE: u8 = 7;
@@ -150,207 +87,97 @@ pub const SIDE_SOUTH: u8 = 3;
 const SIDE_WEST: u8 = 4;
 const FLAG_GEOMETRY_RIGHT: u8 = 1 << 2; // this sidewalk lies right of its stored geometry direction
 
-// v12 lays the graph out by column instead of by 40-byte edge record, so the client views every
-// column in place rather than copying 640k records through a DataView. The maxima, the mid-roadway
-// node flags and the ferry/transit/board id lists come baked with it, and the half-offset byte —
-// which nothing outside this file read — is gone.
+// v12 lays the graph out by column so the client views each column in place.
 const GRAPH_FORMAT: u16 = 12;
-// The field the relief is sampled off is built at this zoom's pixel size — about 5 m at San
-// Francisco's latitude. Finer than the block a grade is measured over, coarser than the meter the
-// DEM is published at, and a whole city of it is tens of megabytes rather than gigabytes.
+// The relief field's zoom: about 5 m pixels at San Francisco's latitude.
 const RELIEF_FIELD_ZOOM: u32 = 15;
-// 64 fixed header bytes, then a 48-entry (offset, length, column tag) section directory of which v12
-// fills 35. The spare entries are how the next column lands without a version bump: a reader that
-// finds an entry absent materialises the zero column a graph written before that bake would have
-// carried. There are only 48 of them, so the writer stops rather than running the 49th into node 0.
+// 64 header bytes plus a 48-entry section directory; a reader zero-fills an absent column.
 const GRAPH_HEADER_BYTES: usize = 640;
 const GRAPH_DIRECTORY_AT: usize = 64;
 const GRAPH_DIRECTORY_ENTRY: usize = 12;
 const GRAPH_DIRECTORY_MAX: usize = 48;
 const GRAPH_SECTIONS: usize = 35;
-// Every section starts here, so a Float64, Float32 or Uint32 view over any of them is legal.
+// Every section starts aligned here, so any Float64/Float32/Uint32 view over it is legal.
 const SECTION_ALIGN: usize = 8;
-// The source record an edge was derived from (a CSCL physicalid, or an OSM way id for a conflated
-// path) and the how-many-th edge of that source, on that side, this is. With the side label already
-// in the kind/side byte the triple (source id, side, ordinal) survives a rebuild, where the
-// positional edge id does not.
+// (source id, side, ordinal) is an edge key that survives a rebuild, unlike the positional id.
 const NO_SOURCE_ID: u32 = 0xFFFF_FFFF; // no durable identity: a crossing, a link or a ferry
-// A long greenway noded and welded against every street it crosses becomes many path edges under one
-// source id, and they all carry SIDE_NONE: NYC's worst OSM way reaches 103 (its busiest sidewalk key
-// only 25, the two sides splitting that source's edges between them), so the ordinal needs a byte.
+// NYC's worst OSM way reaches 103 edges under one source id and side, so the ordinal needs a byte.
 const ORDINALS: usize = 256;
 const NO_GEOMETRY: u32 = 0xFFFF_FFFF; // edge record byte 12 sentinel: straight a->b, no blob entry
 const UNNAMED: u16 = 0xFFFF;
 pub const DECIMETERS_PER_METER: f64 = 10.0; // the half-offset byte's unit, as the chunk uses
 const STEP_STREET: u8 = 7;
 const TUNNEL_STREET: u8 = 4; // CSCL rw_type 4, as against 3 for a bridge
-// A sidewalk's baked geometry runs corner-to-corner (the centerline offset to its side, with the
-// two end vertices replaced by the corner nodes), so its length is the geodesic sum of that
-// polyline; it is clamped up to the straight corner-to-corner distance only if quantization ever
-// leaves it a hair short, keeping the A* heuristic admissible. The chord that decides the N/S/E/W
-// label degenerates on a tight loop; below this it falls back to the first geometry segment's
-// bearing.
+// Below this chord length the N/S/E/W label falls back to the first segment's bearing.
 const SHORT_CHORD_METERS: f64 = 10.0;
 const LENGTH_SLACK_METERS: f32 = 0.5; // f32 length vs great-circle node distance rounding
 const EARTH_RADIUS_METERS: f64 = 6_371_000.0; // matches the client's haversineMeters
-// The chunk offset uses the manifest's sidewalkInsetMeters; this pass is handed the street file and
-// no manifest, so it mirrors that value here. It never turns a width-based offset into 0, and the
-// path-like road types return 0 regardless, so the PATHLIKE classification does not depend on it —
-// only the exact decimeter byte does, and this keeps it identical to the chunk the street layer
-// draws.
+// Mirrors the manifest's sidewalkInsetMeters, which this pass never sees.
 const SIDEWALK_INSET_METERS: f64 = 2.0;
 
 const MERGE_RADIUS_METERS: f64 = 1.0; // CSCL digitization slivers, mopped up after exact noding
 const GRID_METERS: f64 = 3.0; // near-miss bucket size; a 3x3 scan then covers the merge radius
 const PRUNE_DEVIATION_UNITS: f64 = 1.5; // ~0.15 m; the ingest's 25 m densification is pure lerp
 const MAX_EDGE_VERTICES: usize = u16::MAX as usize; // a guard on the merged polyline, never a limit
-// A ferry terminal (a pier) sits off the street grid, so its snap to the nearest walking node has a
-// looser radius than the node merge; a linear scan over the ~26 stops is well under a millisecond.
+// A pier sits off the street grid, so its snap is looser than the node merge.
 const FERRY_SNAP_RADIUS_METERS: f64 = 250.0;
-// A station point is the feed's own — the middle of a mezzanine, not a street door — so it reaches
-// as far for its pavement as a pier does. Entrance geometry is the later refinement that would let
-// this shrink.
+// A station point is the middle of a mezzanine, not a street door, so it reaches as far as a pier.
 const TRANSIT_SNAP_RADIUS_METERS: f64 = 250.0;
-// How near a walking edge stands to a station's own point to be one of its ways in. A station gets a
-// door on every such edge, not only the nearest: which edge is nearest is an accident of a few
-// meters, and a lone door on the far side of an avenue sends every walk out of the station up to the
-// crossing and back.
+// A station gets a door on every edge this near, since a lone nearest door can be across an avenue.
 const TRANSIT_ENTRANCE_RADIUS_METERS: f64 = 40.0;
-// Enough doors for both sides of an avenue and the street a station stands on, few enough that a
-// complex does not fan out into dozens of edges the search relaxes at every visit.
+// Enough doors for both sides of an avenue, few enough not to fan a complex into dozens of edges.
 const TRANSIT_ENTRANCES_MAX: usize = 6;
-// What the walk along an access edge costs on top of the base below, so a station reached across a
-// car park costs the crossing of it. Mirrors WALK_METERS_PER_SECOND in src/routing/walk-speed.ts.
+// Mirrors WALK_METERS_PER_SECOND in src/routing/walk-speed.ts.
 const ACCESS_WALK_METERS_PER_SECOND: f64 = 1.3;
-// What the walk in and out of a station costs, baked rather than measured: down a stair, along a
-// mezzanine and through a gate for a station the feed models as an enclosed place, and a step off
-// the curb for one it models as a stop on the pavement. The way out is the shorter one either way —
-// nobody queues to leave — so every alight edge takes the surface figure.
+// Baked station entry costs; every alight edge takes the surface figure, since exits don't queue.
 const UNDERGROUND_ACCESS_SECONDS: u16 = 90;
 const SURFACE_ACCESS_SECONDS: u16 = 30;
 const ALIGHT_SECONDS: u16 = SURFACE_ACCESS_SECONDS;
-// A lift is called, waited for and ridden, and it must not undercut the stair beside it. No dataset
-// measures this one.
+// No dataset measures this; it must not undercut the stair beside it.
 const ELEVATOR_ACCESS_SECONDS: u16 = 150;
-// The flag bits an ACCESS edge carries, and nothing else does. The low five are the walking flags —
-// one of which decides for the whole graph whether it has tunnels — so a door takes the high three.
-// A graph written before them reads 0, which is a two-way stair, exactly as it behaved.
-//
-// Bit 5 is GRPH_BUILDING_RIGHT's, deliberately: that one is internal and masked out at the write, so
-// no record carries both, and a door is not a walking edge in any case. The written-bit test holds
-// all six apart.
+// ACCESS-only flag bits; bit 5 is shared with GRPH_BUILDING_RIGHT, which is masked out at write.
 const ACCESS_EXIT_ONLY: u8 = 1 << 5;
 const ACCESS_ENTRY_ONLY: u8 = 1 << 6;
-// The one kind whose wording and whose cost differ from a stair; an escalator, a ramp, a station
-// house and a passage all read as a stair.
+// An escalator, ramp, station house or passage all read as a stair.
 const ACCESS_ELEVATOR: u8 = 1 << 7;
-// The one flag bit a RIDE edge carries: this ride is the free step from a stop's arrival node onto
-// its boarding node, which is a rider staying on the train. A ride carries no walking flag and no
-// door bit, so it borrows one; the edge's kind is what tells the two meanings apart.
+// RIDE only: the free step from a stop's arrival node onto its boarding node (staying aboard).
 const RIDE_STAY_ABOARD: u8 = 1 << 6;
-// The seam radius: how far from where a corner would be placed OSM's own corner may stand and still
-// be that corner. A fan corner sits one averaged half-offset out along the gap bisector, and OSM's
-// curb ramp sits at the true corner of the roadway, so the two differ by the difference between the
-// two flanking half-offsets — under 10 m even where a narrow street meets an avenue.
+// How far OSM's corner may stand from where a fan corner would go and still be that corner.
 const SEAM_RADIUS_METERS: f64 = 12.0;
-// And how far a corner that could not *be* an OSM node will reach to join one. A corner the fan had
-// to invent — because a derived sidewalk or a park path binds to it — still has to reach the mapped
-// pavement of the side beside it, or the two networks pass within meters of each other and never
-// meet. This is the reach of that join, which the graph draws as a link edge.
+// How far an invented corner reaches to join an OSM node with a link edge.
 const SEAM_LINK_METERS: f64 = 20.0;
-// The curb cut. Neither radius is a new number: the cut exists only to hand the seam above the node
-// it is short of, so it is bounded by that seam's own two reaches. A corner cuts the pavement only
-// where it would then *stand* on the cut — past the seam radius the corner could not resolve onto it
-// and the cut would be a node nothing binds to. And it cuts only where the way's own nearest node is
-// further off, along the pavement, than the seam can reach: inside that, the corner already has a
-// node to bind to and a cut would only shed a second one beside it. Measured over the 191,692 corner
-// / nearest-way pairs the pass considers, the distances have no gap to cut at — 47% of corners stand
-// within 1 m of the line and the tail decays smoothly — but the detour does: 83% of pairs have a way
-// node within 8 m along the pavement, and past 10 m the distribution flattens into the tail these
-// two radii sit well inside.
+// A corner cuts OSM pavement only within the seam radius and when the way's nearest node is farther.
 const CURB_CUT_METERS: f64 = SEAM_RADIUS_METERS;
 const CURB_CUT_DETOUR_METERS: f64 = SEAM_LINK_METERS;
-// Two cut positions, or a cut and an existing vertex, within 2 m are one: a cut beside a vertex
-// joins it rather than shedding a sliver edge, as the CSCL splits do.
+// Cuts within 2 m of each other or of a vertex merge, so no sliver edge is shed.
 const SPLIT_MERGE_METERS: f64 = 2.0;
-// How far round an OSM crossing path may go and still count as serving the corner pair a
-// synthesized crossing joins: a marked crossing that doglegs through a traffic island is longer than
-// the straight line between the two curbs, and is still the crossing.
+// An OSM crossing may be this much longer than the straight curb line and still serve the pair.
 const SUPPRESSION_SLACK: f64 = 1.5;
-// The seam repair's reach. Where OSM's mapping of a side stops short of the corner the derived
-// pavement reaches, the two stand a few meters apart with no edge between them; this is how far the
-// repair will look for the other half before giving up and reporting the gap.
+// How far the seam repair looks for the other half of a gap before reporting it.
 const SEAM_REPAIR_METERS: f64 = 60.0;
-// What the swap measured, and the headroom over it: the ceiling is derived rather than written out,
-// so the two can never drift apart again. Six times leaves the build failing loudly if the two
-// networks stop meeting, without failing over the residue OSM's own patchiness leaves.
+// The measured seam-gap count; the ceiling is derived from it with sixfold headroom.
 const MEASURED_SEAM_GAPS: usize = 80;
 const MAX_SEAM_GAPS: usize = 6 * MEASURED_SEAM_GAPS;
-// The pavement-coverage grid: half-kilometer cells, and how much walking network a cell needs before
-// it is scored at all. Half a kilometer is a couple of blocks — small enough that a neighborhood
-// losing its pavement is its own cell rather than an average, large enough that an ordinary block
-// with one demoted service road is not the worst cell in the city.
+// Pavement-coverage cells, and the street length a cell needs before it is scored.
 const PAVEMENT_CELL_METERS: f64 = 500.0;
 const PAVEMENT_CELL_KM: f64 = 2.0;
-// The whole-city bounds. Each sits in a gap that was measured from both sides: the finished city on
-// one, and a build of the same city with the fix that closed the defect taken back out on the other.
-//
-// 0.42 of 303.1 km of alley (0.14%) hangs off the main walking component. Without the mouth noding
-// that reads 264.1 of 303.2 (87.1%) and without the curb cuts 5.98 of 302.1 (2.0%), so 1% separates
-// the city from both, at seven times what it measures.
+// Whole-city bounds, each set between the finished city and a build without its fix.
 const MAX_STRANDED_ALLEY_FRACTION: f64 = 0.01;
-// An alley mouth stands on mapped pavement at the median, walks 37 m at the 90th percentile, and
-// none of the 3,813 fails to reach any. Without the curb cuts that reads 108 m, 349 m and 94, and
-// without the mouth noding 3.6 m, 205 m and 61. The median is a near-zero property and 10 m is its
-// margin — half the mouths would have to leave the pavement they stand on to reach it. 120 m is
-// between the 37 the city measures and the 205 of the milder regression, and 10 stranded is a margin
-// on nothing at all.
+// Alley mouths: median walk to pavement, p90 walk, and the count that reach none.
 const MAX_ALLEY_MOUTH_MEDIAN_METERS: f64 = 10.0;
 const MAX_ALLEY_MOUTH_P90_METERS: f64 = 120.0;
 const MAX_STRANDED_ALLEY_MOUTHS: usize = 10;
-// 25 of the 14,961 one-sided keys carry pavement on two opposing winds, which is a residue rather
-// than a rate: a loop street wraps round onto its own far wind and labels the same pavement twice.
-// This bound has no measured far side — a build that computes the gate and then hands the offsetter
-// both sides anyway does not get this far, it dies on the corner assignment above — so 200 is eight
-// times the residue and two orders under the ~14,961 a gate that stopped being honored would make.
+// Loop streets label their own far wind, so a residue of opposing-wind pavement is expected.
 const MAX_PHANTOM_SIDEWALKS: usize = 200;
-// The link edges reach 32 m at the 99th percentile, and the longest is the seam repair's own longest
-// to the centimeter: every link the graph draws is a repair or an entrance snap, so the whole
-// distribution is bounded above by SEAM_REPAIR_METERS by construction, and a link past it is
-// something other than a repair claiming to be one. 50 m is the 99th percentile's own room — over
-// the 40 m a build without the curb cuts reaches, under the reach that makes them.
+// Every link is a seam repair or entrance snap, so all are bounded by SEAM_REPAIR_METERS.
 const MAX_LINK_P99_METERS: f64 = 50.0;
-// A tenth of New York's half-kilometer cells are over 9.4% streets the gate found no pavement on.
-// The failure this bounds is a whole neighborhood's survey going missing while the citywide average
-// hides it: a borough is about a fifth of the 2,877 scored cells, so a borough at ~100% unpaved puts
-// the 90th percentile itself at 1.0. Its ceiling is per region — `existence_ceilings`.
-// Every bound above is held over a population the build classifies for itself, so each one passes
-// on the empty set: stop `road_types == ALLEY` matching and there is no stranded alley km, no mouth
-// that fails to reach pavement, no phantom on a street the gate never called one-sided, and no link
-// whose length could be over the ceiling. These floors are what makes the passes above mean
-// something. Each is roughly a sixth of what the city measures — 303.1 km of alley over 3,813
-// mouths, 14,961 one-sided keys, 2,877 scored cells and 15,539 links — far enough under to survive a
-// year of OSM edits and orders of magnitude over the nothing a classifier that stopped matching
-// would leave.
-//
-// They are EMPTINESS tests, not proportionality tests, and the difference only showed up on a second
-// city. Two of them only ever run against a city that classifies alleys at all (`args.alleys`), and
-// that gate is what lets San Francisco through — it has no alleys in New York's sense, so it is
-// never asked. Those two therefore keep New York's own numbers: lowering them as well, which is what
-// I did first, would have let New York's alley classifier rot from 303 km to 3 before anything
-// tripped, in exchange for nothing.
-//
-// The three that every city faces did have to move, because San Francisco has fewer of everything —
-// but only as far as its own measured figures, keeping a gap on both sides that a dead classifier
-// still falls through. Each carries both cities' populations so the next one can see the margin it
-// is being held to.
+// Floors so each bound above can't pass on an empty population; alley ones run on alley cities only.
 const MIN_ALLEY_KM: f64 = 50.0; // nyc 303.1; alley-classifying cities only
 const MIN_ALLEY_MOUTHS: usize = 600; // nyc 3_813; alley-classifying cities only
 const MIN_ONE_SIDED_KEYS: usize = 500; // nyc 14_961, sf 1_127
 const MIN_PAVEMENT_CELLS: usize = 200; // nyc 2_877, sf 484
 const MIN_LINK_EDGES: usize = 2_500; // nyc 15_539, sf 3_320
-// The same emptiness on the existence gate's own denominators: no derived side km makes the drop
-// 0%, and no alley km makes the demoted share whatever the missing-denominator branch says.
+// The same floors on the existence gate's own denominators.
 const MIN_DERIVED_SIDEWALK_KM: f64 = 400.0; // nyc 2_342, sf 3_466
 
 pub const STRANDED_FORMAT: u16 = 1;
@@ -359,69 +186,45 @@ pub const STRANDED_HEADER_BYTES: usize = 12;
 pub struct Args {
     pub streets: PathBuf,
     pub paths: Option<PathBuf>,
-    // OSM's own sidewalk network (SWLK): `footway=sidewalk`, `footway=crossing` and
-    // `footway=traffic_island`, which the PATH extract deliberately excludes.
+    // OSM's sidewalk network (SWLK), which the PATH extract excludes.
     pub sidewalks: Option<PathBuf>,
     pub ferries: Option<PathBuf>,
-    /// The city's rail topology (TRNS): stations, routes and the stop patterns they run. A city
-    /// with none builds exactly as it did before — the graph simply carries no transit edge.
+    /// The city's rail topology (TRNS); none builds a graph with no transit edge.
     pub transit: Option<PathBuf>,
     pub landmarks: Option<PathBuf>,
     pub art: Option<PathBuf>,
     pub highways: Option<PathBuf>,
     pub commercial: Option<PathBuf>,
-    // The city's industrial tax lots (INDL), sampled per edge for the frontage penalty. A city with
-    // no such source bakes zeros, which is what makes its slider vanish rather than move nothing.
+    // Industrial tax lots (INDL); none bakes zeros, which hides the slider.
     pub industrial: Option<PathBuf>,
-    // The city's designated historic districts (HDST), sampled per edge for the containment
-    // discount. Absent for a city that has none, on the same terms as the lots above.
+    // Designated historic districts (HDST); absent for a city that has none.
     pub historic: Option<PathBuf>,
-    // The city's land mask (LAND), which every deck edge is tested against for the over-water share
-    // the bridge discount is priced off. Absent only where nothing has a mask to read — `key-probe`
-    // builds a fixture, which has no shoreline.
+    // The land mask (LAND) for the bridge over-water share; absent only for a fixture.
     pub land: Option<PathBuf>,
     pub out: PathBuf,
-    /// Where to WRITE this city's dropped ways, as the documented STRD artifact. Nothing reads it
-    /// back: the re-chunk that clears those walks off the overlay takes the ids `run` returns.
+    /// Where to write this city's dropped ways as STRD; nothing reads it back.
     pub stranded_out: Option<PathBuf>,
-    // The optional SHDE bake: building footprints, the shade sun-position grid (the same one the
-    // shade pass bakes its pyramid from), and the directory the per-bin shade files are written
-    // to. All three or none.
+    // The optional SHDE bake: footprints, sun grid and output directory, all three or none.
     pub buildings: Option<PathBuf>,
     pub shade_params: Option<shade::Params>,
     pub shade_dir: Option<PathBuf>,
-    /// The bounds to resample the DEM over, and by being there at all, that this city HAS one — the
-    /// relief column is baked for a city that carries these and left flat for one that does not,
-    /// since a `dem` the driver did not open is a column it already holds rather than a city with no
-    /// terrain. The city's own box: the terrain overlay widens it to keep its shoreline, the relief
-    /// byte has no shore to keep.
+    /// The DEM resample bounds; present means the city has terrain and the relief column is baked.
     pub elevation_bounds: Option<crate::manifest::Bounds>,
-    /// Whether this city's centerline classifies alleys — see the alley bounds in `run`.
+    /// Whether this city's centerline classifies alleys.
     pub alleys: bool,
-    /// The existence gate's two ceilings for this region, out of the plan.
+    /// The existence gate's two ceilings for this region.
     pub existence_ceilings: ExistenceCeilings,
-    // The measured canopy, read twice over: for the direct-canopy record byte, and — when the shade
-    // bake runs — for the crowns that occlude the edges alongside the buildings.
+    // The measured canopy, for the direct-canopy byte and the shade bake's crowns.
     pub canopy: Option<PathBuf>,
-    /// Where this city's cached topology and columns live, and the key each is named by, or none
-    /// for a run that caches nothing — `key-probe` builds a fixture's graph and must not leave an
-    /// entry a real build would read.
+    /// Cache locations and keys, or none for a run that must not write cache entries.
     pub cache: Option<graph_cache::Keys>,
-    // `tiler key-probe`: build the key space of a fixture rather than of a city, and report it. The
-    // bounds below — the alley reach, the pavement cells, the existence gate's two shares — are all
-    // held over a whole city's population and say nothing whatever about a few hundred blocks, so
-    // they are skipped, and nothing else is. What the probe reports is the `keyHash` this same run
-    // would give the city: scripts/graph-inputs.ts is what asks, and scripts/README.md says why.
+    // `tiler key-probe`: build a fixture's key space and skip the whole-city bounds.
     pub probe: bool,
-    // Where to write the stats line instead of stdout. The probe's consumer is a later link in a
-    // package.json chain rather than something holding the pipe, so it reads a file; a build leaves
-    // this unset and the line goes to the log with the rest of the pass.
+    // Where to write the stats line instead of stdout.
     pub report: Option<PathBuf>,
 }
 
-/// One edge, before and after contraction: the polyline runs a -> b with its endpoints pinned to
-/// the node coordinates, the cover sides are in that travel direction, and the length is the sum
-/// of the constituent STRT records' f32 geodesic lengths — never recomputed from the geometry.
+/// One edge; length is the sum of the source records' f32 lengths, never recomputed from geometry.
 struct Edge {
     a: u32,
     b: u32,
@@ -438,12 +241,9 @@ struct Edge {
     kind: u8,       // the GRPH record kind this becomes
     side: u8,       // and its N/E/S/W label, where the source already knows it
     sidewalks: u8,  // which sides get a *derived* sidewalk, in this edge's stored direction
-    // And which sides have pavement at all, so a corner and its crossing are still placed. The name
-    // is the ingest format's: the bits hold *existence* — OSM maps a sidewalk there, or the city's
-    // survey drew one — and say nothing about surface.
+    // Which sides have pavement at all (existence, not surface), so corners and crossings are placed.
     paved: u8,
-    // This end entrance-snapped onto a street's derived sidewalk, so it binds to the corner node the
-    // split made rather than to a path node standing in the roadway. See conflate.rs step 4.
+    // This end snapped onto a derived sidewalk, so it binds to the split's corner node.
     curb_a: bool,
     curb_b: bool,
 }
@@ -453,9 +253,7 @@ fn curb_end(edge: &Edge, node: u32) -> bool {
     (edge.a == node && edge.curb_a) || (edge.b == node && edge.curb_b)
 }
 
-/// What an OSM sidewalk way becomes. A traffic island is part of the crossing it chains through and
-/// is costed as one: an island read as anything else leaves the two halves of every divided street's
-/// crossing joined to nothing, so the walker crosses to the median and the route stops there.
+/// A traffic island is a crossing; read as anything else, a divided street's crossing dead-ends.
 fn swlk_kind(road_type: u8) -> u8 {
     if road_type == SWLK_SIDEWALK {
         KIND_SIDEWALK
@@ -464,14 +262,7 @@ fn swlk_kind(road_type: u8) -> u8 {
     }
 }
 
-/// The existence gate: which sides of an offsetted street have pavement at all — OSM maps a sidewalk
-/// way there, or a survey says so. See DESIGN.md, "Whether there is pavement at all" and "The
-/// existence gate".
-///
-/// Existing is not the same as being *derived*: a stretch OSM has mapped exists because OSM's own
-/// way is in the graph, and `trim_derived` cuts every stretch `Association::covered` names back out
-/// of this mask before any offset is placed over it. That subtraction is the exclusivity rule —
-/// DESIGN.md, "OSM is the pavement, CSCL is the label", is why it is per stretch and not per side.
+/// The existence gate: which sides of an offsetted street have pavement at all.
 fn gated_sidewalks(record_flags: u8) -> u8 {
     let mut sidewalks = 0u8;
     if record_flags & (FLAG_OSM_LEFT | FLAG_SURVEYED_LEFT) != 0 {
@@ -483,12 +274,7 @@ fn gated_sidewalks(record_flags: u8) -> u8 {
     sidewalks
 }
 
-/// Cut a street into the stretches that share one derived-sidewalk mask, so an offset is placed only
-/// where OSM has not already drawn the pavement. Each piece keeps everything durable the street
-/// knows — its physicalid, its name, its half-offset and its pavement mask — and shares its cut
-/// vertices exactly with its neighbors, so the noding puts the chain back together and contraction
-/// re-merges any pair the mask does not actually separate. The cover bytes are copied rather than
-/// re-integrated, which is what the contraction's length-weighted merge would hand back anyway.
+/// Cut a street into stretches sharing one derived-sidewalk mask, so offsets skip OSM pavement.
 fn trim_derived(
     street: ProtoEdge,
     covered: &[Vec<(f64, f64)>; 2],
@@ -519,8 +305,7 @@ fn trim_derived(
             vertex += 1;
         }
         if !last {
-            // The cut, interpolated along the segment it falls in. Quantization can land it on the
-            // vertex either side, which the dedup below folds away.
+            // Quantization can land the cut on a neighboring vertex, which the dedup folds away.
             let span = ruler[vertex] - ruler[vertex - 1];
             let param = if span > 0.0 {
                 (end - ruler[vertex - 1]) / span
@@ -563,16 +348,12 @@ fn trim_derived(
     pieces
 }
 
-/// What a crossing over a street is worth in cover: the mean of the street's two side bytes, since
-/// it spends half its length under each.
+/// A crossing spends half its length under each side, so its cover is their mean.
 fn crossing_cover_bytes(left: u8, right: u8) -> u8 {
     round_half_up((f64::from(left) + f64::from(right)) / 2.0) as u8
 }
 
-/// The ends leaving one base node — streets first, in counter-clockwise bearing order, then paths —
-/// and the corner fan they make. The construction below walks the nodes twice, once to place the
-/// corners the seam resolves against and once to build the edges, so this is a function rather than
-/// a block inside the second loop.
+/// The ends leaving one base node (streets in CCW bearing order, then paths) and their corner fan.
 struct NodeFan {
     ends: Vec<EdgeEnd>,
     street_count: usize,
@@ -655,8 +436,7 @@ fn node_fan(
     }
 }
 
-/// One of an edge's per-side masks as seen leaving a given end: the stored mask at its `a` end,
-/// mirrored at its `b` end, where travel runs against the stored direction.
+/// A per-side mask as seen leaving an end: mirrored at `b`.
 fn mask_leaving(mask: u8, at_a: bool) -> u8 {
     if at_a { mask } else { swap_sidewalks(mask) }
 }
@@ -666,16 +446,12 @@ fn sidewalks_leaving(edge: &Edge, node: u32) -> u8 {
     mask_leaving(edge.sidewalks, edge.a == node)
 }
 
-/// And the sides it has pavement on at all, which is the wider mask: a side OSM maps for itself is
-/// paved without being derived. Despite the name the mask is one of existence, not of surface.
+/// The sides with pavement at all, a superset of derived sides.
 fn paved_leaving(edge: &Edge, node: u32) -> u8 {
     mask_leaving(edge.paved, edge.a == node)
 }
 
-/// An edge's flags as seen leaving one of its ends. Only `GRPH_BUILDING_RIGHT` is direction-
-/// dependent, and only on an OSM sidewalk the association matched to a street: a derived sidewalk
-/// never carries it, and an unmatched OSM way is a path by the time it gets here. Flipping it
-/// unconditionally would invent a side for every edge that has none.
+/// Only `GRPH_BUILDING_RIGHT` is direction-dependent, so only it flips.
 fn flags_leaving(edge: &Edge, node: u32) -> u8 {
     if edge.a == node || !edge.osm || edge.kind != KIND_SIDEWALK {
         edge.flags
@@ -684,32 +460,21 @@ fn flags_leaving(edge: &Edge, node: u32) -> u8 {
     }
 }
 
-/// One position a polyline is asked to be cut at: how far along it the cut falls, and the point it
-/// stands at where the caller has one of its own. A station door is the foot of a real
-/// perpendicular and brings its point; a corner cut has only a distance, and the point is
-/// interpolated along the segment it lands in.
+/// A cut position along a polyline, with its own point where the caller has one.
 struct CutAt {
     along: f64,
     point: Option<(i32, i32)>,
 }
 
-/// A polyline with a set of cuts woven into it: every original vertex in order, plus each cut that
-/// did not land within `SPLIT_MERGE_METERS` of a vertex, or of a cut already woven in — the same
-/// merge `conflate::apply_splits` makes on the CSCL side, so neither routine sheds a sliver.
-///
-/// Both of the graph's cuts take their pieces from this. What they do with the pieces differs — one
-/// builds contracted edges with curb flags, the other divides a finished V2 edge and hands each
-/// door the node it joins — but where a piece begins and ends does not.
+/// A polyline with cuts woven in, merged within `SPLIT_MERGE_METERS` like `conflate::apply_splits`.
 struct WovenCuts {
     x: Vec<i32>,
     y: Vec<i32>,
-    /// The distance along the parent at each woven vertex, so `last` is the parent's own length.
+    /// Distance along the parent at each woven vertex.
     along: Vec<f64>,
-    /// Per given cut, the woven vertex it became or joined. An END vertex means the cut landed on a
-    /// node the polyline already had, which is no cut at all.
+    /// Per cut, the woven vertex it became or joined; an end vertex means no cut.
     vertex_of_cut: Vec<usize>,
-    /// The interior woven vertices a piece boundary falls on, ascending. Empty where every cut
-    /// landed on an end and the parent stays whole.
+    /// Interior woven vertices where pieces split, ascending.
     boundaries: Vec<usize>,
 }
 
@@ -733,7 +498,7 @@ fn weave_cuts(
             })
             .expect("a non-empty polyline");
         if (woven[nearest].0 - cut.along).abs() <= SPLIT_MERGE_METERS {
-            // Never at an end: that node exists already, and cutting there would shed an empty piece.
+            // Never at an end: that node exists and a cut there sheds an empty piece.
             if nearest != 0 && nearest != woven.len() - 1 {
                 woven[nearest].3 = true;
             }
@@ -760,7 +525,7 @@ fn weave_cuts(
             )
         });
         woven.insert(after, (cut.along, point.0, point.1, true));
-        // The insertion moved every woven vertex from here on, and earlier cuts hold those indices.
+        // The insertion shifted later vertices, which earlier cuts hold indices of.
         for held in &mut vertex_of_cut[..index] {
             if *held >= after {
                 *held += 1;
@@ -779,8 +544,7 @@ fn weave_cuts(
     }
 }
 
-/// Cut one contracted edge at a set of interior positions, dividing the stored length by each
-/// piece's share of the parent's geodesic length and interning a node at every cut.
+/// Cut one contracted edge at interior positions, splitting its length by geodesic share.
 fn cut_edge_at(
     edge: &Edge,
     cuts: &[f64],
@@ -838,8 +602,7 @@ fn cut_edge_at(
     pieces
 }
 
-/// Everything a cut piece inherits from its parent — the geometry, the length and the two curb
-/// flags are set per piece, and `Edge` is deliberately not `Clone` so the rest cannot drift.
+/// `Edge` is deliberately not `Clone`, so everything a cut piece inherits is listed here.
 fn clone_edge(edge: &Edge) -> Edge {
     Edge {
         a: edge.a,
@@ -863,30 +626,7 @@ fn clone_edge(edge: &Edge) -> Edge {
     }
 }
 
-/// The cumulative along-distance of every vertex of a polyline, in meters.
-/// The curb cut: a corner cuts the OSM sidewalk way it stands beside, giving the seam the node it
-/// was missing. DESIGN.md, "The seam", is the join this is the fourth case of.
-///
-/// The cut is guarded three ways, because a line passing close is not by itself pavement this
-/// corner opens onto:
-///
-/// - **The wedge.** The projection must fall inside the corner's own angular gap, seen from the
-///   node — the quadrant that corner *is*. The pavement across a roadway lies beyond one of the
-///   street-ends bounding the gap, not inside it, so it is never cut; nor is the sidewalk of a
-///   street that merely passes nearby.
-/// - **The detour.** The nearest node the way already offers must be more than
-///   `CURB_CUT_DETOUR_METERS` further along it. That distance is a lower bound on the walk the cut
-///   removes — every route to this pavement has to enter the way through one of its ends — so a
-///   corner the seam can already reach round the block takes no cut, and only a genuine stranding
-///   does.
-/// - **Grade.** Neither the way nor anything at the node may be a bridge or tunnel deck: a footway
-///   over a cutting passes within meters of the road below it and shares no ground with it.
-///
-/// Measured citywide, 21,593 corners cut and 21,150 of them — 97.9% — landed on pavement carrying
-/// the name of one of the two streets bounding their own wedge, which is the check that the geometry
-/// picked the pavement the corner really opens onto and not merely the nearest line.
-///
-/// Returns the number of cuts made.
+/// Cut OSM sidewalk ways at corners inside the corner's wedge, off-deck, where the detour is long.
 fn cut_sidewalks_at_corners(
     final_edges: &mut Vec<Edge>,
     merged_x: &mut Vec<i32>,
@@ -901,9 +641,7 @@ fn cut_sidewalks_at_corners(
         incidence[edge.b as usize].push((edge_id as u32, false));
     }
 
-    // The pavement a cut may fall on: OSM's own sidewalk edges, at grade. A crossing is not among
-    // them — it is meters long and both its ends are already nodes — and no derived sidewalk exists
-    // yet, its geometry being made from the corners this pass runs before.
+    // OSM sidewalk edges at grade; derived sidewalks don't exist yet, crossings end in nodes.
     let pavement: Vec<u32> = (0..final_edges.len() as u32)
         .filter(|&edge_id| {
             let edge = &final_edges[edge_id as usize];
@@ -951,14 +689,11 @@ fn cut_sidewalks_at_corners(
             meters_per_unit_lng,
             meters_per_unit_lat,
         );
-        // Two street-ends at least: one on its own has a single corner wrapping the whole circle,
-        // and a gap of 360 degrees is not a wedge — the guard below would have nothing to say, and
-        // a cul-de-sac's tip would cut whatever pavement happened to pass within a radius of it.
+        // A lone street-end's 360-degree gap is no wedge; a cul-de-sac tip would cut anything.
         if street_count < 2 {
             continue;
         }
-        // The same "does anything bind here" test the construction makes: a corner nothing reaches
-        // for is never materialized, so cutting the pavement for one would only add a stray node.
+        // A corner nothing binds to is never materialized, so cutting for it would add a stray node.
         let mut needed = vec![false; street_count];
         for slot in 0..street_count {
             let end = &ends[slot];
@@ -979,8 +714,7 @@ fn cut_sidewalks_at_corners(
                 continue;
             }
             let corner = (fan.corner_x[slot], fan.corner_y[slot]);
-            // The corner's own angular gap, as `corners::build_fan` measures it: the arc from this
-            // street-end counter-clockwise to the next, which is the wedge the corner fills.
+            // The gap as `corners::build_fan` measures it: CCW from this street-end to the next.
             let start = ends[slot].bearing;
             let raw = ends[(slot + 1) % street_count].bearing - start;
             let gap = if street_count == 1 || raw <= 0.0 {
@@ -996,16 +730,13 @@ fn cut_sidewalks_at_corners(
                 CURB_CUT_METERS,
                 meters_per_unit,
             ) {
-                // The wedge: the projection, seen from the node, must lie in that gap. Pavement
-                // across a roadway lies beyond one of the two street-ends bounding it, never inside.
+                // Pavement across a roadway lies beyond a bounding street-end, never inside.
                 let toward = (f64::from(candidate.point.1 - merged_y[base]) * meters_per_unit_lat)
                     .atan2(f64::from(candidate.point.0 - merged_x[base]) * meters_per_unit_lng);
                 if (toward - start).rem_euclid(TAU) >= gap {
                     continue;
                 }
-                // The detour: how far along the way its own nearest node stands from here. Every
-                // walk onto this pavement enters through one of the way's ends, so that distance is
-                // a lower bound on the walk the cut removes.
+                // Walks enter the way at an end, so this lower-bounds the walk the cut saves.
                 let along = &along_of[candidate.entry];
                 let (from, to) = (along[candidate.vertex], along[candidate.vertex + 1]);
                 let cut = from + candidate.param * (to - from);
@@ -1049,9 +780,7 @@ struct Projection {
     meters: f64,
 }
 
-/// Every sub-segment of `pavement` within `radius` of a point, nearest first — nearest because the
-/// guards above take the first candidate that passes them, and the pavement a corner opens onto is
-/// not always the nearest line to it.
+/// Sub-segments of `pavement` within `radius`, nearest first; the nearest isn't always the one.
 fn pavement_within(
     grid: &conflate::SegmentGrid,
     final_edges: &[Edge],
@@ -1088,10 +817,7 @@ fn pavement_within(
     found
 }
 
-/// One finished v2 edge: a sidewalk, a crossing, a link, or a path. `geom` indexes the shared
-/// geometry entries (`NO_GEOMETRY` for the geometry-less crossings and links); `name_id` is still
-/// the original STRT id here and is remapped to the compact table at write time. `source_id` is the
-/// contracted street or path edge this was derived from, `NO_SOURCE_ID` for the derived kinds.
+/// One finished v2 edge; `name_id` is still the STRT id here and is remapped at write.
 #[derive(Clone)]
 #[cfg_attr(test, derive(PartialEq, Debug))]
 struct V2Edge {
@@ -1108,8 +834,7 @@ struct V2Edge {
     source_id: u32,
 }
 
-/// The departure bearing of one edge end: `atan2(north, east)` to the first geometry vertex
-/// distinct from the node, in the local meter frame. Ties on a collapsed segment fall back to 0.
+/// `atan2(north, east)` to the first vertex distinct from the node; a collapsed segment gives 0.
 fn departure_bearing(
     poly_x: &[i32],
     poly_y: &[i32],
@@ -1141,7 +866,7 @@ fn departure_bearing(
     0.0
 }
 
-/// The N/S/E/W wind a normal points into: nearest cardinal, exact diagonals resolved to N/S.
+/// The N/S/E/W wind a normal points into; exact diagonals resolve to N/S.
 fn side_label(normal_x: f64, normal_y: f64) -> u8 {
     if normal_y >= normal_x.abs() {
         SIDE_NORTH
@@ -1154,9 +879,7 @@ fn side_label(normal_x: f64, normal_y: f64) -> u8 {
     }
 }
 
-/// The side labels of a street's two sidewalks, geometry-left then geometry-right. The direction is
-/// the whole-edge chord (first to last centerline vertex); a chord that degenerates on a tight loop
-/// falls back to the first geometry segment's bearing. The right label is always the opposite wind.
+/// Side labels of a street's two sidewalks, geometry-left then geometry-right.
 fn side_labels(
     poly_x: &[i32],
     poly_y: &[i32],
@@ -1183,10 +906,7 @@ fn side_labels(
     (left, right)
 }
 
-/// Great-circle meters between two quantized nodes, matching the client's `haversineMeters` (same
-/// mean earth radius) so a crossing or link length is exactly the A* heuristic between its ends and
-/// the length-vs-node-distance invariant is admissible by construction — the equirectangular meter
-/// frame the corners and labels live in overestimates east-west far from the reference latitude.
+/// Great-circle meters matching the client's `haversineMeters`, so A* stays admissible.
 fn great_circle(
     from_x: i32,
     from_y: i32,
@@ -1226,9 +946,7 @@ fn node_distance(
     )
 }
 
-/// The geodesic length of a quantized polyline, summed segment by segment with the same mean earth
-/// radius as `node_distance`, so a sidewalk's baked length and the corner-to-corner distance the
-/// admissibility check compares it against are measured on one metric.
+/// Geodesic length with the same earth radius as `node_distance`, so both use one metric.
 fn polyline_length(
     poly_x: &[i32],
     poly_y: &[i32],
@@ -1251,11 +969,7 @@ fn polyline_length(
     total
 }
 
-/// The baked geometry of one sidewalk: every interior centerline vertex shifted perpendicular to
-/// the local direction by `half_offset_m` to the given side (`sign` +1 geometry-left, -1
-/// geometry-right), with the first and last vertices replaced by the sidewalk's two corner nodes so
-/// it runs corner-to-corner with no overshoot into the intersection. A straight two-vertex street
-/// yields exactly `[corner_a, corner_b]`.
+/// A sidewalk's geometry: the centerline offset to one side, ends replaced by its corner nodes.
 fn offset_polyline(
     poly_x: &[i32],
     poly_y: &[i32],
@@ -1274,8 +988,7 @@ fn offset_polyline(
     let same =
         |left: usize, right: usize| poly_x[left] == poly_x[right] && poly_y[left] == poly_y[right];
     for vertex in 1..count - 1 {
-        // The tangent runs between the neighboring distinct vertices, so a coincident vertex does
-        // not collapse the normal.
+        // Span distinct neighbors, so a coincident vertex doesn't zero the normal.
         let mut back = vertex;
         while back > 0 && same(back, vertex) {
             back -= 1;
@@ -1309,8 +1022,7 @@ impl conflate::Adjacency for HashMap<u32, Vec<(u32, f64)>> {
     }
 }
 
-/// Whether an OSM crossing path joins two termini within `cap` meters — a walk over the mapped
-/// crossings alone, capped so it covers an intersection, not a neighborhood.
+/// Whether mapped OSM crossings alone join two termini within `cap` meters.
 fn crossing_joins(adjacency: &HashMap<u32, Vec<(u32, f64)>>, from: u32, to: u32, cap: f64) -> bool {
     let mut joined = false;
     conflate::walk_within(adjacency, from, cap, |node| {
@@ -1333,7 +1045,7 @@ fn find(parent: &mut [u32], start: u32) -> u32 {
     node
 }
 
-// The smaller id becomes the root, so a merged near-node keeps the coordinates of the lower id.
+// The smaller id becomes the root, so a merged near-node keeps the lower id's coordinates.
 fn union(parent: &mut [u32], left: u32, right: u32) -> bool {
     let root_left = find(parent, left);
     let root_right = find(parent, right);
@@ -1346,8 +1058,7 @@ fn union(parent: &mut [u32], left: u32, right: u32) -> bool {
     }
 }
 
-/// The length-weighted trapezoid of the vertex cover bytes on each side, in the stored direction:
-/// one value per sidewalk for a whole segment, computed on the original bytes before any merging.
+/// Length-weighted trapezoid of the vertex cover bytes per side, computed before any merging.
 fn segment_cover(
     densities: &[u8],
     quantized_x: &[i32],
@@ -1384,9 +1095,7 @@ fn segment_cover(
     }
 }
 
-// Exactly two incident half-edges on two distinct edges, matching in the half-offset byte, the
-// GRPH flags, and the street name: a shape joint the router does not need to see. A name change
-// mid-block is kept — a sidewalk edge that spanned two names would label a lie.
+// A shape joint: two half-edges agreeing on half-offset, flags and name (a name change is kept).
 fn contractible(edges: &[Edge], incidence: &[Vec<u32>], node: u32) -> bool {
     let incident = &incidence[node as usize];
     incident.len() == 2
@@ -1395,36 +1104,21 @@ fn contractible(edges: &[Edge], incidence: &[Vec<u32>], node: u32) -> bool {
         && edges[incident[0] as usize].flags == edges[incident[1] as usize].flags
         && edges[incident[0] as usize].name_id == edges[incident[1] as usize].name_id
         && edges[incident[0] as usize].osm == edges[incident[1] as usize].osm
-        // A mapped sidewalk arrives already labeled, so two pieces merge only when they are the
-        // same kind of thing on the same side of the same street — never a sidewalk into a crossing,
-        // and never the north pavement into the south.
+        // Pieces merge only as the same kind on the same side of the same street.
         && edges[incident[0] as usize].kind == edges[incident[1] as usize].kind
         && edges[incident[0] as usize].side == edges[incident[1] as usize].side
-        // Two halves of one street leave the joint in opposite directions, so their surviving sides
-        // agree when one's mask mirrors the other's. A block that has pavement on the north only and
-        // meets one that has it on the south only is two edges, not a lie spanning both.
+        // The two halves leave in opposite directions, so matching masks mirror each other.
         && sidewalks_leaving(&edges[incident[0] as usize], node)
             == swap_sidewalks(sidewalks_leaving(&edges[incident[1] as usize], node))
-        // And the same for the wider pavement mask, which the corner fan reads to decide which
-        // corner slots exist and so whether a crossing is built there. It diverges from the derived
-        // mask wherever OSM owns a side — `sidewalks = paved & !covered` — so two blocks can agree
-        // on what is derived and still disagree on what is paved; merging them would carry the near
-        // segment's pavement to the far end and place, or miss, a crossing at a real intersection.
+        // The paved mask differs from the derived one where OSM owns a side, and decides crossings.
         && paved_leaving(&edges[incident[0] as usize], node)
             == swap_sidewalks(paved_leaving(&edges[incident[1] as usize], node))
-        // A curb end binds to a corner of the street split under it, which only exists while the
-        // node does. Contracting it away would strand the entrance back in the roadway; the street's
-        // two halves make this node degree 3 anyway, so this only ever guards the degenerate case.
+        // A curb end binds to a corner that exists only while this node does.
         && !curb_end(&edges[incident[0] as usize], node)
         && !curb_end(&edges[incident[1] as usize], node)
 }
 
-/// Walk the chain of degree-2 nodes out of `start` along `first_edge`, merging edges as long as
-/// the far node stays contractible, and emit the single edge that spans it. Each part is oriented
-/// to flow from the running end; a reversed part swaps its two cover sides. The merged cover is the
-/// length-weighted mean of the parts, the length is their f32 sum, and the shared junction vertex
-/// is dropped where two parts meet. The merged source id is the minimum over the parts, so a chain
-/// traced from either end names the same source record.
+/// Merge a degree-2 chain from `start` into one edge; its source id is the parts' minimum.
 fn trace_chain(
     edges: &[Edge],
     incidence: &[Vec<u32>],
@@ -1439,12 +1133,11 @@ fn trace_chain(
     let kind = edges[first_edge as usize].kind;
     let side = edges[first_edge as usize].side;
     let mut source_id = edges[first_edge as usize].source_id;
-    // Every part of a contractible chain agrees on both masks once oriented, so the chain's are the
-    // first part's, read in the direction the trace walks it.
+    // Every part of a contractible chain agrees on both masks once oriented.
     let sidewalks = sidewalks_leaving(&edges[first_edge as usize], start);
     let paved = paved_leaving(&edges[first_edge as usize], start);
     let curb_a = curb_end(&edges[first_edge as usize], start);
-    // Assigned on every pass before any break, so the chain's far end is the last one walked to.
+    // Assigned on every pass before any break, so it ends as the chain's far end.
     let mut curb_b;
     let mut poly_x: Vec<i32> = Vec::new();
     let mut poly_y: Vec<i32> = Vec::new();
@@ -1502,13 +1195,11 @@ fn trace_chain(
         } else {
             incident[0]
         };
-        // A chain that closes back onto an edge already in it is a pure degree-2 cycle; stop and
-        // let it be emitted as a self-loop on the node this trace retained.
+        // A chain closing on itself is a degree-2 cycle, emitted as a self-loop.
         if visited[next as usize] {
             break;
         }
-        // Unreachable for the current data (the longest merged polyline is ~84 vertices), but the
-        // format caps a vertex count at u16, so the guard is honored rather than assumed away.
+        // Unreachable today (longest ~84 vertices), but the format caps vertex counts at u16.
         if poly_x.len() + edges[next as usize].poly_x.len() - 1 > MAX_EDGE_VERTICES {
             break;
         }
@@ -1544,10 +1235,7 @@ fn trace_chain(
     }
 }
 
-/// Greedy collinear pruning: drop any interior vertex whose perpendicular deviation from the chord
-/// between the last kept vertex and the next one is under ~0.15 m. Endpoints are always kept, so
-/// the pinned node coordinates survive. Cover was aggregated before this, so pruning is drawing-
-/// only.
+/// Drop interior vertices deviating under ~0.15 m from the chord; drawing-only, cover is already set.
 fn prune_collinear(xs: &[i32], ys: &[i32]) -> (Vec<i32>, Vec<i32>) {
     let count = xs.len();
     if count <= 2 {
@@ -1578,11 +1266,7 @@ fn prune_collinear(xs: &[i32], ys: &[i32]) -> (Vec<i32>, Vec<i32>) {
     )
 }
 
-/// Which of two crossings over one pair of nodes the graph keeps. A mapped crossing beats a
-/// synthesized one — it is drawn on the ground rather than inferred, and it carries the geometry the
-/// straight corner-to-corner line has none of. Between two of the same provenance the shorter wins:
-/// the duplicate is a second way round the same roadway, and the walk is the short side of it. An
-/// exact tie keeps the incumbent, so the survivor is the earlier edge rather than a hash order.
+/// A mapped crossing beats a synthesized one, then the shorter wins, then the incumbent.
 fn crossing_supersedes(candidate: &V2Edge, incumbent: &V2Edge) -> bool {
     let candidate_mapped = candidate.flags & GRPH_OSM != 0;
     let incumbent_mapped = incumbent.flags & GRPH_OSM != 0;
@@ -1593,13 +1277,7 @@ fn crossing_supersedes(candidate: &V2Edge, incumbent: &V2Edge) -> bool {
     }
 }
 
-/// Drops every edge that runs from a node back to itself, returning the ones it dropped. Both ends of
-/// a walking line can land on one node: the 1 m near-node merge folds a way shorter than itself into a
-/// single base node, an entrance snap binds one end to the very node the other end already sits on, or
-/// OSM draws a closed way that arrives back where it left. What comes out carries nobody anywhere —
-/// taking it pays its length and returns the walker to the node they started from, so no search can
-/// ever take it — and for that same reason dropping it cannot disconnect anything: a node is already
-/// reachable from itself.
+/// Drop and return self-loop edges; no search takes one, so dropping cannot disconnect anything.
 fn drop_self_loops(edges: &mut Vec<V2Edge>) -> Vec<V2Edge> {
     let mut dropped: Vec<V2Edge> = Vec::new();
     edges.retain(|edge| {
@@ -1613,15 +1291,7 @@ fn drop_self_loops(edges: &mut Vec<V2Edge>) -> Vec<V2Edge> {
     dropped
 }
 
-/// The OSM way ids of the paths the island drop takes away entirely, sorted. The overlay draws the
-/// same ways straight from the PATH network, which never sees this drop, so without the list it
-/// paints a tree-lined walk over a component no route can enter or leave.
-///
-/// A way is stranded only when *every* edge it produced went with a dropped component, and the test
-/// runs over the pre-contraction edges because a contracted chain keeps only the least source id of
-/// its parts: reading the survivors alone would call a way stranded whose geometry a chain still
-/// carries. Folding those edges into the union-find restores the nodes contraction removed and joins
-/// nothing the survivors kept apart, since a chain never spans two components.
+/// OSM way ids every edge of which the island drop removed, so the overlay can skip them.
 fn stranded_osm_paths(
     edges: &[Edge],
     final_edges: &[Edge],
@@ -1656,9 +1326,7 @@ fn stranded_osm_paths(
     ways
 }
 
-/// Leaves one crossing over each pair of nodes and drops the rest, returning how many it dropped.
-/// Parallel edges are never the only path between their own two ends, so this cannot disconnect
-/// anything: every pair it touches keeps a crossing.
+/// Keep one crossing per node pair, returning how many were dropped.
 fn collapse_parallel_crossings(edges: &mut Vec<V2Edge>) -> usize {
     let mut kept: HashMap<(u32, u32), usize> = HashMap::new();
     let mut dropped = vec![false; edges.len()];
@@ -1696,11 +1364,7 @@ fn collapse_parallel_crossings(edges: &mut Vec<V2Edge>) -> usize {
     collapsed
 }
 
-/// The ordinal half of the durable key, over the final edge order: for each edge carrying a source
-/// id, how many earlier edges share its `(source id, side)` pair. That makes the triple unique by
-/// construction, so it also settles the theoretical collision between a small OSM way id and a CSCL
-/// physicalid. Record byte 33 holds it, so a source that would need a 257th edge on one side is an
-/// error rather than a silently truncated duplicate key.
+/// Per edge, how many earlier edges share its `(source id, side)`; a 257th is an error.
 fn assign_ordinals(edges: &[V2Edge]) -> Fallible<Vec<u8>> {
     let mut seen: HashMap<(u32, u8), usize> = HashMap::new();
     let mut ordinals = vec![0u8; edges.len()];
@@ -1734,20 +1398,12 @@ fn put_f64(bytes: &mut [u8], offset: usize, value: f64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
-// Append `name` to `all_names` if new (deduped through `interned`) and return its u16 id. The ferry
-// route and terminal names are not in the STRT/PATH name tables, so they are interned here.
-/// The kinds whose record bytes 20-21 are a u16 of seconds rather than a cover byte and a
-/// half-offset, and which carry no scenic attribute at all: a ferry, and the three transit kinds.
-/// None of them has a polyline either, so every column that samples the ground reads them as empty.
+/// Kinds whose bytes 20-21 are a u16 of seconds; they carry no polyline or scenic attribute.
 fn timed_kind(kind: u8) -> bool {
     matches!(kind, KIND_FERRY | KIND_ACCESS | KIND_BOARD | KIND_RIDE)
 }
 
-/// One transit edge. None of them carries geometry, a source id or a scenic attribute; what it does
-/// carry is a u16 of seconds, in the two bytes a ferry uses for its crossing, and the straight
-/// node-to-node distance as its length — which is 0 for a board or an alight outside a transfer
-/// complex, where a platform stands on its station, and the passage between two platforms of one
-/// complex inside it.
+/// One transit edge; its length is the straight node-to-node distance.
 #[allow(clippy::too_many_arguments)]
 fn transit_edge(
     node_x: &[i32],
@@ -1777,30 +1433,20 @@ fn transit_edge(
     }
 }
 
-/// One station node's worth of the topology: where it stands, what it is called, whether a rider
-/// reaches it off the curb rather than down a stair, and where its members stand. The members'
-/// points are the platforms and doors the feed gives, so they are where the pavement is looked for;
-/// the node itself is their centroid, which for a complex is inside the block.
+/// One station node's worth of the topology; the node stands at its members' centroid.
 struct StationGroup {
     lng: f64,
     lat: f64,
     name: String,
     surface: bool,
     member_points: Vec<(f64, f64)>,
-    /// One station node, or two — side 0 and side 1 — where the agency publishes no free crossover:
-    /// a rider who goes down the wrong stair walks back up and crosses the street, and two nodes
-    /// with no edge between them is exactly that.
+    /// Two sides where the agency publishes no free crossover, with no edge between them.
     sides: usize,
     /// The published ways in, indexed into the topology's entrance table.
     entrances: Vec<usize>,
 }
 
-/// The station groups the graph gets, and for each station of the topology the one it joins: one
-/// group per transfer complex, one per station the feed puts in no complex, and one node per group
-/// unless the agency publishes no free crossover through it. A group stands at its
-/// members' centroid, takes the name most of them carry, and is only a curbside stop where every
-/// member is one. Giving a whole complex a single node is what makes a change of train there an
-/// alight and a board rather than a walk out to the pavement and back in through another door.
+/// One group per transfer complex or lone station, so a transfer is an alight and a board.
 fn station_groups(
     stations: &[binfmt::TransitStation],
     entrances: &[binfmt::TransitEntrance],
@@ -1851,8 +1497,7 @@ fn station_groups(
                     .iter()
                     .map(|&one| (stations[one].lng, stations[one].lat))
                     .collect(),
-                // A complex keeps one node whatever its members say: a transfer inside it is free,
-                // and the flag is only ever set on a station standing on its own.
+                // A complex keeps one node, since a transfer inside it is free.
                 sides: if member.len() == 1 && stations[member[0]].split {
                     2
                 } else {
@@ -1865,21 +1510,14 @@ fn station_groups(
     (groups, group_of_station)
 }
 
-/// Where one member station meets the pavement: the walking edge its own point projects onto, the
-/// foot of that perpendicular, and how far along that edge's polyline the foot falls.
+/// Where one member station meets the pavement.
 struct PavementFoot {
     edge: u32,
     along: f64,
     point: (i32, i32),
 }
 
-/// The pavement a station point reaches: every sidewalk or path whose perpendicular foot lies within
-/// TRANSIT_ENTRANCE_RADIUS_METERS of it — one foot per edge, the nearest — and failing all of them
-/// the single nearest edge within TRANSIT_SNAP_RADIUS_METERS. Ranked on the perpendicular in the
-/// quantized meter frame and confirmed on the great circle, nearest first, each with its meters.
-/// Empty when the point stands out of reach of any walking edge at all. `nearest_only` asks for that
-/// single nearest edge whatever the distance: a published entrance is a street door already, so the
-/// pavement it opens onto is the one under it and not the one across the road.
+/// Edges whose foot is within the entrance radius, else the nearest within the snap radius.
 #[allow(clippy::too_many_arguments)]
 fn pavement_feet(
     point: (i32, i32),
@@ -1906,8 +1544,7 @@ fn pavement_feet(
         point: (i32, i32),
     }
     let nearer = |left: &Nearest, right: &Nearest| -> bool {
-        // The edge id breaks a tie: the grid hands back the cells in the order they were filled, and
-        // the two pieces meeting at a corner do stand the same distance from a point beside it.
+        // The edge id breaks ties, since pieces meeting at a corner can be equidistant.
         left.meters < right.meters || (left.meters == right.meters && left.edge < right.edge)
     };
     let mut doors: HashMap<u32, Nearest> = HashMap::new();
@@ -1991,9 +1628,7 @@ fn pavement_feet(
         .collect()
 }
 
-/// One way into a station group before the pavement is cut: the foot it stands on, the side nodes
-/// it reaches as a bit per side, what the descent costs before the walk out to it, the flag bits
-/// the access edge will carry, and the street it opens onto.
+/// One way into a station group before the pavement is cut.
 struct DoorRequest {
     foot: usize,
     sides: u8,
@@ -2002,8 +1637,7 @@ struct DoorRequest {
     street: (u16, u8),
 }
 
-/// The doors of one side that landed on a single walking node with the same kind and the same
-/// directions, collapsed into the one way in the graph draws there.
+/// Doors of one side on the same node, kind and directions, collapsed into one.
 struct JoinedDoor {
     node: u32,
     base: u16,
@@ -2013,23 +1647,19 @@ struct JoinedDoor {
     street: (u16, u8),
 }
 
-/// The two nodes one platform side of a station stands on: the one its doors lead in to, and the one
-/// they lead out of.
+/// The entry and exit nodes of one platform side.
 struct StationSide {
     entry: u32,
     exit: u32,
 }
 
-/// The street a door opens onto: the name and the side of the walking edge its foot landed on, read
-/// before that edge is cut — every piece of the cut carries both, so the answer does not depend on
-/// which piece the door ends up joining.
+/// The name and side of the edge a door's foot landed on, read before the cut.
 fn door_street(v2_edges: &[V2Edge], foot: &PavementFoot) -> (u16, u8) {
     let edge = &v2_edges[foot.edge as usize];
     (edge.name_id, edge.side)
 }
 
-/// What the descent costs before the walk out to the door. A stop the feed models as a curbside
-/// shelter is a step off the pavement whatever it is built of.
+/// What the descent costs before the walk out to the door; a curbside stop is one step.
 fn entrance_base(surface: bool, kind: binfmt::EntranceKind) -> u16 {
     if surface {
         SURFACE_ACCESS_SECONDS
@@ -2054,13 +1684,7 @@ fn entrance_flags(entrance: &binfmt::TransitEntrance) -> u8 {
     flags
 }
 
-/// Cut every walking edge a station foot landed on, in place: the edge keeps its first piece, the
-/// rest are appended, and each piece carries the parent's attributes and its share of the parent's
-/// length. Gives back the node each foot joins — the node its cut became, or an end of the edge when
-/// the foot fell within `conflate::SPLIT_MERGE_METERS` of it — and how many cuts were made.
-///
-/// Every foot was projected onto the geometry as it stood before any of this, so an edge two of them
-/// landed on is cut at both and the result does not depend on the order the stations are visited.
+/// Cut every walking edge a station foot landed on, returning each foot's node and the cut count.
 #[allow(clippy::too_many_arguments)]
 fn cut_pavement_at_feet(
     feet: &[PavementFoot],
@@ -2079,8 +1703,7 @@ fn cut_pavement_at_feet(
     }
     let mut node_of_foot: Vec<u32> = vec![u32::MAX; feet.len()];
     let mut cuts_made = 0usize;
-    // In edge order: a hash map hands its keys back in an order seeded per process, and the nodes
-    // and edges made below are numbered as they are made.
+    // In edge order, since hash map order is seeded per process.
     let mut cut_edges: Vec<u32> = feet_of_edge.keys().copied().collect();
     cut_edges.sort_unstable();
     for edge_id in cut_edges {
@@ -2102,8 +1725,7 @@ fn cut_pavement_at_feet(
         );
         let last = woven.x.len() - 1;
 
-        // A node per cut, numbered along the parent; a foot that landed on an end of it joins the
-        // node standing there already.
+        // A node per cut; a foot on an end joins the existing node.
         let mut node_of_vertex: HashMap<usize, u32> =
             HashMap::with_capacity(woven.boundaries.len());
         for &boundary in &woven.boundaries {
@@ -2176,63 +1798,43 @@ fn cut_pavement_at_feet(
     (node_of_foot, cuts_made)
 }
 
-/// What the transit pass appended, for the build log and for the graph's transit side tables.
+/// What the transit pass appended, for the log and the transit side tables.
 #[derive(Default)]
 struct TransitBuild {
-    /// The station NODES, which is two per platform side — a way in and a way out — so twice the
-    /// groups, and twice again for every station split in two.
+    /// Station nodes: two per platform side (in and out).
     stations: usize,
     unsnapped: usize,
     /// The groups that got a pair of nodes per platform side.
     split_stations: usize,
     /// The published entrances that found pavement and became doors.
     entrances: usize,
-    /// The groups no published entrance can be entered by, which took the station point's own doors.
+    /// Groups with no enterable published entrance, which took the station point's own doors.
     fallback_stations: usize,
-    /// The groups a side of which had no way IN, and so stand on one node after all.
+    /// Groups with a side lacking a way in, which stand on one node after all.
     collapsed_stations: usize,
-    /// The access edges that join a station node to the pavement, which the total below also
-    /// counts: one per direction per door per side, so more than one per station node.
+    /// Access edges joining station nodes to the pavement: one per direction per door per side.
     street_doors: usize,
-    /// The exit-to-entry edges, one per station node pair, that a change of train crosses.
+    /// The exit-to-entry edges a change of train crosses.
     transfer_edges: usize,
-    /// The cuts those joins made in the walking network, each one a new mid-block node.
+    /// The mid-block nodes those joins cut into the walking network.
     pavement_cuts: usize,
-    /// The platform NODES, which is two per stop of every pattern — one boarded from and one
-    /// alighted from — so twice the board edges.
+    /// Platform nodes: two per stop of every pattern (board and alight).
     platform_nodes: usize,
     access_edges: usize,
     board_edges: usize,
     ride_edges: usize,
-    /// The arrival-to-boarding edges, one per platform, that a rider staying on the train crosses.
+    /// The arrival-to-boarding edges a rider staying on the train crosses.
     stay_aboard_edges: usize,
     dropped_patterns: usize,
     routes: Vec<TransitRouteRecord>,
-    /// Per board edge its lane id, route index and stop index along the pattern, and per ride edge
-    /// its route index — the two side tables, in edge-id order.
+    /// Per board edge its lane, route and stop index; per ride edge its route, in edge-id order.
     board_table: Vec<(u32, u32, u16, u16)>,
     ride_table: Vec<(u32, u16)>,
-    /// Per door the street it stands on and which side of it, as the walking edge it was cut into
-    /// carries them. The maneuver names the door by this rather than by the step a route happens to
-    /// approach it along, which is the cross street at a corner and nothing at all across a crossing.
+    /// Per door the street and side it stands on, which the maneuver names it by.
     door_table: Vec<(u32, u16, u8)>,
 }
 
-/// Transit: the rail topology, on the ferries' terms and one step further. A ferry rides between two
-/// walking nodes; a train rides between nodes of its own, because a rider's wait belongs to one
-/// pattern and not to the station. So each station group becomes a PAIR of nodes per platform side,
-/// each stop of each pattern becomes a PAIR of platform nodes, and the ride runs one stop's boarding
-/// node to the next stop's arrival node. Every one of these edges is appended after the walking
-/// renumber, exactly as the ferries are, so no walking edge or node moves.
-///
-/// Both pairs are what keep a station from being a way through the block. A rider walks in at the
-/// side's ENTRY node and out at its EXIT node, every door being one-way into the one or out of the
-/// other; boards leave the entry, alights land on the exit, and the only edge between the two runs
-/// exit to entry. So a door in and straight out again — which a single node made a free underpass,
-/// dearer only than whatever the street above it cost — cannot be walked, and a change of train,
-/// which is an alight onto the exit and a board off the entry, still can. The platform's own pair
-/// closes the same passage one level down: a board lands on the BOARDING node and an alight leaves
-/// the ARRIVAL node, so the cheapest way across a platform is a ride of at least one stop.
+/// Transit: entry/exit node pairs per side and board/arrival pairs per stop, so no free underpass.
 #[allow(clippy::too_many_arguments)]
 fn append_transit(
     transit: &binfmt::Transit,
@@ -2260,11 +1862,7 @@ fn append_transit(
         });
     }
 
-    // A station meets the pavement at its published entrances: each one projects onto the walking
-    // edge under it, that edge is cut there, and the side nodes the entrance serves join the cut. A
-    // station the agency publishes no entrance for falls back to its own point projected onto every
-    // edge within TRANSIT_ENTRANCE_RADIUS_METERS, which is a door in the middle of the block rather
-    // than whichever corner the snap happened to find.
+    // Each published entrance projects onto the edge under it; none falls back to the station point.
     let (groups, group_of_station) = station_groups(&transit.stations, &transit.entrances);
     let candidates: Vec<u32> = v2_edges
         .iter()
@@ -2286,14 +1884,11 @@ fn append_transit(
     for group in &groups {
         let both_sides: u8 = if group.sides == 2 { 0b11 } else { 0b01 };
         let mut doors: Vec<DoorRequest> = Vec::new();
-        // The sides a rider can get IN by. An exit-only stair is no way to a platform, so a side
-        // with nothing else is a side whose trains cannot be boarded — 145 St on the Lenox line
-        // publishes four doors for its northbound platform and every one of them opens outwards.
+        // An exit-only stair is no way in (145 St northbound publishes only outward doors).
         let mut served: u8 = 0;
         for &entrance_index in &group.entrances {
             let entrance = &transit.entrances[entrance_index];
-            // A station standing on one node takes every door it has, whatever side the entrance
-            // names: there is only one platform to reach.
+            // A one-node station takes every door, whatever side it names.
             let sides = if group.sides == 2 {
                 entrance.sides & both_sides
             } else {
@@ -2334,12 +1929,7 @@ fn append_transit(
             built.entrances += 1;
         }
 
-        // A group no published door can be walked INTO takes the station point's own doors: a
-        // station the agency lists none for, and one whose every listed door opens outwards. A
-        // split group with one side served and one not does NOT — inventing doors round the
-        // station point puts six two-way stairs on pavement the agency publishes none on, the far
-        // side's among them, which is how Aqueduct Racetrack grew a six-door node no train reaches.
-        // That group stands on the served node instead, which the collapse below does.
+        // A split group with one side served stands on that node rather than inventing doors.
         let missing = if served == 0 { both_sides } else { 0 };
         if missing != 0 {
             let mut found: Vec<(f64, PavementFoot)> = Vec::new();
@@ -2358,8 +1948,7 @@ fn append_transit(
                     meters_per_unit,
                 ));
             }
-            // Nearest first across the whole group, so a complex whose members share a corner spends
-            // its six on the six nearest doors rather than on whichever member was read first.
+            // Nearest first across the whole group, so a complex spends its doors on the nearest.
             found.sort_by(|left, right| {
                 left.0
                     .total_cmp(&right.0)
@@ -2407,9 +1996,7 @@ fn append_transit(
             );
             group_nodes.push(Vec::new());
         } else {
-            // A side with no way in would be a platform a rider could leave and never board, so the
-            // group stands on the one node it had before the split — which carries every door the
-            // group has, the far side's included, and is a walk across the street the rider makes.
+            // A side with no way in would be unboardable, so the group stays on one node.
             let enterable = |side: usize| {
                 doors
                     .iter()
@@ -2438,9 +2025,7 @@ fn append_transit(
                 })
                 .collect();
             for (side, place) in places.iter().enumerate() {
-                // Two entrances that landed on one walking node with the same directions and the
-                // same kind are one way in, at the cheaper of their two bases. Differing in either
-                // they stay apart: a lift beside an exit-only stair is not a cheap two-way lift.
+                // Entrances on one node with equal directions and kind merge, at the cheaper base.
                 let mut joined: Vec<JoinedDoor> = Vec::new();
                 for door in doors {
                     if sides == 2 && door.sides & (1 << side) == 0 {
@@ -2476,10 +2061,7 @@ fn append_transit(
                     (door.node, door.kind, door.entry, door.exit, door.base)
                 });
                 for door in joined {
-                    // The base is the stair and the gate; the rest is the walk out to this door,
-                    // taken from the station node so that it is the edge's own length — for a lone
-                    // station that IS the perpendicular, and for a complex, whose node stands at its
-                    // members' centroid, it is the longer and honest figure.
+                    // Measured from the station node so it's the edge's own length.
                     let meters = node_distance(
                         node_lng,
                         node_lat,
@@ -2491,8 +2073,7 @@ fn append_transit(
                     );
                     let walk = (meters / ACCESS_WALK_METERS_PER_SECOND).round();
                     let seconds = (f64::from(door.base) + walk).min(f64::from(u16::MAX)) as u16;
-                    // A two-way door is two edges, because the way in and the way out land on nodes
-                    // of their own. Each keeps the flag that says which it is.
+                    // A two-way door is two edges, since in and out land on different nodes.
                     for (station_id, flag) in [
                         (place.entry, ACCESS_ENTRY_ONLY),
                         (place.exit, ACCESS_EXIT_ONLY),
@@ -2524,9 +2105,7 @@ fn append_transit(
                         built.street_doors += 1;
                     }
                 }
-                // The change of train: off one platform onto this side's exit, over to its entry,
-                // and onto the next. It costs nothing, the wait being what the boarding prices, and
-                // it runs one way, so no walk reaches a door through it.
+                // Free and one-way, so no walk reaches a door through it; the board prices the wait.
                 v2_edges.push(transit_edge(
                     node_lng,
                     node_lat,
@@ -2549,12 +2128,7 @@ fn append_transit(
     }
 
     for pattern in &transit.patterns {
-        // A pattern skips a station the snap dropped and rides straight past it: the seconds are an
-        // offset from the pattern's first stop, so the ride either side of a gap is still the
-        // difference of two offsets. A pattern left with one stop is no ride at all.
-        // The stop index kept beside each of them is the one the TIMETABLE counts in — the position
-        // in the pattern as the feed wrote it — so a snap that dropped a station cannot slide the
-        // rest of the line onto the wrong departures.
+        // Skip dropped stations; the kept stop index is the feed's, so departures stay aligned.
         let kept: Vec<(&StationSide, (i32, i32), u32, u16)> = pattern
             .stops
             .iter()
@@ -2563,8 +2137,7 @@ fn append_transit(
             .filter_map(|(index, (&stop, &offset))| {
                 let station = &transit.stations[stop as usize];
                 let point = (quantize_x(station.lng), quantize_y(station.lat));
-                // A split station boards this pattern from the nodes of its own direction, which is
-                // the platform side at every feed here; one pair takes every direction.
+                // A split station boards from the nodes of its own direction.
                 let places = &group_nodes[group_of_station[stop as usize]];
                 places
                     .get(usize::from(pattern.direction) % places.len().max(1))
@@ -2579,15 +2152,7 @@ fn append_transit(
         let route_name = intern_name(all_names, &mut interned, &route.short_name);
         let mut previous: Option<(u32, u32)> = None; // the last boarding node and its offset
         for &(place, (platform_x, platform_y), offset, stop_index) in &kept {
-            // The platform stands at the stop the feed gives this pattern, not on the station node:
-            // a complex's node is its members' centroid, and a ride drawn from there would start a
-            // couple of hundred meters off the track. The board and the alight carry that passage.
-            //
-            // It stands on TWO nodes at that point, the way a station side does: the BOARDING node,
-            // which the board lands on and the ride out leaves, and the ARRIVAL node, which the ride
-            // in lands on and the alight leaves, with the free one-way stay-aboard edge between
-            // them. So a rider cannot board and step straight off again to cross the block for the
-            // price of a wait, which one platform node let them do.
+            // Board and arrival nodes at the feed's stop, so a board can't cross the block.
             let boarding = node_lng.len() as u32;
             node_lng.push(platform_x);
             node_lat.push(platform_y);
@@ -2613,8 +2178,7 @@ fn append_transit(
                 .board_table
                 .push((board, pattern.lane_id, pattern.route_index, stop_index));
             built.board_edges += 1;
-            // The way out, which the timetable has nothing to say about: a fixed walk back up to the
-            // station's exit node, of the access kind and carrying no route.
+            // The way out: a fixed walk to the station's exit node, of the access kind.
             v2_edges.push(transit_edge(
                 node_lng,
                 node_lat,
@@ -2683,13 +2247,7 @@ fn intern_name(
     }
 }
 
-// The SHDE artifact, one file per sun-position bin so the client fetches only the ~2 bins a given
-// time needs: `<dir>/bins.json` lists the bins (index + sun position, the elevation being what the
-// client derives the bin's solar intensity from) and the edge count, and `<dir>/<index>.bin` carries
-// that bin's two u8 occlusion rows — buildings then trees, `fraction = byte / 255`. The dir is wiped
-// first so a shrunk bin set leaves no stale files. Each bin file is a 12-byte header (magic "SHDB",
-// u16 version, u16 pad, u32 edgeCount) then the two `edge_count`-byte rows, little-endian;
-// `edge_count` matches the GRPH edge count. Layout: scripts/README.md.
+// SHDE: `bins.json` plus one file per bin (12-byte "SHDB" header, then building and tree rows).
 fn write_shade(
     dir: &std::path::Path,
     edge_count: usize,
@@ -2742,15 +2300,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
-/// What the durable KEY SPACE of this graph is: FNV-1a 64 over the number of durable edges and then
-/// every durable key ascending, eight little-endian bytes each. A key is `(source id, side, ordinal)`
-/// packed as `durableKey` in src/routing/graph.ts packs it — `source << 11 | side << 8 | ordinal` —
-/// and the set is what a shed span resolves through and the ONLY thing it resolves through.
-///
-/// Deliberately integer-only. The blob hash beside it covers the f32 edge lengths, which the
-/// geodesic and offset maths land a ulp apart on macOS/aarch64 and Linux/x86_64: a graph built on one
-/// can never match an artifact placed on the other, though not one shed moves a millimeter between
-/// them. Nothing here is float-derived, so this figure is bit-identical wherever it is computed.
+/// FNV-1a 64 over the sorted durable keys, integer-only so it's identical across platforms.
 fn key_space_hash(edges: &[V2Edge], ordinals: &[u8]) -> u64 {
     let mut keys: Vec<u64> = edges
         .iter()
@@ -2760,9 +2310,7 @@ fn key_space_hash(edges: &[V2Edge], ordinals: &[u8]) -> u64 {
             u64::from(edge.source_id) << 11 | u64::from(edge.side) << 8 | u64::from(ordinal)
         })
         .collect();
-    // Ascending, because the client resolves a span by looking its key up: two graphs whose edge
-    // ORDER differs but whose key set does not put every shed on the same pavement, and a hash that
-    // fired on the reordering would send someone re-placing 88,000 permits for nothing.
+    // Ascending, so a reordering with the same key set doesn't change the hash.
     keys.sort_unstable();
     let mut bytes = Vec::with_capacity(8 * (keys.len() + 1));
     bytes.extend_from_slice(&(keys.len() as u64).to_le_bytes());
@@ -2772,13 +2320,7 @@ fn key_space_hash(edges: &[V2Edge], ordinals: &[u8]) -> u64 {
     fnv1a64(&bytes)
 }
 
-// `version.json`, written beside the graph: what the deployed graph *is*, so a job that only has the
-// live site can tell whether the artifact it snapped against is still the one being served. FNV-1a
-// 64 over the file's own bytes — this detects a rebuild, it does not defend against one, and a
-// hand-rolled hash beats a crypto dependency for that.
-//
-// `keyHash` is the narrower figure an artifact is gated on; `hash` stays what it has always been,
-// because it names these exact bytes and the client fetches it under that name.
+// `version.json`: FNV-1a 64 over the graph bytes (detects a rebuild), plus the narrower `keyHash`.
 fn write_version(
     out: &std::path::Path,
     bytes: &[u8],
@@ -2797,10 +2339,7 @@ fn write_version(
         "bytes": bytes.len(),
         "generatedUnixSeconds": generated,
     });
-    // Named after the graph rather than sitting beside it under one name: two cities write into one
-    // directory, and a shared file would describe whichever built last. The client gates its shed
-    // artifact on this, and a mismatch blanks the layer rather than misplacing it — so the wrong
-    // city's hash here is a layer that silently disappears.
+    // Named per graph since two cities share the directory; the wrong hash blanks the shed layer.
     fs::write(
         out.with_extension("version.json"),
         serde_json::to_vec(&version)?,
@@ -2808,9 +2347,7 @@ fn write_version(
     Ok(())
 }
 
-/// The STRD file: the magic, the format, the header size and the count, then that many sorted u32 OSM
-/// way ids. Written beside the graph because it is the graph's own answer to which drawn walks it
-/// keeps. Layout: scripts/README.md.
+/// STRD: magic, format, header size, count, then sorted u32 OSM way ids.
 fn write_stranded(out: &std::path::Path, ways: &[u32]) -> Fallible<()> {
     let mut bytes = Vec::with_capacity(STRANDED_HEADER_BYTES + 4 * ways.len());
     bytes.extend_from_slice(b"STRD");
@@ -2827,8 +2364,7 @@ fn write_stranded(out: &std::path::Path, ways: &[u32]) -> Fallible<()> {
     Ok(())
 }
 
-/// The STRD file back as the ids it holds, for a build that found this city's graph already fresh:
-/// the second chunks pass needs the stranded set whether or not the pass that computed it ran.
+/// Read the STRD ids back for a build whose graph was already fresh.
 pub fn read_stranded(path: &std::path::Path) -> Fallible<Vec<u32>> {
     let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
     if bytes.len() < STRANDED_HEADER_BYTES || &bytes[0..4] != b"STRD" {
@@ -2858,8 +2394,7 @@ pub fn read_stranded(path: &std::path::Path) -> Fallible<Vec<u32>> {
         .collect())
 }
 
-/// One route of the city's transit topology as the graph carries it: the feed's own colors, and
-/// the three names as ids into the graph's name table.
+/// One transit route: the feed's colors and three name ids.
 #[derive(Clone, Copy)]
 #[cfg_attr(test, derive(PartialEq, Debug))]
 struct TransitRouteRecord {
@@ -2870,13 +2405,7 @@ struct TransitRouteRecord {
     id_name: u16,
 }
 
-/// One city's finished walking network, as everything downstream of the edge list reads it: the
-/// nodes, the edges in the order the blob ships them, their geometry, the compacted name table and
-/// the durable keys. `topology` computes it; `graph_cache` holds it between builds.
-///
-/// This is the thing every attribute column is a byte per edge OF, and the reason a column can be
-/// merged back in by position: a column entry's key folds this base's, so a base that moved cannot
-/// be handed one baked over another.
+/// One city's finished walking network, which every attribute column is a byte per edge of.
 #[cfg_attr(test, derive(PartialEq, Debug))]
 struct Base {
     origin_lng: f64,
@@ -2891,31 +2420,24 @@ struct Base {
     ordinals: Vec<u8>,
     key_hash: u64,
     geometry_polys: Vec<(Vec<i32>, Vec<i32>)>,
-    /// The compact table; every edge's `name_id` already indexes it, `UNNAMED` and all.
+    /// The compact name table every edge's `name_id` indexes.
     names: Vec<String>,
     ferry_side_table: Vec<(u32, u16, u16)>,
-    /// The transit side tables: every route the topology carries, then per board edge its lane id,
-    /// route and stop index along the pattern, and per ride edge its route. The lane id is what the
-    /// daily timetable is keyed by and the stop index is which of that lane's stops this platform
-    /// is, so a board edge can find its next departure without the graph knowing any schedule.
+    /// Routes, then per board edge its lane id, route and stop index, and per ride edge its route.
     transit_routes: Vec<TransitRouteRecord>,
     transit_board_table: Vec<(u32, u32, u16, u16)>,
     transit_ride_table: Vec<(u32, u16)>,
-    /// And per access edge that is a street door, the name id of the street it opens onto and which
-    /// side of that street it stands on.
+    /// Per street-door access edge, the street name id and side it opens onto.
     transit_door_table: Vec<(u32, u16, u8)>,
     stranded_ways: Vec<u32>,
-    /// What the pass reports about the network it built, bar the two figures the write itself
-    /// measures. A build whose base came off the cache prints the same line, every number in it
-    /// being a function of this base.
+    /// The pass's stats bar the two figures the write measures.
     stats: serde_json::Value,
     /// Derived from the edges rather than stored, so a decoded base cannot disagree with them.
     csr: Vec<u32>,
     adjacency: Vec<u32>,
 }
 
-/// CSR adjacency of edge ids: node n owns [csr[n], csr[n + 1]); a self-loop lists its edge twice
-/// on its node, so the half-edge total is 2E.
+/// CSR adjacency of edge ids: node n owns [csr[n], csr[n + 1]); a self-loop lists its edge twice.
 fn adjacency_of(node_count: usize, edges: &[V2Edge]) -> (Vec<u32>, Vec<u32>) {
     let mut degree = vec![0u32; node_count];
     for edge in edges {
@@ -2938,9 +2460,7 @@ fn adjacency_of(node_count: usize, edges: &[V2Edge]) -> (Vec<u32>, Vec<u32>) {
 }
 
 impl Base {
-    /// The base as its cache entry: every field little-endian, in this order. No format version of
-    /// its own — the key the entry is named by folds the tiler's own code, so a build whose layout
-    /// changed asks for a name no earlier build wrote.
+    /// Little-endian fields in this order; no version since the cache key folds the tiler's code.
     fn encode(&self) -> Fallible<Vec<u8>> {
         let mut out = graph_cache::Writer::default();
         out.f64(self.origin_lng);
@@ -3143,34 +2663,25 @@ impl Base {
     }
 }
 
-/// Everything through the name compaction: the base of the whole pass, and inherently sequential —
-/// node identity and the renumber, the walking sort, the ferries appended onto the finished walking
-/// node set, the ordinals over the order that leaves. Nothing here is a function of an attribute
-/// source, which is what lets the columns be baked and cached one at a time over what it returns.
+/// Everything through name compaction; sequential, and independent of any attribute source.
 fn topology(args: &Args) -> Fallible<Base> {
     let streets = binfmt::read_streets(&args.streets)?;
     let origin_lng = streets.origin_lng;
     let origin_lat = streets.origin_lat;
     let scale = streets.scale;
-    // Equirectangular meters per quantized unit at the origin latitude — one reference latitude
-    // for the whole city, as the estimator uses.
+    // Equirectangular meters per quantized unit at the one origin latitude.
     let meters_per_unit_lat = METERS_PER_DEGREE_LAT * scale;
     let meters_per_unit_lng = METERS_PER_DEGREE_LAT * origin_lat.to_radians().cos() * scale;
     let meters_per_unit = (meters_per_unit_lng, meters_per_unit_lat);
 
-    // Everything is quantized in the streets frame, so the paths (whose PATH file carries its own
-    // origin) are re-quantized against the streets origin too — a fraction-of-a-unit rounding, well
-    // under the 1 m node merge — and the two networks share one integer grid the conflation compares.
+    // Paths are re-quantized against the streets origin so both share one integer grid.
     let quantize_x = |lng: f64| ((lng - origin_lng) / scale).round() as i32;
     let quantize_y = |lat: f64| ((lat - origin_lat) / scale).round() as i32;
     let quantized_x: Vec<i32> = streets.lngs.iter().map(|lng| quantize_x(*lng)).collect();
     let quantized_y: Vec<i32> = streets.lats.iter().map(|lat| quantize_y(*lat)).collect();
     let densities = streets.densities();
 
-    // Street protos: one per walkable (non-vehicular-only) CSCL segment, raw polyline, the per-side
-    // cover trapezoid over its original vertex range, and the sidewalk offset/flags — exactly the
-    // Edge the pipeline built before, minus the endpoint pinning conflation does after. The
-    // existence gate runs a few blocks below, once the association knows which sides OSM owns.
+    // Street protos: one per walkable CSCL segment, before endpoint pinning.
     let mut dropped_vehicular = 0usize;
     let mut street_protos: Vec<ProtoEdge> = Vec::new();
     let mut street_segment: Vec<usize> = Vec::new(); // per proto, the STRT record it came from
@@ -3226,14 +2737,10 @@ fn topology(args: &Args) -> Fallible<Base> {
         });
         street_segment.push(segment);
     }
-    // FLAG_NON_VEHICULAR rides in the STRT flags byte and is consumed inside half_offset_meters
-    // (an NV deck is drawn on its own line), so the offset byte already carries it; the reference
-    // keeps that dependency legible where the router reads the same flags byte.
+    // FLAG_NON_VEHICULAR is consumed inside half_offset_meters; this keeps the dependency visible.
     let _ = FLAG_NON_VEHICULAR;
 
-    // The merged name table is the streets' names followed by the paths' (its ids offset past the
-    // street count); path protos carry offset 0 (PATHLIKE), cover from their own density blob, and
-    // the OSM provenance bit.
+    // Streets' names then paths' (ids offset past the street count).
     let mut all_names: Vec<String> = streets.names.clone();
     let street_name_count = all_names.len();
     let mut path_protos: Vec<ProtoEdge> = Vec::new();
@@ -3299,10 +2806,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     }
     let path_name_count = all_names.len();
 
-    // OSM's own sidewalk network (SWLK), the swap's primary source: sidewalk, crossing and
-    // traffic-island ways, quantized into the streets frame like the paths. They arrive here raw —
-    // one proto per way, keyed by way id and carrying no cover — because what they *are* is settled
-    // by the association below.
+    // OSM's SWLK ways, one raw proto per way; the association below settles what they are.
     let osm_sidewalks = match &args.sidewalks {
         Some(file) => Some(binfmt::read_sidewalks(file)?),
         None => None,
@@ -3355,9 +2859,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         all_names.extend(ways.names.clone());
     }
 
-    // The association: which CSCL street side each OSM sidewalk flanks. It supplies the labels and
-    // the keys of every mapped sidewalk edge, and — read the other way — the per-stretch exclusivity
-    // that keeps ground OSM has mapped from also being offset.
+    // Which CSCL street side each OSM sidewalk flanks: labels, keys and per-stretch exclusivity.
     let association = association::associate(&street_protos, &sidewalk_ways, meters_per_unit);
     let street_labels: Vec<(u8, u8)> = street_protos
         .iter()
@@ -3371,11 +2873,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         })
         .collect();
 
-    // The existence gate, now that both sources have spoken. A side exists when OSM maps any of it
-    // or the city's survey draws it; a street with neither side is demoted to its centerline. Which
-    // of the side is *derived* is settled per stretch further down — a run OSM maps is evidence that
-    // the pavement is there, whether or not it is enough of the side for the survey's bit to be set,
-    // so it counts here and is subtracted there.
+    // A side exists if OSM maps any of it or the survey draws it; a street with neither is demoted.
     let mut demoted_streets = 0usize;
     let mut demoted_km = 0.0f64;
     let mut one_sided_streets = 0usize;
@@ -3385,9 +2883,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     let mut osm_side_km = 0.0f64; // of those, the sides OSM maps for itself
     let mut alley_km = 0.0f64;
     let mut demoted_alley_km = 0.0f64;
-    // What the whole-city invariants below need from the gate, keyed by physicalid so each can be
-    // read back off the finished edges: which streets are alleys, which the gate demoted, and how
-    // much pavement it left each street with.
+    // Per-physicalid gate results the whole-city invariants read back off the finished edges.
     let mut alley_ids: HashSet<u32> = HashSet::new();
     let mut demoted_ids: HashSet<u32> = HashSet::new();
     let mut kept_sides: HashMap<u32, u32> = HashMap::new();
@@ -3408,10 +2904,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             owned |= SIDEWALK_RIGHT;
         }
         let exists = gated_sidewalks(streets.flags[segment]) | owned;
-        // Everything pavement exists on, pre-trim: `trim_derived` below takes the mapped stretches
-        // back out of `sidewalks`, which is where the two networks are actually held apart, and
-        // leaves `paved` whole. So `paved` is literally this `exists` — the field is named for the
-        // STRT bits it is read out of, not for what it holds.
+        // `trim_derived` later cuts mapped stretches from `sidewalks`; `paved` stays whole.
         proto.sidewalks = exists;
         proto.paved = exists;
         derived_side_km += 2.0 * km;
@@ -3426,9 +2919,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             alley_km += km;
             alley_ids.insert(proto.source_id);
         }
-        // The most pavement any record under this physicalid was left with. CSCL splits a street
-        // across records, and a key that is one-sided on one record and two-sided on another is not
-        // the one-sided case the phantom invariant is about.
+        // CSCL splits a street across records, so keep the most pavement any record has.
         let sides = kept_sides.entry(proto.source_id).or_insert(0);
         *sides = (*sides).max(exists.count_ones());
         match exists.count_ones() {
@@ -3451,11 +2942,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         }
     }
 
-    // Cut each way where its association changes and hand every stretch what the street it flanks
-    // knows: the street's name, its side label, its half-offset byte, that side's cover byte and its
-    // physicalid — the key, because OSM way ids churn ~1.5-2%/yr and the scaffolding artifact hangs
-    // off these. A stretch with no street beside it (an esplanade, a bridge walk) stays a path edge
-    // under its own way id, which is the ~155 km where that exposure is worth taking.
+    // OSM ids churn ~1.5-2%/yr, so a matched stretch takes its street's physicalid as its key.
     let mut streetless_sidewalk_km = 0.0f64;
     let mut sidewalk_protos: Vec<ProtoEdge> = Vec::new();
     for (way_index, way) in sidewalk_ways.iter().enumerate() {
@@ -3491,8 +2978,7 @@ fn topology(args: &Args) -> Fallible<Base> {
                     piece.name_id = street.name_id;
                     piece.source_id = street.source_id;
                     piece.side = if left { left_label } else { right_label };
-                    // OSM rarely tags the pavement itself; the roadway it belongs to is what knows
-                    // it is in a tube, so the bit comes across with the name and the cover.
+                    // OSM rarely tags the pavement as a tunnel, so the bit comes from its roadway.
                     piece.flags |= street.flags & GRPH_TUNNEL;
                     if matched.street_left {
                         piece.flags |= GRPH_BUILDING_RIGHT;
@@ -3502,9 +2988,7 @@ fn topology(args: &Args) -> Fallible<Base> {
                     piece.kind = KIND_PATH;
                     streetless_sidewalk_km += f64::from(length) / 1000.0;
                 }
-                // A crossing belongs to no side and carries no durable key — the scaffolding never
-                // places on one — but it does take the name and the cover of the street it crosses,
-                // so a marked crossing costs what the synthesized one beside it does.
+                // No durable key, but it costs as its street like a synthesized crossing.
                 None => {
                     piece.source_id = NO_SOURCE_ID;
                     if let Some(crossed) = association.crossed[way_index] {
@@ -3523,11 +3007,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     let sidewalk_edge_protos = sidewalk_protos.len();
     path_protos.extend(sidewalk_protos);
 
-    // The exclusivity, applied over the ground it is about. Every stretch of street OSM's own ways
-    // were just cut into is taken back out of the derived mask, and the street is cut where the
-    // answer changes — so a side OSM maps a third of gets its OSM geometry over that third and a
-    // derived edge over the other two, and never both over the same pavement. Done after the loop
-    // above, which addresses `street_protos` by the index `Association` matched against.
+    // Cut OSM-mapped stretches out of the derived mask, after the loop indexing `street_protos`.
     let mut trimmed_streets = 0usize;
     let mut street_pieces: Vec<ProtoEdge> = Vec::with_capacity(street_protos.len());
     for (proto_index, proto) in street_protos.into_iter().enumerate() {
@@ -3538,7 +3018,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         street_pieces.extend(pieces);
     }
 
-    // Conflate the two sources into one segment list, then node it exactly as before.
+    // Conflate the two sources into one segment list, then node it.
     let (protos, conflate_stats) =
         conflate::conflate(street_pieces, path_protos, &all_names, meters_per_unit);
 
@@ -3615,8 +3095,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     let merged_count = merged_x.len();
     let merged_near_nodes = raw_node_count - merged_count;
 
-    // One edge per proto, endpoints pinned to the merged node coordinates; all other fields (cover,
-    // offset, flags, name, provenance) come straight from the conflated proto.
+    // One edge per proto, endpoints pinned to the merged node coordinates.
     let mut edges: Vec<Edge> = Vec::with_capacity(protos.len());
     for (proto_index, &(raw_a, raw_b)) in proto_ends.iter().enumerate() {
         let proto = &protos[proto_index];
@@ -3657,8 +3136,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         incidence[edge.b as usize].push(edge_id as u32);
     }
 
-    // A degree-2 joint that matches in offset and flags but not name is the one shape joint
-    // contraction now keeps; count it, since it is the only source of extra edges over v1's graph.
+    // Name-break joints are the only shape joints contraction keeps.
     let mut name_break_joints = 0usize;
     for incident in &incidence {
         if incident.len() == 2
@@ -3672,9 +3150,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         }
     }
 
-    // Contract the degree-2 chains. A chain starts at every non-contractible node; whatever edges
-    // are left afterwards are pure degree-2 cycles, each emitted as a self-loop on one retained
-    // node.
+    // Chains start at non-contractible nodes; leftover degree-2 cycles become self-loops.
     let mut visited = vec![false; edges.len()];
     let mut final_edges: Vec<Edge> = Vec::new();
     let mut kept_node = vec![false; merged_count];
@@ -3715,15 +3191,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         edge.poly_y = pruned_y;
     }
 
-    // Island drop, the last conflation step: a contracted component with nothing CSCL anchors it to
-    // is an unanchored OSM path net (a playground stub the entrance snap could not reach, or
-    // NJ/Westchester leakage the land clip missed) — unreachable in the model and a trap for snaps
-    // into dead ends. Remove such components whole, before the base component count.
-    //
-    // A mapped sidewalk anchors as firmly as a CSCL edge does: the association tied it to a
-    // physicalid, it is one side of a real street, and the seam below is what joins it to that
-    // street's corners — which happens after this, so judging it unanchored here would delete the
-    // pavement of every block OSM maps and CSCL's own geometry never touches.
+    // Drop components with no CSCL edge or mapped sidewalk anchoring them.
     let mut island_parent: Vec<u32> = (0..merged_count as u32).collect();
     for edge in &final_edges {
         union(&mut island_parent, edge.a, edge.b);
@@ -3759,10 +3227,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     }
     let mut final_edges = kept_edges;
 
-    // The curb cut — the seam's fourth join case (DESIGN.md, "The seam"). Every step below binds a
-    // corner to OSM's pavement through a *node* of it, and where OSM draws a block as one unbroken
-    // way there is no node to bind to: the corner cuts the way at its own projection instead, and
-    // the seam then resolves onto the cut exactly as it would onto a curb ramp OSM had drawn.
+    // Where OSM draws a block as one way, the corner cuts it so the seam has a node to bind to.
     let curb_cuts = cut_sidewalks_at_corners(
         &mut final_edges,
         &mut merged_x,
@@ -3773,11 +3238,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     let merged_count = merged_x.len();
     let final_edges = final_edges;
 
-    // The contracted graph's connected components are the v1 partition: the base graph's own answer
-    // to which nodes are one street. It is no longer a count the finished graph has to match — the
-    // seam merges components only the mapped pavement connected — so what holds it to account is the
-    // seam-gap ceiling below. A node still counts only if a surviving edge touches it, so the dropped
-    // islands leave the count.
+    // v1 components; a node counts only if a surviving edge touches it.
     let mut base_kept = vec![false; merged_count];
     for edge in &final_edges {
         base_kept[edge.a as usize] = true;
@@ -3795,18 +3256,14 @@ fn topology(args: &Args) -> Fallible<Base> {
     }
     let v1_component_count = base_component.len();
 
-    // Incidence over the contracted edges, each entry an (edge, is-a-end) pair; a self-loop lists
-    // both of its ends on the one node it retains.
+    // Incidence of (edge, is-a-end); a self-loop lists both ends on its one node.
     let mut incidence2: Vec<Vec<(u32, bool)>> = vec![Vec::new(); merged_count];
     for (edge_id, edge) in final_edges.iter().enumerate() {
         incidence2[edge.a as usize].push((edge_id as u32, true));
         incidence2[edge.b as usize].push((edge_id as u32, false));
     }
 
-    // The v2 nodes (corners, then any path node, per base node) and edges are built here. A street
-    // edge's two sidewalk endpoints are the corners its fan assigns at each end, so the fans are
-    // built for every base node first (crossings and links, being local to one node, are emitted
-    // as they go); the sidewalk and path edges follow once both ends' corners are known.
+    // Fans are built for every base node first, since a sidewalk needs both ends' corners.
     let mut v2_x: Vec<i32> = Vec::new();
     let mut v2_y: Vec<i32> = Vec::new();
     let mut v2_base: Vec<u32> = Vec::new(); // the base node each v2 node was made for
@@ -3817,13 +3274,11 @@ fn topology(args: &Args) -> Fallible<Base> {
     let mut left_at_b = vec![u32::MAX; final_edges.len()];
     let mut right_at_b = vec![u32::MAX; final_edges.len()];
     let mut path_node = vec![u32::MAX; merged_count];
-    // Per base path edge end, the corner an entrance snap bound it to — the curb it arrives at,
-    // standing in for the path node the join used to detour through.
+    // Per base path edge end, the corner an entrance snap bound it to.
     let mut curb_node_at_a = vec![u32::MAX; final_edges.len()];
     let mut curb_node_at_b = vec![u32::MAX; final_edges.len()];
     let mut link_pairs: HashMap<(u32, u32), u8> = HashMap::new();
-    // (corner a, corner b, crossed edge): a deg-2 street joint's latent crossing, added only if the
-    // mop-up finds its two sides in different components.
+    // (corner a, corner b, crossed edge): a latent crossing the mop-up adds only if needed.
     let mut mopup_candidates: Vec<(u32, u32, u32)> = Vec::new();
     let mut corner_node_count = 0usize;
     let mut path_node_count = 0usize;
@@ -3831,9 +3286,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     let mut synthesized_crossings = 0usize;
     let mut seam_links = 0usize;
 
-    // The seam, first half (DESIGN.md, "The seam"): the base nodes that are corners of OSM's own
-    // sidewalk network — where a mapped sidewalk ends and no CSCL street does. These are the
-    // termini a mapped street-side slot resolves to.
+    // Base nodes where a mapped sidewalk ends and no CSCL street does.
     let mut osm_corner: Vec<u32> = Vec::new();
     for (base, incident) in incidence2.iter().enumerate() {
         let mut sidewalk = false;
@@ -3850,8 +3303,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             osm_corner.push(base as u32);
         }
     }
-    // Cells a seam radius wide in longitude — and so more than that in latitude — so a 3x3 scan
-    // covers the radius on both axes, as the near-node merge's grid does.
+    // A seam radius wide in longitude, and so wider in latitude, so a 3x3 scan covers it.
     let seam_cell = (SEAM_RADIUS_METERS / meters_per_unit_lng).ceil().max(1.0) as i32;
     let mut seam_grid: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
     for &base in &osm_corner {
@@ -3862,9 +3314,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             .push(base);
     }
 
-    // Where every corner would go, so the resolution below can ask which of them OSM already stands
-    // at. The fan is rebuilt in the construction loop rather than kept: it is O(degree) to make and
-    // the alternative is holding a few million small vectors.
+    // Fans are rebuilt later rather than kept, to avoid holding millions of small vectors.
     let mut corner_start: Vec<usize> = Vec::with_capacity(merged_count + 1);
     let mut corner_x: Vec<i32> = Vec::new();
     let mut corner_y: Vec<i32> = Vec::new();
@@ -3887,8 +3337,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     }
     corner_start.push(corner_x.len());
 
-    // Nearest first, and each OSM corner claimed once: two slots of one intersection resolving to the
-    // same node would collapse the crossing between them into a self-loop.
+    // Each OSM corner is claimed once, or two slots would collapse their crossing into a self-loop.
     let mut seam_candidates: Vec<(f64, u32, u32)> = Vec::new();
     for slot in 0..corner_x.len() {
         let cell_x = corner_x[slot].div_euclid(seam_cell);
@@ -3929,9 +3378,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         }
     }
     let seam_corners = claimed_osm.len();
-    // A corner the fan still has to invent reaches a little further for the mapped pavement beside
-    // it, and joins it with a link rather than becoming it. Same candidate list, same nearest-first
-    // order, so the two halves of the rule cannot claim the same node.
+    // Same candidate order as above, so the two halves of the rule cannot claim the same node.
     let mut corner_link = vec![u32::MAX; corner_x.len()];
     for &(_, slot, base) in &seam_candidates {
         if corner_osm[slot as usize] == u32::MAX
@@ -3973,18 +3420,12 @@ fn topology(args: &Args) -> Fallible<Base> {
             meters_per_unit_lat,
         );
 
-        // Which corners something actually binds to: a derived sidewalk reaching for one, or a path
-        // end departing into its gap. A corner nobody binds to and OSM does not already stand at is
-        // not materialized — at a fully mapped intersection that is all four of them, and inventing
-        // them would leave a ring of corners joined to each other and to nothing else.
+        // Unbound corners OSM doesn't stand at aren't made, or they'd form a ring joined to nothing.
         let mut needed = vec![false; street_count];
         for slot in 0..street_count {
             let end = &ends[slot];
             let edge = &final_edges[end.edge as usize];
-            // Pavement, not a derived edge: a side OSM maps still has a corner, because the
-            // synthesized crossing to the next street has to land somewhere (DESIGN.md,
-            // "Crossings"). The corner then reaches the mapped pavement by resolution or by a seam
-            // link.
+            // A side OSM maps still needs a corner for the synthesized crossing to land on.
             let leaving = mask_leaving(edge.paved, end.at_a);
             if leaving & SIDEWALK_LEFT != 0 {
                 needed[fan.corner_left[slot] as usize] = true;
@@ -3999,9 +3440,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             }
         }
 
-        // The seam: a street-side slot whose corner OSM already stands at resolves to *that* node
-        // rather than to an invented one, so the mapped pavement and the derived pavement meet at one
-        // point — no gap between them, and no second corner beside the real one.
+        // A slot whose corner OSM already stands at resolves to that node.
         let mut corner_ids: Vec<u32> = vec![u32::MAX; street_count];
         for slot in 0..street_count {
             let resolved = corner_osm[corner_start[base] + slot];
@@ -4038,15 +3477,9 @@ fn topology(args: &Args) -> Fallible<Base> {
             }
         }
 
-        // Crossings at a real intersection (degree >= 3, at least two streets): one per street,
-        // joining the two corners that flank it, carrying its name, cover and structure/steps. Where
-        // OSM maps the crossing itself the synthesized one is dropped later, once every terminus is
-        // known; what it must not do is refuse the legal unmarked crossing OSM has no way for.
+        // One crossing per street at a real intersection; OSM-mapped ones replace them later.
         if street_count >= 2 && degree >= 3 {
-            // Two street-ends at one node can flank the same pair of corners — a street that both
-            // arrives and leaves has an end in two slots, and where the fan gives it only two gaps
-            // both slots name the same two corners. Emitting per slot then writes the same crossing
-            // twice: same pair of nodes, same name, same length, one on top of the other.
+            // Two ends of one street can name the same corner pair, so dedup or the crossing doubles.
             let mut crossed_pairs: Vec<(u32, u32)> = Vec::with_capacity(street_count);
             for slot in 0..street_count {
                 let crossed = &final_edges[ends[slot].edge as usize];
@@ -4089,21 +3522,11 @@ fn topology(args: &Args) -> Fallible<Base> {
             && corner_ids[1] != u32::MAX
             && corner_ids[0] != corner_ids[1]
         {
-            // A deg-2 through joint gets no crossing, but an isolated ring of them would split its
-            // two sidewalk sides into two components; remember the latent crossing for the mop-up.
+            // A ring of deg-2 joints would split its two sides, so remember the latent crossing.
             mopup_candidates.push((corner_ids[0], corner_ids[1], ends[0].edge));
         }
 
-        // A path end that entrance-snapped onto a sidewalk binds straight to the corner in the gap
-        // it departs into — the curb it reaches — so the walk never enters the roadway. Every other
-        // path end meets at the old intersection position, which a link ties to its corner; that
-        // node is only created if one of them needs it.
-        //
-        // A walking surface that merely *ends* at a street arrives at the curb too, whether or not
-        // conflation snapped it there: CSCL digitizes a boardwalk or a walkway as meeting the road at
-        // its centerline, and binding that end to the intersection would leave the walk stopping in
-        // the middle of the roadbed. It is the sole path end that makes it an ending — where two or
-        // more meet, the path net genuinely passes through the intersection and keeps its node.
+        // A snapped or sole path end binds to its curb corner, not the roadway centerline.
         let terminates = ends.len() == street_count + 1 && street_count > 0;
         let curbs: Vec<bool> = ends[street_count..]
             .iter()
@@ -4157,9 +3580,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         }
     }
 
-    // One edge per surviving side of a street (each its own baked corner-to-corner geometry,
-    // opposite side labels) and one per walking line — a path, or a sidewalk or crossing OSM drew,
-    // which keeps its own polyline. Only the synthesized crossings and the links carry none.
+    // Only the synthesized crossings and the links carry no geometry.
     let mut geometry_polys: Vec<(Vec<i32>, Vec<i32>)> = Vec::new();
     let mut sidewalk_count = 0usize;
     let mut path_edge_count = 0usize;
@@ -4182,10 +3603,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     for (edge_id, edge) in final_edges.iter().enumerate() {
         let base_flags = edge.flags & (GRPH_STRUCTURE | GRPH_STEPS | GRPH_TUNNEL);
         if edge.flags & GRPH_PATHLIKE != 0 {
-            // An end the entrance snap bound to a curb takes that corner; the rest take the base
-            // node's path node. The stored polyline ends on the centerline either way — that is what
-            // located the street split — so both endpoints are re-pinned onto whatever they resolved
-            // to, which is what actually moves the join out of the roadway and onto the pavement.
+            // Endpoints are re-pinned onto the resolved nodes, moving the join onto the pavement.
             let node_a = match curb_node_at_a[edge_id] {
                 u32::MAX => path_node[edge.a as usize],
                 corner => corner,
@@ -4206,9 +3624,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             poly_y[last] = v2_y[node_b as usize];
             let geom = geometry_polys.len() as u32;
             geometry_polys.push((poly_x, poly_y));
-            // The stored length is the ingest's geodesic sum, but the 1 m node merge nudged the
-            // pinned endpoints, so a near-straight path can end a meter or two under the node
-            // distance; clamp it up like a sidewalk to keep the heuristic admissible.
+            // The 1 m node merge can leave a path short of its node distance, so clamp it up.
             let length = clamp_length(node_a, node_b, edge.length, &mut length_clamped);
             let mut path_flags = if edge.osm {
                 base_flags | GRPH_OSM
@@ -4218,9 +3634,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             if edge.flags & GRPH_BUILDING_RIGHT != 0 {
                 path_flags |= FLAG_GEOMETRY_RIGHT;
             }
-            // A mapped sidewalk is a walking line like a path is, so it is built as one — but the
-            // record it writes is a sidewalk on a named side of a named street, and it keeps that
-            // street's half-offset byte, which is what the scaffolding's depth infers the curb from.
+            // Keeps its street's half-offset, which scaffolding depth infers the curb from.
             v2_edges.push(V2Edge {
                 a: node_a,
                 b: node_b,
@@ -4255,9 +3669,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             let right_a = right_at_a[edge_id];
             let left_b = left_at_b[edge_id];
             let right_b = right_at_b[edge_id];
-            // Only the corners a derived sidewalk actually reaches for have to exist: a street both
-            // of whose sides OSM maps places no offset at all, and the fan may not have materialized
-            // a corner nobody binds to.
+            // Only corners a derived sidewalk reaches for must exist.
             if (edge.sidewalks & SIDEWALK_LEFT != 0 && (left_a == u32::MAX || right_b == u32::MAX))
                 || (edge.sidewalks & SIDEWALK_RIGHT != 0
                     && (right_a == u32::MAX || left_b == u32::MAX))
@@ -4272,10 +3684,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             );
             let half_offset_m = f64::from(edge.offset) / DECIMETERS_PER_METER;
             let meters_per_unit = (meters_per_unit_lng, meters_per_unit_lat);
-            // The left sidewalk runs cornerLeft(a) -> cornerRight(b), the centerline offset to its
-            // geometry-left; the right runs cornerRight(a) -> cornerLeft(b), offset geometry-right.
-            // Each bakes its own corners into its geometry so it reaches them without overshoot, and
-            // its length is that offset polyline's geodesic sum. Both keep base node a first.
+            // Left runs cornerLeft(a) -> cornerRight(b), right runs cornerRight(a) -> cornerLeft(b).
             if edge.sidewalks & SIDEWALK_LEFT != 0 {
                 let left_geom = offset_polyline(
                     &edge.poly_x,
@@ -4343,9 +3752,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         }
     }
 
-    // Links, one per deduped (path node, corner) pair, emitted in key order: a hash map's iteration
-    // order is seeded per process, and the edge sort below breaks ties only on the smaller node id,
-    // so leaving it would shuffle a handful of edge ids between two runs over identical inputs.
+    // In key order, since hash map order is seeded per process and would shuffle edge ids.
     let mut link_count = link_pairs.len();
     let mut link_list: Vec<((u32, u32), u8)> = link_pairs.into_iter().collect();
     link_list.sort_unstable();
@@ -4366,11 +3773,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         });
     }
 
-    // Crossing suppression: where OSM maps the crossing, OSM's crossing is the crossing. A
-    // synthesized corner-to-corner one whose two termini an OSM crossing path already joins — within
-    // half again its own length, so one that chains through a traffic island still counts — is
-    // dropped as a duplicate. Every corner pair OSM does *not* serve keeps its synthesized crossing:
-    // without that the router would refuse the legal unmarked crossing and detour around the corner.
+    // Drop a synthesized crossing an OSM crossing already joins within 1.5x its length.
     let mut crossing_adjacency: HashMap<u32, Vec<(u32, f64)>> = HashMap::new();
     for edge in &v2_edges {
         if edge.kind == KIND_CROSSING && edge.flags & GRPH_OSM != 0 {
@@ -4414,16 +3817,11 @@ fn topology(args: &Args) -> Fallible<Base> {
     let mut v2_edges = kept_v2;
     crossing_count -= suppressed_crossings;
 
-    // The backstop, over whatever the passes above left: one crossing per pair of nodes, whoever
-    // drew them. Collapsing here catches the duplicates no rule upstream can see — a synthesized
-    // crossing and a mapped one over the same two curbs, or two mapped ways over one roadway —
-    // because it asks only what the finished graph says, which is where the defect is visible.
+    // Backstop: one crossing per node pair, whatever drew them.
     let collapsed_crossings = collapse_parallel_crossings(&mut v2_edges);
     crossing_count -= collapsed_crossings;
 
-    // Connectivity mop-up: union-find over the v2 graph, then add a latent crossing at any deg-2
-    // joint whose two sides are still separated, until every v1 component's image is whole. Nothing
-    // it adds can duplicate: it only joins two corners no edge already joins.
+    // Add latent crossings where sides are still separated until each v1 component is whole.
     let v2_node_count = v2_x.len();
     let mut v2_parent: Vec<u32> = (0..v2_node_count as u32).collect();
     for edge in &v2_edges {
@@ -4454,13 +3852,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         }
     }
 
-    // The seam repair. Where OSM maps a side, its way is that side's edge and no offset is placed —
-    // so if the mapped way stops short of the corner the rest of the block reaches, the two halves of
-    // one street stand meters apart with nothing between them. Every such gap is *inside* one v1
-    // component, which is what makes it repairable without inventing connectivity: the base graph
-    // already said these two nodes are the same street, and the repair only supplies the join the
-    // seam did not find. It is measured (`seamRepairLinks`, `seamRepairMeters`) because a large or a
-    // long one means the seam rule missed, not that OSM is patchy.
+    // Seam repair: rejoin gaps inside one v1 component where an OSM way stops short of the corner.
     let mut node_v1 = vec![0u32; v2_node_count];
     for (node, root) in node_v1.iter_mut().enumerate() {
         *root = find(&mut component_parent, v2_base[node]);
@@ -4494,9 +3886,7 @@ fn topology(args: &Args) -> Fallible<Base> {
                 .or_default()
                 .push(node as u32);
         }
-        // Only a node in a piece that is not its v1 component's largest can need a join, and the
-        // nearest peer across the gap is what it joins to; the pairs are then taken shortest first
-        // until every v1 component is whole again.
+        // Join non-largest pieces to their nearest peer, shortest first, until whole.
         let mut joins: Vec<(f64, u32, u32)> = Vec::new();
         for node in 0..v2_node_count {
             let piece = find(&mut v2_parent, node as u32);
@@ -4585,9 +3975,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         }
     }
 
-    // The degenerate backstop, run once every pass that can place an edge has run: an edge from a node
-    // back to itself is no edge, whichever pass drew it. Its kind is what the counts have to be told,
-    // because they were taken as the edges were built.
+    // Drop self-loops once every pass that places edges has run, correcting the kind counts.
     let self_loops = drop_self_loops(&mut v2_edges);
     for edge in &self_loops {
         let km = f64::from(edge.length) / 1000.0;
@@ -4618,8 +4006,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             }
         }
     }
-    // A dropped walking line took its polyline with it, and nothing else points at it, so the table is
-    // compacted and the survivors renumbered onto it — an entry no edge names would still be written.
+    // Compact the geometry table, since dropped lines leave entries no edge names.
     let mut geometry_slot: Vec<u32> = vec![u32::MAX; geometry_polys.len()];
     for edge in &v2_edges {
         if edge.geom != NO_GEOMETRY {
@@ -4640,8 +4027,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         }
     }
 
-    // Components of the finished v2 graph, relabeled by size descending (0 = largest). What holds
-    // the partition to account is the seam-gap ceiling below, not an equality with v1's.
+    // Components of the finished v2 graph, relabeled by size descending (0 = largest).
     let mut component_size: HashMap<u32, usize> = HashMap::new();
     let mut node_root = vec![0u32; v2_node_count];
     for (node, root_slot) in node_root.iter_mut().enumerate() {
@@ -4650,12 +4036,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         *component_size.entry(root).or_insert(0) += 1;
     }
     let component_count = component_size.len();
-    // What the seam did to the v1 partition, net. It is no longer a parity: the seam deliberately
-    // *joins* OSM's sidewalk network to the CSCL streets it flanks, merging v1 components that only
-    // the mapped pavement connected; and it leaves a gap wherever OSM owns a side but its ways stop
-    // short of the block, which the repair above could not reach across. The gaps are counted rather
-    // than asserted away — inventing a join over an arbitrary distance would be a worse lie than the
-    // honest break — but a build that shatters is still an error.
+    // The seam merges v1 components and leaves unrepaired gaps, so this is counted, not asserted.
     let seam_merged_components = v1_component_count.saturating_sub(component_count);
     if seam_gaps > MAX_SEAM_GAPS {
         return Err(format!(
@@ -4705,26 +4086,19 @@ fn topology(args: &Args) -> Fallible<Base> {
             .then(left.a.min(left.b).cmp(&right.a.min(right.b)))
     });
 
-    // Ferries: a final stage, after the seam-gap ceiling and the node renumber above (both
-    // left untouched, so they still validate the walking-only build). Each FERR segment becomes a
-    // KIND_FERRY edge between the two walking nodes its terminals snap to; the merged walking-plus-
-    // ferry connectivity then relabels the components, joining Staten Island and Governors Island to
-    // the main component so the "an edge joins two components" invariant still holds for a ferry edge.
+    // Ferries go after the renumber; merged connectivity joins the islands to the main component.
     let mut ferry_edges = 0usize;
     let mut ferry_dropped_unsnapped = 0usize;
     let mut ferry_dropped_same_node = 0usize;
     let mut ferry_dropped_duplicate = 0usize;
     let mut ferry_stops_unsnapped = 0usize;
-    // Per ferry edge, the terminal stop name ids (into `all_names`) at its node-a and node-b ends,
-    // aligned to `edgeNodeA`/`edgeNodeB`. Written as the byte-60 side table after the geometry blob;
-    // these ids are not edge name_ids, so they are added to `used_names` and remapped explicitly.
+    // Per ferry edge the terminal name ids at its a and b ends; not name_ids, so remapped explicitly.
     let mut ferry_stop_names: Vec<(u32, u16, u16)> = Vec::new();
     let mut ferry_interned: HashMap<String, u16> = HashMap::new();
     if let Some(ferries_file) = &args.ferries {
         let ferries = binfmt::read_ferries(ferries_file)?;
 
-        // Snap each stop to the nearest walking node within the radius; a linear scan over the final
-        // nodes is trivial for the ~26 stops. A stop with no node in range drops every segment on it.
+        // Snap each stop to the nearest walking node in range; a stop with none drops its segments.
         let mut stop_node: Vec<Option<u32>> = Vec::with_capacity(ferries.stops.len());
         for stop in &ferries.stops {
             let stop_x = quantize_x(stop.lng);
@@ -4786,24 +4160,19 @@ fn topology(args: &Args) -> Fallible<Base> {
             }
         }
 
-        // In node-pair order, for the same reason the links are: the ferry edges are appended after
-        // the walking renumber, so their order is the order they are emitted in.
+        // In node-pair order, since the appended ferry edges are numbered as emitted.
         let mut kept_segments: Vec<((u32, u32), usize)> = best_segment.into_iter().collect();
         kept_segments.sort_unstable();
         for (_, index) in kept_segments {
             let segment = &ferries.segments[index];
             let node_a = stop_node[segment.stop_a as usize].expect("a kept segment's stop snapped");
             let node_b = stop_node[segment.stop_b as usize].expect("a kept segment's stop snapped");
-            // The combined crossing-plus-wait time the later phase costs this leg by, rounded into a
-            // u16 of seconds (well under the ~2200 s ceiling) and split across the cover/half-offset
-            // bytes at write time.
+            // Crossing-plus-wait seconds as a u16, split across the cover/half-offset bytes at write.
             let duration = round_half_up(f64::from(segment.raw_time_seconds).max(0.0))
                 .min(f64::from(u16::MAX)) as u16;
             let (geom, length) = match &segment.geometry {
                 Some(shape) => {
-                    // The stored polyline runs node_a -> the FERR interior shape vertices -> node_b, so
-                    // its endpoints are exactly the two snapped node coordinates; the shape's own end
-                    // vertices are the unsnapped stop coordinates and are dropped.
+                    // The shape's ends are unsnapped stops, so the nodes replace them.
                     let mut poly_x = vec![node_lng[node_a as usize]];
                     let mut poly_y = vec![node_lat[node_a as usize]];
                     for point in &shape[1..shape.len() - 1] {
@@ -4819,16 +4188,14 @@ fn topology(args: &Args) -> Fallible<Base> {
                     (geom_index, length)
                 }
                 None => {
-                    // A straight leg carries no geometry entry; the client draws the line between its
-                    // two node coordinates, so its length is that node distance.
+                    // A straight leg carries no geometry, so its length is the node distance.
                     let length = node_distance(
                         &node_lng, &node_lat, node_a, node_b, origin_lng, origin_lat, scale,
                     ) as f32;
                     (NO_GEOMETRY, length)
                 }
             };
-            // The route display name becomes the edge's name (so the client's `edgeName` returns it),
-            // and the two terminal stop names go into the side table, aligned to node-a/node-b.
+            // The route name becomes the edge's name; stop names go into the side table.
             let name_id = if segment.route_name.is_empty() {
                 UNNAMED
             } else {
@@ -4900,11 +4267,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     };
     let node_count = node_lng.len();
 
-    // Merged walking-plus-ferry connectivity: union-find over every edge, then relabel the components
-    // by size descending (0 = largest). This overwrites the walking-only node_component/component_count
-    // above, so the ferry-joined boroughs share one component and the pre-write invariant loop's "an
-    // edge joins two components" check passes for the ferry edges that caused the merge. A walking
-    // edge's two ends shared a component already, so a merge only ever keeps them together.
+    // Relabel components over walking plus ferry edges, overwriting the walking-only ones.
     let mut merged_parent: Vec<u32> = (0..node_count as u32).collect();
     for edge in &v2_edges {
         union(&mut merged_parent, edge.a, edge.b);
@@ -4931,21 +4294,18 @@ fn topology(args: &Args) -> Fallible<Base> {
 
     let edge_count = v2_edges.len();
 
-    // The compact name table: only the names the kept edges reference, re-indexed, sorted by their
-    // original id for a stable layout. 0xFFFF stays unnamed.
+    // Only referenced names, sorted by original id; 0xFFFF stays unnamed.
     let mut used_names: Vec<u16> = v2_edges
         .iter()
         .map(|edge| edge.name_id)
         .filter(|&id| id != UNNAMED)
         .collect();
-    // The ferry side-table stop-name ids are not carried by any edge's name_id, so add them here or
-    // the compaction below would drop the strings they point at.
+    // Ferry stop names are on no edge, so keep them or the compaction drops them.
     for &(_, a_stop_name, b_stop_name) in &ferry_stop_names {
         used_names.push(a_stop_name);
         used_names.push(b_stop_name);
     }
-    // The route table's three names per route are reached through the transit side table rather than
-    // through any edge, so they need the same rescue.
+    // Route names are reached only through the side table, so they need the same rescue.
     for route in &transit_routes {
         used_names.push(route.short_name);
         used_names.push(route.long_name);
@@ -4981,8 +4341,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             ..*route
         })
         .collect();
-    // The edges are remapped here rather than at the write, so what the base holds is already the
-    // table the blob ships and the strings the compaction dropped are gone with it.
+    // Remapped here so the base already holds the table the blob ships.
     let names: Vec<String> = used_names
         .iter()
         .map(|&original| all_names[original as usize].clone())
@@ -4994,10 +4353,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     }
     let (csr, adjacency) = adjacency_of(node_count, &v2_edges);
 
-    // Pre-write invariants: a stored-geometry edge begins and ends exactly on its node coordinates
-    // (a sidewalk is baked corner-to-corner, a path keeps its pinned endpoints), so no geometry
-    // overshoots the intersection; every edge is at least as long as its straight-line node
-    // distance; no edge joins two components; the CSR total is 2E.
+    // Geometry ends on its nodes, length >= node distance, no edge joins components, CSR total 2E.
     for edge in &v2_edges {
         if edge.geom != NO_GEOMETRY {
             let (poly_x, poly_y) = &geometry_polys[edge.geom as usize];
@@ -5024,12 +4380,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         return Err("the CSR half-edge count is not 2E".into());
     }
 
-    // The whole-city invariants (invariants.rs), read off the finished edges. A CSCL key is only a
-    // CSCL key on an edge that took one: an OSM way id and a physicalid are both u32 and do collide,
-    // and only a derived edge or a mapped sidewalk matched to a street is keyed by the street.
-    // Over the walking network and the ferries that join its components — the transit edges are cut
-    // out, because every one of these bounds is a statement about pavement, and a ride between two
-    // stations is neither pavement nor a distance anyone walks.
+    // Transit is excluded since these bounds are about pavement; OSM and CSCL ids can collide.
     let invariant_edges: Vec<invariants::Edge> = v2_edges
         .iter()
         .filter(|edge| !matches!(edge.kind, KIND_ACCESS | KIND_BOARD | KIND_RIDE))
@@ -5093,23 +4444,14 @@ fn topology(args: &Args) -> Fallible<Base> {
     let link_lengths = invariants::link_lengths(&walk);
     let pavement_cells = invariants::pavement_cells(&walk, PAVEMENT_CELL_METERS, PAVEMENT_CELL_KM);
     let seam_hairpins = invariants::seam_hairpins(&walk);
-    // Every failure is collected before any is raised, so one build says everything it has to say.
-    // The two counts nothing bounds — the crossings that stop in the middle of the road and the
-    // hairpin hand-offs — go to the stats below to be watched instead: both are dominated by shapes
-    // that are correct (a mapped crossing stub OSM simply drew short, a cul-de-sac wrapping round its
-    // own head), so neither has a line worth holding, and the regressions that move them move the
-    // bounded numbers above far harder.
+    // Failures are collected before any is raised, so one build reports them all.
     let total_km: f64 = v2_edges
         .iter()
         .map(|edge| f64::from(edge.length))
         .sum::<f64>()
         / 1000.0;
     let mut broken: Vec<String> = Vec::new();
-    // The alley bounds assert New York's meaning of an alley — a service way with no pavement, which
-    // the gate demotes to its centerline. A city whose centerline has no such class is not asked:
-    // San Francisco's "alleys" are narrow streets with sidewalks, and 6.6% of their km demote where
-    // New York's 97% do. `args.alleys` is the city's own statement, not a count, so a classifier
-    // that stopped matching still fails the floors below rather than skipping them.
+    // Only alley-classifying cities are asked; the floors still catch a classifier that stopped.
     if args.alleys {
         for (population, floor, what) in [
             (alley_reach.total_km, MIN_ALLEY_KM, "km of alley"),
@@ -5128,8 +4470,7 @@ fn topology(args: &Args) -> Fallible<Base> {
             }
         }
     }
-    // The populations first, so a bound that passed because it had nothing to hold says so instead
-    // of reading as a clean city.
+    // Populations first, so a bound passing on nothing says so.
     for (population, floor, what) in [
         (
             one_sided_ids.len() as f64,
@@ -5212,11 +4553,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     }
     let dropped_fraction = 1.0 - kept_side_km / derived_side_km;
     let demoted_alley_fraction = demoted_alley_km / alley_km;
-    // The gate's two guards. Neither is a tolerance on the data: each catches the rule being wrong.
-    // Both are shares, so each needs its denominator to exist before the share means anything — a
-    // gate handed no offsettable street and no alley at all would otherwise report a perfect city,
-    // which is why that floor is the one failure that still stops the build where it stands: past
-    // it the two shares below are meaningless rather than merely bad.
+    // Each guard catches the rule being wrong; with no denominator at all the build stops here.
     if !args.probe {
         if derived_side_km < MIN_DERIVED_SIDEWALK_KM || (args.alleys && alley_km < MIN_ALLEY_KM) {
             return Err(format!(
@@ -5244,17 +4581,12 @@ fn topology(args: &Args) -> Fallible<Base> {
             ));
         }
     }
-    // Every one of these is a bound on a whole city, so `key-probe` — the same pipeline over a
-    // fixture of a few hundred blocks — reports them and holds none of them. They are collected and
-    // raised together rather than one at a time: a build that breaks two of them has two things to
-    // say, and a city whose gate is being read for the first time needs every one of the numbers,
-    // not whichever the first check happened to be.
+    // Whole-city bounds, so `key-probe` reports them and holds none.
     if !broken.is_empty() && !args.probe {
         return Err(broken.join("; and ").into());
     }
 
-    // The durable key's ordinals, over the exact order the records are written in — the walking sort
-    // and the ferry append are both behind us, so an edge id here is the id the file ships.
+    // Over the exact written order, so an edge id here is the id the file ships.
     let edge_ordinals = assign_ordinals(&v2_edges)?;
     let durable_id_edges = v2_edges
         .iter()
@@ -5307,8 +4639,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         "lengthClamped": length_clamped,
         "durableIdEdges": durable_id_edges,
         "maxOrdinal": max_ordinal,
-        // The whole point of `key-probe`, and worth a line in every build log besides: the one
-        // figure a committed shed artifact is gated on.
+        // The one figure a committed shed artifact is gated on.
         "keyHash": format!("{key_hash:016x}"),
         "dedupedWays": conflate_stats.deduped_ways,
         "dedupedKm": conflate_stats.deduped_km,
@@ -5372,8 +4703,7 @@ fn topology(args: &Args) -> Fallible<Base> {
         "crossingsToNowhere": crossings_to_nowhere,
         "oneSidedKeys": one_sided_ids.len(),
         "phantomSidewalks": phantoms,
-        // The finished network's own count, which is the population the bound below is held over —
-        // `linkEdges` counts them before the seam's repair pass adds its own.
+        // After the seam repair; `linkEdges` counts before it.
         "linkEdgesScored": link_lengths.links,
         "linkP99M": link_lengths.p99_meters,
         "linkLongestM": link_lengths.longest_meters,
@@ -5410,10 +4740,7 @@ fn topology(args: &Args) -> Fallible<Base> {
     })
 }
 
-/// One byte per edge of the base, per attribute — the four scenic bakes, the two relief rows, the
-/// direct canopy, the industrial frontage, the historic-district share and the over-water share of
-/// a deck — plus one (buildings, trees) row pair per sun bin.
-/// Each is baked over the finished edge list and merged back in by position at the write.
+/// One byte per edge per attribute, plus a (buildings, trees) row pair per sun bin.
 struct Columns {
     landmark: Vec<u8>,
     art: Vec<u8>,
@@ -5429,10 +4756,7 @@ struct Columns {
     shade: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
-/// Every edge's polyline in degrees, recovered exactly as the pre-write geometry check does: a
-/// ferry has none, a geometry-less edge is its straight node-to-node line, and a sidewalk or path
-/// is its own baked entry. Every column that samples the ground reads the sidewalk a walker is
-/// actually on, so they all read these.
+/// Every edge's polyline in degrees; a ferry has none, a geometry-less edge is its node-to-node line.
 fn edge_polylines(base: &Base) -> Vec<Vec<binfmt::Coord>> {
     let to_coord = |quantized_x: i32, quantized_y: i32| binfmt::Coord {
         lng: base.origin_lng + f64::from(quantized_x) * base.scale,
@@ -5466,9 +4790,7 @@ fn edge_polylines(base: &Base) -> Vec<Vec<binfmt::Coord>> {
         .collect()
 }
 
-/// The polylines, built at most once and only for a column that has to bake: they are a couple of
-/// hundred megabytes for New York, and a build whose columns all come off the cache never needs
-/// them at all.
+/// Built lazily: a couple hundred MB for New York, and unneeded when every column is cached.
 struct Polylines<'a> {
     base: &'a Base,
     built: Option<Vec<Vec<binfmt::Coord>>>,
@@ -5480,8 +4802,7 @@ impl Polylines<'_> {
     }
 }
 
-/// One column: the entry this key names, or the bake, stored under it. Both halves are skipped for
-/// a build the driver handed no keys — `key-probe` builds a fixture's graph and caches nothing.
+/// One column: the cached entry under this key, or the bake stored under it.
 fn column(
     mut cache: Option<&mut graph_cache::Cache>,
     name: &str,
@@ -5505,9 +4826,7 @@ fn column(
     }
 }
 
-/// The attribute columns over a finished base: independent of each other, each a function of the
-/// base and of its own source alone, and each cached under a key that folds the base's — so a
-/// re-ingested source bakes one of them and the rest are read back.
+/// Attribute columns, each cached under a key folding the base's, so one source rebakes one column.
 fn bake(
     args: &Args,
     base: &Base,
@@ -5518,11 +4837,7 @@ fn bake(
     let edge_count = base.edges.len();
     let mut polylines = Polylines { base, built: None };
 
-    // The scenic-factor bytes (GRPH v4): a network-fan-out amenity DISCOUNT for landmark and
-    // public-art proximity, and an areal PENALTY for highway / elevated-rail nearness — one per-edge
-    // byte each, which a later phase reads into the routing cost. A fan-out over the whole CSR, so
-    // it takes the finished graph rather than the source file alone; a ferry edge carries none,
-    // zeroed at write.
+    // Scenic-factor bytes: a CSR fan-out over the finished graph; ferries zeroed at write.
     let edge_a: Vec<u32> = base.edges.iter().map(|edge| edge.a).collect();
     let edge_b: Vec<u32> = base.edges.iter().map(|edge| edge.b).collect();
     let edge_len_m: Vec<f64> = base
@@ -5530,8 +4845,7 @@ fn bake(
         .iter()
         .map(|edge| f64::from(edge.length))
         .collect();
-    // A ferry stays walkable here, as it was before the transit kinds existed: it is long enough
-    // that no fan-out reaches across one, and saying otherwise would move bytes for nothing.
+    // A ferry stays walkable here: no fan-out reaches across one, so this moves no bytes.
     let edge_walkable: Vec<bool> = base
         .edges
         .iter()
@@ -5635,10 +4949,7 @@ fn bake(
         None => vec![0u8; edge_count],
     };
 
-    // The relief bytes (v9): the height climbed and the height dropped along each edge walked a->b,
-    // sampled off the city's DEM resampled to a lat/lng field. Cached as one entry, the two rows
-    // back to back, because they come out of one pass over that field — which is also the 1.77 GB
-    // decode this cache is worth most for. A city with no elevation source leaves every edge flat.
+    // Ascent and descent along a->b, one cache entry since they share one DEM pass.
     let (ascent, descent) = match args.elevation_bounds {
         Some(bounds) => {
             let rows = column(
@@ -5669,8 +4980,7 @@ fn bake(
         None => (vec![0u8; edge_count], vec![0u8; edge_count]),
     };
 
-    // The direct-canopy byte (v6): the fraction of the edge under a crown, integrated along that
-    // polyline with no kernel — see direct_canopy.rs for why the cover byte cannot stand in.
+    // The fraction of the edge under a crown, with no kernel (see direct_canopy.rs).
     let direct_canopy = match &args.canopy {
         Some(path) => column(
             cache.as_deref_mut(),
@@ -5689,9 +4999,7 @@ fn bake(
         None => vec![0u8; edge_count],
     };
 
-    // The industrial byte (v10): how much of the edge runs past an industrial lot, both sides
-    // probed. A deck over a yard fronts nothing, so the structure flag is handed over with the
-    // polylines rather than being masked out afterwards, which would flatter the reported mean.
+    // The structure flag is passed in since a deck over a yard fronts nothing.
     let industrial = match &args.industrial {
         Some(path) => column(
             cache.as_deref_mut(),
@@ -5716,9 +5024,7 @@ fn bake(
         None => vec![0u8; edge_count],
     };
 
-    // The historic byte (v10): how much of the edge runs inside a designated district, tested
-    // underfoot rather than probed sideways — see historic.rs for why a boundary is read that way
-    // and an industrial lot is not. A deck through a district is still in it, so no structure mask.
+    // Tested underfoot, not probed sideways; a deck through a district is still in it.
     let historic = match &args.historic {
         Some(path) => column(
             cache.as_deref_mut(),
@@ -5737,10 +5043,7 @@ fn bake(
         None => vec![0u8; edge_count],
     };
 
-    // The bridge byte: how much of a deck edge crosses open water rather than ground. The structure
-    // flag carries viaducts over rail yards too, so the land mask is what the polyline is tested
-    // against; the tunnel bit takes the tubes out first, since a bore under a channel is water
-    // overhead and no view at all. See bridge.rs.
+    // The tunnel bit is excluded first, since a bore under a channel has no view.
     let bridge = match &args.land {
         Some(path) => column(
             cache.as_deref_mut(),
@@ -5789,13 +5092,7 @@ fn bake(
     })
 }
 
-/// The per-bin shade rows, one cached column per sun bin: what the buildings and the crowns occlude
-/// of each edge with the sun where that bin puts it. A bin is a function of its own sun position and
-/// of nothing else in the schedule, so a grid that gained a bin bakes exactly the one — which is the
-/// same property the shade pyramid's per-bucket keys have, one artifact over.
-///
-/// The bins that are missing are baked in ONE call, because the bake parallelizes across bins and
-/// not within one: a cold build that took them one at a time would run on a single thread.
+/// One cached column per sun bin; missing bins bake in one call, since it parallelizes across bins.
 fn shade_columns(
     args: &Args,
     base: &Base,
@@ -5865,9 +5162,7 @@ fn shade_columns(
         .collect()
 }
 
-/// The column a directory entry holds, as FNV-1a 32 over the name this file calls it by. The reader
-/// finds a section by its POSITION in the directory, so two same-sized columns appended in the other
-/// order would each be read as the other, silently; the tag is what makes that a refusal.
+/// FNV-1a 32 of the column name; readers find sections by position, so the tag catches swaps.
 fn column_tag(name: &str) -> u32 {
     let mut hash = 0x811c_9dc5u32;
     for byte in name.as_bytes() {
@@ -5877,8 +5172,7 @@ fn column_tag(name: &str) -> u32 {
     hash
 }
 
-/// One v12 section as it lands in the blob: padded onto an 8-byte boundary, appended, and recorded
-/// as the (offset, length, column tag) entry the header's directory names it by.
+/// One v12 section: 8-byte aligned, appended, and recorded as (offset, length, tag).
 struct Layout {
     bytes: Vec<u8>,
     directory: Vec<(u32, u32, u32)>,
@@ -5949,9 +5243,7 @@ fn le_f32(values: &[f32]) -> Vec<u8> {
         .collect()
 }
 
-/// The nodes standing in a roadway rather than on pavement: those whose every walking edge is a
-/// crossing, i.e. the joints inside one marked crossing of a divided street. Mirrors
-/// `markMidRoadwayNodes` in src/routing/graph.ts, which stays exported as this bake's oracle.
+/// Nodes whose every walking edge is a crossing; mirrors src/routing/graph.ts's oracle.
 fn mark_mid_roadway(
     node_count: usize,
     csr: &[u32],
@@ -5975,9 +5267,7 @@ fn mark_mid_roadway(
     mid_roadway
 }
 
-/// The graph blob, its version file, the stranded list and the SHDE bake, out of the base and the
-/// columns baked over it. Seconds: nothing here computes anything about the city, it only lays the
-/// two out in the order the client reads them.
+/// Lay out the graph blob, version file, stranded list and SHDE bake; computes nothing new.
 fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
     let Base {
         origin_lng,
@@ -6007,9 +5297,7 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
     let node_count = node_lng.len();
     let edge_count = v2_edges.len();
 
-    // The geometry blob: one entry per sidewalk and per path edge, its first vertex absolute (delta
-    // from the graph origin — kept origin-anchored so the client decoder is unchanged), the rest
-    // from the previous vertex.
+    // First vertex delta from the graph origin, the rest from the previous vertex.
     let mut geometry: Vec<u8> = Vec::new();
     let mut geometry_offsets: Vec<u32> = Vec::with_capacity(geometry_polys.len());
     for (poly_x, poly_y) in geometry_polys {
@@ -6069,14 +5357,9 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
         edge_name_id.push(edge.name_id);
         edge_kind_side.push((edge.kind & KIND_MASK) | (edge.side << SIDE_SHIFT));
         edge_flags.push(edge.flags);
-        // The durable key: the source record's id, and the ordinal that — with the side already in
-        // the kind/side byte — picks this edge out within it. A crossing, link or ferry has no
-        // source geometry, so it carries the sentinel and a zero ordinal.
+        // A crossing, link or ferry carries the sentinel and a zero ordinal.
         edge_source_id.push(edge.source_id);
-        // A timed kind carries its seconds and no cover; a walking kind the reverse. The cover byte
-        // is clamped to 254 so the client's maxCover stays under 1: cost.ts's admissible heuristic
-        // collapses (the greenest edge goes free at w = 1) if any edge reads a full 255, which the
-        // denser OSM tree field can now reach.
+        // Cover clamps to 254: a 255 makes an edge free at w = 1, breaking cost.ts's heuristic.
         if timed_kind(edge.kind) {
             edge_duration.push(u16::from(edge.cover) | (u16::from(edge.half_offset) << 8));
             edge_cover.push(0);
@@ -6100,8 +5383,7 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
         }
     }
 
-    // A ferry passes no landmark, art, highway or commercial frontage and walks under no crown, and
-    // neither does a train, so every timed kind reads zero out of each attribute column.
+    // Timed kinds read zero out of every attribute column.
     let walking_only = |values: &[u8]| -> Vec<u8> {
         v2_edges
             .iter()
@@ -6128,8 +5410,7 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
 
     let node_mid_roadway = mark_mid_roadway(node_count, csr, adjacency, &edge_kind_side);
 
-    // The ferry endpoint-stop-name side table: a u32 count, then per ferry edge a (u32 edge id,
-    // u16 a-stop name id, u16 b-stop name id) triple, the ids into the name table above.
+    // A u32 count, then per ferry edge (u32 edge id, u16 a-stop name, u16 b-stop name).
     let mut ferry_table: Vec<u8> = Vec::with_capacity(4 + 8 * ferry_side_table.len());
     ferry_table.extend_from_slice(&(ferry_side_table.len() as u32).to_le_bytes());
     for &(edge_id, a_stop_name, b_stop_name) in ferry_side_table {
@@ -6138,11 +5419,7 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
         ferry_table.extend_from_slice(&b_stop_name.to_le_bytes());
     }
 
-    // The transit side tables: the route table, then per board edge its lane id, route and stop
-    // index, then per ride edge its route, then per street door the street it opens onto. Each is a
-    // u32 count and fixed-size records, and all four are empty for a city with no transit source.
-    // The door table came last and after a graph that shipped without it, so a reader that runs out
-    // of section before reaching it reads the doors as unnamed, exactly as that graph behaved.
+    // Each is a u32 count plus fixed records; a reader missing the door table reads unnamed.
     let mut transit_table: Vec<u8> = Vec::new();
     transit_table.extend_from_slice(&(transit_routes.len() as u32).to_le_bytes());
     for route in transit_routes {
@@ -6183,8 +5460,7 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
     put_f64(&mut layout.bytes, 24, origin_lat);
     put_f64(&mut layout.bytes, 32, scale);
     put_u32(&mut layout.bytes, 40, component_count as u32);
-    // The column maxima, baked so neither thread has to scan 640k edges to learn which sliders the
-    // city can even offer. In the order the client reads them back.
+    // Baked so the client needn't scan 640k edges; in the order the client reads them.
     let greatest = |values: &[u8]| values.iter().copied().max().unwrap_or(0);
     for (index, column) in [
         &edge_cover,
@@ -6256,10 +5532,7 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
         write_stranded(path, stranded_ways)?;
     }
 
-    // The SHDE artifact (optional): the building and crown occlusion fractions per edge per
-    // sun-position bin, keyed off the same finalized edge order the client reads GRPH records in.
-    // One bin is one column, so a schedule that gained a bin baked one bin and the rest of these
-    // rows came off the cache.
+    // Per-edge per-bin occlusion, in the finalized GRPH edge order.
     if let (Some(params), Some(shade_dir_path)) = (&args.shade_params, &args.shade_dir)
         && !columns.shade.is_empty()
     {
@@ -6283,16 +5556,7 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
     Ok(())
 }
 
-/// Returns the OSM way ids the island drop stranded, sorted — what the second chunks pass folds
-/// into each chunk's trailing bitmap so the overlay stops painting a walk no route can follow.
-///
-/// Three stages, each cached in its own right when the driver hands over the keys: the sequential
-/// topology, a fan-out of attribute columns over the edge list it settles, and the assemble that
-/// lays the two out as the blob. So a re-ingested landmark file bakes one column and writes the
-/// graph, where it used to rebuild the city.
-///
-/// `dem` is borrowed rather than opened from a path because the elevation pass resamples the same
-/// mosaic for its overlay; `tiler build` opens it once and hands it to both.
+/// Returns the OSM way ids the island drop stranded, sorted, for the second chunks pass.
 pub fn run(args: &Args, dem: Option<&mut crate::dem::Dem>) -> Fallible<Vec<u32>> {
     let mut cache = args
         .cache
@@ -6303,10 +5567,7 @@ pub fn run(args: &Args, dem: Option<&mut crate::dem::Dem>) -> Fallible<Vec<u32>>
         (Some(cache), Some(key)) => cache.load_base(key)?,
         _ => None,
     };
-    // A cache entry that will not decode is treated as a miss rather than an error. It is the one
-    // staleness that cannot heal itself otherwise: the run would fail, the workflow would bank the
-    // same unreadable entry under a fresh key, and the next deploy would restore it again — a loop
-    // that only a topology change or a hand-deleted cache breaks out of. Recomputing overwrites it.
+    // An undecodable entry is a miss, or the workflow would re-bank it under a fresh key forever.
     let base = match held.and_then(|bytes| match Base::decode(&bytes) {
         Ok(base) => Some(base),
         Err(error) => {
@@ -6342,8 +5603,7 @@ pub fn run(args: &Args, dem: Option<&mut crate::dem::Dem>) -> Fallible<Vec<u32>>
 mod tests {
     use super::*;
 
-    // A section of an odd length, so the one after it has to be pushed onto the next boundary: a
-    // reader views these as Uint32 and Float64 arrays, which is only legal 8-aligned.
+    // An odd-length section, so the next must be padded to the 8-byte boundary typed arrays need.
     #[test]
     fn every_section_starts_on_an_eight_byte_boundary() {
         let mut layout = Layout::new();
@@ -6366,8 +5626,7 @@ mod tests {
         }
     }
 
-    // The directory is fixed-size, and the 49th entry's bytes are node 0's: a column added past the
-    // end used to corrupt the graph rather than fail the build.
+    // The directory is fixed-size and a 49th entry would overwrite node 0.
     #[test]
     #[should_panic(expected = "the v12 directory holds 48 sections")]
     fn the_directory_does_not_run_past_its_last_entry() {
@@ -6377,16 +5636,14 @@ mod tests {
         }
     }
 
-    // The column tag is what the client checks a section's identity against, so the two have to
-    // agree on it byte for byte. This is the figure src/routing/graph.ts computes for the same name.
+    // Must match what src/routing/graph.ts computes for the same name.
     #[test]
     fn the_column_tag_is_fnv_1a_32_of_the_name() {
         assert_eq!(column_tag("edgeCover"), 0x6365_59C7);
         assert_ne!(column_tag("edgeCover"), column_tag("edgeLandmark"));
     }
 
-    // Every section this writes, named once: two entries claiming one column would make the client's
-    // check pass on a file whose columns are not the ones it names.
+    // Two entries claiming one column would pass the client's check on a wrong file.
     #[test]
     fn no_two_sections_claim_the_same_column() {
         let names = [
@@ -6433,10 +5690,7 @@ mod tests {
         assert_eq!(tags.len(), GRAPH_SECTIONS);
     }
 
-    // A crossing chained through an island (nodes 0-1-2), with a station node 3 hung off the island
-    // by an access edge. The island is still mid-roadway — a walker standing there is part way
-    // through one crossing — and the station, which has no walking edge at all, is not. The same
-    // case `markMidRoadwayNodes` is asked in src/routing/graph.test.ts.
+    // An island mid-crossing (0-1-2) is mid-roadway; station node 3, with no walking edge, is not.
     #[test]
     fn a_station_on_a_traffic_island_does_not_pave_it() {
         let csr = [0u32, 1, 4, 5, 6];
@@ -6465,10 +5719,7 @@ mod tests {
             .collect()
     }
 
-    // Two of the bits the record spends are stamped late, from state the proto carries on other
-    // bits: one reused by accident would have a sidewalk claim to be a tunnel. The three door bits
-    // are written on an access edge, where none of the walking bits applies, but they are read off
-    // the same byte — so they have to stand clear of every bit a record spends.
+    // Late-stamped bits and door bits share the flags byte, so they must stand clear of each other.
     #[test]
     fn the_written_flag_bits_are_all_different() {
         let written = [
@@ -6487,21 +5738,17 @@ mod tests {
                 assert_eq!(bit & other, 0, "{bit:#04x} and {other:#04x} share a bit");
             }
         }
-        // Both of these are masked out at write; only GRPH_BUILDING_RIGHT survives to be read back,
-        // as FLAG_GEOMETRY_RIGHT, so neither may sit on a bit the record spends.
+        // Both are masked at write, so neither may sit on a bit the record spends.
         for internal in [GRPH_PATHLIKE, GRPH_BUILDING_RIGHT] {
             assert_eq!(internal & (GRPH_STRUCTURE | GRPH_STEPS | GRPH_TUNNEL), 0);
         }
-        // Bit 5 is the one deliberate reuse: GRPH_BUILDING_RIGHT never reaches a record, so the
-        // door bit has it to itself there, and this is what says nothing else moved onto it.
+        // Bit 5 is the one deliberate reuse, since GRPH_BUILDING_RIGHT never reaches a record.
         assert_eq!(ACCESS_EXIT_ONLY, GRPH_BUILDING_RIGHT);
-        // A ride edge carries no walking flag and no door bit, so its own flag borrows a door's; the
-        // kind is what tells them apart, on both sides of the file, and this says which it borrows.
+        // A ride's flag borrows a door's bit; the kind tells them apart.
         assert_eq!(RIDE_STAY_ABOARD, ACCESS_ENTRY_ONLY);
     }
 
-    // Two stations the feed puts in one transfer complex, each served by a line of its own, plus a
-    // station at either end for the two lines to run to.
+    // Two stations in one transfer complex, each on its own line, plus a terminus for each line.
     fn transfer_fixture() -> binfmt::Transit {
         let station = |lng_units: i32, lat_units: i32, name: &str, complex: u16, surface: bool| {
             binfmt::TransitStation {
@@ -6548,14 +5795,11 @@ mod tests {
         }
     }
 
-    // The pavement's own name, which every door cut into it takes as the street it opens onto. It is
-    // name 0 because `run_transit_on` seeds the table with it, as the real pass arrives with every
-    // walking name already interned.
+    // Name 0, since `run_transit_on` seeds the table with it.
     const PAVEMENT_NAME: u16 = 0;
     const PAVEMENT_STREET: &str = "Flatbush Av";
 
-    // The graph's own frame for the fixture: one OSM sidewalk running 850 m east from node 0 to
-    // node 1, which is the pavement every station below projects onto.
+    // One OSM sidewalk running 850 m east from node 0 to node 1.
     fn transfer_graph() -> PavementGraph {
         let sidewalk = V2Edge {
             a: 0,
@@ -6587,8 +5831,7 @@ mod tests {
         built: TransitBuild,
     }
 
-    // The same pavement laid out several times over, one row per given offset north of the frame's
-    // origin: the two sides of an avenue, or enough of them to run past the cap on a station's doors.
+    // The same pavement repeated at each given row offset north of the origin.
     fn parallel_pavements(rows: &[i32]) -> PavementGraph {
         let (mut node_lng, mut node_lat) = (Vec::new(), Vec::new());
         let (mut edges, mut geometry_polys) = (Vec::new(), Vec::new());
@@ -6663,8 +5906,7 @@ mod tests {
             .collect()
     }
 
-    // The doors hung off one station node: its access edges, less the one that runs to the side's
-    // own entry node, which is the change of train rather than a way to the street.
+    // A station node's doors: its access edges, less the one to the side's own entry node.
     fn doors_from(run: &TransitRun, station: u32, entry: u32) -> Vec<V2Edge> {
         access_edges_from(&run.edges, station)
             .into_iter()
@@ -6736,9 +5978,7 @@ mod tests {
         assert_eq!((outward[0].b, outward[0].flags), (foot, ACCESS_EXIT_ONLY));
     }
 
-    // The underpass: with one node per station a walk could go down one stair and up another, which
-    // is a way through the block for the price of two doors — and the router took it wherever the
-    // street above cost more. The entry and the exit are what make it impossible.
+    // With one node per station, down one stair and up another would be a free underpass.
     #[test]
     fn a_station_is_a_way_in_and_a_way_out_and_not_a_way_through() {
         let run = run_transit_on(parallel_pavements(&[0, 300]), &lone_station(4_000, 150));
@@ -6782,8 +6022,7 @@ mod tests {
 
     #[test]
     fn a_station_between_two_pavements_gets_a_door_on_each() {
-        // 150 units of latitude is about 17 m, so the station stands within the entrance radius of
-        // the pavement either side of it — the two sides of an avenue its platforms run under.
+        // 150 lat units is ~17 m, inside the entrance radius of both pavements.
         let run = run_transit_on(parallel_pavements(&[0, 300]), &lone_station(4_000, 150));
 
         assert_eq!(
@@ -6803,8 +6042,7 @@ mod tests {
         }
     }
 
-    // What the door table is for: the maneuver names the street the door itself stands on, which the
-    // route's own approach step is only sometimes on.
+    // The maneuver names the street the door stands on, not the route's approach.
     #[test]
     fn every_door_records_the_street_it_opens_onto() {
         let run = run_transit_on(parallel_pavements(&[0, 300]), &lone_station(4_000, 150));
@@ -6940,9 +6178,7 @@ mod tests {
         }
     }
 
-    // A station the agency publishes no free crossover for, standing between the two pavements of an
-    // avenue, with a stair onto each; one line runs through it in both directions, and a second
-    // station down the road is what the two patterns ride to.
+    // A split station between an avenue's two pavements, a stair onto each, and one line through it.
     fn split_fixture(entrances: Vec<binfmt::TransitEntrance>) -> binfmt::Transit {
         let station = |lng_units: i32, name: &str, split: bool| binfmt::TransitStation {
             lng: -73.5 + f64::from(lng_units) * 1e-6,
@@ -6984,9 +6220,7 @@ mod tests {
         }
     }
 
-    // The station nodes one station's name hangs off, in the order they were made. Every one of them
-    // carries the name on an edge leaving it — the doors in or out, and failing those the change of
-    // train — which is how the client finds them too.
+    // The station nodes one station's name hangs off, in the order they were made.
     fn named_station_nodes(run: &TransitRun, name: &str) -> Vec<u32> {
         let mut nodes: Vec<u32> = run
             .edges
@@ -7010,8 +6244,7 @@ mod tests {
         nodes.chunks(2).map(|pair| (pair[0], pair[1])).collect()
     }
 
-    // The arrival node paired with a boarding node: the far end of the stay-aboard edge that runs
-    // into it. The alight hangs off this one, never off the node a board lands on.
+    // The arrival node paired with a boarding node, via the stay-aboard edge.
     fn arrival_of(run: &TransitRun, boarding: u32) -> u32 {
         run.edges
             .iter()
@@ -7090,10 +6323,7 @@ mod tests {
         );
     }
 
-    // 145 St on the Lenox line: every door the agency publishes for one of its platforms opens
-    // outwards, so that side has no way in at all. Inventing doors round the station point would put
-    // stairs on pavement that has none; the group stands on the side that IS served instead, which
-    // is the walk across the street a rider actually makes.
+    // 145 St: one platform's doors all open outwards, so the group stands on the served side.
     #[test]
     fn a_split_side_with_no_way_in_stands_on_the_side_that_has_one() {
         let run = run_transit_on(
@@ -7145,9 +6375,7 @@ mod tests {
         }
     }
 
-    // And when NO side has a way in, the station takes its own doors after all: a published door
-    // that only opens outwards is no way to a platform, and a station with nothing else would be
-    // one no train could be boarded at.
+    // With no side enterable, the station takes its own doors after all.
     #[test]
     fn a_station_whose_every_door_opens_outwards_takes_doors_it_can_be_entered_by() {
         let run = run_transit_on(
@@ -7180,8 +6408,7 @@ mod tests {
         }
     }
 
-    // Two doors on one walking node are one way in only if they are the same fixture: a lift beside
-    // an exit-only stair, merged, would be a two-way lift at the stair's cheaper base.
+    // A lift beside an exit-only stair must not merge into a two-way lift at the stair's base.
     #[test]
     fn an_exit_only_stair_beside_a_lift_stays_two_doors() {
         let mut transit = split_fixture(vec![
@@ -7284,8 +6511,7 @@ mod tests {
 
     #[test]
     fn an_entrance_opens_onto_the_pavement_under_it_and_not_the_nearest_to_the_station() {
-        // The station stands beside the far pavement, its one published stair beside the near one:
-        // the door is cut where the stair is, which is the whole point of reading the entrances.
+        // The door is cut where the published stair is, not at the station point.
         let mut transit = split_fixture(vec![entrance(
             4_000,
             10,
@@ -7324,8 +6550,7 @@ mod tests {
             ..
         } = &run;
 
-        // The platform the A line's second stop is, and the one the B line's first stop is: one
-        // rider's arrival and departure at the two halves of the complex.
+        // The A line's second stop and the B line's first: one rider's transfer.
         let platform_of = |lane: u32, stop: u16| -> u32 {
             let (board, _, _, _) = *built
                 .board_table
@@ -7367,10 +6592,7 @@ mod tests {
         );
     }
 
-    // The platform's own pair, one level below the station's. A board lands on the BOARDING node and
-    // an alight leaves the ARRIVAL node, with a free one-way edge from the arrival onto the boarding
-    // between them: so the shortest way across a platform is a ride of at least one stop, and
-    // boarding a train to step straight off it and out of the other door is not a walk at all.
+    // The shortest way across a platform must be a ride of at least one stop.
     #[test]
     fn a_platform_is_boarded_at_one_node_and_alighted_from_another() {
         let run = run_transit(&transfer_fixture());
@@ -7459,8 +6681,7 @@ mod tests {
         }
     }
 
-    // The key space of a two-source graph: three sidewalk edges carrying keys, one crossing carrying
-    // none, and lengths that differ enough to move any figure taken over the bytes.
+    // Three keyed sidewalks and one keyless crossing, with lengths that move any byte-level figure.
     fn key_space_fixture() -> (Vec<V2Edge>, Vec<u8>) {
         let edges = vec![
             V2Edge {
@@ -7485,8 +6706,7 @@ mod tests {
     fn the_key_space_hash_ignores_what_a_shed_does_not_resolve_through() {
         let (edges, ordinals) = key_space_fixture();
         let before = key_space_hash(&edges, &ordinals);
-        // Every length a ulp longer, which is the whole of the macOS/Linux difference that made a
-        // gate on the graph's bytes unpassable, plus a cover byte and a name for good measure.
+        // A ulp longer each, the whole macOS/Linux difference, plus a cover byte and a name.
         let moved: Vec<V2Edge> = edges
             .iter()
             .map(|edge| V2Edge {
@@ -7516,8 +6736,7 @@ mod tests {
     #[test]
     fn the_key_space_hash_fires_when_a_source_splits_differently() {
         let (edges, ordinals) = key_space_fixture();
-        // One more edge off source 88's north side: the same street, cut in three where it was cut
-        // in two, so every span placed on the old ordinal 1 now names a different stretch.
+        // Source 88's north side cut in three instead of two, renaming ordinal 1's stretch.
         let mut split = edges.clone();
         split.push(V2Edge {
             length: 12.25,
@@ -7543,8 +6762,7 @@ mod tests {
 
     #[test]
     fn a_mapped_crossing_takes_the_pair_from_a_synthesized_one_however_far_it_doglegs() {
-        // What the suppression's length slack cannot reach: the mapped crossing rounds a curb and
-        // runs to twice the straight line the synthesis drew between the same two corners.
+        // Beyond the suppression slack: the mapped crossing is twice the synthesized line.
         let mut edges = vec![crossing(4, 9, 10.9, false), crossing(9, 4, 21.8, true)];
         assert_eq!(collapse_parallel_crossings(&mut edges), 1);
         assert_eq!(edges.len(), 1);
@@ -7629,14 +6847,12 @@ mod tests {
             gated_sidewalks(record(true, true, true, true)),
             SIDEWALK_LEFT | SIDEWALK_RIGHT
         );
-        // The Bronx case, and the reason OSM alone cannot decide: nobody has mapped this block, but
-        // the city's survey draws pavement on both sides, so both survive.
+        // Unmapped in OSM but surveyed on both sides, so both survive.
         assert_eq!(
             gated_sidewalks(record(false, false, true, true)),
             SIDEWALK_LEFT | SIDEWALK_RIGHT
         );
-        // And the reverse: the survey missed it — a driveway curb cut, a plaza drawn separately —
-        // but a mapper walked it, so it survives too.
+        // Missed by the survey but mapped in OSM, so it survives too.
         assert_eq!(
             gated_sidewalks(record(true, false, false, false)),
             SIDEWALK_LEFT
@@ -7650,9 +6866,7 @@ mod tests {
 
     #[test]
     fn the_gate_leaves_an_alley_no_sidewalks_at_all() {
-        // 99.4% of the city's alley km is like this: no OSM sidewalk, no surveyed polygon, either
-        // side. The gate returns nothing, which is what demotes the alley to a centerline path edge
-        // — the alley stays routable, it just stops pretending to have pavement.
+        // Most alley km: no evidence either side, so the alley is demoted to a centerline path.
         assert_eq!(gated_sidewalks(record(false, false, false, false)), 0);
         // The other flag bits share the byte and must not be read as sides.
         let alley = FLAG_VEHICULAR_ONLY | FLAG_STRUCTURE | (1 << 1);
@@ -7661,11 +6875,7 @@ mod tests {
 
     #[test]
     fn a_traffic_island_is_part_of_the_crossing_it_chains_through() {
-        // 20 is a sidewalk, 21 a marked crossing and 22 the island between the two halves of one.
-        // The island has to read as a crossing: a divided street's crossing is drawn as way, island,
-        // way, and an island that is anything else costs differently at best and, if the ingest ever
-        // stops carrying it, leaves both halves ending in the middle of the road — which is the
-        // shape `invariants::crossings_to_nowhere` counts over the finished city.
+        // An island must read as a crossing, or a divided street's crossing ends mid-road.
         assert_eq!(swlk_kind(SWLK_SIDEWALK), KIND_SIDEWALK);
         assert_eq!(swlk_kind(21), KIND_CROSSING);
         assert_eq!(swlk_kind(22), KIND_CROSSING);
@@ -7684,8 +6894,7 @@ mod tests {
 
     #[test]
     fn a_chain_contracts_only_where_the_surviving_sides_line_up() {
-        // Two halves of one street meeting at node 1: the first arrives (its `b` end), the second
-        // departs (its `a` end), so their stored masks are read the same way round.
+        // The first arrives at node 1 and the second departs, so their masks read the same way round.
         let block = |a: u32, b: u32, sidewalks: u8, paved: u8| Edge {
             a,
             b,
@@ -7719,17 +6928,13 @@ mod tests {
             north_only(1, 2, SIDEWALK_RIGHT),
         ];
         assert!(!contractible(&differing, &incidence, 1));
-        // The same two sides, but the second block digitized the other way round, so both edges end
-        // at the joint and the masks must mirror to mean the same pavement.
+        // The second block digitized the other way round, so the masks must mirror.
         let mirrored = vec![
             north_only(0, 1, SIDEWALK_LEFT),
             north_only(2, 1, SIDEWALK_RIGHT),
         ];
         assert!(contractible(&mirrored, &incidence, 1));
-        // The derived masks agree and the paved ones do not: the first block's north side is OSM's,
-        // so nothing is derived there but the pavement is real, while the second's is bare on both.
-        // The corner fan reads `paved`, so merging these would carry the first block's curb to the
-        // far end and place a crossing where there is no pavement to cross to.
+        // Derived masks agree but paved ones don't; merging would place a crossing to nowhere.
         let paved_only = vec![block(0, 1, 0, SIDEWALK_LEFT), block(1, 2, 0, 0)];
         assert!(!contractible(&paved_only, &incidence, 1));
         // And it mirrors like the derived mask does.
@@ -7742,9 +6947,7 @@ mod tests {
 
     #[test]
     fn a_street_is_cut_where_osm_takes_over_its_side() {
-        // 100 m of street, OSM owning the first 40 m of its geometry-left side. The offset is placed
-        // over the other 60 and nowhere else, and the two pieces share the cut vertex exactly so the
-        // noding puts them back together.
+        // 100 m of street with OSM owning the first 40 m of the left side.
         let street = ProtoEdge {
             poly_x: vec![0, 100],
             poly_y: vec![0, 0],
@@ -7776,8 +6979,7 @@ mod tests {
                 (vec![40, 100], SIDEWALK_LEFT | SIDEWALK_RIGHT, 11),
             ]
         );
-        // Both keep the whole street's pavement mask, which is what the corner fan reads, and their
-        // lengths still sum to it.
+        // Both keep the whole pavement mask, and their lengths still sum to it.
         assert!(
             pieces
                 .iter()
@@ -7881,12 +7083,6 @@ mod tests {
         fs::remove_dir_all(&dir).expect("cleanup");
     }
 
-    // The curb-cut fixture: a bend node where an east street and a south street meet, and one OSM
-    // sidewalk way running east-west a little to the north of it. Meters are units here, so the
-    // coordinates read directly. The fan puts one corner in the 90-degree south-east wedge at
-    // (4, -4) and one in the 270-degree wedge behind it at (-4, 4); the way passes through the
-    // second wedge and only clips the corner of the first, which is what the guards have to tell
-    // apart.
     /// One edge for the island-drop tests: nothing but its ends, its provenance and its kind matter.
     fn island_edge(a: u32, b: u32, osm: bool, kind: u8, source_id: u32) -> Edge {
         Edge {
@@ -7913,8 +7109,7 @@ mod tests {
 
     #[test]
     fn a_way_is_stranded_only_when_its_whole_component_goes() {
-        // Nodes 0-1 are a CSCL street with an OSM path (way 10) hung off it at node 1; nodes 3-4 are
-        // an OSM path net (ways 20 and 21) touching nothing else.
+        // 0-1: a CSCL street with OSM way 10 at node 1; 3-4: an isolated OSM net (ways 20, 21).
         let edges = vec![
             island_edge(0, 1, false, KIND_SIDEWALK, 1),
             island_edge(1, 2, true, KIND_PATH, 10),
@@ -7928,9 +7123,7 @@ mod tests {
 
     #[test]
     fn a_way_a_surviving_chain_still_carries_is_not_stranded() {
-        // Contraction keeps only the least source id of a chain, so the survivor of ways 30 and 31
-        // names 30 alone. Read off the survivors, way 31 would look stranded; read off the parts it
-        // was built from, it is exactly as reachable as way 30 is.
+        // A contracted chain names only its least source id, so way 31 must be judged off the parts.
         let parts = vec![
             island_edge(0, 1, false, KIND_SIDEWALK, 1),
             island_edge(1, 2, true, KIND_PATH, 30),
@@ -7970,8 +7163,7 @@ mod tests {
         }
     }
 
-    /// Runs the pass over the fixture with one sidewalk way of the caller's choosing, and returns
-    /// the cut count and the x coordinates the way was cut at.
+    /// A bend node with corners at (4, -4) and (-4, 4) and the given way; returns cuts and their x's.
     fn cut_fixture(
         way: &[(i32, i32)],
         way_structure: bool,
@@ -7997,13 +7189,7 @@ mod tests {
 
     #[test]
     fn a_corner_cuts_the_unbroken_sidewalk_it_stands_on_and_only_that_corner() {
-        // The way runs 400 m with no node of its own, so the seam has nothing to bind the corner in
-        // its wedge to; the cut gives it one, at the corner's own projection.
-        //
-        // Both corners are inside the 12 m radius of that way — the south-east one at (4, -4) is 8 m
-        // from it — and both are far from either of its ends, so only the wedge tells them apart:
-        // the way passes behind the south-east corner, on the far side of the east street it flanks.
-        // Hence one cut rather than two. Take the wedge guard out and this fails on the count.
+        // Both corners are within reach of the nodeless way, so only the wedge guard yields one cut.
         let (cuts, at) = cut_fixture(&[(-200, 4), (200, 4)], false, false);
         assert_eq!(cuts, 1);
         assert_eq!(
@@ -8015,16 +7201,13 @@ mod tests {
 
     #[test]
     fn a_corner_beside_the_way_s_own_node_takes_no_cut() {
-        // The same corner and the same wedge, but now the way is 20 m long: its own ends are 6 m
-        // and 14 m along from the projection, well inside the seam's reach, so the corner already
-        // has a node to bind to and cutting would only shed a second one beside it.
+        // The way's own ends are within seam reach, so no cut.
         assert_eq!(cut_fixture(&[(-10, 4), (10, 4)], false, false), (0, vec![]));
     }
 
     #[test]
     fn a_corner_does_not_reach_past_the_seam_radius() {
-        // 16 m from the corner: past that the corner could not resolve onto the cut anyway, so the
-        // cut would be a node nothing binds to.
+        // 16 m out the corner couldn't resolve onto the cut anyway.
         assert_eq!(
             cut_fixture(&[(-200, 20), (200, 20)], false, false),
             (0, vec![])
@@ -8033,8 +7216,7 @@ mod tests {
 
     #[test]
     fn grade_separation_is_never_cut() {
-        // A footway on a bridge deck passes within meters of the road under it and shares no ground
-        // with it — from either side of the pairing.
+        // A deck shares no ground with the road under it, from either side of the pairing.
         assert_eq!(
             cut_fixture(&[(-200, 4), (200, 4)], true, false),
             (0, vec![])
@@ -8045,10 +7227,7 @@ mod tests {
         );
     }
 
-    /// `encode`/`decode` is the one path where cached bytes could assemble a WRONG graph rather than
-    /// failing to assemble one: `Reader::finish` catches a length that drifted, but two same-typed
-    /// fields written in one order and read back in the other cost no bytes at all. So every field
-    /// below holds a value no field it could be confused with holds.
+    /// Every field holds a distinct value, so two same-typed fields swapped in decode would fail.
     #[test]
     fn a_base_survives_the_encoding_its_cache_entry_is() {
         let edges = vec![
