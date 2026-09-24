@@ -77,7 +77,7 @@ test("the default mode is the first chip", () => {
   expect(modeById("cartographer")).toBeNull();
 });
 
-// Effective weights: industrial's max is 5, every other factor's is 1.
+// Effective weights: industrial's max is 5, highway's and transit's 3, every other factor's 1.
 test("each mode spends what the table says it spends", () => {
   const weights = Object.fromEntries(
     MODES.map((mode) => [mode.id, spent(neutral(mode))]),
@@ -85,6 +85,7 @@ test("each mode spends what the table says it spends", () => {
   expect(weights.naturalist).toEqual({
     tree: 1,
     bridge: 1,
+    highway: 3,
     industrial: 5,
     transit: 3,
   });
@@ -174,7 +175,12 @@ test("a factor this place cannot answer is dropped, and the rest are not", () =>
     { ...DEFAULT_TOGGLES, hills: "none" },
     withoutIndustry,
   );
-  expect(spent(weights)).toEqual({ tree: 1, bridge: 1, transit: 3 });
+  expect(spent(weights)).toEqual({
+    tree: 1,
+    bridge: 1,
+    highway: 3,
+    transit: 3,
+  });
   expect(weights.hill).toBe(0); // the toggle is off the table too, not just the mode's weights
 });
 
