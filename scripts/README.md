@@ -261,7 +261,7 @@ in its own band.
 | legacy | SF Legacy Business Registry (ArcGIS, Office of Small Business) and NY State Historic Business Preservation Registry (ArcGIS, State Parks) | businesses trading 50+ years, at their register's own point; a committed POI source, magic `LGCY` — overlay only, no per-edge byte; see "Binary layouts" |
 | landmarks | **NYC**: LPC Individual Landmark Sites, Socrata `buis-pvji`. **SF**: Planning's Article 10 landmarks, `rzic-39gi`. **East Bay**: the California OHP's Built Environment Resource Directory for Alameda County, geocoded against the county's address points and parcels (`scripts/alameda.ts`) | designated historic/touristy sites as points — ~1.5k in New York, 458 in the Bay Area; a committed POI source, magic `LMRK` — fanned out into a per-edge routing discount, not the cover pipeline. **The East Bay's are a different kind of designation from the other two** — federal and state, not a local register, because neither Oakland's nor Berkeley's is published as data; see "Binary layouts" |
 | art | **NYC**: PDC Outdoor Public Art Inventory (Socrata `2pg3-gcaa`). **SF**: the Civic Art Collection, the 1% Art Program and the StreetSmArts murals. Everywhere: OSM `tourism=artwork` via Overpass | public art and murals (OSM carries the murals a city inventory is thin on), deduped by proximity; a committed POI source, magic `ARTW` — its own routing discount, distinct scenery from landmarks. The East Bay has no city inventory worth reading — Oakland's Socrata set is frozen at 2013 and 59 of its 90 rows share one placeholder coordinate — so its 371 works are OSM's, which the region-wide Overpass query already returns; see "Binary layouts" |
-| highways | OSM limited-access highways (`motorway`/`trunk` + ramps) and above-ground rail (surface, open cut, or elevated — anything not `tunnel`), via Overpass | the lines walking near is unpleasant, as polylines; a committed source, magic `HWAY` — proximity to it is a per-edge routing *penalty*; never itself routed; see "Binary layouts" |
+| highways | OSM big roads (`motorway`, `trunk`, `primary`, `secondary`, `tertiary`, each with its `_link` ramps folded in) and above-ground rail (surface, open cut, or elevated — anything not `tunnel`), via Overpass; tunneled roads are excluded too. **NYC** adds FHWA HPMS 2024 for New York (ArcGIS, `geo.dot.gov/.../HPMS_FULL_NY_2024/FeatureServer/0`), whose per-segment AADT matches NYSDOT's counts (`scripts/hpms.ts`) | the lines walking near is unpleasant, as polylines, each with a class byte and a severity byte; a committed source, magic `HWAY` — proximity to it is a per-edge routing *penalty* scaled by that severity; never itself routed; see "Binary layouts" |
 | buildings | **NYC**: NYC Building Footprints, Socrata `5zhs-2jue` (`feature_code=2100` with a positive `height_roof`, feet→meters). **SF**: DataSF `ynuv-fyni`, whose rows carry their own LiDAR height (`hgt_median_m`) and ground (`gnd_min_m`). **East Bay**: Overture's footprints (ODbL) with the heights `tiler ndsm` measures off the 2021 county LiDAR, merged by `scripts/east-bay-buildings.ts` | 867,920 footprints in New York and 426,509 in the Bay Area, each with its roof height; a committed source, magic `BLDG` — the walls the **building-shade** factor raises to cast shadows, for both the shade overlay pyramid and the signed per-edge shade routing bake; see "Binary layouts" and "The LiDAR building surface" |
 | landuse | NYC PLUTO, Socrata `64uk-42ks` (lots with `landuse` 1..5) | 788,591 tax lots, each with a land-use class byte; a committed source, magic `PLUT` — the commercial-vs-residential signal for the **commercial-area** overlay; see "Binary layouts" |
 | industrial | **NYC**: PLUTO's tax-lot polygons, DCP's MAPPLUTO ArcGIS FeatureServer (`services5.arcgis.com/.../MAPPLUTO/FeatureServer/0`), `LandUse = '06'`. **SF**: DataSF Land Use `c5ge-t6pj` + Zoning `3i4a-hu95`, the rule in `scripts/sf.ts`. **East Bay**: Alameda County's assessor parcels (`services5.arcgis.com/.../Parcels/FeatureServer/0`), `UseCode` in the 4xxx industrial band, plus MTC/SFEI Existing Land Use 2020 for the tax-exempt land no roll carries (`scripts/alameda.ts`) | industrial land as **polygons** — 9,295 lots in New York and 6,269 parcels in the Bay Area (2,573 in San Francisco, 3,696 in the East Bay); a committed source, magic `INDL` — drawn as an overlay so the region's industrial land can be seen, and sampled per edge into the graph's industrial-frontage penalty (the GRPH industrial column). New York's geometry has to come from ArcGIS: the Socrata copy of PLUTO is lot centroids and its `geom` column is null on every row. See "Binary layouts" |
@@ -269,7 +269,7 @@ in its own band.
 | dining | NYC Dining Out `fpeh-f7ci` + OSM `outdoor_seating` via Overpass | outdoor-dining points; a committed source, magic `DINE` — a "cute" signal for the commercial overlay |
 | openstreets | NYC DOT Open Streets `uiay-nctu` (non-school), sampled every ~10 m | Open Streets corridor points; a committed source, magic `OSTR` — a "cute" signal for the commercial overlay |
 
-The commercial overlay's per-segment signals are then precomputed at **build time** by the commercial pass (run after the chunks pass): it snaps `landuse`/`buildings`/`dining`/`openstreets` onto each street segment by *frontage* (perpendicular, projection in-span) and writes `public/commercial/{x}/{y}.bin` (magic `CMRC`, 3 bytes/segment: commercial fraction, median roof height, flags for open-street/seating), one file per `STCK` chunk, gitignored. The overlay reads those and applies the gate (>50% commercial AND low-rise AND (open-street OR seating)) client-side, so its thresholds stay tunable without a rebuild. The **same gate** also runs at build time to emit the qualifying blocks' centerlines as `public/commercial-lines/<id>.bin` (magic `CMLN`, the `HWAY` single-ring-polygon layout, gitignored), which the graph pass proximity-bakes into the per-edge commercial routing discount (the GRPH commercial column).
+The commercial overlay's per-segment signals are then precomputed at **build time** by the commercial pass (run after the chunks pass): it snaps `landuse`/`buildings`/`dining`/`openstreets` onto each street segment by *frontage* (perpendicular, projection in-span) and writes `public/commercial/{x}/{y}.bin` (magic `CMRC`, 3 bytes/segment: commercial fraction, median roof height, flags for open-street/seating), one file per `STCK` chunk, gitignored. The overlay reads those and applies the gate (>50% commercial AND low-rise AND (open-street OR seating)) client-side, so its thresholds stay tunable without a rebuild. The **same gate** also runs at build time to emit the qualifying blocks' centerlines as `public/commercial-lines/<id>.bin` (magic `CMLN`, the `HWAY` single-ring-polygon layout without its class and severity bytes, gitignored), which the graph pass proximity-bakes into the per-edge commercial routing discount (the GRPH commercial column).
 
 Only walkable road types are kept. Highways, ramps, driveways, ferry routes, u-turns and
 non-physical segments are not part of the network a person walks. Bridges and tunnels come in
@@ -1672,14 +1672,52 @@ layout (name blob empty), for the commercial overlay's "cute" signals. **`data/l
 place of the name blob, via `encodeClassifiedPoints` — mirroring how `TREE` appends parallel per-point
 bytes. All three are consumed only at build time by the commercial pass (see "The sources").
 
-### `data/highways/<id>.bin` — the nuisance lines, magic `HWAY` (v1)
+### `data/highways/<id>.bin` — the nuisance lines, magic `HWAY` (v3)
 
-The **`LAND` polygon layout** exactly, under its own magic: each highway or above-ground-rail polyline
-is one **open ring of a single-ring polygon** record, so the shared `encodePolygons` encoder and
-the generic polygon reader carry it with no new format. Unlike the walking network these are never
-routed — a later phase rasterizes them into an areal proximity field and turns nearness into a
-per-edge routing *penalty* (the mirror of the POI discount). Nuisance is areal, not path-bound, so
-the geometry is raw (undensified); the field's kernel does the smoothing.
+The **`LAND` polygon layout** under its own magic, plus two trailing regions: each road or
+above-ground-rail polyline is one **open ring of a single-ring polygon** record, then exactly `count`
+bytes, **one class byte per line, in record order**, then exactly `count` more, **one severity byte
+per line** (0–255 for 0–1), no padding. Written by `encodeClassifiedPolygons` and read by
+`binfmt::read_highways`.
+
+| class byte | OSM `highway` / `railway` | severity where there are no counts |
+| --- | --- | --- |
+| 0 | `motorway`, `motorway_link` | 1.0 |
+| 1 | `trunk`, `trunk_link` | 0.582 |
+| 2 | `primary`, `primary_link` | 0.249 |
+| 3 | `secondary`, `secondary_link` | 0.133 |
+| 4 | `tertiary`, `tertiary_link` | 0.086 |
+| 5 | above-ground `railway` | 1.0 |
+
+The severity is what the penalty reads; the class only sizes the overlay's stroke. A `_link` ramp
+folds into its parent road's class.
+
+**Where there are traffic counts** (New York, from HPMS), every road's severity is its own traffic:
+`min(AADT / 80,000, 1)`, a fixed reference near the length-weighted median AADT of the city's counted
+`motorway` lines (80,860 in the 2024 data), so only highway-like traffic comes near a highway's
+weight. `scripts/traffic.ts` conflates the counts onto the OSM lines: every ~10 m of a road takes the
+nearest HPMS line within 25 m running within 20° of it (a same-named one first, when both have
+names), and the road's AADT is the length-weighted median of those, or none when under a quarter of
+its length matched. A `motorway` or `trunk` line that finds none gets a second, looser pass (60 m,
+30°), and one that still finds none reads **1.0**: in 2024 that pass recovered 14.5 of the 24.2 km
+the first one missed, and the 9.7 km left are mostly the JFK Expressway and its airport ramps, then
+the Henry Hudson Parkway. HPMS counts a road's two-way total on one centerline, so each carriageway
+of a divided road takes that total. Uncounted segments carry each county's local-street default (986
+in Kings, 2157 in New York, …) rather than a count; those and any lesser road with no match read
+**severity 0**. Rail has no count and is always 1.0.
+
+**Elsewhere** (the Bay Area) a road reads its class's severity from the table above,
+`CLASS_SEVERITY` in `scripts/highways.ts`: the length-weighted median severity of New York's
+counted lines of that class. Retuning it is a refetch, not a code change in the tiler.
+
+The client decoder still reads a **v2** file (no severity region) at the table's severity for each
+class, and a **v1** file (no class region either) as all motorway, because a cached blob can outlive
+a deploy.
+
+Unlike the walking network these are never routed — a later phase rasterizes them into an areal
+proximity field and turns nearness into a per-edge routing *penalty* (the mirror of the POI
+discount). Nuisance is areal, not path-bound, so the geometry is raw (undensified); the field's
+kernel does the smoothing.
 
 ### `data/industrial/<id>.bin` — the industrial tax lots, magic `INDL` (v1)
 
@@ -3550,8 +3588,10 @@ The landmark, art, highway and commercial columns are the **scenic-factor attrib
 bytes are a network **discount**: each POI (`LMRK`/`ARTW`) snaps to the nearest walking node and a
 bounded Dijkstra fan-out deposits a distance-decaying contribution on the edges it reaches, summed
 across POIs and saturated `1 − e^{−k·field}` (so a dense cluster stops stacking); the kernel is
-per-mood (landmarks wide, art tight). The highway byte is an areal **penalty**: a Gaussian of the
-edge's meter distance to the nearest highway or above-ground-rail line (`HWAY`). The commercial byte
+per-mood (landmarks wide, art tight). The highway byte is an areal **penalty**: for each `HWAY`
+line, its severity byte (1.0 for a motorway-volume road or an el, down toward 0 for a quiet street)
+times a Gaussian of the edge's meter distance to it, and the byte is the **largest** across lines,
+so an expressway's two carriageways count once. One σ (35 m) serves every line. The commercial byte
 is the same proximity Gaussian over the qualifying commercial-block lines (`CMLN`, derived by
 the commercial pass), read instead as a **discount** with a tight σ so the reward lands on the
 block's own street and sidewalks. All four quantize to a 0–254 ceiling so the client's

@@ -4917,11 +4917,23 @@ fn bake(
             keys.map(|keys| keys.highways.as_str()),
             edge_count,
             || {
-                let lines = binfmt::read_polygons(path, "HWAY", binfmt::HIGHWAY_FORMAT)?;
-                let (bytes, max_byte) = scenic::highway_penalty(&network, &lines);
+                let highways = binfmt::read_highways(path)?;
+                let (bytes, max_byte) =
+                    scenic::highway_penalty(&network, &highways.lines, &highways.severities);
+                let mut per_class = [0usize; binfmt::HIGHWAY_CLASSES];
+                for &class in &highways.classes {
+                    per_class[usize::from(class)] += 1;
+                }
+                let weightless = highways
+                    .severities
+                    .iter()
+                    .filter(|&&severity| severity == 0.0)
+                    .count();
                 eprintln!(
-                    "highways: {} nuisance lines, max penalty byte {}",
-                    lines.len(),
+                    "highways: {} nuisance lines {:?} by class (motorway, trunk, primary, secondary, tertiary, rail), {} of no severity, max penalty byte {}",
+                    highways.lines.len(),
+                    per_class,
+                    weightless,
                     max_byte
                 );
                 Ok(bytes)

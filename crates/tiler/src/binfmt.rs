@@ -16,7 +16,7 @@ pub const FERRY_FORMAT: u16 = 2; // the NYC ferry graph, magic "FERR"
 pub const TRANSIT_FORMAT: u16 = 2; // the rail topology, magic "TRNS"
 pub const LANDMARK_FORMAT: u16 = 1; // scenic POI points, the shared point layout, magic "LMRK"
 pub const ART_FORMAT: u16 = 1; // public-art POI points, the shared point layout, magic "ARTW"
-pub const HIGHWAY_FORMAT: u16 = 1; // highway/elevated-rail lines, LAND's layout, magic "HWAY"
+pub const HIGHWAY_FORMAT: u16 = 3; // nuisance lines, LAND's layout plus class and severity bytes per line, magic "HWAY"
 pub const COMMERCIAL_FORMAT: u16 = 1; // commercial-block lines, LAND's layout, magic "CMLN"
 pub const INDUSTRIAL_FORMAT: u16 = 1; // industrial tax lots, LAND's layout, magic "INDL"
 pub const LANDUSE_FORMAT: u16 = 1; // tax lots carrying a land-use class byte, magic "PLUT"
@@ -228,6 +228,57 @@ pub fn read_polygons(path: &Path, magic: &str, format: u16) -> Fallible<Vec<Poly
         offset: head.body,
     };
     Ok(decode_polygons(&mut cursor, &head))
+}
+
+/// Motorway, trunk, primary, secondary, tertiary, rail.
+pub const HIGHWAY_CLASSES: usize = 6;
+
+/// HWAY v3's lines with their parallel class bytes and severities (the severity byte over 255).
+pub struct Highways {
+    pub lines: Vec<Polygon>,
+    pub classes: Vec<u8>,
+    pub severities: Vec<f64>,
+}
+
+/// HWAY v3: the lines as single-ring polygons, then one class byte per line, then one severity byte per line.
+pub fn read_highways(path: &Path) -> Fallible<Highways> {
+    let bytes = fs::read(path)?;
+    check_magic(&bytes, "HWAY", HIGHWAY_FORMAT, path)?;
+    let head = header(&bytes);
+    let mut cursor = Cursor {
+        bytes: &bytes,
+        offset: head.body,
+    };
+    let lines = decode_polygons(&mut cursor, &head);
+    let start = cursor.offset;
+    let middle = start + head.count;
+    let end = middle + head.count;
+    if bytes.len() < end {
+        return Err(format!(
+            "{} is truncated: {} bytes, {end} needed for {} class and severity bytes",
+            path.display(),
+            bytes.len(),
+            head.count
+        )
+        .into());
+    }
+    let classes = bytes[start..middle].to_vec();
+    if let Some((index, class)) = classes
+        .iter()
+        .enumerate()
+        .find(|&(_, &class)| usize::from(class) >= HIGHWAY_CLASSES)
+    {
+        return Err(format!("{}: line {index} is of class {class}", path.display()).into());
+    }
+    let severities = bytes[middle..end]
+        .iter()
+        .map(|&byte| f64::from(byte) / 255.0)
+        .collect();
+    Ok(Highways {
+        lines,
+        classes,
+        severities,
+    })
 }
 
 /// BLDG v1: footprints (one per MultiPolygon part), then u16 roof heights and base elevations.
@@ -1001,6 +1052,109 @@ pub fn write_varint(bytes: &mut Vec<u8>, value: u64) {
 mod tests {
     use super::*;
 
+    const HIGHWAY_ORIGIN_LNG: f64 = -74.0;
+    const HIGHWAY_ORIGIN_LAT: f64 = 40.6;
+    const HIGHWAY_SCALE: f64 = 1e-6;
+
+    // A tiny HWAY v3: two lines, then `trailing` verbatim, so a short or bad trailing region can be built.
+    fn highway_fixture(trailing: &[u8]) -> Vec<u8> {
+        const HEADER: u16 = 40;
+        let lines: [Vec<(i64, i64)>; 2] = [
+            vec![(0, 0), (1_000, 0), (1_000, 2_000)],
+            vec![(5_000, 4_000), (5_000, 9_000)],
+        ];
+
+        let mut body = Vec::new();
+        for ring in &lines {
+            body.extend_from_slice(&1u16.to_le_bytes());
+            body.extend_from_slice(&(ring.len() as u32).to_le_bytes());
+            let (mut previous_x, mut previous_y) = (0i64, 0i64);
+            for &(x, y) in ring {
+                write_varint(&mut body, zigzag(x - previous_x));
+                write_varint(&mut body, zigzag(y - previous_y));
+                previous_x = x;
+                previous_y = y;
+            }
+        }
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"HWAY");
+        bytes.extend_from_slice(&HIGHWAY_FORMAT.to_le_bytes());
+        bytes.extend_from_slice(&HEADER.to_le_bytes());
+        bytes.extend_from_slice(&(lines.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // reserved
+        bytes.extend_from_slice(&HIGHWAY_ORIGIN_LNG.to_le_bytes());
+        bytes.extend_from_slice(&HIGHWAY_ORIGIN_LAT.to_le_bytes());
+        bytes.extend_from_slice(&HIGHWAY_SCALE.to_le_bytes());
+        assert_eq!(bytes.len(), usize::from(HEADER));
+        bytes.extend_from_slice(&body);
+        bytes.extend_from_slice(trailing);
+        bytes
+    }
+
+    fn write_highway_fixture(name: &str, trailing: &[u8]) -> std::path::PathBuf {
+        let directory = std::env::temp_dir().join("tiler-hway-fixture");
+        fs::create_dir_all(&directory).expect("a scratch directory");
+        let path = directory.join(format!("{name}.bin"));
+        fs::write(&path, highway_fixture(trailing)).expect("the fixture");
+        path
+    }
+
+    #[test]
+    fn a_nuisance_line_reads_back_with_its_class_and_severity() {
+        let path = write_highway_fixture("round-trip", &[0, 4, 255, 51]);
+
+        let Highways {
+            lines,
+            classes,
+            severities,
+        } = read_highways(&path).expect("the nuisance lines");
+
+        assert_eq!(classes, vec![0, 4]);
+        assert_eq!(severities, vec![1.0, 0.2]);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].len(), 1);
+        assert_eq!(lines[0][0].len(), 3);
+        assert_eq!(lines[1][0].len(), 2);
+        assert!((lines[0][0][0].lng - HIGHWAY_ORIGIN_LNG).abs() < 1e-12);
+        assert!((lines[0][0][1].lng - -73.999).abs() < 1e-9);
+        assert!((lines[0][0][2].lat - 40.602).abs() < 1e-9);
+        assert!((lines[1][0][1].lat - 40.609).abs() < 1e-9);
+
+        fs::remove_file(&path).expect("the fixture removed");
+    }
+
+    #[test]
+    fn a_file_short_of_one_severity_byte_is_an_error() {
+        let path = write_highway_fixture("truncated", &[0, 4, 255]);
+
+        let error = read_highways(&path).map(|_| ()).expect_err("a truncation");
+
+        assert!(
+            error.to_string().contains("truncated"),
+            "{error} says the file is short"
+        );
+
+        fs::remove_file(&path).expect("the fixture removed");
+    }
+
+    #[test]
+    fn a_class_byte_past_the_last_class_is_an_error() {
+        // It would index off the end of the graph pass's per-class tally.
+        let path = write_highway_fixture("out-of-range", &[0, HIGHWAY_CLASSES as u8, 255, 255]);
+
+        let error = read_highways(&path)
+            .map(|_| ())
+            .expect_err("an out-of-range class");
+
+        assert!(
+            error.to_string().contains("line 1 is of class 6"),
+            "{error} names the offending line"
+        );
+
+        fs::remove_file(&path).expect("the fixture removed");
+    }
+
     // A tiny TRNS: two stations (the first split, with two entrances), one route, one pattern.
     fn transit_fixture() -> Vec<u8> {
         const HEADER: usize = 64;
@@ -1144,6 +1298,51 @@ mod tests {
         assert_eq!(transit.patterns[0].offsets, vec![0, 300]);
 
         fs::remove_file(&path).expect("the fixture removed");
+    }
+
+    #[test]
+    fn the_committed_nuisance_lines_decode() {
+        let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/highways");
+        for city in ["nyc", "sf"] {
+            let path = data.join(format!("{city}.bin"));
+            if !path.exists() {
+                continue; // a sparse checkout without the committed data
+            }
+            let Highways {
+                lines,
+                classes,
+                severities,
+            } = read_highways(&path).expect("the nuisance lines");
+            assert_eq!(lines.len(), classes.len());
+            assert_eq!(lines.len(), severities.len());
+            let mut per_class = [0usize; HIGHWAY_CLASSES];
+            let mut severity_sum = [0f64; HIGHWAY_CLASSES];
+            for (&class, &severity) in classes.iter().zip(&severities) {
+                per_class[usize::from(class)] += 1;
+                severity_sum[usize::from(class)] += severity;
+            }
+            let mean: Vec<String> = severity_sum
+                .iter()
+                .zip(&per_class)
+                .map(|(sum, &count)| format!("{:.3}", sum / count.max(1) as f64))
+                .collect();
+            eprintln!("{city}: {per_class:?} lines by class, mean severity {mean:?}");
+            assert!(
+                per_class.iter().all(|&count| count > 0),
+                "{city} has a line of every class: {per_class:?}"
+            );
+            // Rail has no traffic count; it keeps full weight in every city.
+            assert!(
+                classes
+                    .iter()
+                    .zip(&severities)
+                    .all(
+                        |(&class, &severity)| usize::from(class) != HIGHWAY_CLASSES - 1
+                            || severity == 1.0
+                    ),
+                "{city}'s rail is at full severity"
+            );
+        }
     }
 
     /// The committed artifacts, the only proof this reader agrees with the TypeScript encoder.

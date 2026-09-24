@@ -159,7 +159,7 @@ export interface RoutingGraph extends GraphIdentity {
 
   edgeLandmark: Uint8Array;
   edgeArt: Uint8Array; // 0..254, this edge's public-art discount attribute; 0 for a ferry
-  edgeHighway: Uint8Array; // 0..254, this edge's highway/rail nuisance penalty attribute; 0 for a ferry
+  edgeHighway: Uint8Array; // 0..254, this edge's road/rail nuisance penalty, graded by traffic; 0 for a ferry
   edgeCommercial: Uint8Array; // 0..254, this edge's nice-commercial-frontage discount attribute; 0 for a ferry
   edgeIndustrial: Uint8Array; // 0..254, this edge's industrial-frontage penalty attribute; 0 for a ferry
   // A discount attribute, so its max is an A* lower-bound term and not only a slider gate.
