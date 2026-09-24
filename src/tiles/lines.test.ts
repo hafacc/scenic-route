@@ -10,28 +10,47 @@ const ORIGIN_LNG = -74.1;
 const ORIGIN_LAT = 40.6;
 const SCALE = 1e-6;
 
-type PathOp = { op: string; args: number[]; stroke: string };
+type PathOp = {
+  op: string;
+  args: number[];
+  stroke: string;
+  alpha: number;
+  width: number;
+  composite: string;
+};
 
+// Style is read when the path is stroked, as the canvas does, so one path can be stroked twice.
 function recordingContext(ops: PathOp[]): OffscreenCanvasRenderingContext2D {
-  let stroking: PathOp[] = [];
+  let path: { op: string; args: number[] }[] = [];
   const record = (op: string) => {
     return (...args: number[]) => {
-      stroking.push({ op, args, stroke: String(context.strokeStyle) });
+      path.push({ op, args });
     };
   };
   const context = {
+    globalAlpha: 1,
+    globalCompositeOperation: "source-over",
     lineWidth: 0,
     lineJoin: "",
     lineCap: "",
     strokeStyle: "",
     beginPath: () => {
-      stroking = [];
+      path = [];
     },
     moveTo: record("moveTo"),
     lineTo: record("lineTo"),
     bezierCurveTo: record("bezierCurveTo"),
     stroke: () => {
-      ops.push(...stroking);
+      for (const { op, args } of path) {
+        ops.push({
+          op,
+          args,
+          stroke: String(context.strokeStyle),
+          alpha: context.globalAlpha,
+          width: context.lineWidth,
+          composite: context.globalCompositeOperation,
+        });
+      }
     },
   } as unknown as OffscreenCanvasRenderingContext2D;
   return context;
@@ -151,34 +170,46 @@ function encodeFerr(crossings: readonly Crossing[]): ArrayBuffer {
   return buffer;
 }
 
-// HWAY: one single-ring polygon whose ring is the line.
-function encodeHway(
-  points: readonly { lng: number; lat: number }[],
-): ArrayBuffer {
+interface Nuisance {
+  points: readonly { lng: number; lat: number }[];
+  klass: number;
+  severity?: number; // the byte, 0..255; full when omitted
+}
+
+// HWAY: one single-ring polygon per line, then (v2) a class byte and (v3) a severity byte per line.
+function encodeHway(lines: readonly Nuisance[], format = 3): ArrayBuffer {
   const HEADER_BYTES = 40;
   const body: number[] = [];
-  body.push(1, 0); // one ring
-  body.push(points.length & 0xff, points.length >> 8, 0, 0);
-  let previousX = 0;
-  let previousY = 0;
-  for (const { lng, lat } of points) {
-    const x = Math.round((lng - ORIGIN_LNG) / SCALE);
-    const y = Math.round((lat - ORIGIN_LAT) / SCALE);
-    writeVarint(body, x - previousX);
-    writeVarint(body, y - previousY);
-    previousX = x;
-    previousY = y;
+  for (const { points } of lines) {
+    body.push(1, 0); // one ring
+    body.push(points.length & 0xff, (points.length >> 8) & 0xff, 0, 0);
+    let previousX = 0;
+    let previousY = 0;
+    for (const { lng, lat } of points) {
+      const x = Math.round((lng - ORIGIN_LNG) / SCALE);
+      const y = Math.round((lat - ORIGIN_LAT) / SCALE);
+      writeVarint(body, x - previousX);
+      writeVarint(body, y - previousY);
+      previousX = x;
+      previousY = y;
+    }
   }
-  const buffer = new ArrayBuffer(HEADER_BYTES + body.length);
+  const trailing = [
+    ...(format >= 2 ? lines.map(({ klass }) => klass) : []),
+    ...(format >= 3 ? lines.map(({ severity }) => severity ?? 255) : []),
+  ];
+  const buffer = new ArrayBuffer(HEADER_BYTES + body.length + trailing.length);
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
   bytes.set(new TextEncoder().encode("HWAY"));
+  view.setUint16(4, format, true);
   view.setUint16(6, HEADER_BYTES, true);
-  view.setUint32(8, 1, true);
+  view.setUint32(8, lines.length, true);
   view.setFloat64(16, ORIGIN_LNG, true);
   view.setFloat64(24, ORIGIN_LAT, true);
   view.setFloat64(32, SCALE, true);
   bytes.set(body, HEADER_BYTES);
+  bytes.set(trailing, HEADER_BYTES + body.length);
   return buffer;
 }
 
@@ -206,7 +237,8 @@ function crossing(route: string, zoom: number, shiftPx: number): Crossing {
   return { route, points };
 }
 
-function drawTile(
+// Every stroke, erasures included.
+function strokeTile(
   data: ReturnType<typeof decodeLines>,
   tileX: number,
   tileY: number,
@@ -221,13 +253,24 @@ function drawTile(
     1,
   );
   // Back into world pixels, which is where two tiles' drawings are comparable.
-  return ops.map(({ op, args, stroke }) => ({
-    op,
-    stroke,
-    args: args.map((value, index) =>
+  return ops.map((op) => ({
+    ...op,
+    args: op.args.map((value, index) =>
       index % 2 === 0 ? value + tileX * TILE_SIZE : value + tileY * TILE_SIZE,
     ),
   }));
+}
+
+// What shows: the painted strokes, without the erasures under them.
+function drawTile(
+  data: ReturnType<typeof decodeLines>,
+  tileX: number,
+  tileY: number,
+  zoom: number,
+): PathOp[] {
+  return strokeTile(data, tileX, tileY, zoom).filter(
+    ({ composite }) => composite === "source-over",
+  );
 }
 
 test("neighboring tiles draw a crossing at the same world position", () => {
@@ -352,16 +395,171 @@ test("a route takes its operator's color, and an unknown one the layer's", () =>
 test("highway lines keep their corners and the layer's own color", () => {
   const zoom = 15;
   const { points } = crossing("unused", zoom, 0);
-  const data = decodeLines(encodeHway(points), "hway");
+  const data = decodeLines(encodeHway([{ points, klass: 0 }]), "hway");
   const drawn = drawTile(data, 9650, 12317, zoom);
   expect(drawn.map(({ op }) => op)).toEqual([
     "moveTo",
     ...points.slice(1).map(() => "lineTo"),
   ]);
   expect(drawn[0].stroke).toBe(params.color.light);
+  expect(drawn[0].alpha).toBe(1);
   // Loose by a pixel hundredth: the artifact quantizes coordinates to 1e-6°.
   expect(drawn[1].args[0]).toBeCloseTo(projectX(points[1].lng, zoom), 1);
   expect(drawn[1].args[1]).toBeCloseTo(projectY(points[1].lat, zoom), 1);
+});
+
+// The opacity a severity byte draws at, from lines.ts' floor and levels.
+function alphaOf(byte: number): number {
+  return 0.25 + (0.75 * Math.round((byte / 255) * 16)) / 16;
+}
+
+test("a nuisance line is drawn at its severity's opacity, faintest first", () => {
+  const zoom = 15;
+  const motorway = crossing("unused", zoom, 0).points;
+  const quiet = crossing("unused", zoom, 60).points;
+  const data = decodeLines(
+    encodeHway([
+      { points: motorway, klass: 0, severity: 255 },
+      { points: quiet, klass: 2, severity: 26 },
+    ]),
+    "hway",
+  );
+  const drawn = drawTile(data, 9650, 12317, zoom);
+  const alphas = drawn.map(({ alpha }) => alpha);
+  expect(alphas).toEqual([
+    ...quiet.map(() => alphaOf(26)),
+    ...motorway.map(() => 1),
+  ]);
+  const starts = drawn.filter(({ op }) => op === "moveTo");
+  expect(starts).toHaveLength(2);
+  expect(starts[0].args[1]).toBeCloseTo(projectY(quiet[0].lat, zoom), 1);
+  expect(starts[1].args[1]).toBeCloseTo(projectY(motorway[0].lat, zoom), 1);
+  expect(new Set(drawn.map(({ stroke }) => stroke))).toEqual(
+    new Set([params.color.light]),
+  );
+});
+
+test("a busy lesser road outdraws a quiet one of a bigger class", () => {
+  const zoom = 15;
+  const busy = crossing("unused", zoom, 0).points;
+  const quiet = crossing("unused", zoom, 60).points;
+  const data = decodeLines(
+    encodeHway([
+      { points: busy, klass: 3, severity: 204 },
+      { points: quiet, klass: 1, severity: 51 },
+    ]),
+    "hway",
+  );
+  const starts = drawTile(data, 9650, 12317, zoom).filter(
+    ({ op }) => op === "moveTo",
+  );
+  expect(starts.map(({ alpha }) => alpha)).toEqual([alphaOf(51), alphaOf(204)]);
+  expect(starts[1].args[1]).toBeCloseTo(projectY(busy[0].lat, zoom), 1);
+});
+
+test("overlapping nuisance lines show the strongest one's opacity, not the sum", () => {
+  const zoom = 15;
+  const across = crossing("unused", zoom, 0).points;
+  const along = crossing("unused", zoom, 20).points;
+  const data = decodeLines(
+    encodeHway([
+      { points: across, klass: 0, severity: 255 },
+      { points: along, klass: 2, severity: 51 },
+      { points: across, klass: 2, severity: 51 },
+    ]),
+    "hway",
+  );
+  const strokes = strokeTile(data, 9650, 12317, zoom);
+  // Per group, faintest first: its path erased at full strength, then that same path painted once.
+  const runs: { composite: string; alpha: number; moves: number }[] = [];
+  for (const { op, composite, alpha } of strokes) {
+    const last = runs[runs.length - 1];
+    if (last && last.composite === composite && last.alpha === alpha) {
+      last.moves += op === "moveTo" ? 1 : 0;
+    } else {
+      runs.push({ composite, alpha, moves: op === "moveTo" ? 1 : 0 });
+    }
+  }
+  expect(runs).toEqual([
+    { composite: "destination-out", alpha: 1, moves: 2 },
+    { composite: "source-over", alpha: alphaOf(51), moves: 2 },
+    { composite: "destination-out", alpha: 1, moves: 1 },
+    { composite: "source-over", alpha: 1, moves: 1 },
+  ]);
+  const pathOf = (composite: string) =>
+    strokes
+      .filter((op) => op.composite === composite)
+      .map(({ op, args }) => ({ op, args }));
+  expect(pathOf("destination-out")).toEqual(pathOf("source-over"));
+});
+
+test("a line of no severity is not drawn", () => {
+  const zoom = 15;
+  const { points } = crossing("unused", zoom, 0);
+  const data = decodeLines(
+    encodeHway([{ points, klass: 0, severity: 0 }]),
+    "hway",
+  );
+  expect(drawTile(data, 9650, 12317, zoom)).toEqual([]);
+});
+
+// Stroke width per class for a motorway and a tertiary street across the middle of one tile.
+function roadWidths(zoom: number, tileX: number, tileY: number) {
+  const across = (y: number) =>
+    [0.25, 0.75].map((x) =>
+      unproject((tileX + x) * TILE_SIZE, (tileY + y) * TILE_SIZE, zoom),
+    );
+  const data = decodeLines(
+    encodeHway([
+      { points: across(0.4), klass: 0 },
+      { points: across(0.6), klass: 4, severity: 26 },
+    ]),
+    "hway",
+  );
+  const drawn = drawTile(data, tileX, tileY, zoom);
+  const widthOf = (alpha: number) =>
+    drawn.find((op) => op.alpha === alpha)?.width ?? Number.NaN;
+  return { motorway: widthOf(1), tertiary: widthOf(alphaOf(26)) };
+}
+
+test("a nuisance line is drawn at its road's width in meters, whatever the zoom", () => {
+  const { lat } = unproject(9650.5 * TILE_SIZE, 12317.5 * TILE_SIZE, 15);
+  const metersPerPx =
+    (156_543.033_92 * Math.cos((lat * Math.PI) / 180)) / 2 ** 15;
+  const near = roadWidths(15, 9650, 12317);
+  expect(near.motorway).toBeCloseTo(25 / metersPerPx, 1);
+  expect(near.tertiary).toBeCloseTo(10 / metersPerPx, 1);
+  const nearer = roadWidths(16, 19300, 24634);
+  expect(nearer.motorway).toBeCloseTo(2 * near.motorway, 1);
+  expect(nearer.tertiary).toBeCloseTo(2 * near.tertiary, 1);
+});
+
+test("a zoomed-out nuisance line keeps a pixel of width", () => {
+  const far = roadWidths(10, 301, 384);
+  expect(far.motorway).toBe(1);
+  expect(far.tertiary).toBe(1);
+});
+
+// The service worker can serve a cached v1 blob to fresh JS.
+test("a v1 blob with no class region still draws, as all motorway", () => {
+  const zoom = 15;
+  const { points } = crossing("unused", zoom, 0);
+  const data = decodeLines(encodeHway([{ points, klass: 4 }], 1), "hway");
+  expect(data.classes).toEqual(new Uint8Array(1));
+  const drawn = drawTile(data, 9650, 12317, zoom);
+  expect(drawn).toHaveLength(points.length);
+  expect(drawn.every(({ alpha }) => alpha === 1)).toBe(true);
+});
+
+test("a v2 blob with no severity region draws each line at its class's severity", () => {
+  const zoom = 15;
+  const { points } = crossing("unused", zoom, 0);
+  const data = decodeLines(encodeHway([{ points, klass: 4 }], 2), "hway");
+  expect(data.classes).toEqual(Uint8Array.of(4));
+  expect(data.severities?.[0]).toBeCloseTo(0.086, 5);
+  const drawn = drawTile(data, 9650, 12317, zoom);
+  expect(drawn).toHaveLength(points.length);
+  expect(drawn[0].alpha).toBe(alphaOf(0.086 * 255));
 });
 
 // A line's own perpendicular flips when it is stored reversed or comes out of a hairpin.

@@ -18,6 +18,21 @@ import type { Cursor } from "./varint";
 const TILE_SIZE = 256;
 const CELL_DEG = 0.01; // ~1.1 km; a line is filed under every cell its bounding box spans
 const LINE_WIDTH_PX = 2;
+// Web Mercator ground resolution of a 256 px tile at z0 on the equator.
+const EQUATOR_METERS_PER_PX = 156_543.033_92;
+
+// Per HWAY class byte, a rough carriageway width in meters, so the line covers the road it marks.
+const CLASS_WIDTH_M = [25, 20, 16, 13, 10, 8];
+// Per class byte, the severity a v2 blob (no severity region) reads as; scripts/highways.ts CLASS_SEVERITY.
+const V2_CLASS_SEVERITY = [1, 0.582, 0.249, 0.133, 0.086, 1];
+// So a zoomed-out line stays visible rather than thinning to nothing.
+const MIN_ROAD_WIDTH_PX = 1;
+// Opacity runs from this at the faintest severity to 1 at full, so a quiet street still shows.
+const MIN_ALPHA = 0.25;
+// Severity is drawn in this many opacity levels, each one stroke per class.
+const ALPHA_STEPS = 16;
+// Within one opacity level, narrowest first.
+const CLASS_DRAW_ORDER = [4, 3, 2, 1, 5, 0];
 
 // Routes sharing water share its track (68% within 60 m); the SI Ferry and St. George are 100+ m apart.
 const LANE_CELL_M = 60;
@@ -42,12 +57,21 @@ interface Lines {
   buckets: Map<string, number[]>;
   // Index-aligned with polylines; null for a source with no route identity (HWAY).
   ribbons: Ribbon[] | null;
+  // Index-aligned with polylines; null for FERR, which has no classes.
+  classes: Uint8Array | null;
+  // Index-aligned with polylines, 0..1; null for FERR.
+  severities: Float32Array | null;
 }
 
-// HWAY is binfmt.rs read_polygons' layout; each nuisance line is one open ring of its own polygon.
-function decodeHway(buffer: ArrayBuffer): Polyline[] {
+// HWAY is binfmt.rs read_highways' layout; each nuisance line is one open ring of its own polygon.
+function decodeHway(buffer: ArrayBuffer): {
+  polylines: Polyline[];
+  classes: Uint8Array;
+  severities: Float32Array;
+} {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
+  const format = view.getUint16(4, true);
   const count = view.getUint32(8, true);
   const originLng = view.getFloat64(16, true);
   const originLat = view.getFloat64(24, true);
@@ -55,6 +79,7 @@ function decodeHway(buffer: ArrayBuffer): Polyline[] {
   const cursor: Cursor = { offset: view.getUint16(6, true) };
 
   const polylines: Polyline[] = [];
+  const recordOf: number[] = []; // which polygon record each polyline's ring came from
   for (let polygon = 0; polygon < count; polygon++) {
     const rings = view.getUint16(cursor.offset, true);
     cursor.offset += 2;
@@ -64,9 +89,30 @@ function decodeHway(buffer: ArrayBuffer): Polyline[] {
       polylines.push(
         readPolyline(bytes, cursor, vertices, originLng, originLat, scale),
       );
+      recordOf.push(polygon);
     }
   }
-  return polylines;
+
+  // The service worker can serve a cached older blob to fresh JS: v1 has no trailing bytes and
+  // reads as all motorway, v2 has classes but no severities and reads its class's.
+  const classes = new Uint8Array(polylines.length);
+  const severities = new Float32Array(polylines.length).fill(1);
+  const hasClasses = format >= 2 && cursor.offset + count <= bytes.length;
+  const hasSeverities =
+    format >= 3 && cursor.offset + 2 * count <= bytes.length;
+  for (let line = 0; line < polylines.length; line++) {
+    const record = recordOf[line];
+    if (hasClasses) {
+      const klass = bytes[cursor.offset + record];
+      classes[line] = klass < CLASS_WIDTH_M.length ? klass : 0;
+    }
+    if (hasSeverities) {
+      severities[line] = bytes[cursor.offset + count + record] / 255;
+    } else if (hasClasses) {
+      severities[line] = V2_CLASS_SEVERITY[classes[line]];
+    }
+  }
+  return { polylines, classes, severities };
 }
 
 // FERR is binfmt.rs read_ferries' layout; a segment with no shape draws straight between its stops.
@@ -140,11 +186,13 @@ export function decodeLines(
   format: LinesParams["format"],
 ): Lines {
   if (format === "hway") {
-    const polylines = decodeHway(buffer);
+    const { polylines, classes, severities } = decodeHway(buffer);
     return {
       polylines,
       buckets: bucketize(polylines, CELL_DEG),
       ribbons: null,
+      classes,
+      severities,
     };
   } else {
     const { polylines, routes } = decodeFerr(buffer);
@@ -160,7 +208,13 @@ export function decodeLines(
         latitude: midLatitude(polylines),
       },
     ).map((ribbon, index) => ({ color: styles[index].color, ...ribbon }));
-    return { polylines, buckets: bucketize(polylines, CELL_DEG), ribbons };
+    return {
+      polylines,
+      buckets: bucketize(polylines, CELL_DEG),
+      ribbons,
+      classes: null,
+      severities: null,
+    };
   }
 }
 
@@ -205,7 +259,8 @@ function draw(
   context.lineJoin = "round";
   context.lineCap = "round";
   const spacing = laneSpacingPx(zoom, LANE_SPACING_PX, LANE_FULL_ZOOM);
-  const drawn = new Set<number>();
+  const visible: number[] = [];
+  const seen = new Set<number>();
   for (
     let cellX = Math.floor(northWest.lng / CELL_DEG);
     cellX <= Math.floor(southEast.lng / CELL_DEG);
@@ -216,49 +271,111 @@ function draw(
       cellY <= Math.floor(northWest.lat / CELL_DEG);
       cellY++
     ) {
-      const cell = lines.buckets.get(`${cellX},${cellY}`);
-      if (!cell) {
-        continue;
-      }
-      for (const index of cell) {
-        if (drawn.has(index)) {
-          continue;
+      for (const index of lines.buckets.get(`${cellX},${cellY}`) ?? []) {
+        if (!seen.has(index)) {
+          seen.add(index);
+          visible.push(index);
         }
-        drawn.add(index);
-        const { lngs, lats } = lines.polylines[index];
-        const ribbon = lines.ribbons?.[index];
-        // Project the whole polyline: lane offsets and curves read vertices outside the tile.
-        const pixelX: number[] = [];
-        const pixelY: number[] = [];
-        for (let vertex = 0; vertex < lngs.length; vertex++) {
-          const offset = (ribbon?.lanes[vertex] ?? 0) * spacing;
-          pixelX.push(
-            projectX(lngs[vertex], zoom) -
-              originX +
-              offset * (ribbon?.normalX[vertex] ?? 0),
-          );
-          pixelY.push(
-            projectY(lats[vertex], zoom) -
-              originY +
-              offset * (ribbon?.normalY[vertex] ?? 0),
-          );
-        }
-        context.strokeStyle = ribbon?.color ?? stroke;
-        context.beginPath();
-        if (ribbon) {
-          roundedPath(context, pixelX, pixelY);
-        } else {
-          for (let vertex = 0; vertex < pixelX.length; vertex++) {
-            if (vertex === 0) {
-              context.moveTo(pixelX[vertex], pixelY[vertex]);
-            } else {
-              context.lineTo(pixelX[vertex], pixelY[vertex]);
-            }
-          }
-        }
-        context.stroke();
       }
     }
+  }
+
+  // Project the whole polyline: lane offsets and curves read vertices outside the tile.
+  const project = (index: number): [number[], number[]] => {
+    const { lngs, lats } = lines.polylines[index];
+    const ribbon = lines.ribbons?.[index];
+    const pixelX: number[] = [];
+    const pixelY: number[] = [];
+    for (let vertex = 0; vertex < lngs.length; vertex++) {
+      const offset = (ribbon?.lanes[vertex] ?? 0) * spacing;
+      pixelX.push(
+        projectX(lngs[vertex], zoom) -
+          originX +
+          offset * (ribbon?.normalX[vertex] ?? 0),
+      );
+      pixelY.push(
+        projectY(lats[vertex], zoom) -
+          originY +
+          offset * (ribbon?.normalY[vertex] ?? 0),
+      );
+    }
+    return [pixelX, pixelY];
+  };
+
+  const { classes, severities } = lines;
+  if (classes && severities) {
+    // In CSS pixels: the worker has already scaled the context by the device pixel ratio.
+    const metersPerPx =
+      (EQUATOR_METERS_PER_PX *
+        Math.cos(((northWest.lat + southEast.lat) / 2) * (Math.PI / 180))) /
+      2 ** zoom;
+    // Keyed so ascending order paints faintest first, then narrowest first within a level.
+    const groups = new Map<number, number[]>();
+    for (const index of visible) {
+      const severity = severities[index];
+      if (severity <= 0) {
+        continue; // no penalty in routing, so nothing to show
+      }
+      const key =
+        Math.round(severity * ALPHA_STEPS) * CLASS_DRAW_ORDER.length +
+        CLASS_DRAW_ORDER.indexOf(classes[index]);
+      const group = groups.get(key);
+      if (group) {
+        group.push(index);
+      } else {
+        groups.set(key, [index]);
+      }
+    }
+    context.strokeStyle = stroke;
+    for (const key of [...groups.keys()].sort((left, right) => left - right)) {
+      const step = Math.floor(key / CLASS_DRAW_ORDER.length);
+      const klass = CLASS_DRAW_ORDER[key % CLASS_DRAW_ORDER.length];
+      const alpha = MIN_ALPHA + ((1 - MIN_ALPHA) * step) / ALPHA_STEPS;
+      context.lineWidth = Math.max(
+        CLASS_WIDTH_M[klass] / metersPerPx,
+        MIN_ROAD_WIDTH_PX,
+      );
+      context.beginPath();
+      for (const index of groups.get(key) ?? []) {
+        const [pixelX, pixelY] = project(index);
+        for (let vertex = 0; vertex < pixelX.length; vertex++) {
+          if (vertex === 0) {
+            context.moveTo(pixelX[vertex], pixelY[vertex]);
+          } else {
+            context.lineTo(pixelX[vertex], pixelY[vertex]);
+          }
+        }
+      }
+      // Erase what's under the group, then paint it: a pixel keeps the alpha of the last and so
+      // strongest group covering it rather than the sum, and one stroke never overlaps itself.
+      context.globalCompositeOperation = "destination-out";
+      context.globalAlpha = 1;
+      context.stroke();
+      context.globalCompositeOperation = "source-over";
+      context.globalAlpha = alpha;
+      context.stroke();
+    }
+    context.globalAlpha = 1;
+    return;
+  }
+
+  for (const index of visible) {
+    const ribbon = lines.ribbons?.[index];
+    const [pixelX, pixelY] = project(index);
+    context.strokeStyle = ribbon?.color ?? stroke;
+    context.beginPath();
+    if (ribbon) {
+      roundedPath(context, pixelX, pixelY);
+    } else {
+      for (let vertex = 0; vertex < pixelX.length; vertex++) {
+        if (vertex === 0) {
+          context.moveTo(pixelX[vertex], pixelY[vertex]);
+        } else {
+          context.lineTo(pixelX[vertex], pixelY[vertex]);
+        }
+      }
+    }
+    context.stroke();
   }
 }
 

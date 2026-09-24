@@ -55,6 +55,7 @@ export const DEFAULT_LANDMARK_WEIGHT = 0.1;
 export const MAX_ART_WEIGHT = 1;
 export const DEFAULT_ART_WEIGHT = 0.1;
 // Measured over 300 trips per city: 3 removes ~90% of attainable highway frontage for 6% more walking.
+// Measured when only motorways and trunks counted, before lesser roads were graded in; re-measure.
 export const MAX_HIGHWAY_WEIGHT = 3;
 // Measured on Potrero Hill: 1 still climbed a 12% block; past 5 routes go a long way round.
 export const MAX_HILL_WEIGHT = 5;

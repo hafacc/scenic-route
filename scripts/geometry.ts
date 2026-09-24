@@ -312,6 +312,29 @@ export function encodeCanopy(
   return out;
 }
 
+// The encodePolygons body, then each column in turn: one byte per polygon, in polygon order.
+export function encodeClassifiedPolygons(
+  magic: string,
+  format: number,
+  polygons: readonly Polygon[],
+  ...columns: readonly (readonly number[])[]
+): Uint8Array {
+  for (const column of columns) {
+    if (column.length !== polygons.length) {
+      throw new Error(
+        `${magic}: ${column.length} bytes for ${polygons.length} polygons`,
+      );
+    }
+  }
+  const body = encodePolygons(magic, format, polygons);
+  const out = new Uint8Array(body.length + columns.length * polygons.length);
+  out.set(body);
+  columns.forEach((column, index) => {
+    out.set(new Uint8Array(column), body.length + index * polygons.length);
+  });
+  return out;
+}
+
 // A MultiPolygon becomes several entries, each repeating the building's height and base.
 export interface HeightedBuilding {
   polygon: Polygon;

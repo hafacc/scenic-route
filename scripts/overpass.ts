@@ -32,7 +32,7 @@ interface OverpassNode {
   tags?: Record<string, string>;
 }
 
-type OverpassElement = OverpassWay | OverpassRelation | OverpassNode;
+export type OverpassElement = OverpassWay | OverpassRelation | OverpassNode;
 
 // Attempts rotate: no one mirror serves a query this size reliably under load.
 const ENDPOINTS: readonly string[] = [
@@ -444,14 +444,75 @@ export async function fetchOutdoorSeating(
 }
 
 export interface NuisanceLine {
-  kind: "highway" | "rail"; // only for the ingest log; the penalty treats them alike
+  kind: "highway" | "rail"; // only for the ingest log
+  klass: number; // NUISANCE_CLASS
+  name: string | null; // OSM `name`, for matching traffic counts
   points: Coord[];
 }
 
-const HIGHWAY_CLASSES = "^(motorway|trunk|motorway_link|trunk_link)$";
+// The HWAY class byte.
+export const NUISANCE_CLASS = {
+  motorway: 0,
+  trunk: 1,
+  primary: 2,
+  secondary: 3,
+  tertiary: 4,
+  rail: 5,
+} as const;
+
+const HIGHWAY_CLASS_CODES = new Map<string, number>([
+  ["motorway", NUISANCE_CLASS.motorway],
+  ["trunk", NUISANCE_CLASS.trunk],
+  ["primary", NUISANCE_CLASS.primary],
+  ["secondary", NUISANCE_CLASS.secondary],
+  ["tertiary", NUISANCE_CLASS.tertiary],
+]);
+const LINK_SUFFIX = "_link";
+
+const HIGHWAY_CLASSES = "^(motorway|trunk|primary|secondary|tertiary)(_link)?$";
 const RAIL_CLASSES = "^(rail|subway|light_rail)$";
 
-// Any rail not underground: open cuts carry no bridge/layer tag, so "elevated only" misses them.
+// Tunnels drop out on both branches. Any rail not underground counts: open cuts carry no bridge/layer
+// tag, so "elevated only" misses them.
+export function nuisanceLineOf(element: OverpassElement): NuisanceLine | null {
+  if (
+    element.type !== "way" ||
+    !element.geometry ||
+    element.geometry.length < 2 ||
+    element.tags?.tunnel === "yes"
+  ) {
+    return null;
+  }
+  const tags = element.tags ?? {};
+  if (tags.highway !== undefined) {
+    const value = tags.highway.endsWith(LINK_SUFFIX)
+      ? tags.highway.slice(0, -LINK_SUFFIX.length)
+      : tags.highway;
+    const klass = HIGHWAY_CLASS_CODES.get(value);
+    return klass === undefined
+      ? null
+      : {
+          kind: "highway",
+          klass,
+          name: tags.name?.trim() || null,
+          points: toCoords(element.geometry),
+        };
+  }
+  if (tags.railway !== undefined) {
+    const layer = Number.parseInt(tags.layer ?? "", 10);
+    if (Number.isFinite(layer) && layer < 0) {
+      return null;
+    }
+    return {
+      kind: "rail",
+      klass: NUISANCE_CLASS.rail,
+      name: tags.name?.trim() || null,
+      points: toCoords(element.geometry),
+    };
+  }
+  return null;
+}
+
 export async function fetchNuisanceLines(
   south: number,
   west: number,
@@ -461,31 +522,15 @@ export async function fetchNuisanceLines(
   const box = `${south},${west},${north},${east}`;
   const query =
     `[out:json][timeout:${QUERY_TIMEOUT_SECONDS}];(` +
-    `way["highway"~"${HIGHWAY_CLASSES}"](${box});` +
+    `way["highway"~"${HIGHWAY_CLASSES}"]["tunnel"!~"yes"](${box});` +
     `way["railway"~"${RAIL_CLASSES}"]["tunnel"!~"yes"](${box});` +
     `);out geom;`;
   const elements = await overpassQuery("overpass-nuisance", query);
   const lines: NuisanceLine[] = [];
   for (const element of elements) {
-    if (
-      element.type !== "way" ||
-      !element.geometry ||
-      element.geometry.length < 2
-    ) {
-      continue;
-    }
-    const tags = element.tags ?? {};
-    let kind: NuisanceLine["kind"] | null = null;
-    if (tags.highway !== undefined) {
-      kind = "highway";
-    } else if (tags.railway !== undefined && tags.tunnel !== "yes") {
-      const layer = Number.parseInt(tags.layer ?? "", 10);
-      if (!Number.isFinite(layer) || layer >= 0) {
-        kind = "rail";
-      }
-    }
-    if (kind !== null) {
-      lines.push({ kind, points: toCoords(element.geometry) });
+    const line = nuisanceLineOf(element);
+    if (line !== null) {
+      lines.push(line);
     }
   }
   return lines;
