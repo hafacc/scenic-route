@@ -128,25 +128,6 @@ fn crown_casters(crowns: Vec<crown::Crown>, heights: &[f64]) -> Vec<Caster> {
         .collect()
 }
 
-/// The city's casting crowns and heights, dropping the 0 sentinel before the costly slicing.
-fn city_crowns(city: &City, data: &Path) -> Fallible<(Vec<Polygon>, Vec<f64>)> {
-    let Some(layer) = &city.field.canopy else {
-        return Ok((Vec::new(), Vec::new()));
-    };
-    let path = data.join("canopy").join(&layer.file);
-    if !path.exists() {
-        return Ok((Vec::new(), Vec::new()));
-    }
-    let canopy = binfmt::read_canopy(&path)?;
-    let heights = canopy.heights_m();
-    Ok(canopy
-        .polygons
-        .into_iter()
-        .zip(heights)
-        .filter(|(_, height)| *height > 0.0)
-        .unzip())
-}
-
 /// The trunk radius (m) a crown radius implies, clamped since OSM crowns were never grown from a dbh.
 fn trunk_radius_m(crown_radius_m: f64) -> f64 {
     let log_log = ((2.0 * crown_radius_m).ln() - CROWN_A - CROWN_LOG_BIAS) / CROWN_B;
@@ -756,9 +737,8 @@ pub fn run(args: &Args) -> Fallible<()> {
         } else {
             (Vec::new(), Vec::new())
         };
-        let (crown_polygons, crown_heights) = city_crowns(city, &args.data)?;
+        let (sliced, crown_heights) = shade::city_crowns(city, &args.data)?;
         let buildings = casters(&polygons, &heights, true);
-        let sliced = crown::slice_crowns(&crown_polygons);
         let histogram = crown::radius_histogram(&sliced);
         let crowns = crown_casters(sliced, &crown_heights);
         if buildings.is_empty() && crowns.is_empty() {

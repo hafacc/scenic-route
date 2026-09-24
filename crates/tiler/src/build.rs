@@ -933,6 +933,7 @@ impl<'a> Stamps<'a> {
 const STAGES: usize = 9;
 
 fn stage(number: usize, name: &str, started: &Instant) {
+    crate::trim_heap();
     eprintln!(
         "[{number}/{STAGES}] {name} ({:.1}s in)",
         started.elapsed().as_secs_f64()
@@ -1556,6 +1557,8 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
         };
         let dem = dems.get_mut(city.id.as_str());
         pass.restart()?;
+        // The previous city's graph leaves freed pages this city's field and grids can't reuse.
+        crate::trim_heap();
         let ways = graph::run(
             &graph::Args {
                 streets: plan.data.join("streets").join(&city.streets.file),

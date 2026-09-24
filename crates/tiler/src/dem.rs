@@ -291,6 +291,8 @@ impl Dem {
         {
             return Ok(());
         }
+        // Dropped before the decode, so two tiles are never held at once.
+        self.loaded = None;
         let tile = &self.tiles[position];
         // The default decode limit rejects the staged 1 m DEM's 401 MB tiles.
         let mut decoder =
@@ -365,27 +367,29 @@ impl Field {
         deck_meters: f32,
         mut keep: impl FnMut(f64, f64) -> bool,
     ) -> usize {
-        let mut inside = vec![false; self.width * self.height];
+        let mut flags = vec![0u8; self.width * self.height];
         for row in 0..self.height {
             let lat = self.north - (row as f64 + 0.5) * self.step_lat;
             for column in 0..self.width {
                 let lng = self.west + (column as f64 + 0.5) * self.step_lng;
-                inside[row * self.width + column] = keep(lng, lat);
+                if keep(lng, lat) {
+                    flags[row * self.width + column] = INSIDE;
+                }
             }
         }
         let cell_meters = self.step_lat * METERS_PER_DEGREE_LAT;
         let radius = (reach_meters / cell_meters.max(0.01)).round() as usize;
-        let reached = dilate(&inside, self.width, self.height, radius);
+        dilate(&mut flags, self.width, self.height, radius);
 
         let mut dropped = 0;
-        for cell in 0..self.meters.len() {
-            if !self.meters[cell].is_finite() {
+        for (meters, flag) in self.meters.iter_mut().zip(&flags) {
+            if !meters.is_finite() {
                 continue;
             }
             // Inside the mask height isn't asked: beaches and tidal flats sit below any deck.
-            let keep_cell = inside[cell] || (reached[cell] && self.meters[cell] >= deck_meters);
+            let keep_cell = flag & INSIDE != 0 || (flag & REACHED != 0 && *meters >= deck_meters);
             if !keep_cell {
-                self.meters[cell] = f32::NAN;
+                *meters = f32::NAN;
                 dropped += 1;
             }
         }
@@ -471,46 +475,56 @@ const FILL_REACH_METERS: f64 = 40.0;
 /// Caps the rings the reach converts to on a very fine field.
 const MAX_FILL_RINGS: usize = 24;
 
-/// Every cell within `radius` cells of a set one, as a square so it takes two separable passes.
-fn dilate(set: &[bool], width: usize, height: usize, radius: usize) -> Vec<bool> {
+// Bits of `retain`'s one byte per cell: the kept mask, its row-wise spread, and its full reach.
+const INSIDE: u8 = 1;
+const SPREAD: u8 = 2;
+const REACHED: u8 = 4;
+
+/// Flags REACHED on every cell within `radius` cells of an INSIDE one, a square in two passes.
+fn dilate(flags: &mut [u8], width: usize, height: usize, radius: usize) {
+    let has = |flag: u8, bit: u8| usize::from(flag & bit != 0);
     if radius == 0 {
-        return set.to_vec();
+        for flag in flags.iter_mut() {
+            *flag |= if *flag & INSIDE != 0 { REACHED } else { 0 };
+        }
+        return;
     }
-    let mut spread = vec![false; set.len()];
     for row in 0..height {
         let mut count = 0usize;
         for column in 0..(radius + 1).min(width) {
-            count += usize::from(set[row * width + column]);
+            count += has(flags[row * width + column], INSIDE);
         }
         for column in 0..width {
-            spread[row * width + column] = count > 0;
+            if count > 0 {
+                flags[row * width + column] |= SPREAD;
+            }
             if let Some(leaving) = column.checked_sub(radius) {
-                count -= usize::from(set[row * width + leaving]);
+                count -= has(flags[row * width + leaving], INSIDE);
             }
             let entering = column + radius + 1;
             if entering < width {
-                count += usize::from(set[row * width + entering]);
+                count += has(flags[row * width + entering], INSIDE);
             }
         }
     }
-    let mut out = vec![false; set.len()];
     for column in 0..width {
         let mut count = 0usize;
         for row in 0..(radius + 1).min(height) {
-            count += usize::from(spread[row * width + column]);
+            count += has(flags[row * width + column], SPREAD);
         }
         for row in 0..height {
-            out[row * width + column] = count > 0;
+            if count > 0 {
+                flags[row * width + column] |= REACHED;
+            }
             if let Some(leaving) = row.checked_sub(radius) {
-                count -= usize::from(spread[leaving * width + column]);
+                count -= has(flags[leaving * width + column], SPREAD);
             }
             let entering = row + radius + 1;
             if entering < height {
-                count += usize::from(spread[entering * width + column]);
+                count += has(flags[entering * width + column], SPREAD);
             }
         }
     }
-    out
 }
 
 /// Fills gaps ring by ring from the mean of valid 8-neighbors; returns how many cells it filled.
@@ -564,7 +578,10 @@ fn close_holes(meters: &mut [f32], width: usize, height: usize, cell_meters: f64
     patched
 }
 
-/// Resamples the mosaic onto a longitude/latitude grid at `zoom`'s pixel size, one decode per tile.
+// Field rows resampled per band; a tile spanning a band edge decodes once per band it reaches.
+const RESAMPLE_BAND_ROWS: usize = 1024;
+
+/// Resamples the mosaic onto a longitude/latitude grid at `zoom`'s pixel size.
 pub fn resample(bounds: &Bounds, zoom: u32, dem: &mut Dem) -> Fallible<Field> {
     // Cells the size of a pixel at `zoom`, in degrees, so the field lines up with the tiles.
     let west = bounds.west;
@@ -584,32 +601,36 @@ pub fn resample(bounds: &Bounds, zoom: u32, dem: &mut Dem) -> Fallible<Field> {
     let mut filled = 0usize;
 
     // Bucketed by tile, since a row-major sweep re-decodes every tile on every row.
-    let mut by_tile: HashMap<usize, Vec<usize>> = HashMap::new();
-    for row in 0..height {
-        let lat = north - (row as f64 + 0.5) * step_lat;
-        for column in 0..width {
-            let lng = west + (column as f64 + 0.5) * step_lng;
-            if let Some(position) = dem.tile_of(lng, lat) {
-                by_tile
-                    .entry(position)
-                    .or_default()
-                    .push(row * width + column);
+    // A band at a time, so the buckets hold a band's cell indices, not the whole field's.
+    for band in (0..height).step_by(RESAMPLE_BAND_ROWS) {
+        let mut by_tile: HashMap<usize, Vec<u32>> = HashMap::new();
+        for row in band..(band + RESAMPLE_BAND_ROWS).min(height) {
+            let lat = north - (row as f64 + 0.5) * step_lat;
+            for column in 0..width {
+                let lng = west + (column as f64 + 0.5) * step_lng;
+                if let Some(position) = dem.tile_of(lng, lat) {
+                    by_tile
+                        .entry(position)
+                        .or_default()
+                        .push(((row - band) * width + column) as u32);
+                }
             }
         }
-    }
-    let mut positions: Vec<usize> = by_tile.keys().copied().collect();
-    positions.sort_unstable();
-    for position in positions {
-        for &cell in &by_tile[&position] {
-            let row = cell / width;
-            let column = cell % width;
-            let lat = north - (row as f64 + 0.5) * step_lat;
-            let lng = west + (column as f64 + 0.5) * step_lng;
-            if let Some(value) = dem.sample_in(position, lng, lat)? {
-                meters[cell] = value;
-                low = low.min(value);
-                high = high.max(value);
-                filled += 1;
+        let mut positions: Vec<usize> = by_tile.keys().copied().collect();
+        positions.sort_unstable();
+        for position in positions {
+            for &offset in &by_tile[&position] {
+                let cell = band * width + offset as usize;
+                let row = cell / width;
+                let column = cell % width;
+                let lat = north - (row as f64 + 0.5) * step_lat;
+                let lng = west + (column as f64 + 0.5) * step_lng;
+                if let Some(value) = dem.sample_in(position, lng, lat)? {
+                    meters[cell] = value;
+                    low = low.min(value);
+                    high = high.max(value);
+                    filled += 1;
+                }
             }
         }
     }
@@ -672,7 +693,17 @@ impl Field {
 
 #[cfg(test)]
 mod tests {
-    use super::{FILL_REACH_METERS, close_holes, dilate};
+    use super::{FILL_REACH_METERS, INSIDE, REACHED, close_holes, dilate};
+
+    /// `dilate` over a plain mask, read back as one.
+    fn reach(set: &[bool], width: usize, height: usize, radius: usize) -> Vec<bool> {
+        let mut flags: Vec<u8> = set
+            .iter()
+            .map(|&hit| if hit { INSIDE } else { 0 })
+            .collect();
+        dilate(&mut flags, width, height, radius);
+        flags.iter().map(|flag| flag & REACHED != 0).collect()
+    }
 
     /// A cell size that makes the reach exactly four rings.
     const FOUR_RINGS: f64 = FILL_REACH_METERS / 4.0;
@@ -750,7 +781,7 @@ mod tests {
         let height = 11;
         let mut set = vec![false; width * height];
         set[5 * width + 5] = true;
-        let reached = dilate(&set, width, height, 2);
+        let reached = reach(&set, width, height, 2);
         assert!(reached[5 * width + 7]);
         assert!(reached[3 * width + 3]); // the corner of the square, two out on each axis
         assert!(!reached[5 * width + 8]);
@@ -760,7 +791,7 @@ mod tests {
     #[test]
     fn a_zero_reach_leaves_the_mask_exactly_as_it_was() {
         let set = vec![false, true, false, false];
-        assert_eq!(dilate(&set, 2, 2, 0), set);
+        assert_eq!(reach(&set, 2, 2, 0), set);
     }
 }
 

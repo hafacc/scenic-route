@@ -5092,7 +5092,10 @@ fn bake(
     })
 }
 
-/// One cached column per sun bin; missing bins bake in one call, since it parallelizes across bins.
+// Sun bins baked per call; each bin in flight holds a city-wide coverage grid.
+const SHADE_BAKE_BINS: usize = 3;
+
+/// One cached column per sun bin; missing bins bake a few per call, parallel across the few.
 fn shade_columns(
     args: &Args,
     base: &Base,
@@ -5134,26 +5137,31 @@ fn shade_columns(
             missing.len(),
             params.buckets.len()
         );
+        // Around the load, so neither the earlier columns' frees nor the outlines' sit under it.
+        crate::trim_heap();
         let casters = shade::edge_shade_casters(buildings, args.canopy.as_deref())?;
-        let wanted: Vec<shade::Bucket> = missing
-            .iter()
-            .map(|bin| params.buckets[*bin].clone())
-            .collect();
-        let baked = shade::bake_edge_shade(
-            &casters,
-            &wanted,
-            params.max_shadow_meters,
-            params.max_zoom,
-            polylines.get(),
-        );
-        for (bin, (buildings, trees)) in missing.iter().zip(baked) {
-            if let (Some(cache), Some(keys)) = (cache.as_deref_mut(), keys) {
-                let mut entry = Vec::with_capacity(2 * edge_count);
-                entry.extend_from_slice(&buildings);
-                entry.extend_from_slice(&trees);
-                cache.store(graph_cache::SHADE, &keys.shade[*bin], &entry)?;
+        crate::trim_heap();
+        for chunk in missing.chunks(SHADE_BAKE_BINS) {
+            let wanted: Vec<shade::Bucket> = chunk
+                .iter()
+                .map(|bin| params.buckets[*bin].clone())
+                .collect();
+            let baked = shade::bake_edge_shade(
+                &casters,
+                &wanted,
+                params.max_shadow_meters,
+                params.max_zoom,
+                polylines.get(),
+            );
+            for (bin, (buildings, trees)) in chunk.iter().zip(baked) {
+                if let (Some(cache), Some(keys)) = (cache.as_deref_mut(), keys) {
+                    let mut entry = Vec::with_capacity(2 * edge_count);
+                    entry.extend_from_slice(&buildings);
+                    entry.extend_from_slice(&trees);
+                    cache.store(graph_cache::SHADE, &keys.shade[*bin], &entry)?;
+                }
+                rows[*bin] = Some((buildings, trees));
             }
-            rows[*bin] = Some((buildings, trees));
         }
     }
 
