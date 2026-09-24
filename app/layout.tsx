@@ -6,8 +6,8 @@ import {
   SITE_DESCRIPTION,
   SITE_JSON_LD,
   SITE_NAME,
-  SITE_ORIGIN,
   SITE_TITLE,
+  SITE_URL,
 } from "../src/site";
 import "./globals.css";
 
@@ -20,7 +20,7 @@ export const metadata: Metadata = {
     absoluteTitle: true,
   }),
   // Next warns without it, and a relative metadata URL would otherwise resolve against localhost.
-  metadataBase: new URL(SITE_ORIGIN),
+  metadataBase: new URL(SITE_URL),
   applicationName: SITE_NAME,
   // verification: { google: "<token from Search Console>" },
 };
