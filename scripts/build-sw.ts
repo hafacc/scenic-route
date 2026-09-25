@@ -5,7 +5,6 @@ import { execFileSync } from "node:child_process";
 import { access, readdir, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { APP_PAGES, SHELL_EXTRAS } from "../src/pages";
-import { SW_RELEASE } from "../src/sw/update";
 import manifest from "../src/tree-cover/manifest.json";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -89,8 +88,6 @@ const built = await Bun.build({
   define: {
     SW_VERSION: JSON.stringify(stamp),
     SW_PRECACHE: JSON.stringify(precache),
-    // Bumped by hand; a page whose bundled copy is lower is offered a reload.
-    SW_RELEASE: JSON.stringify(SW_RELEASE),
     // Basemap tiles are cached only over these; baked in so the rule holds on the very first tile.
     SW_CITIES: JSON.stringify(
       manifest.cities.map(({ bounds }) => ({

@@ -15,7 +15,6 @@ import {
   type Store,
   shadeKey,
 } from "./policy";
-import type { ReleaseReply } from "./update";
 
 // Owns storage policy only; an offline cache miss rejects rather than answering 404.
 // Built by scripts/build-sw.ts into out/sw.js; the committed public/sw.js is a no-cache dev stub.
@@ -23,8 +22,6 @@ import type { ReleaseReply } from "./update";
 // Replaced at build time; the version is the deploy's git sha, so every deploy gets new cache names.
 declare const SW_VERSION: string;
 declare const SW_PRECACHE: readonly string[];
-// The owner's deploy marker, from src/sw/update.ts.
-declare const SW_RELEASE: number;
 declare const SW_CITIES: readonly {
   west: number;
   south: number;
@@ -139,16 +136,12 @@ scope.addEventListener("message", (event) => {
   const message = event.data as
     | { type: "overlay-cap"; bytes: number | null }
     | { type: "clear-overlays" }
-    | { type: "release" }
     | { type: "skip-waiting" }
     | undefined;
   if (message?.type === "overlay-cap") {
     event.waitUntil(setOverlayCap(message.bytes));
   } else if (message?.type === "clear-overlays") {
     event.waitUntil(clearOverlays());
-  } else if (message?.type === "release") {
-    const reply: ReleaseReply = { release: SW_RELEASE };
-    event.ports[0]?.postMessage(reply);
   } else if (message?.type === "skip-waiting") {
     // Every open page must reload on the hand-over, since activation deletes the shell they import.
     event.waitUntil(scope.skipWaiting());

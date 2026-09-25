@@ -4428,16 +4428,14 @@ Deliberately **no `skipWaiting`** by default: a new deploy takes over when the l
 the installed app's next launch. A deploy while you are offline cannot strand you either — install
 fails because the new shell cannot be fetched, so the old worker and its caches keep serving.
 
-The cost of that is running one deploy behind for a session, and for the deploy that is worth
-interrupting a session for there is an opt-in way out. `src/sw/update.ts` holds a single `SW_RELEASE`
-number, baked into the worker beside the sha the same way; **bump it by hand, in the same commit as
-such a deploy**. A worker parked in `waiting` reports its copy over a `MessageChannel` when the page
-asks, and a page whose own bundled copy is lower shows a one-tap banner. The tap is the only path to
-`skipWaiting()` there is — the worker skips its wait in answer to that message and nothing else, and
-the page reloads on `controllerchange`, immediately, because the activation behind that hand-over
-deletes the shell it is still lazily importing chunks out of. Dismissing the banner declines this
-offer only: the parked worker still takes over at the next natural close, exactly as it would have.
-Leaving `SW_RELEASE` alone, which is what nearly every deploy should do, shows nothing at all.
+The cost of that is running one deploy behind for a session, so every deploy offers a way out: a
+page controlled by a worker that finds a newer one parked in `waiting` shows a one-tap banner. Only
+deploys count — the daily shed and timetable artifacts are read from `main` over
+raw.githubusercontent.com and never change `sw.js`. The tap is the only path to `skipWaiting()`
+there is — the worker skips its wait in answer to that message and nothing else, and the page
+reloads on `controllerchange`, immediately, because the activation behind that hand-over deletes the
+shell it is still lazily importing chunks out of. Dismissing the banner declines this offer only:
+the parked worker still takes over at the next natural close, exactly as it would have.
 
 Nothing would otherwise notice a deploy in an installed app that is resumed rather than navigated, so
 the page calls `registration.update()` when it becomes visible, throttled to once every five minutes

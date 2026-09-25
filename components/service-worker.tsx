@@ -4,12 +4,7 @@ import { useEffect, useState } from "react";
 import { FiX } from "react-icons/fi";
 import { coverageBytes } from "../src/settings/offline";
 import { settings, subscribeSettings } from "../src/settings/store";
-import {
-  dueForCheck,
-  offersReload,
-  type ReleaseReply,
-  SW_RELEASE,
-} from "../src/sw/update";
+import { dueForCheck } from "../src/sw/update";
 
 // Registered relative to pick up basePath; the worker is told its cap, since asking would wake it.
 
@@ -27,22 +22,6 @@ export function sendCoverage(coverage: string): void {
 
 export function clearOfflineMaps(): void {
   void tellWorker({ type: "clear-overlays" }).catch(() => {});
-}
-
-// A worker from an older deploy never answers, so the ask times out.
-const REPLY_MS = 2000;
-
-function askRelease(parked: ServiceWorker): Promise<number | null> {
-  return new Promise((resolve) => {
-    const channel = new MessageChannel();
-    const giveUp = setTimeout(() => resolve(null), REPLY_MS);
-    channel.port1.onmessage = (event: MessageEvent) => {
-      clearTimeout(giveUp);
-      const reply = event.data as ReleaseReply | undefined;
-      resolve(typeof reply?.release === "number" ? reply.release : null);
-    };
-    parked.postMessage({ type: "release" }, [channel.port2]);
-  });
 }
 
 // The worker skips waiting only in answer to this; each page's controllerchange reloads it.
@@ -80,13 +59,9 @@ export default function ServiceWorker() {
     // Registration just fetched sw.js, so the first re-check waits a full interval.
     let lastCheck = Date.now();
 
-    const offer = async (waiting: ServiceWorker | null): Promise<void> => {
+    const offer = (waiting: ServiceWorker | null): void => {
       // Nothing to take over from is a first install, not an update, and needs no reload.
-      if (!waiting || !navigator.serviceWorker.controller) {
-        return;
-      }
-      const release = await askRelease(waiting);
-      if (live && release !== null && offersReload(release, SW_RELEASE)) {
+      if (live && waiting && navigator.serviceWorker.controller) {
         setParked(waiting);
       }
     };
@@ -94,7 +69,7 @@ export default function ServiceWorker() {
     const offerOnceInstalled = (installing: ServiceWorker): void => {
       installing.addEventListener("statechange", () => {
         if (installing.state === "installed") {
-          void offer(registration?.waiting ?? null);
+          offer(registration?.waiting ?? null);
         }
       });
     };
@@ -139,7 +114,7 @@ export default function ServiceWorker() {
         registration = ready;
         ready.addEventListener("updatefound", onUpdateFound);
         // A worker that parked before this page opened fires no updatefound of its own.
-        void offer(ready.waiting);
+        offer(ready.waiting);
         // This navigation's own check may have started one before there was a listener.
         if (ready.installing) {
           offerOnceInstalled(ready.installing);
