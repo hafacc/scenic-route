@@ -488,6 +488,8 @@ fn append_sweep(
                 close(&mut run, out);
             }
         } else {
+            // A run that ends naturally still sweeps; only a length cut carries into the next.
+            close(&mut run, out);
             run.clear();
         }
     }
@@ -1656,5 +1658,85 @@ mod tests {
             assert_eq!(building_at(4), 0);
             assert_eq!(tree_at(4), 0);
         }
+    }
+
+    /// Whether `point` lies inside any polygon's outer ring (even-odd crossing test).
+    fn covered(polygons: &[Polygon], point: Coord) -> bool {
+        polygons.iter().any(|polygon| {
+            let ring = &polygon[0];
+            let mut inside = false;
+            let mut previous = ring.len() - 1;
+            for current in 0..ring.len() {
+                let (a, b) = (ring[previous], ring[current]);
+                if (a.lat > point.lat) != (b.lat > point.lat)
+                    && point.lng < a.lng + (point.lat - a.lat) / (b.lat - a.lat) * (b.lng - a.lng)
+                {
+                    inside = !inside;
+                }
+                previous = current;
+            }
+            inside
+        })
+    }
+
+    // A U swept up and right has two facing runs, split by its notch; both must leave strips.
+    #[test]
+    fn sweeps_every_facing_run_of_a_concave_ring() {
+        let meters_per_lng = METERS_PER_DEGREE_LAT * 40.7f64.to_radians().cos();
+        let at = |east: f64, north: f64| {
+            coord(
+                -74.0 + east / meters_per_lng,
+                40.7 + north / METERS_PER_DEGREE_LAT,
+            )
+        };
+        let ring: Ring = [
+            (0.0, 0.0),
+            (60.0, 0.0),
+            (60.0, 60.0),
+            (40.0, 60.0),
+            (40.0, 20.0),
+            (20.0, 20.0),
+            (20.0, 60.0),
+            (0.0, 60.0),
+        ]
+        .iter()
+        .map(|(east, north)| at(*east, *north))
+        .collect();
+        let base = (5.0 / meters_per_lng, 3.0 / METERS_PER_DEGREE_LAT);
+        let delta = (25.0 / meters_per_lng, 35.0 / METERS_PER_DEGREE_LAT);
+        let mut swept: Vec<Polygon> = Vec::new();
+        append_sweep(&ring, base, delta, meters_per_lng, &mut swept);
+
+        // The reference: the ring stamped at many small steps along the sweep.
+        let steps = 200;
+        let stamps: Vec<Polygon> = (0..=steps)
+            .map(|step| {
+                let t = step as f64 / steps as f64;
+                let shift = |vertex: &Coord| Coord {
+                    lng: vertex.lng + base.0 + t * delta.0,
+                    lat: vertex.lat + base.1 + t * delta.1,
+                };
+                vec![ring.iter().map(shift).collect()]
+            })
+            .collect();
+        let (mut reference, mut missed, mut extra) = (0, 0, 0);
+        for column in 0..220 {
+            for row in 0..240 {
+                let point = at(
+                    -10.0 + column as f64 * 0.5 + 0.25,
+                    -10.0 + row as f64 * 0.5 + 0.25,
+                );
+                let want = covered(&stamps, point);
+                let got = covered(&swept, point);
+                reference += usize::from(want);
+                missed += usize::from(want && !got);
+                extra += usize::from(got && !want);
+            }
+        }
+        assert!(reference > 0);
+        assert!(
+            missed * 100 < reference && extra * 100 < reference,
+            "missed {missed} and added {extra} of {reference} swept cells"
+        );
     }
 }

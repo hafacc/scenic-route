@@ -448,6 +448,8 @@ function traceRunSweep(
         close();
       }
     } else {
+      // A run that ends naturally still sweeps; only a length cut carries into the next.
+      close();
       run = [];
     }
   }

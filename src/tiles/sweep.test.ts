@@ -1,9 +1,16 @@
 import { expect, test } from "bun:test";
 import { DECK_HEIGHT_METERS } from "../routing/sheds";
 import type { SunSample } from "../shade/sun";
+import type { CasterChunk } from "./casters";
 import { projectX, projectY } from "./mercator";
 import { packRuns, pixelsPerMeter, type ShedDecks } from "./shed-decks";
-import { castSheds, crownSegments, frameFor, type PolygonSink } from "./sweep";
+import {
+  castCrowns,
+  castSheds,
+  crownSegments,
+  frameFor,
+  type PolygonSink,
+} from "./sweep";
 
 // No baked pyramid carries shed decks, so only these tests catch their shadows going wrong.
 
@@ -308,4 +315,112 @@ test("cuts the bands the tiler cuts", () => {
       expect(cut[slice].toM).toBeCloseTo(toM, 6);
     }
   }
+});
+
+// Mirrors `sweeps_every_facing_run_of_a_concave_ring` in crates/tiler/src/shade.rs.
+
+function inside(rings: [number, number][][], x: number, y: number): boolean {
+  return rings.some((ring) => {
+    let crossed = false;
+    for (let vertex = 0; vertex < ring.length; vertex++) {
+      const [ax, ay] = ring[(vertex + ring.length - 1) % ring.length];
+      const [bx, by] = ring[vertex];
+      if (ay > y !== by > y && x < ax + ((y - ay) / (by - ay)) * (bx - ax)) {
+        crossed = !crossed;
+      }
+    }
+    return crossed;
+  });
+}
+
+test("sweeps every facing run of a concave crown slice", () => {
+  // A U opening north, thrown north-east, so its notch splits the facing edges into two runs.
+  const worldPerMeter = FRAME.pixelsPerMeter / FRAME.scale;
+  const cornerX = (FRAME.originX + 64) / FRAME.scale;
+  const cornerY = (FRAME.originY + 192) / FRAME.scale;
+  const worldRing = (
+    [
+      [0, 0],
+      [60, 0],
+      [60, 60],
+      [40, 60],
+      [40, 20],
+      [20, 20],
+      [20, 60],
+      [0, 60],
+    ] as const
+  ).map(([east, north]): [number, number] => [
+    cornerX + east * worldPerMeter,
+    cornerY - north * worldPerMeter,
+  ]);
+  const xs = worldRing.map(([x]) => x);
+  const ys = worldRing.map(([, y]) => y);
+  const height = 20;
+  const chunk = {
+    points: Float64Array.from(worldRing.flat()),
+    rings: Uint32Array.from([0, worldRing.length]),
+    records: Uint32Array.from([0, 1]),
+    heights: Float32Array.from([height]),
+    boxes: Float64Array.from([
+      Math.min(...xs),
+      Math.min(...ys),
+      Math.max(...xs),
+      Math.max(...ys),
+    ]),
+    hulls: Uint32Array.from([0, 0]),
+    hullPoints: new Float64Array(0),
+    wound: Uint8Array.from([signedDoubleArea(worldRing) > 0 ? 1 : 0]),
+    levels: Uint8Array.from([3]), // only the widest slice, whose sweep is longest
+    buildings: 0,
+  } as CasterChunk;
+  const sample = sunAt(30, 225);
+  const swept = new Recorder();
+  expect(castCrowns(swept, [chunk], sample, MAX_SHADOW_METERS, FRAME)).toBe(1);
+
+  // The reference: the ring stamped at many small steps along the slice's sweep.
+  const segment = crownSegments(
+    height,
+    sample.shadowPerHeight,
+    MAX_SHADOW_METERS,
+    1 / FRAME.pixelsPerMeter,
+  ).find(({ level }) => level === 3);
+  if (segment === undefined) {
+    throw new Error("the widest slice should cast");
+  }
+  const steps = 200;
+  const stamps = Array.from({ length: steps + 1 }, (_, step) => {
+    const meters =
+      segment.fromM + ((segment.toM - segment.fromM) * step) / steps;
+    const dx = meters * sample.east * FRAME.pixelsPerMeter;
+    const dy = -meters * sample.north * FRAME.pixelsPerMeter;
+    return worldRing.map(([x, y]): [number, number] => [
+      x * FRAME.scale - FRAME.originX + dx,
+      y * FRAME.scale - FRAME.originY + dy,
+    ]);
+  });
+  const stampXs = stamps.flatMap((ring) => ring.map(([x]) => x));
+  const stampYs = stamps.flatMap((ring) => ring.map(([, y]) => y));
+  let reference = 0;
+  let missed = 0;
+  let extra = 0;
+  for (
+    let x = Math.min(...stampXs) - 2.25;
+    x < Math.max(...stampXs) + 2;
+    x += 0.5
+  ) {
+    for (
+      let y = Math.min(...stampYs) - 2.25;
+      y < Math.max(...stampYs) + 2;
+      y += 0.5
+    ) {
+      const want = inside(stamps, x, y);
+      const got = inside(swept.rings, x, y);
+      reference += want ? 1 : 0;
+      missed += want && !got ? 1 : 0;
+      extra += got && !want ? 1 : 0;
+    }
+  }
+  expect(reference).toBeGreaterThan(0);
+  expect(missed * 100).toBeLessThan(reference);
+  expect(extra * 100).toBeLessThan(reference);
 });
