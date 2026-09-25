@@ -934,8 +934,11 @@ const STAGES: usize = 9;
 
 fn stage(number: usize, name: &str, started: &Instant) {
     crate::trim_heap();
+    let peak = crate::peak_rss()
+        .map(|bytes| format!(", peak RSS {}", crate::gib(bytes)))
+        .unwrap_or_default();
     eprintln!(
-        "[{number}/{STAGES}] {name} ({:.1}s in)",
+        "[{number}/{STAGES}] {name} ({:.1}s in{peak})",
         started.elapsed().as_secs_f64()
     );
 }
@@ -1195,7 +1198,14 @@ fn handoffs(plan: &Plan, cities: &[(&City, &PlanCity)], selection: &Selection) -
 }
 
 /// A build on `jobs` rayon threads, sized before any parallel iterator builds the default pool.
-pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fallible<()> {
+/// `memory` is the caches' budget in bytes and its provenance; it only trades memory for time,
+/// so no stamp or cache key ever reads it.
+pub fn run(
+    plan_file: &Path,
+    jobs: Option<usize>,
+    memory: (u64, String),
+    selection: &Selection,
+) -> Fallible<()> {
     let started = Instant::now();
     if let Some(threads) = jobs {
         rayon::ThreadPoolBuilder::new()
@@ -1207,6 +1217,9 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
         "building on {threads} thread{}",
         if threads == 1 { "" } else { "s" }
     );
+    let (budget, provenance) = memory;
+    eprintln!("memory budget {} ({provenance})", crate::gib(budget));
+    let memory_budget = usize::try_from(budget).unwrap_or(usize::MAX);
     let mut plan: Plan = serde_json::from_slice(&fs::read(plan_file)?)?;
     plan.hash_source_tokens();
     let manifest: Manifest = serde_json::from_slice(&fs::read(&plan.manifest)?)?;
@@ -1445,6 +1458,7 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
                         params: params.clone(),
                         city: city.id.clone(),
                         render,
+                        memory_budget,
                     })?;
                 }
             }
@@ -1596,6 +1610,7 @@ pub fn run(plan_file: &Path, jobs: Option<usize>, selection: &Selection) -> Fall
                 cache: Some(graph_keys[index].clone()),
                 probe: false,
                 report: None,
+                memory_budget,
             },
             dem,
         )?;

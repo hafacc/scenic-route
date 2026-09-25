@@ -153,6 +153,25 @@ pub fn flatten(polygons: &[Polygon]) -> PolygonSet {
 }
 
 impl PolygonSet {
+    /// How many polygons the set holds.
+    pub fn len(&self) -> usize {
+        self.rings.len()
+    }
+
+    /// The parts' polygons in order as one set, sized once so no outer vector ever regrows.
+    pub fn concat(parts: Vec<PolygonSet>) -> PolygonSet {
+        let total = parts.iter().map(PolygonSet::len).sum();
+        let mut set = PolygonSet {
+            rings: Vec::with_capacity(total),
+            boxes: Vec::with_capacity(total),
+        };
+        for part in parts {
+            set.rings.extend(part.rings);
+            set.boxes.extend(part.boxes);
+        }
+        set
+    }
+
     /// Whether a point lands on any of `candidates`: even-odd per polygon, overlaps don't cancel.
     pub fn contains_point(&self, candidates: &[u32], lng: f64, lat: f64) -> bool {
         candidates.iter().any(|candidate| {

@@ -578,8 +578,84 @@ fn close_holes(meters: &mut [f32], width: usize, height: usize, cell_meters: f64
     patched
 }
 
-// Field rows resampled per band; a tile spanning a band edge decodes once per band it reaches.
-const RESAMPLE_BAND_ROWS: usize = 1024;
+/// A longitude/latitude grid of cells, sampled at their centers.
+struct CellGrid {
+    west: f64,
+    north: f64,
+    step_lng: f64,
+    step_lat: f64,
+    width: usize,
+    height: usize,
+}
+
+impl CellGrid {
+    fn lng(&self, column: usize) -> f64 {
+        self.west + (column as f64 + 0.5) * self.step_lng
+    }
+
+    fn lat(&self, row: usize) -> f64 {
+        self.north - (row as f64 + 0.5) * self.step_lat
+    }
+}
+
+/// The grid's readings, NaN where no tile answered, with their range and count.
+struct Sampled {
+    meters: Vec<f32>,
+    low: f32,
+    high: f32,
+    filled: usize,
+}
+
+/// Every cell read from the tile that covers it, each tile decoded once.
+/// A row's cells are cut into runs of one tile, and the runs visited grouped by tile, so a tile's
+/// cells come in row-major order as a whole-field bucket would list them, but in a few bytes a run.
+fn sample_cells(grid: &CellGrid, dem: &mut Dem) -> Fallible<Sampled> {
+    let mut runs: Vec<(u32, u32, u32, u32)> = Vec::new(); // (tile, row, from column, to column)
+    for row in 0..grid.height {
+        let lat = grid.lat(row);
+        let mut open: Option<(usize, usize)> = None; // (tile, first column)
+        for column in 0..=grid.width {
+            let tile = if column < grid.width {
+                dem.tile_of(grid.lng(column), lat)
+            } else {
+                None
+            };
+            if let Some((held, from)) = open
+                && tile != Some(held)
+            {
+                runs.push((held as u32, row as u32, from as u32, column as u32));
+                open = None;
+            }
+            if open.is_none()
+                && let Some(tile) = tile
+            {
+                open = Some((tile, column));
+            }
+        }
+    }
+    // Stable, so each tile's runs stay in row order.
+    runs.sort_by_key(|run| run.0);
+
+    let mut sampled = Sampled {
+        meters: vec![f32::NAN; grid.width * grid.height],
+        low: f32::INFINITY,
+        high: f32::NEG_INFINITY,
+        filled: 0,
+    };
+    for (tile, row, from, to) in runs {
+        let (tile, row) = (tile as usize, row as usize);
+        let lat = grid.lat(row);
+        for column in from as usize..to as usize {
+            if let Some(value) = dem.sample_in(tile, grid.lng(column), lat)? {
+                sampled.meters[row * grid.width + column] = value;
+                sampled.low = sampled.low.min(value);
+                sampled.high = sampled.high.max(value);
+                sampled.filled += 1;
+            }
+        }
+    }
+    Ok(sampled)
+}
 
 /// Resamples the mosaic onto a longitude/latitude grid at `zoom`'s pixel size.
 pub fn resample(bounds: &Bounds, zoom: u32, dem: &mut Dem) -> Fallible<Field> {
@@ -595,45 +671,20 @@ pub fn resample(bounds: &Bounds, zoom: u32, dem: &mut Dem) -> Fallible<Field> {
     let step_lng = (east - west) / width as f64;
     let step_lat = (north - south) / height as f64;
 
-    let mut meters = vec![f32::NAN; width * height];
-    let mut low = f32::INFINITY;
-    let mut high = f32::NEG_INFINITY;
-    let mut filled = 0usize;
-
-    // Bucketed by tile, since a row-major sweep re-decodes every tile on every row.
-    // A band at a time, so the buckets hold a band's cell indices, not the whole field's.
-    for band in (0..height).step_by(RESAMPLE_BAND_ROWS) {
-        let mut by_tile: HashMap<usize, Vec<u32>> = HashMap::new();
-        for row in band..(band + RESAMPLE_BAND_ROWS).min(height) {
-            let lat = north - (row as f64 + 0.5) * step_lat;
-            for column in 0..width {
-                let lng = west + (column as f64 + 0.5) * step_lng;
-                if let Some(position) = dem.tile_of(lng, lat) {
-                    by_tile
-                        .entry(position)
-                        .or_default()
-                        .push(((row - band) * width + column) as u32);
-                }
-            }
-        }
-        let mut positions: Vec<usize> = by_tile.keys().copied().collect();
-        positions.sort_unstable();
-        for position in positions {
-            for &offset in &by_tile[&position] {
-                let cell = band * width + offset as usize;
-                let row = cell / width;
-                let column = cell % width;
-                let lat = north - (row as f64 + 0.5) * step_lat;
-                let lng = west + (column as f64 + 0.5) * step_lng;
-                if let Some(value) = dem.sample_in(position, lng, lat)? {
-                    meters[cell] = value;
-                    low = low.min(value);
-                    high = high.max(value);
-                    filled += 1;
-                }
-            }
-        }
-    }
+    let grid = CellGrid {
+        west,
+        north,
+        step_lng,
+        step_lat,
+        width,
+        height,
+    };
+    let Sampled {
+        mut meters,
+        low,
+        high,
+        filled,
+    } = sample_cells(&grid, dem)?;
     if filled == 0 {
         return Err("the DEM covered none of the city".into());
     }
@@ -804,8 +855,9 @@ mod mosaic_tests {
     use tiff::encoder::{TiffEncoder, colortype};
     use tiff::tags::Tag;
 
-    use super::{Dem, MosaicTiles};
+    use super::{CellGrid, Dem, MosaicTiles, resample, sample_cells};
     use crate::heights::{SF_CS13, UTM_10N};
+    use crate::manifest::Bounds;
 
     /// A point in each survey's own ground: the CS13 origin under Twin Peaks, and downtown Oakland.
     const IN_SAN_FRANCISCO: (f64, f64) = (-122.45, 37.75);
@@ -927,5 +979,125 @@ mod mosaic_tests {
             .sample_grid(east_x - 20.0, east_y + 20.0, 1.0, SIDE, SIDE)
             .expect("a grid");
         assert!(values.iter().all(|&value| value == 33.0));
+    }
+
+    /// One meter cells whose readings climb across and down the tile, with a nodata corner.
+    fn write_sloped(path: &Path, origin_x: f64, origin_y: f64, base: f32) {
+        let mut encoder =
+            TiffEncoder::new(BufWriter::new(File::create(path).expect("a tile"))).expect("a tiff");
+        let mut image = encoder
+            .new_image::<colortype::Gray32Float>(SIDE as u32, SIDE as u32)
+            .expect("an image");
+        georeference(&mut image, origin_x, origin_y);
+        let samples: Vec<f32> = (0..SIDE * SIDE)
+            .map(|cell| {
+                let (row, column) = (cell / SIDE, cell % SIDE);
+                if row < 3 && column < 3 {
+                    -9999.0
+                } else {
+                    base + column as f32 * 0.5 + row as f32 * 0.25
+                }
+            })
+            .collect();
+        image.write_data(&samples).expect("the samples");
+    }
+
+    /// Three of a 2 x 2 block of tiles around downtown Oakland, the fourth left as a gap.
+    fn three_tiles(test: &str) -> Dem {
+        let (x, y) = UTM_10N.forward(IN_THE_EAST_BAY.0, IN_THE_EAST_BAY.1);
+        let side = SIDE as f64;
+        let paths: Vec<PathBuf> = [(0.0, 0.0, 10.0), (side, 0.0, 50.0), (0.0, -side, 90.0)]
+            .iter()
+            .enumerate()
+            .map(|(number, &(east, south, base))| {
+                let path = scratch(test, &format!("tile-{number}.tif"));
+                write_sloped(&path, x - side + east, y + side + south, base);
+                path
+            })
+            .collect();
+        Dem::open(&paths, UTM_10N, 0).expect("a three-tile dem")
+    }
+
+    /// The block's cells a little past its edges, at about a quarter meter a cell.
+    fn around_the_block() -> (Bounds, CellGrid) {
+        let (lng, lat) = IN_THE_EAST_BAY;
+        let bounds = Bounds {
+            west: lng - 0.0006,
+            east: lng + 0.0006,
+            south: lat - 0.0004,
+            north: lat + 0.0004,
+        };
+        let (width, height) = (451, 373);
+        let grid = CellGrid {
+            west: bounds.west,
+            north: bounds.north,
+            step_lng: (bounds.east - bounds.west) / width as f64,
+            step_lat: (bounds.north - bounds.south) / height as f64,
+            width,
+            height,
+        };
+        (bounds, grid)
+    }
+
+    // The runs must read every cell from the same tile a cell-by-cell sweep would, decoding each
+    // tile once where the sweep decodes on every change of tile.
+    #[test]
+    fn the_run_resample_reads_what_a_cell_by_cell_sweep_does_decoding_each_tile_once() {
+        let (_, grid) = around_the_block();
+        let mut dem = three_tiles("runs-match-cells");
+        let got = sample_cells(&grid, &mut dem).expect("a sampled grid");
+        assert_eq!(dem.decoded, 3, "each tile decoded exactly once");
+
+        let mut naive = three_tiles("runs-match-cells-naive");
+        let mut want = vec![f32::NAN; grid.width * grid.height];
+        let mut touched = std::collections::HashSet::new();
+        for row in 0..grid.height {
+            for column in 0..grid.width {
+                let (lng, lat) = (grid.lng(column), grid.lat(row));
+                if let Some(tile) = naive.tile_of(lng, lat) {
+                    touched.insert(tile);
+                    if let Some(value) = naive.sample_in(tile, lng, lat).expect("a reading") {
+                        want[row * grid.width + column] = value;
+                    }
+                }
+            }
+        }
+        assert_eq!(touched.len(), 3);
+        assert!(
+            naive.decoded > 3,
+            "the sweep should thrash the one held tile"
+        );
+        assert!(
+            got.meters
+                .iter()
+                .zip(&want)
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+        );
+        let finite: Vec<f32> = want
+            .iter()
+            .copied()
+            .filter(|value| value.is_finite())
+            .collect();
+        assert_eq!(got.filled, finite.len());
+        assert!(
+            got.filled > 0 && got.filled < want.len(),
+            "ground, gap and nodata all appear"
+        );
+        assert_eq!(
+            got.low,
+            finite.iter().copied().fold(f32::INFINITY, f32::min)
+        );
+        assert_eq!(
+            got.high,
+            finite.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+        );
+    }
+
+    #[test]
+    fn a_resample_decodes_each_tile_it_reaches_once() {
+        let (bounds, _) = around_the_block();
+        let mut dem = three_tiles("resample-decodes-once");
+        resample(&bounds, 19, &mut dem).expect("a field");
+        assert_eq!(dem.decoded, 3);
     }
 }
