@@ -1,5 +1,6 @@
 import pRetry from "p-retry";
 import { cached } from "./cache";
+import { densify, haversineMeters } from "./geometry";
 import { USER_AGENT } from "./http";
 import type { Coord } from "./socrata";
 
@@ -21,6 +22,8 @@ interface OverpassWay {
 
 interface OverpassRelation {
   type: "relation";
+  id?: number;
+  tags?: Record<string, string>;
   members?: { type: string; role: string; geometry?: OverpassPoint[] }[];
 }
 
@@ -124,6 +127,7 @@ export interface PathWay {
 }
 
 const WALKABLE = '["area"!="yes"]["indoor"!="yes"]["foot"!~"^(no|private)$"]';
+const BARRED = /^(no|private)$/;
 
 // cycleway brings the greenways; a bike-only segment carries foot=no and drops out.
 const FOOT_CLASSES =
@@ -137,10 +141,13 @@ const FOOT_WAYS =
   '["access"!~"^(no|private)$"]' +
   WALKABLE;
 
+const PRIVATE_SERVICE =
+  "^(driveway|parking_aisle|alley|drive-through|emergency_access)$";
+
 // Park drives; motor_vehicle=private also needs a foot grant or a name to keep gated driveways out.
 const DRIVE_ROAD =
   '["highway"~"^(unclassified|service|residential|tertiary|living_street)$"]' +
-  '["service"!~"^(driveway|parking_aisle|alley|drive-through|emergency_access)$"]';
+  `["service"!~"${PRIVATE_SERVICE}"]`;
 const DRIVE_CLAUSES = [
   `way["motor_vehicle"="no"]${DRIVE_ROAD}${WALKABLE}`,
   `way["motor_vehicle"="private"]["foot"~"^(yes|designated)$"]${DRIVE_ROAD}${WALKABLE}`,
@@ -170,6 +177,239 @@ export function tunneled(tags: Record<string, string>): boolean {
   return tagged(tags.tunnel) || tags.covered === "yes";
 }
 
+function pathWayOf(element: OverpassElement): PathWay | null {
+  if (element.type !== "way" || element.id === undefined) {
+    return null;
+  }
+  const geometry = element.geometry ?? [];
+  if (geometry.length < 2) {
+    return null;
+  }
+  const tags = element.tags ?? {};
+  const layer = Number.parseInt(tags.layer ?? "", 10);
+  return {
+    id: element.id,
+    name: tags.name,
+    steps: tags.highway === "steps",
+    structure:
+      tagged(tags.bridge) ||
+      tagged(tags.tunnel) ||
+      (tags.layer !== undefined && layer !== 0),
+    tunnel: tunneled(tags),
+    points: toCoords(geometry),
+  };
+}
+
+// Green-Wood's avenues are highway=service, access=permissive, so no clause above admits them.
+const CEMETERY_LANE_SHARE = 0.8; // of a lane's length inside a cemetery; the rest is its gate
+const LANE_STEP_METERS = 5;
+const PRIVATE_SERVICE_PATTERN = new RegExp(PRIVATE_SERVICE);
+
+function isCemetery(tags: Record<string, string> | undefined): boolean {
+  return tags?.landuse === "cemetery" || tags?.amenity === "grave_yard";
+}
+
+// No name required: Oakland's Mountain View names none of its lanes; the polygon is the guard.
+function isCemeteryLane(tags: Record<string, string>): boolean {
+  return (
+    tags.highway === "service" &&
+    !PRIVATE_SERVICE_PATTERN.test(tags.service ?? "") &&
+    !BARRED.test(tags.access ?? "") &&
+    !BARRED.test(tags.foot ?? "") &&
+    tags.area !== "yes" &&
+    tags.indoor !== "yes"
+  );
+}
+
+interface CemeteryArea {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
+  chains: OverpassPoint[][];
+}
+
+const AREA_RELATIONS = new Set(["multipolygon", "boundary"]);
+const RING_ROLES = new Set(["outer", "inner"]);
+
+// Closed only if every chain end meets another, as each ring's first and last node do.
+function chainsClose(chains: readonly OverpassPoint[][]): boolean {
+  const ends = new Map<string, number>();
+  for (const chain of chains) {
+    for (const end of [chain[0], chain[chain.length - 1]]) {
+      const key = `${end.lat},${end.lon}`;
+      ends.set(key, (ends.get(key) ?? 0) + 1);
+    }
+  }
+  return [...ends.values()].every((count) => count % 2 === 0);
+}
+
+// A relation's member ways close only together, so each is kept as an open chain.
+function cemeteryArea(element: OverpassElement): CemeteryArea | null {
+  let chains: OverpassPoint[][] = [];
+  if (element.type === "way" && isCemetery(element.tags)) {
+    chains = [element.geometry ?? []];
+  } else if (
+    element.type === "relation" &&
+    isCemetery(element.tags) &&
+    AREA_RELATIONS.has(element.tags?.type ?? "")
+  ) {
+    chains = (element.members ?? [])
+      .filter((member) => member.type === "way" && RING_ROLES.has(member.role))
+      .map((member) => member.geometry ?? []);
+  }
+  chains = chains.filter((chain) => chain.length > 0);
+  const points = chains.flat();
+  if (points.length < 3) {
+    return null;
+  }
+  // An open outline would read everything to one side of it as inside.
+  if (!chainsClose(chains)) {
+    console.error(
+      `  cemetery ${element.type} ${"id" in element ? element.id : "?"}: its rings don't close; skipped`,
+    );
+    return null;
+  }
+  const lats = points.map((point) => point.lat);
+  const lngs = points.map((point) => point.lon);
+  return {
+    south: Math.min(...lats),
+    west: Math.min(...lngs),
+    north: Math.max(...lats),
+    east: Math.max(...lngs),
+    chains,
+  };
+}
+
+const EDGE_METERS = 1; // nearer an outline than this, which side a point lies on is rounding
+const METERS_PER_DEGREE = 111_320;
+
+// Within EDGE_METERS of any of the area's edges, measured on a local flat plane.
+function nearEdge(area: CemeteryArea, { lat, lng }: Coord): boolean {
+  const latPad = EDGE_METERS / METERS_PER_DEGREE;
+  const scale = Math.cos((lat * Math.PI) / 180) * METERS_PER_DEGREE;
+  const lngPad = EDGE_METERS / scale;
+  if (
+    lat < area.south - latPad ||
+    lat > area.north + latPad ||
+    lng < area.west - lngPad ||
+    lng > area.east + lngPad
+  ) {
+    return false;
+  }
+  for (const chain of area.chains) {
+    for (let index = 1; index < chain.length; index++) {
+      const ax = (chain[index - 1].lon - lng) * scale;
+      const ay = (chain[index - 1].lat - lat) * METERS_PER_DEGREE;
+      const bx = (chain[index].lon - lng) * scale;
+      const by = (chain[index].lat - lat) * METERS_PER_DEGREE;
+      const dx = bx - ax;
+      const dy = by - ay;
+      const length = dx * dx + dy * dy;
+      const along =
+        length === 0
+          ? 0
+          : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / length));
+      if (Math.hypot(ax + along * dx, ay + along * dy) < EDGE_METERS) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Even-odd over every member edge; OSM closes a ring by repeating its first node.
+function insideArea(area: CemeteryArea, { lat, lng }: Coord): boolean {
+  if (
+    lat < area.south ||
+    lat > area.north ||
+    lng < area.west ||
+    lng > area.east
+  ) {
+    return false;
+  }
+  let inside = false;
+  for (const chain of area.chains) {
+    for (let index = 1; index < chain.length; index++) {
+      const from = chain[index - 1];
+      const to = chain[index];
+      if (from.lat > lat !== to.lat > lat) {
+        const at =
+          from.lon +
+          ((lat - from.lat) / (to.lat - from.lat)) * (to.lon - from.lon);
+        if (lng < at) {
+          inside = !inside;
+        }
+      }
+    }
+  }
+  return inside;
+}
+
+// The walkable service ways lying mostly inside a cemetery, out of one mixed result.
+export function cemeteryLanes(elements: readonly OverpassElement[]): PathWay[] {
+  const areas: CemeteryArea[] = [];
+  for (const element of elements) {
+    const area = cemeteryArea(element);
+    if (area !== null) {
+      areas.push(area);
+    }
+  }
+  const lanes: PathWay[] = [];
+  for (const element of elements) {
+    if (element.type !== "way" || !isCemeteryLane(element.tags ?? {})) {
+      continue;
+    }
+    const lane = pathWayOf(element);
+    if (lane === null) {
+      continue;
+    }
+    // Densified, so a long straight lane is credited a step at a time rather than all-or-nothing.
+    const dense = densify(lane.points, LANE_STEP_METERS).points;
+    let total = 0;
+    let inside = 0;
+    for (let index = 1; index < dense.length; index++) {
+      const from = dense[index - 1];
+      const to = dense[index];
+      const middle = {
+        lat: (from.lat + to.lat) / 2,
+        lng: (from.lng + to.lng) / 2,
+      };
+      // A step along the fence is neither in nor out, so the rest of the lane decides.
+      if (areas.some((area) => nearEdge(area, middle))) {
+        continue;
+      }
+      const meters = haversineMeters(from, to);
+      total += meters;
+      if (areas.some((area) => insideArea(area, middle))) {
+        inside += meters;
+      }
+    }
+    if (total > 0 && inside >= CEMETERY_LANE_SHARE * total) {
+      lanes.push(lane);
+    }
+  }
+  return lanes;
+}
+
+// The area filter only narrows the fetch to service ways touching a cemetery; cemeteryLanes decides.
+function cemeteryLanesQuery(
+  south: number,
+  west: number,
+  north: number,
+  east: number,
+): string {
+  const box = `${south},${west},${north},${east}`;
+  const areas = ['["landuse"="cemetery"]', '["amenity"="grave_yard"]']
+    .map((filter) => `way${filter}(${box});rel${filter}(${box});`)
+    .join("");
+  return (
+    `[out:json][timeout:${QUERY_TIMEOUT_SECONDS}];(${areas})->.cemeteries;` +
+    ".cemeteries out geom;.cemeteries map_to_area->.grounds;" +
+    `way(area.grounds)["highway"="service"](${box});out geom;`
+  );
+}
+
 export async function fetchPaths(
   south: number,
   west: number,
@@ -182,28 +422,23 @@ export async function fetchPaths(
   );
   const ways: PathWay[] = [];
   for (const element of elements) {
-    if (element.type !== "way" || element.id === undefined) {
-      continue;
+    const way = pathWayOf(element);
+    if (way !== null) {
+      ways.push(way);
     }
-    const geometry = element.geometry ?? [];
-    if (geometry.length < 2) {
-      continue;
-    }
-    const tags = element.tags ?? {};
-    const layer = Number.parseInt(tags.layer ?? "", 10);
-    ways.push({
-      id: element.id,
-      name: tags.name,
-      steps: tags.highway === "steps",
-      structure:
-        tagged(tags.bridge) ||
-        tagged(tags.tunnel) ||
-        (tags.layer !== undefined && layer !== 0),
-      tunnel: tunneled(tags),
-      points: toCoords(geometry),
-    });
   }
-  return ways;
+  const lanes = cemeteryLanes(
+    await overpassQuery(
+      "overpass-cemetery-lanes",
+      cemeteryLanesQuery(south, west, north, east),
+    ),
+  );
+  const seen = new Set(ways.map((way) => way.id));
+  const added = lanes.filter((lane) => !seen.has(lane.id));
+  console.error(
+    `  cemetery lanes: ${lanes.length} kept, ${added.length} not already paths`,
+  );
+  return [...ways, ...added];
 }
 
 // A road's per-side `sidewalk` tags, raw; scripts/sidewalks.ts interprets them.

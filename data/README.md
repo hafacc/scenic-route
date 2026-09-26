@@ -11,7 +11,7 @@ fetches. None of these files is ever served to a browser. Layouts are documented
 | `streets/nyc.bin` | the walkable street network, with the canopy cover at every vertex and, per side, whether OSM maps a sidewalk there and whether the planimetric layer paves it | NYC CSCL street centerline (`inkn-q76z`) + NYC planimetric SIDEWALK polygons (`52n9-sdep`) + **OpenStreetMap** |
 | `land/nyc.bin` | shoreline-clipped borough boundaries | NYC borough boundaries (`gthc-hcne`) |
 | `canopy/nyc.bin` | measured 2017 LiDAR tree-canopy polygons — the cover source | NYC OTI / NYC Parks |
-| `paths/nyc.bin` | OSM pedestrian/park ways (footway, path, greenway, steps…) and park drives (roads closed to through motor traffic), with the canopy cover at every vertex | **OpenStreetMap** |
+| `paths/nyc.bin` | OSM pedestrian/park ways (footway, path, greenway, steps…), park drives (roads closed to through motor traffic) and cemetery lanes, with the canopy cover at every vertex | **OpenStreetMap** |
 | `sidewalks/nyc.bin` | the OSM ways describing a street's own pavement — `footway=sidewalk`, `footway=crossing`, `footway=traffic_island` — the set the paths extract excludes | **OpenStreetMap** |
 | `ferries/nyc.bin` | the time-independent ferry graph (stops, crossings, per-segment crossing+wait time and drawing geometry) — OSM- and canopy-independent | NYC DOT Staten Island Ferry GTFS + NYC Ferry (Hornblower) GTFS |
 | `ferries/siferry-gtfs.zip`, `ferries/nycferry-gtfs.zip` | the two raw GTFS feeds, frozen so a later time-of-day pass can re-derive from the exact feeds a build read | NYC DOT + NYC Ferry (Hornblower) |

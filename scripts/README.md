@@ -253,7 +253,7 @@ in its own band.
 | land | **NYC**: borough boundaries (water areas excluded), Socrata `gthc-hcne`. **Bay Area**: SF's analysis neighborhoods, DataSF `j2bu-swwd`, unioned with seven Alameda County city limits (`Administrative_Boundaries/2`) and the ridge parkland above Oakland (CPAD `cpad_2024a_holdingsgdb`), less the Census TIGER tidal water that legal boundary runs out into | the population the cover distribution is taken over, and the clip that drops New Jersey — and, in the Bay Area, the bay itself and southern Marin |
 | canopy | **NYC**: the 2017 LiDAR tree canopy, ArcGIS `TreeCanopy2017_Simplified_1ft`. **SF**: the 2013 Urban Forest Plan canopy analysis, DataSF `ni2e-vpbg`. **East Bay**: the Alameda / Contra Costa 1 m lidar canopy height model, thresholded and vectorized here (`scripts/alcc.ts` + `scripts/canopy-raster.ts`) | the *measured* canopy footprint the cover field is blurred from, a committed source, magic `CNPY` — feeds the density blobs and, through them, routing; see below |
 | canopy heights | **NYC**: the 1 m LiDAR canopy height model of Ma et al. 2023, figshare doi `10.6084/m9.figshare.20522895` (`NY_CHM_10Int260m.tif`, CC BY 4.0). **SF**: band 2 of the same 3DEP tiles the terrain overlay reads. **East Bay**: the Alameda / Contra Costa 1 m lidar CHM, the same raster its canopy cover is traced from | rasters cached but never committed; `tiler ingest` samples each per canopy polygon and writes the result *into* the `CNPY` file — a region may name several, and a polygon keeps the reading of whichever covered it — see below |
-| paths | OSM pedestrian/park ways (footway/path/pedestrian/steps/cycleway/bridleway/track) plus park drives (roads closed to through motor traffic), via Overpass | the park, greenway and car-free-drive network CSCL lacks; a separate committed source, magic `PATH` — see below and "Binary layouts" |
+| paths | OSM pedestrian/park ways (footway/path/pedestrian/steps/cycleway/bridleway/track) plus park drives (roads closed to through motor traffic) and cemetery lanes, via Overpass | the park, greenway and car-free-drive network CSCL lacks; a separate committed source, magic `PATH` — see below and "Binary layouts" |
 | sidewalks | OSM `footway=sidewalk`/`crossing`/`traffic_island` ways via Overpass; the city's own survey — NYC's planimetric SIDEWALK polygons, Socrata `52n9-sdep` (`sub_code` 380000 = street right-of-way), or SF's 2014 Sidewalk Widths study; and the `sidewalk`/`sidewalk:left`/`sidewalk:right`/`sidewalk:both` tags OSM puts on the **road** | the ways are a committed source, magic `SWLK`; the three together settle the four per-side sidewalk bits of every offsetted `STRT` record, and the ways themselves are the walking network wherever they exist — see below and "Binary layouts" |
 | ferries | the two NYC ferry GTFS feeds — Staten Island Ferry (NYC DOT) and NYC Ferry (Hornblower, via Connexionz) | consolidated to a time-independent ferry graph, a committed source, magic `FERR` — OSM- and canopy-independent, read by a later phase's routing graph, not the cover pipeline; see below and "Binary layouts" |
 | subway | the MTA's subway GTFS feed, `https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip` | the 29 routes as 93 polylines (every shape variant the feed runs that draws track nothing else does) and the 496 stations, with the colors and names the MTA publishes for each route and, per station, the set of routes that genuinely serve it and the complex `transfers.txt` puts it in; a committed source, magic `SBWY` — **display only**, it enters no routing input (the rail a route rides comes from `TRNS`); see below and "Binary layouts" |
@@ -620,7 +620,8 @@ committed network, `data/paths/nyc.bin`, magic `PATH`. Its byte layout is **STRT
 so `binfmt.rs` reads it with the same code (`read_paths`) and `tiler ingest` samples it with
 the same loop; only a few record fields are reinterpreted (see "Binary layouts").
 
-The Overpass filter is a union of two kinds of clause: the walking net, and park drives.
+The Overpass filter is a union of two kinds of clause, the walking net and park drives, and a
+second query adds a third kind, cemetery lanes.
 
 The **walking net** is the dedicated foot and park ways:
 
@@ -647,6 +648,18 @@ affirmative pedestrian signal — a `foot`=`yes`|`designated` grant, or a `name`
 lacking one stay out. This is why `highway=service` is not excluded wholesale: West Drive is a
 `service` road. Whatever still leaks through and coincides with a real street is deduped against
 CSCL by the graph conflation, so double-counting a named residential block is self-correcting.
+
+**Cemetery lanes** are the avenues a cemetery's footpaths hang from. They are plain
+`highway=service` — Green-Wood's "Sassafras Avenue" and "Summit Avenue" carry `access=permissive`,
+Mount Lebanon's `access=unknown`, and Oakland's Mountain View names none of its lanes — so neither
+clause above admits them, and the footpath networks ending on them were dropped whole as islands.
+A second query (`overpass-cemetery-lanes`) fetches every `landuse=cemetery`/`amenity=grave_yard`
+way and relation in the box with its geometry, plus the `service` ways touching one of those areas;
+`cemeteryLanes` then keeps a way only when at least 80% of its length lies inside a cemetery
+polygon (so a lane through the gate keeps its stub outside the fence, and a public road along the
+wall does not qualify), and applies the same exclusions as a park drive: no `service`=`driveway`
+or its kin, no `access`/`foot` `no`/`private`, no `area=yes` or `indoor=yes`. No name is required;
+the polygon is the guard. Opening hours are not modeled: a cemetery lane routes at any hour.
 
 The ways are land-clipped against the borough polygons — a
 way is kept if its midpoint or either endpoint is on land, which drops the New Jersey and
