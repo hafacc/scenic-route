@@ -10,6 +10,11 @@
 /.next/
 /out/
 
+# agent notes `next dev` writes, and local agent worktrees
+/AGENTS.md
+/CLAUDE.md
+/.claude/
+
 # map overlays, rendered from data/streets/*.bin by `bun run build-tiles`
 /public/tiles/
 /public/streets/
