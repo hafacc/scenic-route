@@ -12,8 +12,8 @@ These bit the shade work but none of them are about shade. They apply to any lay
 *software* rasterizer and reproduces pre-GPU numbers exactly — one re-measurement "reproduced" an
 already-fixed stall entirely this way. Launch with `--use-angle=metal --use-gl=angle` and assert the
 renderer string before trusting a number. Headless also drops layers the real GPU renders, so a
-headless screenshot test can pass while testing nothing. This applies to `genus-gl-layer` too, which
-predates any of this.
+headless screenshot test can pass while testing nothing. This applies to the genus wash
+(`src/tiles/genus.ts`) too, which predates any of this.
 
 **In Canvas2D the cost is the Path2D binding, not the arithmetic.** Measured at **1079 ns per
 `moveTo`/`lineTo`** — a JS↔C++ call per vertex. The same loops writing a `Float32Array` took 1.16 ms

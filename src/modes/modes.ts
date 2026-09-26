@@ -79,9 +79,9 @@ export const MODES: readonly Mode[] = [
     id: "naturalist",
     name: "Naturalist",
     color: "#0d9488", // teal-600, the canopy ramp's own mid stop
-    // The deep half of the canopy ramp; its pale end is a wash, not a line.
+    // Routes keep the canopy ramp's deep half, since the genus wash has no single hue of its own.
     palette: CANOPY_HEX.light.slice(3),
-    overlays: ["canopy"],
+    overlays: ["genus"],
     weights: { tree: 1, bridge: 1, highway: 1, industrial: 1, transit: 1 },
     allowSheds: false,
     needs: ["tree"],

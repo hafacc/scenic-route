@@ -758,8 +758,11 @@ impl<'a> Stamps<'a> {
         let mut digest = self.open("genus-field");
         for (city, _) in cities {
             if city.field.genus.is_some() {
-                let trees = self.plan.data.join("trees").join(&city.field.trees.file);
-                self.file(&mut digest, &trees)?;
+                let inputs = vec![
+                    self.plan.data.join("trees").join(&city.field.trees.file),
+                    self.plan.data.join("land").join(&city.field.land.file),
+                ];
+                self.files(&mut digest, &inputs)?;
             }
         }
         Ok(hex(&digest.finalize()))
@@ -2559,6 +2562,20 @@ mod tests {
         assert_eq!(after.elevation, before.elevation);
         assert_eq!(after.canopy, before.canopy);
         assert_eq!(after.genus_field, before.genus_field);
+    }
+
+    /// The genus field clips and normalizes its blur by the land, so a new shoreline repaints it.
+    #[test]
+    fn a_re_ingested_shoreline_moves_the_genus_field() {
+        let plan = stamping_plan("stamps-land");
+        let before = stamped_passes(&plan);
+
+        fs::write(plan.data.join("land").join("nyc.bin"), b"re-ingested").expect("a source");
+        let after = stamped_passes(&plan);
+
+        assert_ne!(after.genus_field, before.genus_field);
+        assert_ne!(after.canopy, before.canopy);
+        assert_eq!(after.chunks, before.chunks);
     }
 
     /// A pass reruns when its upstream does: commercial signals are keyed on chunk segment order.

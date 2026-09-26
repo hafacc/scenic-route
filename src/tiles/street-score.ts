@@ -47,6 +47,8 @@ function levels(theme: ThemeName): readonly string[] {
   );
 }
 
+// A z12 chunk covers a screen or more, so a few dozen hold any pan; older ones are refetched.
+const CHUNK_CACHE_LIMIT = 48;
 const chunks = new Map<string, Promise<Segment[]>>();
 
 // Left is CSCL's l_ side (the first density byte); canvas y runs south, so its normal is (ty, -tx).
@@ -83,6 +85,9 @@ function loadChunk(tileX: number, tileY: number): Promise<Segment[]> {
   const key = `${tileX}/${tileY}`;
   const pending = chunks.get(key);
   if (pending) {
+    // Re-inserted, so the eviction below is an LRU.
+    chunks.delete(key);
+    chunks.set(key, pending);
     return pending;
   } else {
     const url = resolveUrl(
@@ -99,27 +104,36 @@ function loadChunk(tileX: number, tileY: number): Promise<Segment[]> {
         }
       })
       .catch((error: unknown) => {
-        chunks.delete(key);
+        // Only this request: an evicted one's late failure mustn't drop its replacement.
+        if (chunks.get(key) === request) {
+          chunks.delete(key);
+        }
         throw error;
       });
     chunks.set(key, request);
+    while (chunks.size > CHUNK_CACHE_LIMIT) {
+      const [oldest] = chunks.keys();
+      chunks.delete(oldest);
+    }
     return request;
   }
 }
 
-function load(
-  _params: StreetScoreParams,
-  coords: TileCoords,
-): Promise<Segment[]> {
+// Also the genus wash's (./genus.ts), which strokes the same lines as a density mask.
+export function loadStreets(coords: TileCoords): Promise<Segment[]> {
   const shift = coords.z - CHUNK_ZOOM;
   return loadChunk(coords.x >> shift, coords.y >> shift);
 }
 
+// The stroke per density level that `strokeStreets` takes: a byte's level is `byte >> 3`.
+export const STREET_LEVELS = LEVELS;
+
 // One path per density level; runs meet butt to butt, since overlapping translucent strokes bead.
-function draw(
+export function strokeStreets(
   context: OffscreenCanvasRenderingContext2D,
   segments: Segment[],
   coords: TileCoords,
+  colors: readonly string[],
 ): void {
   const originX = coords.x * TILE_SIZE;
   const originY = coords.y * TILE_SIZE;
@@ -213,7 +227,6 @@ function draw(
     }
   }
 
-  const colors = COLORS[themeName()];
   for (let level = 1; level < LEVELS; level++) {
     const path = paths[level];
     if (path) {
@@ -224,6 +237,7 @@ function draw(
 }
 
 export const streetScoreRenderer: TileRenderer<StreetScoreParams, Segment[]> = {
-  load,
-  draw,
+  load: (_params, coords) => loadStreets(coords),
+  draw: (context, segments, coords) =>
+    strokeStreets(context, segments, coords, COLORS[themeName()]),
 };

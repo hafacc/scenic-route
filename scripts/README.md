@@ -39,7 +39,7 @@ scripts either side of one hand their work over as files.
 | | |
 | --- | --- |
 | `scripts/` | Socrata paging, the Overpass mirror rotation, the disk cache, the `.bin` encoders, and the manifest |
-| `crates/tiler` | the canopy convolution and the cover it yields, the sidewalk offsets and their cover, the Monte-Carlo cover distribution, the per-polygon canopy heights, the genus-dot overlay, the tile pyramids, the WebPs, the street and caster chunks, and the routing graph |
+| `crates/tiler` | the canopy convolution and the cover it yields, the sidewalk offsets and their cover, the Monte-Carlo cover distribution, the per-polygon canopy heights, the genus field, the tile pyramids, the WebPs, the street and caster chunks, and the routing graph |
 
 ```sh
 tiler build --plan <file.json> [--jobs <count|half>]          # the nine passes that make a tile build, in one process
@@ -178,10 +178,11 @@ zooms in. It is never baked into the data.
 ### The allometry: trunk to crown
 
 The cover field is measured, not inferred from the tree points — but the points are still drawn, as
-the **genus overlay** (`components/genus-gl-layer.tsx`, `components/tree-dots-layer.tsx`): each tree
-a disc colored by its genus and *sized by its crown*. That crown radius comes from a **published**
-relation, not an invented one: **McPherson, van Doorn & Peper 2016, *Urban Tree Database and
-Allometric Equations*, USDA Forest Service GTR-PSW-253** (data archive RDS-2016-0005). Its "NoEast"
+the **genus overlay**'s dots (`components/tree-dots-layer.tsx`, over the wash of
+`components/genus-layer.tsx`): each tree a disc colored by its genus and *sized by its crown*. That
+crown radius comes from a **published** relation, not an invented one: **McPherson, van Doorn &
+Peper 2016, *Urban Tree Database and Allometric Equations*, USDA Forest Service GTR-PSW-253** (data
+archive RDS-2016-0005). Its "NoEast"
 reference city is Queens, so this is literally NYC street-tree data; the **London planetree**
 log-log curve — the city's most abundant street species, R² 0.94 — stands in for every species,
 since the ingest does not read species. With dbh in cm and diameter in meters,
@@ -1474,9 +1475,10 @@ blank webp:
   and averaged back down for edge anti-aliasing, then an **isotropic Gaussian** (σ_fill in pixel
   space, skipped below half a pixel, haloed by 3σ so tiles do not seam) grades the shade out past
   a crown before the land clip and the write into alpha.
-- **The genus dots (the genus-field pass).** A uniform **60 m index over the trees**, flat arrays,
-  CSR-style: a tile scans only the buckets a dot can reach, and a tile with no tree whose disc
-  spills into it goes straight to the blank webp. Each tree is a single anti-aliased disc, so this
+- **The genus colors (the genus-field pass).** A uniform **60 m index over the trees**, flat arrays,
+  CSR-style: a tile scans only the buckets its haloed extent reaches. Each tree deposits its crown
+  area into its genus's plane (an anti-aliased disc, or a bilinear point below a pixel), each
+  touched plane is blurred at 120 m (floored at 4 px) and divided by the blurred land mask, so this
   pass is cheap next to the polygon fill.
 - **The shadows (the shade pass).** A cold one runs the whole plan once per sun-position bin (58 of
   them), around twenty minutes: 25–31 s a bin over New York's 3616-tile plan for the buildings' six
@@ -1555,16 +1557,23 @@ point *i*:
 
 v1 was points only; v2 added the crown byte; v3 appends the genus byte.
 
-The genus overlay renders this file two ways: the genus-field pass bakes each tree's disc into
-lossless DATA tiles of per-genus crown density (`public/tiles/genus-field`, z9–14, the zoomed-out
-view, shaded client-side by `components/genus-gl-layer.tsx`), and the blob itself is served at
-`public/trees/<id>.bin` so the client (`components/tree-dots-layer.tsx`) draws the dots live as
-crisp canvas discs from z15 up, where an upscaled raster tile would blur.
+The genus overlay ("Genus canopy") renders this file two ways. The genus-field pass bakes each
+genus's crown cover, blurred wide, into lossless DATA tiles (`public/tiles/genus-field`, z9–14,
+each byte the square root of the cover fraction); the blur is divided by the land's own blur, so an
+area by the shore is a share of its land rather than diluted by the water. The tile worker
+(`src/tiles/genus.ts`, mounted by `components/genus-layer.tsx`) turns them into a slowly varying
+hue: the area's leading genus, or "Other" (the gray sage) where the inventory is thin. And the blob
+itself is served at `public/trees/<id>.bin`, so `components/tree-dots-layer.tsx` draws the dots
+live as crisp canvas discs from z15 up.
 
-So the legend can toggle one genus at a time, the density is kept per genus rather than pre-colored:
-three genera ride in one tile's R/G/B, four tiles cover all twelve, and the shader reads only the
-enabled channels. Toggling a genus is a uniform write, so a region hands off to its runner-up instead
-of going blank; the live dots (`components/tree-dots-layer.tsx`) filter by the same selection.
+The shape of the wash is the canopy map's own. The worker resamples the canopy pyramid for cover and
+strokes the street chunks' sidewalks as a density mask, both at the tile's resolution and, past each
+pyramid's finest level, magnified with a ring of neighbor tiles (`src/tiles/magnify.ts`) so tiles
+don't seam; the hue then rides on the canopy map's detail at every zoom. So the legend can toggle
+one genus at a time, the cover is kept per genus rather than pre-colored: three genera ride in one
+tile's R/G/B, four tiles cover all twelve, and the shader blends only the enabled channels. A toggle
+repaints each tile in place from the cached sources, so an area takes its runner-up's hue and loses
+that genus's share of the cover; the live dots filter by the same selection.
 
 ### `data/land/<id>.bin` — the land mask, magic `LAND`
 
