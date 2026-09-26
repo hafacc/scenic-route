@@ -5,18 +5,19 @@ import { join } from "node:path";
 import type { RoutingGraph } from "../src/routing/graph";
 import {
   byJobNumber,
+  DOB_CITY,
   encodedShedsOf,
   loadGraphBytes,
   parcelRequestsOf,
   placementAttributes,
   placeRecords,
-  SHED_DIR,
   type ShedCoverage,
   toConfidenceByte,
   toEncodedSpans,
   toShedRecord,
   writeShedArtifact,
 } from "./build-sheds";
+import { shedDir } from "./graph-inputs";
 import {
   type DecodedShedArtifact,
   decodeShedArtifact,
@@ -39,9 +40,9 @@ import {
 
 // New sheds must be placed on the deployed graph the client runs, not what a checkout would build.
 const SITE = process.env.SHED_SITE ?? "https://scenic.hafa.cc";
-const GRAPH_URL = `${SITE}/routing/nyc.bin`;
+const GRAPH_URL = `${SITE}/routing/${DOB_CITY}.bin`;
 // A directory, or a URL to read the artifact over HTTP.
-const ARTIFACT = process.env.SHED_ARTIFACT ?? SHED_DIR;
+const ARTIFACT = process.env.SHED_ARTIFACT ?? shedDir(DOB_CITY);
 const SHALLOW_DAYS = 30;
 const DAY_MS = 86_400_000;
 const EPOCH_MS = Date.UTC(2017, 11, 28); // the first DOB snapshot; every day number counts from here
@@ -262,7 +263,13 @@ export async function updateSheds(): Promise<void> {
   );
 
   const records = reconcileSheds(artifact, permits, lastDay, placed);
-  await writeShedArtifact(records, graph.keyHash, shedDayOf(lastDay), counts);
+  await writeShedArtifact(
+    DOB_CITY,
+    records,
+    graph.keyHash,
+    shedDayOf(lastDay),
+    counts,
+  );
   const stillUp = records.filter((record) => record.close === null).length;
   console.error(
     `sheds: ${stillUp} standing on ${lastDay}, ${records.length - stillUp} come down` +

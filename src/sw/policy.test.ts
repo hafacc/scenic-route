@@ -76,8 +76,8 @@ test("another origin is left alone entirely", () => {
 
 test("the daily feeds are cached, but network first", () => {
   const base = "https://raw.githubusercontent.com/hafacc/scenic-route/main";
-  expect(fileRequest(`${base}/public/sheds/nyc.bin`, SCOPE)).toEqual({
-    path: "sheds/nyc.bin",
+  expect(fileRequest(`${base}/public/sheds/nyc/open.bin`, SCOPE)).toEqual({
+    path: "sheds/nyc/open.bin",
     store: "routing",
     fresh: true,
   });
@@ -256,7 +256,7 @@ test("a deploy drops what it no longer serves or never vouched for", () => {
 test("another host's files go with every deploy, since they change under one URL", () => {
   for (const url of [
     "https://api.protomaps.com/tiles/v4/15/9649/12315.mvt",
-    "https://raw.githubusercontent.com/hafacc/scenic-route/main/public/sheds/nyc.bin",
+    "https://raw.githubusercontent.com/hafacc/scenic-route/main/public/sheds/nyc/open.bin",
   ]) {
     expect(outdated(url, SCOPE, BEFORE, BEFORE)).toBe(true);
   }

@@ -314,7 +314,7 @@ export default function ShadeLayer() {
         return;
       }
       deckDay = day;
-      Promise.all([loadGraph(city.id), loadSheds()]).then(
+      Promise.all([loadGraph(city.id), loadSheds(city.id)]).then(
         ([graph, history]) => {
           if (!canceled && deckDay === day) {
             sendShedDecks(shedDecks(graph, history, day));

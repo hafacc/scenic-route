@@ -126,7 +126,7 @@ export default function ShedLayer() {
       grid.setDecks(shedDecks(graph, history, day));
     };
 
-    Promise.all([loadGraph(city.id), loadSheds()]).then(
+    Promise.all([loadGraph(city.id), loadSheds(city.id)]).then(
       ([loaded, sheds]) => {
         if (!canceled) {
           graph = loaded;
