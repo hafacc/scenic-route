@@ -4,6 +4,12 @@ import { projectX, projectY, unproject } from "./mercator";
 import { bucketize, type Polyline, readPolyline } from "./polylines";
 import type { HistoricParams, TileCoords } from "./protocol";
 import type { TileRenderer } from "./renderer";
+import {
+  BLUR_PAD,
+  compositeSoft,
+  MAX_BLUR_PX,
+  tileMetersPerPixel,
+} from "./soft-edge";
 import { themeName } from "./theme";
 import type { Cursor } from "./varint";
 
@@ -13,9 +19,13 @@ const CELL_DEG = 0.005; // ~550 m; a district is filed under every cell its boun
 const FILL_ALPHA = 0.45;
 // Smaller districts are drawn as a square, since antialiasing fades sub-pixel ones to nothing.
 const MIN_DISTRICT_PX = 1.5;
+// A ground width of feathering, capped at MAX_BLUR_PX from about z16 so close in it stays crisp.
+const BLUR_METERS = 12;
+const MIN_BLUR_PX = 1;
 
 interface Districts {
   districts: Polyline[][]; // filled even-odd so an inner ring punches a hole
+  boxes: Polyline[]; // per district, its [min, max] lng and lat
   // District indices by `${cellX},${cellY}` over each bounding box.
   buckets: Map<string, number[]>;
 }
@@ -64,7 +74,7 @@ export function decodeHistoric(buffer: ArrayBuffer): Districts {
       lats: Float64Array.of(minLat, maxLat),
     };
   });
-  return { districts, buckets: bucketize(boxes, CELL_DEG) };
+  return { districts, boxes, buckets: bucketize(boxes, CELL_DEG) };
 }
 
 const loaded = new Map<string, Promise<Districts>>();
@@ -93,20 +103,33 @@ function loadDistricts({ url }: HistoricParams): Promise<Districts> {
   }
 }
 
+// Filled opaque as one union so overlaps don't darken, then blurred and washed in together.
 function draw(
   context: OffscreenCanvasRenderingContext2D,
-  { districts, buckets }: Districts,
+  { districts, boxes, buckets }: Districts,
   coords: TileCoords,
+  _params: HistoricParams,
+  ratio: number,
 ): void {
   const zoom = coords.z;
   const originX = coords.x * TILE_SIZE;
   const originY = coords.y * TILE_SIZE;
-  const northWest = unproject(originX, originY, zoom);
-  const southEast = unproject(originX + TILE_SIZE, originY + TILE_SIZE, zoom);
+  // Padded, so districts just past the edge feed the blur and neighbouring tiles seam.
+  const northWest = unproject(originX - BLUR_PAD, originY - BLUR_PAD, zoom);
+  const southEast = unproject(
+    originX + TILE_SIZE + BLUR_PAD,
+    originY + TILE_SIZE + BLUR_PAD,
+    zoom,
+  );
+  const blur = Math.min(
+    MAX_BLUR_PX,
+    Math.max(MIN_BLUR_PX, BLUR_METERS / tileMetersPerPixel(coords)),
+  );
+  // Grown by the blur so a tiny district's square keeps a solid core after feathering.
+  const minSide = MIN_DISTRICT_PX + 2 * blur;
 
-  context.globalAlpha = FILL_ALPHA;
-  context.fillStyle = HISTORIC_COLOR[themeName()];
-  const drawn = new Set<number>();
+  const found: number[] = [];
+  const seen = new Set<number>();
   for (
     let cellX = Math.floor(northWest.lng / CELL_DEG);
     cellX <= Math.floor(southEast.lng / CELL_DEG);
@@ -117,50 +140,65 @@ function draw(
       cellY <= Math.floor(northWest.lat / CELL_DEG);
       cellY++
     ) {
-      const cell = buckets.get(`${cellX},${cellY}`);
-      if (!cell) {
-        continue;
-      }
-      for (const index of cell) {
-        if (drawn.has(index)) {
-          continue;
-        }
-        drawn.add(index);
-        context.beginPath();
-        let minX = Number.POSITIVE_INFINITY;
-        let maxX = Number.NEGATIVE_INFINITY;
-        let minY = Number.POSITIVE_INFINITY;
-        let maxY = Number.NEGATIVE_INFINITY;
-        for (const { lngs, lats } of districts[index]) {
-          for (let vertex = 0; vertex < lngs.length; vertex++) {
-            const x = projectX(lngs[vertex], zoom) - originX;
-            const y = projectY(lats[vertex], zoom) - originY;
-            minX = Math.min(minX, x);
-            maxX = Math.max(maxX, x);
-            minY = Math.min(minY, y);
-            maxY = Math.max(maxY, y);
-            if (vertex === 0) {
-              context.moveTo(x, y);
-            } else {
-              context.lineTo(x, y);
-            }
-          }
-          context.closePath();
-        }
-        if (maxX - minX < MIN_DISTRICT_PX && maxY - minY < MIN_DISTRICT_PX) {
-          context.fillRect(
-            (minX + maxX - MIN_DISTRICT_PX) / 2,
-            (minY + maxY - MIN_DISTRICT_PX) / 2,
-            MIN_DISTRICT_PX,
-            MIN_DISTRICT_PX,
-          );
-        } else {
-          context.fill("evenodd");
+      for (const index of buckets.get(`${cellX},${cellY}`) ?? []) {
+        if (!seen.has(index)) {
+          seen.add(index);
+          found.push(index);
         }
       }
     }
   }
-  context.globalAlpha = 1;
+  if (found.length === 0) {
+    return;
+  }
+
+  compositeSoft(context, ratio, blur, FILL_ALPHA, (wash) => {
+    wash.fillStyle = HISTORIC_COLOR[themeName()];
+    let painted = false;
+    for (const index of found) {
+      // Its box's projected corners; north is the smaller y.
+      const { lngs: boxLngs, lats: boxLats } = boxes[index];
+      const minX = projectX(boxLngs[0], zoom) - originX;
+      const maxX = projectX(boxLngs[1], zoom) - originX;
+      const minY = projectY(boxLats[1], zoom) - originY;
+      const maxY = projectY(boxLats[0], zoom) - originY;
+      // A bucket reaches well past the scratch, so a district wholly outside it is skipped.
+      const grow = minSide / 2;
+      if (
+        maxX + grow < -BLUR_PAD ||
+        minX - grow > TILE_SIZE + BLUR_PAD ||
+        maxY + grow < -BLUR_PAD ||
+        minY - grow > TILE_SIZE + BLUR_PAD
+      ) {
+        continue;
+      }
+      painted = true;
+      wash.beginPath();
+      for (const { lngs, lats } of districts[index]) {
+        for (let vertex = 0; vertex < lngs.length; vertex++) {
+          const x = projectX(lngs[vertex], zoom) - originX;
+          const y = projectY(lats[vertex], zoom) - originY;
+          if (vertex === 0) {
+            wash.moveTo(x, y);
+          } else {
+            wash.lineTo(x, y);
+          }
+        }
+        wash.closePath();
+      }
+      if (maxX - minX < minSide && maxY - minY < minSide) {
+        wash.fillRect(
+          (minX + maxX - minSide) / 2,
+          (minY + maxY - minSide) / 2,
+          minSide,
+          minSide,
+        );
+      } else {
+        wash.fill("evenodd");
+      }
+    }
+    return painted;
+  });
 }
 
 export const historicRenderer: TileRenderer<HistoricParams, Districts> = {

@@ -2,9 +2,10 @@ import { COMMERCIAL_COLOR } from "../overlays/colors";
 import { decodeStreetChunk } from "../streets/chunk";
 import { hexToRgb, type ThemeName } from "../theme/palette";
 import { resolveUrl } from "./base-url";
-import { projectX, projectY, unproject } from "./mercator";
+import { projectX, projectY } from "./mercator";
 import type { CommercialParams, TileCoords } from "./protocol";
 import type { TileRenderer } from "./renderer";
+import { BLUR_PAD, compositeSoft, tileMetersPerPixel } from "./soft-edge";
 import { themeName } from "./theme";
 
 // Signals are baked per segment by crates/tiler/src/commercial.rs; the gate runs here to stay tunable.
@@ -44,12 +45,8 @@ const BAND_CHANNELS: Record<ThemeName, readonly [number, number, number]> = {
 const BAND_METERS = 50;
 const MIN_BAND_PX = 4;
 
-// Blur scales with band width so thin bands survive; the pad (~3× max blur) feeds blur at tile edges.
+// Blur scales with band width so thin bands survive.
 const BLUR_FRACTION = 0.18;
-const MAX_BLUR_PX = 5;
-const BLUR_PAD = 15;
-
-const EQUATOR_METERS_PER_PIXEL = 156_543.033_92; // web mercator, at the equator, at z0
 
 // One block-length CSCL centerline.
 interface Segment {
@@ -248,34 +245,6 @@ function load(
   );
 }
 
-// Draws run one at a time and synchronously, so one scratch canvas serves every tile.
-let bandScratch: OffscreenCanvas | null = null;
-
-function sizedCanvas(
-  canvas: OffscreenCanvas | null,
-  width: number,
-  height: number,
-): OffscreenCanvas {
-  const reused = canvas ?? new OffscreenCanvas(width, height);
-  if (reused.width !== width || reused.height !== height) {
-    reused.width = width; // resizing also clears the canvas
-    reused.height = height;
-  }
-  return reused;
-}
-
-function metersPerPixel(coords: TileCoords): number {
-  const center = unproject(
-    coords.x * TILE_SIZE + TILE_SIZE / 2,
-    coords.y * TILE_SIZE + TILE_SIZE / 2,
-    coords.z,
-  );
-  return (
-    (EQUATOR_METERS_PER_PIXEL * Math.cos((center.lat * Math.PI) / 180)) /
-    2 ** coords.z
-  );
-}
-
 // Stroked opaque as one union so crossings don't darken; square caps fill T and L corners flush.
 function compositeBand(
   context: OffscreenCanvasRenderingContext2D,
@@ -283,39 +252,15 @@ function compositeBand(
   width: number,
   ratio: number,
 ): void {
-  const padded = TILE_SIZE + 2 * BLUR_PAD;
-  bandScratch = sizedCanvas(bandScratch, padded * ratio, padded * ratio);
-  const offscreen = bandScratch;
-  const offContext = offscreen.getContext("2d");
-  if (!offContext) {
-    return;
-  }
-  // Reused across tiles, so undo the previous tile's state first.
-  offContext.setTransform(1, 0, 0, 1, 0, 0);
-  offContext.filter = "none";
-  offContext.clearRect(0, 0, offscreen.width, offscreen.height);
-  offContext.scale(ratio, ratio);
-  offContext.translate(BLUR_PAD, BLUR_PAD);
-  offContext.filter = `blur(${Math.min(MAX_BLUR_PX, width * BLUR_FRACTION)}px)`;
-  offContext.lineCap = "square";
-  offContext.lineJoin = "miter";
-  offContext.lineWidth = width;
   const [red, green, blue] = BAND_CHANNELS[themeName()];
-  offContext.strokeStyle = `rgba(${red}, ${green}, ${blue}, 1)`;
-  offContext.stroke(path);
-  context.globalAlpha = BAND_OPACITY;
-  context.drawImage(
-    offscreen,
-    BLUR_PAD * ratio,
-    BLUR_PAD * ratio,
-    TILE_SIZE * ratio,
-    TILE_SIZE * ratio,
-    0,
-    0,
-    TILE_SIZE,
-    TILE_SIZE,
-  );
-  context.globalAlpha = 1;
+  compositeSoft(context, ratio, width * BLUR_FRACTION, BAND_OPACITY, (band) => {
+    band.lineCap = "square";
+    band.lineJoin = "miter";
+    band.lineWidth = width;
+    band.strokeStyle = `rgba(${red}, ${green}, ${blue}, 1)`;
+    band.stroke(path);
+    return true;
+  });
 }
 
 function draw(
@@ -327,7 +272,7 @@ function draw(
 ): void {
   const originX = coords.x * TILE_SIZE;
   const originY = coords.y * TILE_SIZE;
-  const width = Math.max(MIN_BAND_PX, BAND_METERS / metersPerPixel(coords));
+  const width = Math.max(MIN_BAND_PX, BAND_METERS / tileMetersPerPixel(coords));
   const margin = width + BLUR_PAD;
 
   const band = new Path2D();
