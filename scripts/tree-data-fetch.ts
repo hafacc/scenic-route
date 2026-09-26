@@ -78,6 +78,7 @@ import {
   type Tree,
 } from "./socrata";
 import {
+  dropNotStreets,
   FLAG_NON_VEHICULAR,
   FLAG_STRUCTURE,
   FLAG_TUNNEL,
@@ -356,11 +357,12 @@ function crownOsmTrees(
 function toSegments(rows: StreetRow[]): Segment[] {
   const segments: Segment[] = [];
   let degenerate = 0;
-  for (const row of rows) {
+  for (const row of dropNotStreets(rows)) {
     const roadType = toInt(row.rw_type) as RoadType;
     if (!row.the_geom || !ROAD_TYPES.includes(roadType)) {
       continue;
     }
+    const physicalId = toInt(row.physicalid);
     let flags = 0;
     if (row.nonped === "V") {
       flags |= FLAG_VEHICULAR_ONLY;
@@ -390,7 +392,7 @@ function toSegments(rows: StreetRow[]): Segment[] {
         continue;
       }
       segments.push({
-        physicalId: toInt(row.physicalid),
+        physicalId,
         roadType,
         streetWidth: Math.min(255, toInt(row.streetwidth)),
         postedSpeed: Math.min(255, toInt(row.posted_speed)),
