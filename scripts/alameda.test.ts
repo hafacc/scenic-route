@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { apnSortKey, featureName, prettyLandmarkName } from "./alameda";
+import {
+  apnSortKey,
+  assertTubesPresent,
+  featureName,
+  prettyLandmarkName,
+  roadTypeOf,
+} from "./alameda";
+import { ROAD_STREET } from "./streets";
 
 // These join on exact strings, so a wrong spelling silently drops a landmark.
 
@@ -59,4 +66,50 @@ test("the export's editorial marks are not part of the name", () => {
     "First Church Of Christ, Scientist",
   );
   expect(prettyLandmarkName("OAKLAND CITY HALL<")).toBe("Oakland City Hall");
+});
+
+test("the estuary tubes' carriageways are not walked, whatever their class", () => {
+  // As the county serves them: no feature type, and one row's name has a trailing space.
+  for (const [CLASS, STREET] of [
+    ["Principal Arterial", "POSEY TUBE"],
+    ["Principal Arterial", "WEBSTER TUBE "],
+    ["Principal Arterial", "WEBSTER ST TUBE"],
+    ["Local", "WEBSTER TUBE"],
+  ]) {
+    expect(roadTypeOf({ CLASS, SFEATYP: null, STREET })).toBeNull();
+  }
+});
+
+test("a street merely named for a tunnel is still walked", () => {
+  expect(
+    roadTypeOf({
+      CLASS: "Principal Arterial",
+      SFEATYP: "RD",
+      STREET: "TUNNEL RD",
+    }),
+  ).toBe(ROAD_STREET);
+  expect(
+    roadTypeOf({ CLASS: "Local", SFEATYP: "CT", STREET: "TUBEROSE CT" }),
+  ).toBe(ROAD_STREET);
+  // Typed rows are ordinary streets, whatever they're named.
+  expect(roadTypeOf({ CLASS: "Local", SFEATYP: "ST", STREET: "X TUBE" })).toBe(
+    ROAD_STREET,
+  );
+});
+
+const tubeRow = (STREET: string) => ({
+  properties: { CLASS: "Principal Arterial", SFEATYP: null, STREET },
+});
+
+test("both estuary tubes must be in the county's answer", () => {
+  expect(() =>
+    assertTubesPresent([tubeRow("POSEY TUBE"), tubeRow("WEBSTER TUBE ")]),
+  ).not.toThrow();
+  expect(() => assertTubesPresent([])).toThrow(/POSEY/);
+});
+
+test("one tube renamed out from under the rule still fails the ingest", () => {
+  expect(() =>
+    assertTubesPresent([tubeRow("POSEY TUBE"), tubeRow("WEBSTER TUNNEL")]),
+  ).toThrow(/WEBSTER/);
 });

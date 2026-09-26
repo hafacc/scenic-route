@@ -264,7 +264,7 @@ export async function fetchEastBayLand(): Promise<Polygon[]> {
   return toPolygons(land);
 }
 
-interface StreetRow {
+export interface StreetRow {
   CLASS?: string | null;
   SFEATYP?: string | null;
   STREET?: string | null;
@@ -285,12 +285,49 @@ const PEDESTRIAN_TYPES = new Set(["WK", "PA", "PZ"]);
 // Ramp, connector, freeway, highway: catches motorway rows misfiled under a walkable `CLASS`.
 const MOTORWAY_TYPES = new Set(["RAMP", "CONN", "FW", "HW"]);
 
-function roadTypeOf(row: StreetRow): RoadType | null {
-  const type = (row.SFEATYP ?? "").trim().toUpperCase();
-  if (MOTORWAY_TYPES.has(type) || !WALKABLE_CLASSES.has(row.CLASS ?? "")) {
+// Typeless "... TUBE" rows are the estuary tubes; OSM tags them foot=no and brings the Posey walkway.
+function isTube(type: string, row: StreetRow): boolean {
+  return type === "" && /\bTUBE$/.test((row.STREET ?? "").trim().toUpperCase());
+}
+
+function featureType(row: StreetRow): string {
+  return (row.SFEATYP ?? "").trim().toUpperCase();
+}
+
+// A tube apart from other unwalkable rows, so the ingest can count it.
+function walkability(row: StreetRow): RoadType | "tube" | null {
+  const type = featureType(row);
+  if (isTube(type, row)) {
+    return "tube";
+  } else if (
+    MOTORWAY_TYPES.has(type) ||
+    !WALKABLE_CLASSES.has(row.CLASS ?? "")
+  ) {
     return null;
   } else {
     return PEDESTRIAN_TYPES.has(type) ? ROAD_PATH : ROAD_STREET;
+  }
+}
+
+export function roadTypeOf(row: StreetRow): RoadType | null {
+  const walked = walkability(row);
+  return walked === "tube" ? null : walked;
+}
+
+// Both tubes by name, since one renamed would quietly route pedestrians down its carriageway.
+export function assertTubesPresent(
+  features: readonly { properties?: StreetRow | null }[],
+): void {
+  const names = features
+    .map(({ properties }) => properties ?? {})
+    .filter((row) => isTube(featureType(row), row))
+    .map((row) => (row.STREET ?? "").toUpperCase());
+  for (const tube of ["POSEY", "WEBSTER"]) {
+    if (!names.some((name) => name.includes(tube))) {
+      throw new Error(
+        `Alameda County's centerline has no ${tube} tube row over the city's box; was it renamed?`,
+      );
+    }
   }
 }
 
@@ -340,10 +377,12 @@ export async function fetchEastBayStreets(
       `Alameda County's centerline answered ${features.length} segments over the city's box, too few to be the whole of it`,
     );
   }
+  assertTubesPresent(features);
 
   const segments: Segment[] = [];
   let offLand = 0;
   let unwalkable = 0;
+  let tubes = 0;
   let degenerate = 0;
   for (const feature of features) {
     const row = feature.properties ?? {};
@@ -368,8 +407,11 @@ export async function fetchEastBayStreets(
         offLand += 1;
         continue;
       }
-      const roadType = roadTypeOf(row);
-      if (roadType === null) {
+      const roadType = walkability(row);
+      if (roadType === "tube") {
+        tubes += 1;
+        continue;
+      } else if (roadType === null) {
         unwalkable += 1;
         continue;
       }
@@ -382,7 +424,7 @@ export async function fetchEastBayStreets(
         physicalId: toInt(String(row.SEGID ?? "")),
         roadType,
         streetWidth: roadType === ROAD_STREET ? EAST_BAY_ROADWAY_FEET : 0,
-        // No speed limit or non-walkable flag published; motorways are dropped by class instead.
+        // No speed limit or non-walkable flag published; motorways and tubes are dropped instead.
         postedSpeed: 0,
         flags: 0,
         name: (row.STREET ?? "").trim(),
@@ -394,7 +436,8 @@ export async function fetchEastBayStreets(
   }
   console.error(
     `  east bay streets: ${segments.length} walkable of ${features.length} in the box` +
-      ` (${offLand} off land, ${unwalkable} motorway or unclassified, ${degenerate} degenerate)`,
+      ` (${offLand} off land, ${unwalkable} motorway or unclassified,` +
+      ` ${tubes} tube carriageway, ${degenerate} degenerate)`,
   );
   return segments;
 }
