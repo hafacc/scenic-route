@@ -595,10 +595,19 @@ avoidable.
 
 The tree-cover overlay and the routing graph are built from different sets. The chunks pass draws
 straight from `data/paths/<id>.bin`; the graph pass conflates that same file against CSCL and then
-**drops whole OSM path components nothing anchors** — 1,815 islands, 211.2 km, once step 7 above has
-noded onto the network everything that was standing on it — as unreachable. So the map paints 4,036
-ways green and tree-lined that no route can enter or leave, covering 3,979 `PATH` records and 204.5
-km: Floyd Bennett Field's North Forty, the Staten Island Greenbelt, Ferry Point Park, Alley Pond.
+**drops whole OSM path components nothing anchors** — 1,110 islands, 89.6 km, once step 7 above has
+noded onto the network everything that was standing on it — as unreachable. So the map would paint
+2,219 ways green and tree-lined that no route can enter or leave, covering 2,177 `PATH` records and
+85.5 km: Floyd Bennett Field's North Forty, the Staten Island Greenbelt, Ferry Point Park, Alley
+Pond. San Francisco's strands 979 ways (965 records, 42.0 km) in 524 islands. Before the rebuild of
+2026-09-27 those were 4,036 ways and 204.5 km in New York and 1,214 ways and 80.4 km in San
+Francisco. Part of the drop is golf courses, whose cart paths have no public way in and are now left
+out at ingest (scripts/README.md, "Golf courses' own paths are dropped"): 173 ways (55.5 km) of New
+York's extract and 234 (75.0 km) of San Francisco's carried a golf tag, and none does now. The rest
+is the cemetery lanes (scripts/README.md, "Cemetery lanes"), which put 869 lanes (213.8 km) into
+New York's extract and 80 (20.8 km) into San Francisco's, all but 18 of them routable, and bring
+the footpaths hanging from them in with them. The figures above are the 2026-09-27 rebuild's; the
+component measurements below are the 2026-09-25 build's, before the lanes and the golf drop.
 Asked for a walk between two ends of one of those trails, the app answers with a 2.3 mi road detour
 while drawing the trail underneath it. Step 7 took 668 ways (656 records, 31.5 km) out of that set —
 the grave-row lattices of the Cypress Hills and Mount Judah cemeteries are the largest of them — and
@@ -606,30 +615,36 @@ the overlay drew those again with no change to any of the code below, which is w
 one-directional reconciliation is for.
 
 **The overlay is the side that gives way.** A green line is an offer, and the graph is the only thing
-that can honor one, so the graph now writes the ways it stranded (`public/routing/stranded.bin`) and
-the second chunk pass marks them undrawn. That is not a claim the trails are unwalkable — most plainly
-are. It is that a layer must not advertise what the router will refuse.
+that can honor one, so the graph now writes the ways it stranded
+(`public/routing/<id>.stranded.bin`) and the second chunk pass marks them undrawn. That is not a
+claim the trails are unwalkable — most plainly are. It is that a layer must not advertise what the
+router will refuse.
 
 The reconciliation is one-directional and deliberately so: the drawn set is filtered down to the
 routable one, not the other way round. Making those components *routable* is a different and larger
 question, below.
 
+Walked case by case, the stranded trails mostly *do* reach a way in OSM — one the paths extract left
+out. Green-Wood's footpaths end on its avenues ("Sassafras Avenue", "Summit Avenue"), which are
+`highway=service` with `access=permissive`, and Mount Lebanon's the same with `access=unknown`; those
+cemetery lanes are now admitted (scripts/README.md, "Cemetery lanes"). What is left mostly ends on a
+parking aisle or a plain service road. The North Forty stays unroutable on purpose: its footway
+stops at the edge of the grass, and the 36 m to the nearest pedestrian way the graph carries is bare
+concrete — runway 12/30, mapped as `highway=service` with `abandoned:aeroway` — with no path marked
+across it (the OSM ids are in scripts/README.md's `stranded.bin` section). OSM is not missing a
+connector there, and the build does not invent one onto a runway; the trails' own trailhead is the
+lot at their north end, where they end on parking aisles the extract leaves out.
+
 ### Known gaps
 
-- **204.5 km of walkable trail is still drawn nowhere and routable nowhere, and no measurement says
-  where to join it.** Step 7 above closed the half of this that was a noding defect: 384 components,
-  34.3 km, that were standing on the routable network with no node there. What is left is not that.
-  Measured over all 2,233 components the drop would take, the distance from the nearest one to the
-  network it would join is a continuum from 4 m out with no trough in it at any conditioning tried —
-  parkland, the entrance snap's continuation guard, or a connector that crosses no other line. Floyd
-  Bennett Field's North Forty, the worst single case, is **36.3 m** from anything anchored; the
-  premise that OSM merely leaves out the last few meters does not hold there, and a bound wide enough
-  to reach it welds 882 further components (127.6 km) that no evidence vouches for.
-  Closing this needs evidence the graph's own inputs do not carry — a parkland boundary, an OSM
-  `barrier`/`entrance` tag, or a survey of where park entrances actually are — not a wider tolerance.
-  Until then the overlay's silence is honest and those trails are missing from both. **Worth doing,
-  not urgent**: nothing is wrong on the map today, the router simply cannot offer a trail nobody has
-  drawn a way onto, so this waits for whoever wants to bring an entrance source to it.
+- **85.5 km of walkable trail in New York and 42.0 km in San Francisco is still drawn nowhere and
+  routable nowhere, and no distance says where to join it.** Step 7 above closed the noding half:
+  384 components, 34.3 km. Over all 2,233 components the drop would take, the distance to the
+  network is a continuum from 4 m out with no trough at any conditioning tried, and a bound wide
+  enough to reach the North Forty (**36.3 m**) welds 882 further components (127.6 km) that no
+  evidence vouches for. The fix is in what the extract admits, as walked through above: cemetery
+  lanes are in and golf paths out, and parking aisles and plain service roads are what is left.
+  **Worth doing, not urgent**: nothing is wrong on the map today.
 - **The per-borough drop criterion was waived in the Bronx, and nobody has checked it by eye.** The
   criterion was that no borough lose much more derived sidewalk than the city as a whole, and the
   Bronx came in 2.8 pp above it (25.7% against 22.9%), which is a fail. It was waived on the
