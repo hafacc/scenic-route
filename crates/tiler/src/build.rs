@@ -111,37 +111,111 @@ const RELIEF_CODE: [&str; 7] = [
     "raster.rs",
 ];
 
-/// Every other module, so that together with the scopes above the lists cover the directory.
-#[cfg(test)]
-const OUTSIDE_SHADE: [&str; 27] = [
-    "association.rs",
-    "bridge.rs",
-    "build.rs",
-    "canopy.rs",
-    "caster_chunks.rs",
+/// The street chunks' modules, for both cuts: the transitive closure of chunks.rs's imports.
+const CHUNKS_CODE: [&str; 6] = [
     "chunks.rs",
-    "commercial.rs",
-    "conflate.rs",
-    "corners.rs",
-    "dem.rs",
-    "densities.rs",
-    "direct_canopy.rs",
-    "elevation.rs",
-    "genus_field.rs",
-    "graph.rs",
-    "graph_cache.rs",
-    "heights.rs",
-    "historic.rs",
-    "industrial.rs",
-    "ingest.rs",
-    "invariants.rs",
-    "main.rs",
-    "ndsm.rs",
-    "relief.rs",
-    "sampling.rs",
-    "scenic.rs",
+    "binfmt.rs",
+    "geometry.rs",
+    "manifest.rs",
+    "raster.rs",
     "sidewalks.rs",
 ];
+
+/// The commercial signals' modules; chunks.rs is in it for the `Chunks` handle the pass reads.
+const COMMERCIAL_CODE: [&str; 7] = [
+    "commercial.rs",
+    "binfmt.rs",
+    "chunks.rs",
+    "geometry.rs",
+    "manifest.rs",
+    "raster.rs",
+    "sidewalks.rs",
+];
+
+/// The caster chunks' modules: they cut with shade.rs's halo and crown.rs's crowns.
+const CASTERS_CODE: [&str; 7] = [
+    "caster_chunks.rs",
+    "binfmt.rs",
+    "crown.rs",
+    "geometry.rs",
+    "manifest.rs",
+    "raster.rs",
+    "shade.rs",
+];
+
+/// The elevation pyramid's modules: the DEM resample, including the projections it opens with.
+const ELEVATION_CODE: [&str; 7] = [
+    "elevation.rs",
+    "binfmt.rs",
+    "dem.rs",
+    "geometry.rs",
+    "heights.rs",
+    "manifest.rs",
+    "raster.rs",
+];
+
+/// The canopy pyramid's modules: the transitive closure of canopy.rs's imports.
+const CANOPY_CODE: [&str; 5] = [
+    "canopy.rs",
+    "binfmt.rs",
+    "geometry.rs",
+    "manifest.rs",
+    "raster.rs",
+];
+
+/// The genus field's modules: the transitive closure of genus_field.rs's imports.
+const GENUS_FIELD_CODE: [&str; 5] = [
+    "genus_field.rs",
+    "binfmt.rs",
+    "geometry.rs",
+    "manifest.rs",
+    "raster.rs",
+];
+
+/// Modules no stamp hashes: this driver and the crate root, whose values reach stamps directly, and ingest/ndsm.
+// The driver's path plumbing is still unstamped: after editing where a pass reads or writes, use --force.
+#[cfg(test)]
+const UNSTAMPED: [&str; 5] = [
+    "build.rs",
+    "densities.rs",
+    "ingest.rs",
+    "main.rs",
+    "ndsm.rs",
+];
+
+/// Every scope a stamp names with how many leading modules its pass calls into, for the closure tests.
+#[cfg(test)]
+const SCOPES: [(&[&str], usize); 9] = [
+    (&SHADE_CODE, 1),
+    (&GRAPH_CODE, 1),
+    (&RELIEF_CODE, 2),
+    (&CHUNKS_CODE, 1),
+    (&COMMERCIAL_CODE, 1),
+    (&CASTERS_CODE, 1),
+    (&ELEVATION_CODE, 1),
+    (&CANOPY_CODE, 1),
+    (&GENUS_FIELD_CODE, 1),
+];
+
+/// Crate-root items a scope may name; each sets only speed or reporting, never a pass's output.
+#[cfg(test)]
+const OUTPUT_NEUTRAL_ROOT_ITEMS: [&str; 5] =
+    ["Fallible", "gib", "peak_rss", "trim_heap", "write_report"];
+
+/// `tiler key-probe`'s mode, which a build never runs; stamped so a flip reruns the graph.
+const GRAPH_PROBE: bool = false;
+/// Where the graph pass writes its stats line; a build writes none, and a change reruns it.
+const GRAPH_REPORT: Option<&str> = None;
+
+/// The DEM resample bounds the graph pass gets: the city's, when it has terrain.
+fn graph_elevation_bounds(city: &City, planned: &PlanCity) -> Option<crate::manifest::Bounds> {
+    (!planned.elevation.is_empty()).then_some(city.bounds)
+}
+
+/// The land mask the graph pass reads for the bridge column; every city carries one.
+fn graph_land(data: &Path, city: &City) -> Option<PathBuf> {
+    Some(data.join("land").join(&city.field.land.file))
+}
 
 /// Build inputs in every scope: a dependency, feature flag or compiler bump can move the output.
 const BUILD_FILES: [&str; 4] = [
@@ -262,15 +336,6 @@ impl Plan {
                 *oid = hashed;
             }
         }
-    }
-
-    fn code_epoch(&self) -> String {
-        let mut digest = Sha256::new();
-        for (path, oid) in &self.code {
-            field(&mut digest, path.as_bytes());
-            field(&mut digest, oid.as_bytes());
-        }
-        hex(&digest.finalize())
     }
 
     /// One pass's scope as a hash; a named module the plan doesn't carry is an error.
@@ -585,10 +650,15 @@ fn dem_identity(digest: &mut Sha256, elevation: &[Elevation]) -> Fallible<()> {
 /// Per-pass stamps: SHA-256 over code, manifest, plan values, input contents and upstream stamps.
 struct Stamps<'a> {
     plan: &'a Plan,
-    code: String,
     shade_code: String,
     graph_code: String,
     relief_code: String,
+    chunks_code: String,
+    commercial_code: String,
+    casters_code: String,
+    elevation_code: String,
+    canopy_code: String,
+    genus_field_code: String,
     manifest_oid: String,
     oids: HashMap<PathBuf, String>,
 }
@@ -596,21 +666,22 @@ struct Stamps<'a> {
 impl<'a> Stamps<'a> {
     fn new(plan: &'a Plan) -> Fallible<Stamps<'a>> {
         Ok(Stamps {
-            code: plan.code_epoch(),
             shade_code: plan.code_scope(&SHADE_CODE)?,
             graph_code: plan.code_scope(&GRAPH_CODE)?,
             relief_code: plan.code_scope(&RELIEF_CODE)?,
+            chunks_code: plan.code_scope(&CHUNKS_CODE)?,
+            commercial_code: plan.code_scope(&COMMERCIAL_CODE)?,
+            casters_code: plan.code_scope(&CASTERS_CODE)?,
+            elevation_code: plan.code_scope(&ELEVATION_CODE)?,
+            canopy_code: plan.code_scope(&CANOPY_CODE)?,
+            genus_field_code: plan.code_scope(&GENUS_FIELD_CODE)?,
             plan,
             manifest_oid: input_oid(&plan.manifest)?,
             oids: HashMap::new(),
         })
     }
 
-    /// A digest seeded with the manifest and code every pass shares.
-    fn open(&self, pass: &str) -> Sha256 {
-        self.scoped(pass, &self.code)
-    }
-
+    /// A digest seeded with the pass, its code scope and the manifest every pass reads.
     fn scoped(&self, pass: &str, code: &str) -> Sha256 {
         let mut digest = Sha256::new();
         field(&mut digest, pass.as_bytes());
@@ -645,7 +716,7 @@ impl<'a> Stamps<'a> {
     }
 
     fn chunks(&mut self, cities: &[(&City, &PlanCity)]) -> Fallible<String> {
-        let mut digest = self.open("chunks");
+        let mut digest = self.scoped("chunks", &self.chunks_code);
         for (city, _) in cities {
             let mut inputs = vec![self.plan.data.join("streets").join(&city.streets.file)];
             inputs.extend(
@@ -660,7 +731,7 @@ impl<'a> Stamps<'a> {
 
     /// Pass 2, over pass 1's stamp since its signals are keyed on the chunks' segment order.
     fn commercial(&mut self, cities: &[(&City, &PlanCity)], chunks: &str) -> Fallible<String> {
-        let mut digest = self.open("commercial");
+        let mut digest = self.scoped("commercial", &self.commercial_code);
         field(&mut digest, chunks.as_bytes());
         for (city, _) in cities {
             let inputs: Vec<PathBuf> = ["landuse", "buildings", "openstreets", "dining"]
@@ -678,7 +749,7 @@ impl<'a> Stamps<'a> {
         cities: &[(&City, &PlanCity)],
         sun: Option<&shade::Params>,
     ) -> Fallible<String> {
-        let mut digest = self.open("caster-chunks");
+        let mut digest = self.scoped("caster-chunks", &self.casters_code);
         match sun {
             Some(params) => field(&mut digest, &params.max_shadow_meters.to_le_bytes()),
             None => field(&mut digest, b"no sun"),
@@ -732,7 +803,7 @@ impl<'a> Stamps<'a> {
     }
 
     fn elevation(&mut self, city: &City, planned: &PlanCity) -> Fallible<String> {
-        let mut digest = self.open("elevation");
+        let mut digest = self.scoped("elevation", &self.elevation_code);
         field(&mut digest, city.id.as_bytes());
         dem_identity(&mut digest, &planned.elevation)?;
         let land = self.plan.data.join("land").join(&city.field.land.file);
@@ -741,7 +812,7 @@ impl<'a> Stamps<'a> {
     }
 
     fn canopy(&mut self, cities: &[(&City, &PlanCity)]) -> Fallible<String> {
-        let mut digest = self.open("canopy");
+        let mut digest = self.scoped("canopy", &self.canopy_code);
         for (city, _) in cities {
             if let Some(layer) = &city.field.canopy {
                 let inputs = vec![
@@ -755,7 +826,7 @@ impl<'a> Stamps<'a> {
     }
 
     fn genus_field(&mut self, cities: &[(&City, &PlanCity)]) -> Fallible<String> {
-        let mut digest = self.open("genus-field");
+        let mut digest = self.scoped("genus-field", &self.genus_field_code);
         for (city, _) in cities {
             if city.field.genus.is_some() {
                 let trees = self.plan.data.join("trees").join(&city.field.trees.file);
@@ -778,6 +849,34 @@ impl<'a> Stamps<'a> {
         field(
             &mut digest,
             if planned.alleys { b"alleys" } else { b"none" },
+        );
+        // The existence gate runs inside the cached topology, so a tighter ceiling must rerun it.
+        let graph::ExistenceCeilings {
+            dropped_sidewalk_fraction,
+            cell_demoted_share,
+        } = planned
+            .existence_ceilings
+            .unwrap_or(graph::SURVEYED_CEILINGS);
+        field(&mut digest, &dropped_sidewalk_fraction.to_le_bytes());
+        field(&mut digest, &cell_demoted_share.to_le_bytes());
+        // The value settings the call site passes, read through the same consts and fns.
+        field(&mut digest, if GRAPH_PROBE { b"probe" } else { b"build" });
+        field(&mut digest, GRAPH_REPORT.unwrap_or("").as_bytes());
+        field(
+            &mut digest,
+            if graph_elevation_bounds(city, planned).is_some() {
+                b"terrain"
+            } else {
+                b"flat"
+            },
+        );
+        field(
+            &mut digest,
+            if graph_land(&self.plan.data, city).is_some() {
+                b"land"
+            } else {
+                b"no land"
+            },
         );
         let mut inputs = vec![self.plan.data.join("streets").join(&city.streets.file)];
         inputs.extend(
@@ -831,7 +930,7 @@ impl<'a> Stamps<'a> {
         let mut relief = self.scoped("graph-relief", &self.relief_code);
         field(&mut relief, base.as_bytes());
         dem_identity(&mut relief, &planned.elevation)?;
-        let mut commercial_key = self.open("graph-commercial");
+        let mut commercial_key = self.scoped("graph-commercial", &self.graph_code);
         field(&mut commercial_key, base.as_bytes());
         field(&mut commercial_key, commercial.as_bytes());
         Ok(graph_cache::Keys {
@@ -876,7 +975,7 @@ impl<'a> Stamps<'a> {
         name: &str,
         input: Option<&PathBuf>,
     ) -> Fallible<String> {
-        let mut digest = self.open(name);
+        let mut digest = self.scoped(name, &self.graph_code);
         field(&mut digest, base.as_bytes());
         match input {
             Some(path) => self.file(&mut digest, path)?,
@@ -887,7 +986,7 @@ impl<'a> Stamps<'a> {
 
     /// Pass 8's stamp, which is exactly its keys.
     fn graph(&self, keys: &graph_cache::Keys) -> String {
-        let mut digest = self.open("graph");
+        let mut digest = self.scoped("graph", &self.graph_code);
         for key in [
             &keys.base,
             &keys.landmarks,
@@ -918,7 +1017,7 @@ impl<'a> Stamps<'a> {
         chunks: &str,
         stranded: &chunks::Stranded,
     ) -> Fallible<String> {
-        let mut digest = self.open("chunks-stranded");
+        let mut digest = self.scoped("chunks-stranded", &self.chunks_code);
         field(&mut digest, chunks.as_bytes());
         for (city, _) in cities {
             field(&mut digest, city.id.as_bytes());
@@ -1589,7 +1688,7 @@ pub fn run(
                 commercial: lines.get(&city.id).map(Path::to_path_buf),
                 industrial: planned.source(&plan.data, Source::Industrial),
                 historic: planned.source(&plan.data, Source::Historic),
-                land: Some(plan.data.join("land").join(&city.field.land.file)),
+                land: graph_land(&plan.data, city),
                 out: plan.routing.join(format!("{}.bin", city.id)),
                 // Written for the record; the re-chunk reads the same ids from memory.
                 stranded_out: Some(stranded_file),
@@ -1602,14 +1701,14 @@ pub fn run(
                     .canopy
                     .as_ref()
                     .map(|layer| plan.data.join("canopy").join(&layer.file)),
-                elevation_bounds: (!planned.elevation.is_empty()).then_some(city.bounds),
+                elevation_bounds: graph_elevation_bounds(city, planned),
                 alleys: planned.alleys,
                 existence_ceilings: planned
                     .existence_ceilings
                     .unwrap_or(graph::SURVEYED_CEILINGS),
                 cache: Some(graph_keys[index].clone()),
-                probe: false,
-                report: None,
+                probe: GRAPH_PROBE,
+                report: GRAPH_REPORT.map(PathBuf::from),
                 memory_budget,
             },
             dem,
@@ -1836,13 +1935,25 @@ mod tests {
 
     /// Every file some scope claims, hashed to its own name.
     fn code_map() -> BTreeMap<String, String> {
-        SHADE_CODE
-            .iter()
-            .chain(&OUTSIDE_SHADE)
+        claimed()
+            .into_iter()
             .map(|module| format!("{SRC}/{module}"))
             .chain(BUILD_FILES.iter().map(|file| (*file).to_owned()))
             .map(|path| (path.clone(), format!("the bytes of {path}")))
             .collect()
+    }
+
+    /// Every module some scope or `UNSTAMPED` names, sorted and once each.
+    fn claimed() -> Vec<String> {
+        let mut claimed: Vec<String> = SCOPES
+            .iter()
+            .flat_map(|(scope, _)| scope.iter())
+            .chain(&UNSTAMPED)
+            .map(|module| (*module).to_owned())
+            .collect();
+        claimed.sort();
+        claimed.dedup();
+        claimed
     }
 
     /// New York with a two-bin sun grid and footprints to cast it.
@@ -2593,25 +2704,41 @@ mod tests {
             .insert(format!("{SRC}/{module}"), "a different tiler".to_owned());
     }
 
-    /// Every pass but shade folds the whole crate, since a format change moves no input file.
+    /// A helper every scope reaches reruns every pass, since a format change moves no input file.
     #[test]
-    fn a_new_tiler_reruns_every_pass_that_names_no_modules() {
-        let mut plan = stamping_plan("stamps-epoch");
+    fn an_edit_to_a_shared_helper_reruns_every_pass() {
+        let mut plan = stamping_plan("stamps-helper");
         let before = stamped_passes(&plan);
-        edited(&mut plan, "shade.rs");
+        edited(&mut plan, "geometry.rs");
         let after = stamped_passes(&plan);
 
         assert_ne!(after.chunks, before.chunks);
         assert_ne!(after.commercial, before.commercial);
         assert_ne!(after.casters, before.casters);
+        assert_ne!(after.buckets, before.buckets);
         assert_ne!(after.elevation, before.elevation);
         assert_ne!(after.canopy, before.canopy);
         assert_ne!(after.genus_field, before.genus_field);
         assert_ne!(after.graph, before.graph);
-        assert_ne!(
-            after.buckets, before.buckets,
-            "the pass that reads shade.rs"
-        );
+        assert_ne!(after.keys.relief, before.keys.relief);
+    }
+
+    /// A shade edit reruns the passes that call into shade.rs and leaves the rest standing.
+    #[test]
+    fn a_shade_edit_reruns_the_passes_that_read_shade_alone() {
+        let mut plan = stamping_plan("stamps-shade-scope");
+        let before = stamped_passes(&plan);
+        edited(&mut plan, "shade.rs");
+        let after = stamped_passes(&plan);
+
+        assert_ne!(after.buckets, before.buckets);
+        assert_ne!(after.casters, before.casters, "which cut with its halo");
+        assert_ne!(after.graph, before.graph, "which bakes it per edge");
+        assert_eq!(after.chunks, before.chunks);
+        assert_eq!(after.commercial, before.commercial);
+        assert_eq!(after.elevation, before.elevation, "the DEM resample");
+        assert_eq!(after.canopy, before.canopy);
+        assert_eq!(after.genus_field, before.genus_field);
     }
 
     #[test]
@@ -2622,25 +2749,67 @@ mod tests {
         let after = stamped_passes(&plan);
 
         assert_ne!(after.graph, before.graph);
-        assert_ne!(after.chunks, before.chunks);
         assert_eq!(after.buckets, before.buckets);
+        assert_eq!(after.casters, before.casters);
+        assert_eq!(after.chunks, before.chunks);
+        assert_eq!(after.commercial, before.commercial);
+        assert_eq!(after.elevation, before.elevation);
+        assert_eq!(after.canopy, before.canopy);
+        assert_eq!(after.genus_field, before.genus_field);
     }
 
-    /// A graph edit reruns the graph pass but keeps the cached relief and shade columns.
+    /// The existence gate runs in the cached topology, so its ceilings key the base.
     #[test]
-    fn an_edit_the_graph_never_reads_keeps_the_dem_and_the_shade_bakes() {
-        let mut plan = stamping_plan("stamps-graph-scope");
+    fn new_existence_ceilings_rerun_the_topology_and_the_default_spelled_out_does_not() {
+        let mut plan = stamping_plan("stamps-ceilings");
+        let before = stamped_passes(&plan);
+        let with = |ceilings: &str| {
+            SUNNY.replacen(
+                r#"{"id": "nyc", "#,
+                &format!(r#"{{"id": "nyc", "existenceCeilings": {ceilings}, "#),
+                1,
+            )
+        };
+
+        plan.cities = serde_json::from_str(&with(
+            r#"{"droppedSidewalkFraction": 0.3, "cellDemotedShare": 0.3}"#,
+        ))
+        .expect("the default ceilings");
+        let spelled = stamped_passes(&plan);
+        assert_eq!(spelled.keys.base, before.keys.base);
+        assert_eq!(spelled.graph, before.graph);
+
+        plan.cities = serde_json::from_str(&with(
+            r#"{"droppedSidewalkFraction": 0.2, "cellDemotedShare": 0.3}"#,
+        ))
+        .expect("tighter ceilings");
+        let tighter = stamped_passes(&plan);
+        assert_ne!(tighter.keys.base, before.keys.base);
+        assert_ne!(tighter.graph, before.graph);
+        assert_eq!(tighter.chunks, before.chunks, "no other pass reads them");
+    }
+
+    /// An edit to a module only `tiler ingest` runs moves no stamp, nor any graph column.
+    #[test]
+    fn an_edit_no_pass_reads_moves_no_stamp() {
+        let mut plan = stamping_plan("stamps-unread");
         let before = stamped_passes(&plan);
         edited(&mut plan, "densities.rs");
         let after = stamped_passes(&plan);
 
-        assert_ne!(after.graph, before.graph, "the pass runs again");
-        assert_eq!(after.keys.base, before.keys.base, "onto the same topology");
-        assert_eq!(
-            after.keys.relief, before.keys.relief,
-            "and reads no GeoTIFF to do it"
-        );
-        assert_eq!(after.keys.shade, before.keys.shade, "nor casts a ray");
+        assert_eq!(after.chunks, before.chunks);
+        assert_eq!(after.commercial, before.commercial);
+        assert_eq!(after.casters, before.casters);
+        assert_eq!(after.buckets, before.buckets);
+        assert_eq!(after.elevation, before.elevation);
+        assert_eq!(after.canopy, before.canopy);
+        assert_eq!(after.genus_field, before.genus_field);
+        assert_eq!(after.graph, before.graph);
+        assert_eq!(after.keys.base, before.keys.base);
+        assert_eq!(after.keys.relief, before.keys.relief, "no GeoTIFF read");
+        assert_eq!(after.keys.shade, before.keys.shade, "no ray cast");
+        assert_eq!(after.keys.commercial, before.keys.commercial);
+        assert_eq!(after.keys.canopy, before.keys.canopy);
     }
 
     #[test]
@@ -2865,24 +3034,50 @@ mod tests {
                 }
             }
         }
-        let mut claimed: Vec<String> = SHADE_CODE
-            .iter()
-            .chain(&OUTSIDE_SHADE)
-            .map(|module| (*module).to_owned())
-            .collect();
         found.sort();
-        claimed.sort();
 
-        assert_eq!(found, claimed);
+        assert_eq!(found, claimed());
     }
 
-    /// Every module a `crate::` path names, including `pub use`, brace groups and qualified paths.
-    fn crate_heads(stream: TokenStream, found: &mut Vec<String>) {
+    /// A module no stamp names must be one no scope reaches, or the list is hiding a dependency.
+    #[test]
+    fn no_scope_reaches_a_module_listed_as_unstamped() {
+        for (scope, _) in SCOPES {
+            for module in closure_of(scope) {
+                assert!(
+                    !UNSTAMPED.contains(&module.as_str()),
+                    "{} reaches {module}",
+                    scope[0]
+                );
+            }
+        }
+    }
+
+    /// Every item a `crate::` path names, including `pub use`, brace groups and qualified paths.
+    fn crate_heads(stream: TokenStream, in_test: bool, found: &mut Vec<String>) {
         let trees: Vec<TokenTree> = stream.into_iter().collect();
         let colon = |tree: Option<&TokenTree>| matches!(tree, Some(TokenTree::Punct(punct)) if punct.as_char() == ':');
+        // `#[cfg(test)] mod name { .. }`, whose `super::` paths are the test module's own.
+        let test_module = |index: usize| {
+            index >= 3
+                && matches!(&trees[index - 1], TokenTree::Ident(name) if name != "mod")
+                && matches!(&trees[index - 2], TokenTree::Ident(keyword) if keyword == "mod")
+                && matches!(&trees[index - 3], TokenTree::Group(attribute)
+                    if attribute.delimiter() == Delimiter::Bracket
+                        && attribute.stream().to_string().replace(' ', "") == "cfg(test)")
+        };
         for (index, tree) in trees.iter().enumerate() {
             match tree {
-                TokenTree::Group(group) => crate_heads(group.stream(), found),
+                TokenTree::Group(group) => {
+                    crate_heads(group.stream(), in_test || test_module(index), found)
+                }
+                TokenTree::Ident(ident)
+                    if ident == "super"
+                        && colon(trees.get(index + 1))
+                        && colon(trees.get(index + 2)) =>
+                {
+                    assert!(in_test, "a `super::` path outside a test module");
+                }
                 TokenTree::Ident(ident)
                     if ident == "crate"
                         && colon(trees.get(index + 1))
@@ -2895,6 +3090,11 @@ mod tests {
                             let mut head = true;
                             for tree in group.stream() {
                                 match tree {
+                                    TokenTree::Punct(punct) if punct.as_char() == '*' && head => {
+                                        panic!(
+                                            "a `crate::{{*}}` glob hides which modules it reaches"
+                                        )
+                                    }
                                     TokenTree::Ident(name) if head => {
                                         found.push(name.to_string());
                                         head = false;
@@ -2906,7 +3106,10 @@ mod tests {
                                 }
                             }
                         }
-                        _ => {}
+                        Some(TokenTree::Punct(punct)) if punct.as_char() == '*' => {
+                            panic!("a `crate::*` glob hides which modules it reaches")
+                        }
+                        other => panic!("an unrecognized `crate::` path: {other:?}"),
                     }
                 }
                 _ => {}
@@ -2924,12 +3127,20 @@ mod tests {
             let mut named = Vec::new();
             crate_heads(
                 TokenStream::from_str(&body).expect("a module that lexes"),
+                false,
                 &mut named,
             );
             for name in named {
                 let file = format!("{name}.rs");
-                // Items of lib.rs like `Fallible` are not modules.
-                if !src.join(&file).is_file() || reached.contains(&file) {
+                // Not a module, so an item of the crate root, main.rs, which no stamp hashes.
+                if !src.join(&file).is_file() {
+                    assert!(
+                        OUTPUT_NEUTRAL_ROOT_ITEMS.contains(&name.as_str()),
+                        "{module} reaches main.rs's {name}, which may move output; scope it"
+                    );
+                    continue;
+                }
+                if reached.contains(&file) {
                     continue;
                 }
                 reached.push(file.clone());
@@ -2946,19 +3157,51 @@ mod tests {
         declared
     }
 
-    /// Each narrow scope must be closed under its modules' imports.
+    /// Each scope is the closure of the modules whose `run` its pass calls, so a new scope is checked too.
     #[test]
-    fn the_shade_scope_is_closed_under_its_own_imports() {
-        assert_eq!(closure_of(&[SHADE_CODE[0]]), sorted(&SHADE_CODE));
+    fn every_scope_is_closed_under_its_own_imports() {
+        for (scope, heads) in SCOPES {
+            assert_eq!(closure_of(&scope[..heads]), sorted(scope), "{}", scope[0]);
+        }
     }
 
+    /// The graph pass's value settings are the ones its stamp folds, read through the same names.
     #[test]
-    fn the_graph_and_relief_scopes_are_closed_under_their_own_imports() {
-        assert_eq!(closure_of(&[GRAPH_CODE[0]]), sorted(&GRAPH_CODE));
-        assert_eq!(
-            closure_of(&[RELIEF_CODE[0], RELIEF_CODE[1]]),
-            sorted(&RELIEF_CODE)
+    fn the_graph_call_site_passes_what_its_stamp_folds() {
+        let body = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/build.rs"))
+            .expect("the driver");
+        let tokens = TokenStream::from_str(&body)
+            .expect("a module that lexes")
+            .to_string();
+        for setting in [
+            "probe : GRAPH_PROBE ,",
+            "report : GRAPH_REPORT . map (PathBuf :: from) ,",
+            "elevation_bounds : graph_elevation_bounds (city , planned) ,",
+            "land : graph_land (& plan . data , city) ,",
+        ] {
+            assert!(tokens.contains(setting), "graph::Args lacks `{setting}`");
+        }
+    }
+
+    /// Flipping a value the driver passes the graph reruns it, though no input file moved.
+    #[test]
+    fn the_graph_stamp_folds_the_value_settings_the_driver_passes() {
+        let plan = stamping_plan("stamps-flat");
+        let before = stamped_passes(&plan);
+        let mut terrain = stamping_plan("stamps-terrain");
+        let tile = terrain.data.join("dem.tif");
+        fs::write(&tile, b"a dem").expect("a tile");
+        terrain.cities[0].elevation.push(Elevation {
+            crs: "sf-cs13".to_owned(),
+            band: 0,
+            tiles: vec![tile],
+        });
+        let after = stamped_passes(&terrain);
+        assert_ne!(
+            after.keys.base, before.keys.base,
+            "the bounds it now passes"
         );
+        assert_ne!(after.graph, before.graph);
     }
 
     /// The second chunks pass is stamped on the stranded set, not on the graph's stamp.

@@ -1203,12 +1203,12 @@ gate stamps its inputs off — see *What the stamp covers*.
 **The freshness check is per pass.** Each of the nine computes a SHA-256 over what *it* reads: the
 plan values it acts on, the content of every input file it opens, and the stamps of the passes whose
 output it consumes — a hash DAG, sound because the passes are deterministic. Folded into all of them
-are the manifest and a **code epoch**, the hash of `crates/tiler/src/**`, both `Cargo.toml`s,
-`Cargo.lock` and `rust-toolchain.toml`; so any edit to the tiler invalidates every pass, including
-one whose output *format* changed, which no input file would have moved. The toolchain is in there
-because a compiler bump can move a low bit of `sin` through std or libm, and that is a shadow in a
-different place. `write-plan.ts` hashes those files one at a time and the plan carries them as the
-`code` map, which is what lets a pass name a scope of its own — the shade pass does, below. Content,
+are the manifest and a **code scope**, the hash of the tiler modules that pass is a function of,
+both `Cargo.toml`s, `Cargo.lock` and `rust-toolchain.toml`; so an edit to any module a pass reads
+invalidates it, including one whose output *format* changed, which no input file would have moved.
+The toolchain is in there because a compiler bump can move a low bit of `sin` through std or libm,
+and that is a shadow in a different place. `write-plan.ts` hashes those files one at a time and the plan carries them as the
+`code` map, which is what lets each pass name a scope of its own — see below. Content,
 not mtime — a fresh checkout (CI) or a `touch` rewrites mtimes without moving a byte.
 
 **A `.rs` file enters by its token stream, not by its bytes.** The tiler rehashes every module of
@@ -1240,13 +1240,26 @@ renames, one that loses a bin costs the renames alone, and a re-ingested `data/b
 correctly re-renders every bin, that file being opaque and city-wide. Each bin records its key as it
 finishes, so a build killed inside the pyramid keeps every bin that completed.
 
-**Shade also names the modules it is a function of** — `shade.rs`, `crown.rs`, `raster.rs`,
-`geometry.rs`, `binfmt.rs` and `manifest.rs`, the transitive closure of what `shade.rs` imports, plus
-the build files — instead of folding in the whole-crate epoch, under which any
-unrelated tiler edit would re-render the whole pyramid. No other pass names a scope yet, so the rest
-of the crate is listed as the complement and a test asserts that the two lists together ARE
-`crates/tiler/src/`: a module claimed by neither would be one no stamp is a function of, and the one
-edit that leaves a stale pyramid being served.
+**Every pass names the modules it is a function of** — for shade, `shade.rs`, `crown.rs`,
+`raster.rs`, `geometry.rs`, `binfmt.rs` and `manifest.rs`, the transitive closure of what `shade.rs`
+imports, plus the build files — rather than folding in the whole crate, under which any unrelated
+tiler edit would re-render the whole pyramid. Each scope (`*_CODE` in `build.rs`) is the closure of
+the module whose `run` the driver calls: chunks and chunks-stranded name `chunks.rs`'s, commercial
+`commercial.rs`'s, caster-chunks `caster_chunks.rs`'s (shade and crowns included), elevation
+`elevation.rs`'s (the DEM and its projections), canopy and genus-field their own; the graph's base,
+its attribute columns and its assembled stamp all name `graph.rs`'s, and its relief and shade
+columns the narrower relief and shade scopes. A test asserts each list IS its entry module's
+closure over `crate::` paths, so a new import widens the scope or fails the test, never silently
+narrows it. The modules no stamp names — `build.rs`, `main.rs` and the `ingest`/`ndsm` commands'
+`densities.rs`, `ingest.rs` and `ndsm.rs` — are listed too, and a test asserts the lists together
+ARE `crates/tiler/src/` and that no scope reaches an unstamped one: a module claimed by none would
+be one no stamp is a function of, and the one edit that leaves stale output being served. A scope
+may name only the crate root's output-neutral items (`Fallible`, `trim_heap`, `write_report`, `gib`,
+`peak_rss`), and the test fails on a glob or on anything else there. The value settings `build.rs`
+itself hands a pass — the graph's `probe` and `report`, whether it gets terrain bounds and a land
+mask — go through consts and helpers its stamp folds too, and a test holds the call site to them.
+Only the driver's path plumbing is left unstamped; after editing where a pass reads or writes, run
+it with `--force`.
 
 **The graph pass is split finer still: a base topology, a column per attribute, and a cheap
 assemble.** Everything through the name compaction — node identity and the renumber, the walking
@@ -1318,8 +1331,8 @@ serves and report success.
 ```jsonc
 {
   "code": {                                   // the tiler's own sources, file by file, repo-relative
-    "Cargo.lock": "1d8b…",                    // the whole map is folded into every pass's stamp;
-    "rust-toolchain.toml": "4c71…",           // the shade pass hashes the six modules it reads.
+    "Cargo.lock": "1d8b…",                    // every pass folds the build files and the
+    "rust-toolchain.toml": "4c71…",           // modules it reads, e.g. shade's six.
     "crates/tiler/src/shade.rs": "9f2c…"      // .rs bytes here, token stream once the tiler has it
   },
   "manifest": "src/tree-cover/manifest.json", // every pass reads the city list from here
@@ -1411,10 +1424,10 @@ on any of the others is rejected rather than quietly ignored, as is a pass name 
 answers to. `--force` runs the selected passes whether or not their stamps hold. With no `--only`
 that is all nine, which is a build from scratch.
 
-What it is for is the one thing the stamps are deliberately coarse about: the **code epoch** is the
-whole crate, so an edit anywhere in the tiler invalidates all eight passes that name no scope of
-their own, and iterating on one pass's code would otherwise re-render everything each time. `--only graph` then reruns the pass being worked on
-and leaves the rest of the last build standing. The two named scripts are the two passes that are
+What it is for is the one thing the stamps are deliberately coarse about: a code scope is a whole
+module closure, so an edit to a helper as shared as `geometry.rs` invalidates every pass, and
+iterating on one pass's code would otherwise re-render everything each time. `--only graph` then
+reruns the pass being worked on and leaves the rest of the last build standing. The two named scripts are the two passes that are
 worth minutes rather than seconds and so the two anyone iterates on; anything else is cheap enough
 to reach through `build-tiles:half -- --only …`, which appends to the tiler because it is the last
 command in that chain.
