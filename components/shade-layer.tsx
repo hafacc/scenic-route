@@ -319,7 +319,7 @@ export default function ShadeLayer() {
           if (!canceled && deckDay === day) {
             sendShedDecks(shedDecks(graph, history, day));
             for (const layer of layers.values()) {
-              layer.redraw();
+              layer.repaint();
             }
           }
         },
@@ -343,7 +343,7 @@ export default function ShadeLayer() {
         // Tau is baked into the pixels, and a date can cross half of leaf-fall within one bin.
         if (tau !== drawnTau) {
           drawnTau = tau;
-          layers.get(target)?.redraw();
+          layers.get(target)?.repaint();
         }
         return;
       }

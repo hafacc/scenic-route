@@ -23,7 +23,7 @@ let worker: Worker | undefined;
 const pending = new Map<number, PendingTile>();
 let nextTileKey = 0;
 
-// Leaflet keeps a drawn tile forever, so a theme flip must redraw every layer.
+// Leaflet keeps a drawn tile forever, so a theme flip must repaint every layer.
 const layers = new Set<WorkerTileLayer>();
 
 function repaintForTheme(): void {
@@ -33,7 +33,7 @@ function repaintForTheme(): void {
     worker.postMessage(message);
   }
   for (const layer of layers) {
-    layer.redraw();
+    layer.repaint();
   }
 }
 
@@ -76,6 +76,8 @@ export function sendShedDecks(decks: ShedDecks): void {
 export default class WorkerTileLayer extends L.GridLayer {
   // Weak, so a dropped tile stays collectable.
   private readonly tileKeys = new WeakMap<HTMLElement, number>();
+  // The same keys, iterable for a repaint.
+  private readonly liveKeys = new Set<number>();
 
   constructor(
     private readonly tileParams: () => TileParams,
@@ -104,6 +106,7 @@ export default class WorkerTileLayer extends L.GridLayer {
     const tileKey = nextTileKey;
     nextTileKey += 1;
     this.tileKeys.set(tile, tileKey);
+    this.liveKeys.add(tileKey);
     pending.set(tileKey, { tile, done });
     // One-way: this canvas can never yield a 2d context on the main thread again.
     const canvas = tile.transferControlToOffscreen();
@@ -119,11 +122,25 @@ export default class WorkerTileLayer extends L.GridLayer {
     return tile;
   }
 
+  // Unlike `redraw`, keeps every tile, and a zoom's retained parents, on screen until it repaints.
+  // It fires no Leaflet tile events, so watchLayerStatus never hears a repaint fail or recover.
+  repaint(): void {
+    if (this.liveKeys.size > 0) {
+      const message: ToWorker = {
+        type: "repaint",
+        tileKeys: [...this.liveKeys],
+        params: this.tileParams(),
+      };
+      tileWorker().postMessage(message);
+    }
+  }
+
   // Possibly before its data arrived, so the worker skips what's left of it.
   private discard(tile: HTMLElement): void {
     const tileKey = this.tileKeys.get(tile);
     if (tileKey !== undefined) {
       this.tileKeys.delete(tile);
+      this.liveKeys.delete(tileKey);
       pending.delete(tileKey);
       const message: ToWorker = { type: "cancel", tileKey };
       tileWorker().postMessage(message);

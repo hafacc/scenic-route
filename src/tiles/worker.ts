@@ -14,6 +14,7 @@ import { streetScoreRenderer } from "./street-score";
 import { subwayRenderer } from "./subway";
 import { setShedDecks } from "./sweep";
 import { setWorkerTheme } from "./theme";
+import { TileQueue } from "./tile-queue";
 import { treeDotsRenderer } from "./tree-dots";
 
 // `self` types as a Window under the app's dom lib, and the webworker lib conflicts with it.
@@ -22,24 +23,17 @@ const scope = globalThis as unknown as {
   postMessage(message: DoneMessage): void;
 };
 
-// Tiles still loading, and the subset Leaflet has since dropped.
-const inFlight = new Set<number>();
-const canceled = new Set<number>();
 // Only this side can reach a transferred canvas, so only it can repaint a lost context.
 const live = new Map<number, () => void>();
-
-function forget(tileKey: number): void {
-  live.get(tileKey)?.();
-  live.delete(tileKey);
-}
 
 async function run<Params, Data>(
   renderer: TileRenderer<Params, Data>,
   params: Params,
   { tileKey, coords, ratio, canvas }: DrawMessage,
+  current: () => boolean,
 ): Promise<void> {
   const data = await renderer.load(params, coords);
-  if (canceled.has(tileKey)) {
+  if (!current()) {
     return;
   }
   const context = canvas.getContext("2d");
@@ -48,46 +42,46 @@ async function run<Params, Data>(
       renderer.draw(target, data, coords, params, ratio);
     });
     // Registered before painting: the context may already be lost, and then the restore paints it.
+    live.get(tileKey)?.();
     live.set(tileKey, repaintOnRestore(canvas, paint));
     paint();
   }
 }
 
-function rasterize(message: DrawMessage): Promise<void> {
+function rasterize(
+  message: DrawMessage,
+  current: () => boolean,
+): Promise<void> {
   const { params } = message;
   switch (params.kind) {
     case "street-score":
-      return run(streetScoreRenderer, params, message);
+      return run(streetScoreRenderer, params, message, current);
     case "commercial":
-      return run(commercialRenderer, params, message);
+      return run(commercialRenderer, params, message, current);
     case "lines":
-      return run(linesRenderer, params, message);
+      return run(linesRenderer, params, message, current);
     case "industrial":
-      return run(industrialRenderer, params, message);
+      return run(industrialRenderer, params, message, current);
     case "historic":
-      return run(historicRenderer, params, message);
+      return run(historicRenderer, params, message, current);
     case "subway":
-      return run(subwayRenderer, params, message);
+      return run(subwayRenderer, params, message, current);
     case "poi":
-      return run(poiRenderer, params, message);
+      return run(poiRenderer, params, message, current);
     case "tree-dots":
-      return run(treeDotsRenderer, params, message);
+      return run(treeDotsRenderer, params, message, current);
     case "canopy":
-      return run(canopyRenderer, params, message);
+      return run(canopyRenderer, params, message, current);
     case "elevation":
-      return run(elevationRenderer, params, message);
+      return run(elevationRenderer, params, message, current);
     case "shade":
-      return run(shadeRenderer, params, message);
+      return run(shadeRenderer, params, message, current);
   }
 }
 
-function finish(tileKey: number, error?: string): void {
-  inFlight.delete(tileKey);
-  // Leaflet has already forgotten a dropped tile, so there is nothing to report.
-  if (!canceled.delete(tileKey)) {
-    scope.postMessage({ type: "done", tileKey, error });
-  }
-}
+const queue = new TileQueue(rasterize, (done) => {
+  scope.postMessage(done);
+});
 
 scope.onmessage = ({ data: message }) => {
   if (message.type === "init") {
@@ -100,20 +94,12 @@ scope.onmessage = ({ data: message }) => {
     setWorkerTheme(message.theme);
   } else if (message.type === "cancel") {
     // Also releases a painted tile, whose watcher holds the canvas and the decoded data.
-    forget(message.tileKey);
-    if (inFlight.has(message.tileKey)) {
-      canceled.add(message.tileKey);
-    }
+    live.get(message.tileKey)?.();
+    live.delete(message.tileKey);
+    queue.cancel(message.tileKey);
+  } else if (message.type === "repaint") {
+    queue.repaint(message.tileKeys, message.params);
   } else {
-    const { tileKey } = message;
-    inFlight.add(tileKey);
-    rasterize(message).then(
-      () => {
-        finish(tileKey);
-      },
-      (error: Error) => {
-        finish(tileKey, error.message);
-      },
-    );
+    queue.draw(message);
   }
 };
