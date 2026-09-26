@@ -127,15 +127,21 @@ pub(crate) fn encode_webp_lossless(pixels: &[u8]) -> Vec<u8> {
 
 /// Tiles are keyed globally so cities sharing one at low zoom paint into the same buffer.
 pub(crate) fn plan_tiles(cities: &[City], max_zoom: u32) -> Vec<Tile> {
+    let bounds: Vec<Bounds> = cities.iter().map(|city| city.bounds).collect();
+    plan_bounds(&bounds, max_zoom)
+}
+
+/// `plan_tiles` over each member's bounds, member `index` being `bounds[index]`.
+pub(crate) fn plan_bounds(bounds: &[Bounds], max_zoom: u32) -> Vec<Tile> {
     let mut plan: Vec<Tile> = Vec::new();
     let mut seen: HashMap<(u32, u32, u32), usize> = HashMap::new();
-    for (index, city) in cities.iter().enumerate() {
+    for (index, city) in bounds.iter().enumerate() {
         let Bounds {
             south,
             west,
             north,
             east,
-        } = city.bounds;
+        } = *city;
         for zoom in MIN_ZOOM..=max_zoom {
             let min_x = tile_index(lng_to_pixel_x(west, zoom), zoom);
             let max_x = tile_index(lng_to_pixel_x(east, zoom), zoom);

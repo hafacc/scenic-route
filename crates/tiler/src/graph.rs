@@ -222,6 +222,8 @@ pub struct Args {
     pub probe: bool,
     // Where to write the stats line instead of stdout.
     pub report: Option<PathBuf>,
+    /// Bytes the shade bake's bins in flight may hold; it sets only speed, so no key reads it.
+    pub memory_budget: usize,
 }
 
 /// One edge; length is the sum of the source records' f32 lengths, never recomputed from geometry.
@@ -5104,10 +5106,10 @@ fn bake(
     })
 }
 
-// Sun bins baked per call; each bin in flight holds a city-wide coverage grid.
+// Sun bins baked per call at the least; each bin in flight holds a city-wide coverage grid.
 const SHADE_BAKE_BINS: usize = 3;
 
-/// One cached column per sun bin; missing bins bake a few per call, parallel across the few.
+/// One cached column per sun bin; missing bins bake as many per call as the budget holds.
 fn shade_columns(
     args: &Args,
     base: &Base,
@@ -5153,7 +5155,21 @@ fn shade_columns(
         crate::trim_heap();
         let casters = shade::edge_shade_casters(buildings, args.canopy.as_deref())?;
         crate::trim_heap();
-        for chunk in missing.chunks(SHADE_BAKE_BINS) {
+        let threads = rayon::current_num_threads();
+        let per_bin = shade::bake_bin_bytes(polylines.get());
+        let in_flight =
+            shade::bake_in_flight(args.memory_budget, per_bin, threads, SHADE_BAKE_BINS);
+        // Enough for every thread: one call, so no chunk waits on its slowest bin.
+        let step = if in_flight >= threads {
+            missing.len()
+        } else {
+            in_flight
+        };
+        eprintln!(
+            "shade: {in_flight} bins in flight ({:.0} MiB each)",
+            per_bin as f64 / 1024.0 / 1024.0
+        );
+        for chunk in missing.chunks(step) {
             let wanted: Vec<shade::Bucket> = chunk
                 .iter()
                 .map(|bin| params.buckets[*bin].clone())
