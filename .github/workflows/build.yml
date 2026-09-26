@@ -27,7 +27,7 @@ jobs:
           lfs: false
       - uses: oven-sh/setup-bun@v2
       # Pinned to match rust-toolchain.toml; move both together.
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
