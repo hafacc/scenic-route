@@ -1,5 +1,17 @@
 import { expect, test } from "bun:test";
-import { coversACity, fileRequest, isGraph, pageFor, shadeKey } from "./policy";
+import {
+  chunked,
+  contentUnit,
+  coversACity,
+  dropsMost,
+  fileRequest,
+  isGraph,
+  missRequest,
+  outdated,
+  pageFor,
+  sameStamps,
+  shadeKey,
+} from "./policy";
 
 // Paths are filed relative to the worker's scope, which in production is the origin root.
 const SCOPE = "https://scenic.hafa.cc/";
@@ -190,4 +202,114 @@ test("a navigation to explorer is answered by explorer's own page", () => {
   for (const path of ["", "index.html", "404.html"]) {
     expect(pageFor(path)).toBe("index.html");
   }
+});
+
+test("one city's graph and one shade bin are stamped apart from the rest", () => {
+  expect(contentUnit("routing/nyc.bin")).toBe("routing/nyc.bin");
+  expect(contentUnit("routing/shade/nyc/12.bin")).toBe(
+    "routing/shade/nyc/12.bin",
+  );
+  expect(contentUnit("tiles/shade/nyc/12/16/19301/24650.webp")).toBe(
+    "tiles/shade/nyc/12",
+  );
+  expect(contentUnit("tiles/tree-shade/sf/7/14/2620/6333.webp")).toBe(
+    "tiles/tree-shade/sf/7",
+  );
+  expect(contentUnit("tiles/shade/nyc/buckets.json")).toBe("tiles/shade/nyc");
+  expect(contentUnit("tiles/elevation/sf/11/327/791.webp")).toBe(
+    "tiles/elevation/sf",
+  );
+  expect(contentUnit("casters/5232/6162.bin")).toBe("casters/5232");
+  expect(contentUnit("trees/nyc.bin")).toBe("trees/nyc.bin");
+});
+
+const BEFORE = {
+  "routing/nyc.bin": "aaaa",
+  "routing/sf.bin": "bbbb",
+  "tiles/shade/nyc/12": "cccc",
+  "casters/5232": "dddd",
+};
+
+test("a deploy keeps what it didn't change", () => {
+  const after = { ...BEFORE, "routing/sf.bin": "eeee" };
+  for (const path of [
+    "routing/nyc.bin",
+    "tiles/shade/nyc/12/16/19301/24650.webp",
+    "casters/5232/6162.bin",
+  ]) {
+    expect(outdated(`${SCOPE}${path}`, SCOPE, BEFORE, after)).toBe(false);
+  }
+  expect(outdated(`${SCOPE}routing/sf.bin`, SCOPE, BEFORE, after)).toBe(true);
+});
+
+test("a deploy drops what it no longer serves or never vouched for", () => {
+  const { "casters/5232": _, ...after } = BEFORE;
+  expect(outdated(`${SCOPE}casters/5232/6162.bin`, SCOPE, BEFORE, after)).toBe(
+    true,
+  );
+  const added = { ...BEFORE, "routing/shade/nyc/3.bin": "ffff" };
+  expect(
+    outdated(`${SCOPE}routing/shade/nyc/3.bin`, SCOPE, BEFORE, added),
+  ).toBe(true);
+});
+
+test("another host's files go with every deploy, since they change under one URL", () => {
+  for (const url of [
+    "https://api.protomaps.com/tiles/v4/15/9649/12315.mvt",
+    "https://raw.githubusercontent.com/hafacc/scenic-route/main/public/sheds/nyc.bin",
+  ]) {
+    expect(outdated(url, SCOPE, BEFORE, BEFORE)).toBe(true);
+  }
+});
+
+test("the worker's own markers outlive a deploy", () => {
+  for (const url of [`${SCOPE}__sw/shade-season/nyc`, `${SCOPE}__sw/stamps`]) {
+    expect(outdated(url, SCOPE, BEFORE, {})).toBe(false);
+  }
+});
+
+test("a stamp is the unit's own key, never an inherited property", () => {
+  expect(outdated(`${SCOPE}toString`, SCOPE, {}, { toString: "a" })).toBe(true);
+  expect(outdated(`${SCOPE}toString`, SCOPE, {}, {})).toBe(false);
+});
+
+test("under a sub-path scope, units are named from the scope", () => {
+  const scope = "https://hafa.cc/scenic-route/";
+  const after = { ...BEFORE, "routing/nyc.bin": "zzzz" };
+  expect(outdated(`${scope}routing/nyc.bin`, scope, BEFORE, after)).toBe(true);
+  expect(outdated(`${scope}routing/sf.bin`, scope, BEFORE, after)).toBe(false);
+});
+
+test("a marker vouches only for exactly the baked stamps", () => {
+  const reordered = Object.fromEntries(Object.entries(BEFORE).reverse());
+  expect(sameStamps(reordered, BEFORE)).toBe(true);
+  expect(sameStamps(null, BEFORE)).toBe(false);
+  expect(sameStamps({ ...BEFORE, "routing/sf.bin": "eeee" }, BEFORE)).toBe(
+    false,
+  );
+  const { "casters/5232": _, ...fewer } = BEFORE;
+  expect(sameStamps(fewer, BEFORE)).toBe(false);
+  expect(sameStamps(BEFORE, fewer)).toBe(false);
+});
+
+test("a miss on this origin revalidates past the HTTP cache", () => {
+  const own = missRequest(new Request(`${SCOPE}routing/nyc.bin`), SCOPE);
+  expect(own.cache).toBe("no-cache");
+  expect(own.url).toBe(`${SCOPE}routing/nyc.bin`);
+  const basemap = new Request(
+    "https://api.protomaps.com/tiles/v4/15/9649/12315.mvt",
+  );
+  expect(missRequest(basemap, SCOPE)).toBe(basemap);
+});
+
+test("a sweep drops the whole cache only when it loses most of it", () => {
+  expect(dropsMost(0, 0)).toBe(false);
+  expect(dropsMost(5, 10)).toBe(false);
+  expect(dropsMost(6, 10)).toBe(true);
+  expect(dropsMost(1, 1)).toBe(true);
+});
+
+test("deletes are batched in order, with a short last batch", () => {
+  expect(chunked([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+  expect(chunked([], 64)).toEqual([]);
 });

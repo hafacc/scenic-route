@@ -2,9 +2,11 @@
 // Overwrites the committed no-cache stub public/sw.js, which lets dev register a worker safely.
 
 import { execFileSync } from "node:child_process";
-import { access, readdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { APP_PAGES, SHELL_EXTRAS } from "../src/pages";
+import { contentUnit, fileRequest } from "../src/sw/policy";
 import manifest from "../src/tree-cover/manifest.json";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -49,7 +51,35 @@ async function precacheList(): Promise<string[]> {
   return found.map((file) => relative(OUT, file).split("\\").join("/")).sort();
 }
 
-// Any change gives the worker new cache names, and old caches are deleted on activate.
+// Hashes what the deploy serves rather than trusting the tiler's stamps, which cover only its passes.
+async function contentStamps(): Promise<Record<string, string>> {
+  const scope = "https://sw.invalid/";
+  const files = (await filesUnder(OUT))
+    .map((file) => relative(OUT, file).split("\\").join("/"))
+    .filter((path) => {
+      const filed = fileRequest(`${scope}${path}`, scope);
+      return filed !== null && filed.store !== "shell";
+    })
+    .sort();
+  const hashes = new Map<string, ReturnType<typeof createHash>>();
+  for (const path of files) {
+    const unit = contentUnit(path);
+    let hash = hashes.get(unit);
+    if (!hash) {
+      hash = createHash("sha256");
+      hashes.set(unit, hash);
+    }
+    // The name too, so a file moving within its unit changes the stamp.
+    hash.update(`${path}\0`);
+    hash.update(await readFile(join(OUT, path)));
+  }
+  // 64 bits: a collision would only keep an entry the deploy changed.
+  return Object.fromEntries(
+    [...hashes].map(([unit, hash]) => [unit, hash.digest("hex").slice(0, 16)]),
+  );
+}
+
+// Any change gives the worker a new shell cache, and the old one is deleted on activate.
 function version(): string {
   const fromCi = process.env.GITHUB_SHA;
   if (fromCi) {
@@ -79,6 +109,7 @@ declare const Bun: {
 };
 
 const stamp = version();
+const stamps = await contentStamps();
 const built = await Bun.build({
   entrypoints: [join(ROOT, "src/sw/worker.ts")],
   target: "browser",
@@ -88,6 +119,7 @@ const built = await Bun.build({
   define: {
     SW_VERSION: JSON.stringify(stamp),
     SW_PRECACHE: JSON.stringify(precache),
+    SW_STAMPS: JSON.stringify(stamps),
     // Basemap tiles are cached only over these; baked in so the rule holds on the very first tile.
     SW_CITIES: JSON.stringify(
       manifest.cities.map(({ bounds }) => ({
@@ -104,4 +136,6 @@ if (!built.success) {
 }
 
 await writeFile(join(OUT, "sw.js"), await built.outputs[0].text());
-console.log(`sw.js: ${precache.length} shell files precached at ${stamp}`);
+console.log(
+  `sw.js: ${precache.length} shell files precached at ${stamp}, ${Object.keys(stamps).length} data units stamped`,
+);
