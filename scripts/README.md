@@ -674,6 +674,18 @@ wall does not qualify), and applies the same exclusions as a park drive: no `ser
 or its kin, no `access`/`foot` `no`/`private`, no `area=yes` or `indoor=yes`. No name is required;
 the polygon is the guard. Opening hours are not modeled: a cemetery lane routes at any hour.
 
+**Golf courses' own paths are dropped** as each way is read (`pathWayOf`, so the cemetery lanes
+cannot bring one back): any way tagged `golf=cartpath` or `golf=path`, whatever its `foot` tag says.
+On a course `foot=designated` means golfers — 96 of New York's 100 stranded `golf=path` ways carry
+it, at LaTourette, Silver Lake, Douglaston, Forest Park and Van Cortlandt — so it grants the public
+nothing. A public path that merely crosses a course, like Van Cortlandt's greenway, carries no
+`golf` tag and stays. `golf_cart=yes` alone only lets carts share a path, and no polygon test is
+run: the untagged ways inside course boundaries are few and include exactly those public crossings.
+On the 2026-09-25 build the two tags account for every golf way the island drop stranded but 2
+(0.1 km): 139 ways, 38.2 km in New York and 68 ways, 29.2 km in San Francisco. They also take out
+cart paths the graph routes today, where one touches the network: about 34 ways (17 km) in New York
+and 166 (46 km) in San Francisco.
+
 The ways are land-clipped against the borough polygons — a
 way is kept if its midpoint or either endpoint is on land, which drops the New Jersey and
 Westchester spill the bounding box reaches — densified to 25 m, degenerate ways under a meter

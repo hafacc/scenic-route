@@ -177,6 +177,11 @@ export function tunneled(tags: Record<string, string>): boolean {
   return tagged(tags.tunnel) || tags.covered === "yes";
 }
 
+// A course's own paths; foot=designated there means golfers, so it grants nothing.
+export function golfPath(tags: Record<string, string>): boolean {
+  return tags.golf === "cartpath" || tags.golf === "path";
+}
+
 function pathWayOf(element: OverpassElement): PathWay | null {
   if (element.type !== "way" || element.id === undefined) {
     return null;
@@ -186,6 +191,10 @@ function pathWayOf(element: OverpassElement): PathWay | null {
     return null;
   }
   const tags = element.tags ?? {};
+  // Here, so neither the path fetch nor the cemetery lanes admit one.
+  if (golfPath(tags)) {
+    return null;
+  }
   const layer = Number.parseInt(tags.layer ?? "", 10);
   return {
     id: element.id,
