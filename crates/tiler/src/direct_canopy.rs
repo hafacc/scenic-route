@@ -6,7 +6,7 @@ use rayon::prelude::*;
 
 use crate::Fallible;
 use crate::binfmt::{self, Coord};
-use crate::geometry::{METERS_PER_DEGREE_LAT, PolygonGrid, flatten, round_half_up};
+use crate::geometry::{METERS_PER_DEGREE_LAT, PolygonGrid, flatten_canopy, round_half_up};
 use crate::sampling::contained_fraction;
 
 const BYTE_CEILING: f64 = 254.0; // as cover and the scenic bytes: keeps the client's max attr < 1
@@ -24,10 +24,9 @@ pub fn direct_canopy(
     canopy: &Path,
     reference_lat: f64,
 ) -> Fallible<DirectCanopy> {
-    let polygons = binfmt::read_polygons(canopy, "CNPY", binfmt::CANOPY_FORMAT)?;
-    let count = polygons.len();
-    let set = flatten(&polygons);
-    drop(polygons);
+    // Flattened a batch at a time, so the rings never sit beside the flat copy.
+    let set = flatten_canopy(&mut binfmt::read_canopy_batches(canopy)?);
+    let count = set.len();
     let grid = PolygonGrid::new(&set);
     let meters_per_degree_lng = METERS_PER_DEGREE_LAT * reference_lat.to_radians().cos();
 

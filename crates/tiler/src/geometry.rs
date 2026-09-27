@@ -2,7 +2,7 @@
 
 use std::sync::LazyLock;
 
-use crate::binfmt::{Coord, Polygon};
+use crate::binfmt::{CanopyBatches, Coord, Polygon};
 use crate::manifest::Bounds;
 
 pub const BLUR_RADII: f64 = 3.0; // kernel half-width, in sigmas
@@ -143,6 +143,19 @@ pub fn flatten(polygons: &[Polygon]) -> PolygonSet {
     let vertices: usize = polygons.iter().flatten().map(Vec::len).sum();
     let mut set = PolygonSet::with_capacity(polygons.len(), rings, vertices);
     set.extend(polygons);
+    set
+}
+
+/// Polygons decoded per batch when flattening a canopy file.
+const FLATTEN_BATCH: usize = 65_536;
+
+/// `flatten` of a canopy file's polygons, decoded a batch at a time so they never exist as rings whole.
+pub fn flatten_canopy(canopy: &mut CanopyBatches) -> PolygonSet {
+    canopy.rewind();
+    let mut set = PolygonSet::with_capacity(canopy.len(), canopy.rings(), canopy.vertices());
+    while canopy.left() > 0 {
+        set.extend(&canopy.next_polygons(FLATTEN_BATCH));
+    }
     set
 }
 

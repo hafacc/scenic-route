@@ -5,6 +5,7 @@ use std::fs;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
@@ -14,7 +15,7 @@ use tiff::decoder::{Decoder, DecodingResult};
 use tiff::tags::Tag;
 
 use crate::Fallible;
-use crate::binfmt::{self, Polygon};
+use crate::binfmt::{self, CanopyBatches, Polygon};
 use crate::dem::{TileGrid, read_tile_grid};
 
 pub struct Args {
@@ -347,46 +348,89 @@ struct Shapes {
     last_rows: Vec<u32>,
 }
 
-fn project(polygons: &[Polygon], grid: &Grid) -> Shapes {
-    let mut shapes = Shapes {
-        xs: Vec::new(),
-        ys: Vec::new(),
-        ring_starts: Vec::new(),
-        polygon_starts: Vec::with_capacity(polygons.len() + 1),
-        first_rows: Vec::with_capacity(polygons.len()),
-        last_rows: Vec::with_capacity(polygons.len()),
+// Polygons decoded per batch while projecting.
+const PROJECT_BATCH: usize = 65_536;
+
+/// The polygons a measure reads: decoded ones, or a canopy file decoded a batch at a time.
+pub enum Polygons<'a> {
+    Slice(&'a [Polygon]),
+    Canopy(&'a mut CanopyBatches),
+}
+
+impl Polygons<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Polygons::Slice(polygons) => polygons.len(),
+            Polygons::Canopy(canopy) => canopy.len(),
+        }
+    }
+}
+
+// A canopy file is decoded a batch at a time into arrays sized from its counts, so neither peaks.
+fn project(polygons: &mut Polygons<'_>, grid: &Grid) -> Shapes {
+    let (rings, vertices) = match polygons {
+        Polygons::Slice(polygons) => (
+            polygons.iter().map(Vec::len).sum(),
+            polygons.iter().flatten().map(Vec::len).sum(),
+        ),
+        Polygons::Canopy(canopy) => (canopy.rings(), canopy.vertices()),
     };
-    for polygon in polygons {
-        shapes.polygon_starts.push(shapes.ring_starts.len() as u32);
-        let mut lowest = f64::INFINITY;
-        let mut highest = f64::NEG_INFINITY;
-        let mut leftmost = f64::INFINITY;
-        let mut rightmost = f64::NEG_INFINITY;
-        for ring in polygon {
-            shapes.ring_starts.push(shapes.xs.len() as u32);
-            for point in ring {
-                let (x, y) = grid.pixel(point.lng, point.lat);
-                lowest = lowest.min(y);
-                highest = highest.max(y);
-                leftmost = leftmost.min(x);
-                rightmost = rightmost.max(x);
-                shapes.xs.push(x);
-                shapes.ys.push(y);
+    let count = polygons.len();
+    let mut shapes = Shapes {
+        xs: Vec::with_capacity(vertices),
+        ys: Vec::with_capacity(vertices),
+        ring_starts: Vec::with_capacity(rings + 1),
+        polygon_starts: Vec::with_capacity(count + 1),
+        first_rows: Vec::with_capacity(count),
+        last_rows: Vec::with_capacity(count),
+    };
+    match polygons {
+        Polygons::Slice(polygons) => {
+            for polygon in polygons.iter() {
+                project_polygon(polygon, grid, &mut shapes);
             }
         }
-        // A polygon beside the raster gets an empty row range, so no band scans it.
-        let (first, last) = if rightmost < 0.0 || leftmost > grid.width as f64 {
-            (0.0, 0.0)
-        } else {
-            let first = lowest.floor().clamp(0.0, grid.height as f64);
-            (first, highest.ceil().clamp(first, grid.height as f64))
-        };
-        shapes.first_rows.push(first as u32);
-        shapes.last_rows.push(last as u32);
+        Polygons::Canopy(canopy) => {
+            canopy.rewind();
+            while canopy.left() > 0 {
+                for polygon in &canopy.next_polygons(PROJECT_BATCH) {
+                    project_polygon(polygon, grid, &mut shapes);
+                }
+            }
+        }
     }
     shapes.polygon_starts.push(shapes.ring_starts.len() as u32);
     shapes.ring_starts.push(shapes.xs.len() as u32);
     shapes
+}
+
+fn project_polygon(polygon: &Polygon, grid: &Grid, shapes: &mut Shapes) {
+    shapes.polygon_starts.push(shapes.ring_starts.len() as u32);
+    let mut lowest = f64::INFINITY;
+    let mut highest = f64::NEG_INFINITY;
+    let mut leftmost = f64::INFINITY;
+    let mut rightmost = f64::NEG_INFINITY;
+    for ring in polygon {
+        shapes.ring_starts.push(shapes.xs.len() as u32);
+        for point in ring {
+            let (x, y) = grid.pixel(point.lng, point.lat);
+            lowest = lowest.min(y);
+            highest = highest.max(y);
+            leftmost = leftmost.min(x);
+            rightmost = rightmost.max(x);
+            shapes.xs.push(x);
+            shapes.ys.push(y);
+        }
+    }
+    // A polygon beside the raster gets an empty row range, so no band scans it.
+    let (first, last) = if rightmost < 0.0 || leftmost > grid.width as f64 {
+        (0.0, 0.0)
+    } else {
+        let first = lowest.floor().clamp(0.0, grid.height as f64);
+        (first, highest.ceil().clamp(first, grid.height as f64))
+    };
+    shapes.first_rows.push(first as u32);
+    shapes.last_rows.push(last as u32);
 }
 
 /// Which polygons reach each band, CSR-style; a polygon spanning two bands is listed in both.
@@ -448,6 +492,32 @@ struct BandResult {
     readings: Vec<Reading>,
     skipped_tiles: usize,
     skipped_cells: u64, // polygon cells in skipped tiles
+}
+
+/// Every band's readings folded in as it finishes, so no band's copy outlives its fold.
+struct Folded {
+    values: Vec<Vec<u16>>,
+    cells: Vec<u32>,
+    skipped_tiles: usize,
+    skipped_cells: u64,
+}
+
+impl Folded {
+    // Band order doesn't matter: cells are summed and each polygon's values sorted afterwards.
+    fn fold(&mut self, band: BandResult) {
+        self.skipped_tiles += band.skipped_tiles;
+        self.skipped_cells += band.skipped_cells;
+        for reading in band.readings {
+            let polygon = reading.polygon as usize;
+            self.cells[polygon] += reading.cells;
+            let slot = &mut self.values[polygon];
+            if slot.is_empty() {
+                *slot = reading.values;
+            } else {
+                slot.extend(reading.values);
+            }
+        }
+    }
 }
 
 /// One band of a single tiled raster, read chunk by chunk from its own tile grid.
@@ -617,8 +687,15 @@ fn sample(
     shapes: &Shapes,
     bands: &Bands,
     started: Instant,
-) -> Fallible<Vec<BandResult>> {
+) -> Fallible<Folded> {
     let done = AtomicUsize::new(0);
+    let polygons = shapes.first_rows.len();
+    let folded = Mutex::new(Folded {
+        values: vec![Vec::new(); polygons],
+        cells: vec![0; polygons],
+        skipped_tiles: 0,
+        skipped_cells: 0,
+    });
     (0..grid.bands)
         .into_par_iter()
         .map_init(
@@ -641,6 +718,10 @@ fn sample(
                     .as_mut()
                     .ok_or_else(|| "the canopy height raster could not be reopened".to_string())?;
                 let result = sample_band(reader, cells, band, grid, shapes, bands)?;
+                folded
+                    .lock()
+                    .map_err(|_| "a band's fold panicked".to_string())?
+                    .fold(result);
                 let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
                 if finished.is_multiple_of(PROGRESS_BANDS) {
                     eprintln!(
@@ -649,10 +730,13 @@ fn sample(
                         grid.bands
                     );
                 }
-                Ok(result)
+                Ok(())
             },
         )
-        .collect()
+        .collect::<Fallible<()>>()?;
+    folded
+        .into_inner()
+        .map_err(|_| "a band's fold panicked".into())
 }
 
 /// The height at which the polygons no taller than it first hold `quantile` of the measured area.
@@ -737,7 +821,7 @@ pub fn percentile_dm(sorted: &[u16], quantile: f64) -> u16 {
 
 /// Every polygon's readings from one raster; `quantity` decides what a mosaic cell reads as.
 pub fn measure(
-    polygons: &[Polygon],
+    mut polygons: Polygons<'_>,
     raster: &Source,
     projection: Tmerc,
     quantity: Quantity,
@@ -768,7 +852,7 @@ pub fn measure(
         }
     );
 
-    let shapes = project(polygons, &grid);
+    let shapes = project(&mut polygons, &grid);
     let bands = bucket_bands(&shapes, &grid);
     eprintln!(
         "  [{:>5.1}s] {} vertices projected into the raster's grid",
@@ -776,20 +860,13 @@ pub fn measure(
         shapes.xs.len()
     );
 
-    let sampled = sample(raster, &tiles, quantity, &grid, &shapes, &bands, started)?;
-    let mut cells = vec![0u32; polygons.len()];
-    let mut values: Vec<Vec<u16>> = vec![Vec::new(); polygons.len()];
-    let mut skipped_tiles = 0;
-    let mut skipped_cells = 0;
-    for band in sampled {
-        skipped_tiles += band.skipped_tiles;
-        skipped_cells += band.skipped_cells;
-        for reading in band.readings {
-            let polygon = reading.polygon as usize;
-            cells[polygon] += reading.cells;
-            values[polygon].extend(reading.values);
-        }
-    }
+    let Folded {
+        mut values,
+        cells,
+        skipped_tiles,
+        skipped_cells,
+    } = sample(raster, &tiles, quantity, &grid, &shapes, &bands, started)?;
+    drop((shapes, bands));
     eprintln!(
         "  [{:>5.1}s] {skipped_tiles} raster tiles would not decode, holding {skipped_cells} polygon cells",
         started.elapsed().as_secs_f64()
@@ -806,16 +883,16 @@ pub fn measure(
 
 pub fn run(args: &Args) -> Fallible<Report> {
     let started = Instant::now();
-    let mut canopy = binfmt::read_canopy(&args.canopy)?;
-    let mut heights = vec![0u16; canopy.polygons.len()];
+    let mut canopy = binfmt::read_canopy_batches(&args.canopy)?;
+    let mut heights = vec![0u16; canopy.len()];
     // Per polygon, the most cells any raster laid over it: its area, for weighting the summary.
-    let mut covered = vec![0u32; canopy.polygons.len()];
+    let mut covered = vec![0u32; canopy.len()];
     // The most cells any raster read decides the height, as a raster over a gap covers but reads none.
-    let mut read = vec![0usize; canopy.polygons.len()];
+    let mut read = vec![0usize; canopy.len()];
     let mut skipped_tiles = 0;
     for raster in &args.rasters {
         let sampled = measure(
-            &canopy.polygons,
+            Polygons::Canopy(&mut canopy),
             &raster.source,
             raster.projection,
             Quantity::crown(),
@@ -830,7 +907,7 @@ pub fn run(args: &Args) -> Fallible<Report> {
         }
     }
     canopy.set_heights_dm(&heights);
-    fs::write(&args.canopy, &canopy.bytes)?;
+    fs::write(&args.canopy, canopy.bytes())?;
     let measured = describe(&canopy.heights_m(), &covered);
     eprintln!(
         "  [{:>5.1}s] wrote {}",
@@ -839,7 +916,7 @@ pub fn run(args: &Args) -> Fallible<Report> {
     );
 
     Ok(Report {
-        polygons: canopy.polygons.len(),
+        polygons: canopy.len(),
         measured,
         skipped_tiles,
     })

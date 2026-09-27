@@ -1679,11 +1679,15 @@ varint-delta rings — under its own magic so it self-identifies, followed by **
 of a `u16` little-endian per polygon in the same polygon order: the **crown height in decimeters**,
 as `BLDG` carries its roof heights. It is NYC's 2017 LiDAR tree-canopy footprint (~1.08 M polygons,
 land-clipped), the *measured* field the cover is blurred from. The fetch (`polygonChunks` in
-`scripts/packed-polygons.ts`) writes the region zeroed and `tiler ingest` fills it in place from the separate canopy height model (above); **0
-means unknown**, not flat. Read the geometry alone with the generic `read_polygons(path, "CNPY", 2)`
-— which is what `tiler ingest` (convolving and sampling it into the streets/paths density blobs),
-the canopy pass (rasterizing it into the fill pyramid) and the graph pass (integrating it *unblurred*
-along each sidewalk into the direct-canopy edge byte) do — or with the heights through `read_canopy`.
+`scripts/packed-polygons.ts`) writes the region zeroed and `tiler ingest` fills it in place from the
+separate canopy height model (above); **0 means unknown**, not flat. Every reader goes through
+`read_canopy_batches`, which steps over the polygons once to find the heights and count the rings
+and vertices, then decodes them a batch at a time: `flatten_canopy` builds the flat `PolygonSet`
+straight from the batches, sized once, for `tiler ingest` (convolving and sampling it into the streets/paths density blobs), the canopy pass
+(rasterizing it into the fill pyramid) and the graph pass (integrating it *unblurred* along each
+sidewalk into the direct-canopy edge byte); the height pass projects each batch into its raster's
+grid; the shade pass slices crowns per batch. None of them ever holds the ~34 M vertices as
+`Vec<Polygon>` rings beside the flat copy.
 
 ### `data/landmarks/<id>.bin` and `data/art/<id>.bin` — the scenic POIs, magic `LMRK` / `ARTW` (v1)
 

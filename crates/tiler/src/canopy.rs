@@ -7,7 +7,7 @@ use std::time::Instant;
 use rayon::prelude::*;
 
 use crate::Fallible;
-use crate::binfmt::{self, CANOPY_FORMAT, LAND_FORMAT};
+use crate::binfmt::{self, LAND_FORMAT};
 use crate::geometry::{self, PolygonGrid, PolygonSet, Projection, round_half_up};
 use crate::manifest::{Bounds, City, Manifest};
 use crate::raster::{
@@ -64,24 +64,22 @@ fn read_canopy(city: &City, data: &Path) -> Fallible<Option<Canopy>> {
     let Some(canopy) = &city.field.canopy else {
         return Ok(None);
     };
-    let polygons = binfmt::read_polygons(
+    // Flattened a batch at a time, so the rings never sit beside the flat copy.
+    let set = geometry::flatten_canopy(&mut binfmt::read_canopy_batches(
         &data.join("canopy").join(&canopy.file),
-        "CNPY",
-        CANOPY_FORMAT,
-    )?;
+    )?);
     let land = binfmt::read_polygons(
         &data.join("land").join(&city.field.land.file),
         "LAND",
         LAND_FORMAT,
     )?;
     let projection = Projection::new(&city.bounds);
-    let set = geometry::flatten(&polygons);
     Ok(Some(Canopy {
         grid: PolygonGrid::new(&set),
         land: rasterize_land(&land, &city.bounds, &projection),
+        polygons: set.len(),
         set,
         projection,
-        polygons: polygons.len(),
     }))
 }
 

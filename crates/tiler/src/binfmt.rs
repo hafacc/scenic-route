@@ -312,43 +312,38 @@ pub fn read_buildings(path: &Path) -> Fallible<(Vec<Polygon>, Vec<f64>)> {
     Ok((polygons, heights))
 }
 
-/// The canopy polygons plus the raw file, whose trailing height region the height pass patches.
-pub struct Canopy {
-    pub bytes: Vec<u8>,
-    pub polygons: Vec<Polygon>,
-    heights: usize,
-}
-
-impl Canopy {
-    /// Crown heights in meters; 0 means no cell was measured, below any real reading.
-    pub fn heights_m(&self) -> Vec<f64> {
-        (0..self.polygons.len())
-            .map(|polygon| {
-                f64::from(u16_at(&self.bytes, self.heights + polygon * 2)) / DECIMETERS_PER_METER
-            })
-            .collect()
-    }
-
-    /// Fills the trailing region, decimeters in polygon order.
-    pub fn set_heights_dm(&mut self, heights: &[u16]) {
-        for (polygon, height) in heights.iter().enumerate() {
-            let at = self.heights + polygon * 2;
-            self.bytes[at..at + 2].copy_from_slice(&height.to_le_bytes());
-        }
-    }
-}
-
-/// A CNPY v2 file whose polygons decode a batch at a time, so a caller can free each batch.
+/// A CNPY v2 file whose polygons decode a batch at a time, so a caller never holds them all as rings.
 pub struct CanopyBatches {
     bytes: Vec<u8>,
     head: Header,
     offset: usize, // where the next batch's first polygon starts
     left: usize,
     heights: usize,
+    rings: usize,
+    vertices: usize,
 }
 
 impl CanopyBatches {
-    /// Crown heights in meters, as `Canopy::heights_m` reads them.
+    /// How many polygons the file holds.
+    pub fn len(&self) -> usize {
+        self.head.count
+    }
+
+    /// Rings and vertices over every polygon, so a flat copy can be sized once.
+    pub fn rings(&self) -> usize {
+        self.rings
+    }
+
+    pub fn vertices(&self) -> usize {
+        self.vertices
+    }
+
+    /// Polygons not yet decoded.
+    pub fn left(&self) -> usize {
+        self.left
+    }
+
+    /// Crown heights in meters; 0 means no cell was measured, below any real reading.
     pub fn heights_m(&self) -> Vec<f64> {
         (0..self.head.count)
             .map(|polygon| {
@@ -369,9 +364,28 @@ impl CanopyBatches {
         self.left -= count;
         polygons
     }
+
+    /// Back to the first polygon, for another pass over the file.
+    pub fn rewind(&mut self) {
+        self.offset = self.head.body;
+        self.left = self.head.count;
+    }
+
+    /// Fills the trailing region, decimeters in polygon order.
+    pub fn set_heights_dm(&mut self, heights: &[u16]) {
+        for (polygon, height) in heights.iter().enumerate() {
+            let at = self.heights + polygon * 2;
+            self.bytes[at..at + 2].copy_from_slice(&height.to_le_bytes());
+        }
+    }
+
+    /// The whole file, heights region included.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
-/// `read_canopy` without decoding: the polygons are only stepped over to find the heights.
+/// CNPY v2's polygons and u16 decimeter crown heights; polygons are only counted here, decoded in batches.
 pub fn read_canopy_batches(path: &Path) -> Fallible<CanopyBatches> {
     let bytes = fs::read(path)?;
     check_magic(&bytes, "CNPY", CANOPY_FORMAT, path)?;
@@ -380,12 +394,16 @@ pub fn read_canopy_batches(path: &Path) -> Fallible<CanopyBatches> {
         bytes: &bytes,
         offset: head.body,
     };
+    let mut total_rings = 0;
+    let mut total_vertices = 0;
     for _ in 0..head.count {
         let rings = usize::from(u16_at(cursor.bytes, cursor.offset));
         cursor.offset += 2;
+        total_rings += rings;
         for _ in 0..rings {
             let vertices = u32_at(cursor.bytes, cursor.offset) as usize;
             cursor.offset += 4;
+            total_vertices += vertices;
             for _ in 0..2 * vertices {
                 cursor.unsigned_varint();
             }
@@ -406,36 +424,10 @@ pub fn read_canopy_batches(path: &Path) -> Fallible<CanopyBatches> {
         offset: head.body,
         left: head.count,
         heights,
+        rings: total_rings,
+        vertices: total_vertices,
         head,
         bytes,
-    })
-}
-
-/// CNPY v2: the canopy polygons, then one u16 crown height in decimeters per polygon.
-pub fn read_canopy(path: &Path) -> Fallible<Canopy> {
-    let bytes = fs::read(path)?;
-    check_magic(&bytes, "CNPY", CANOPY_FORMAT, path)?;
-    let head = header(&bytes);
-    let mut cursor = Cursor {
-        bytes: &bytes,
-        offset: head.body,
-    };
-    let polygons = decode_polygons(&mut cursor, &head);
-    let heights = cursor.offset;
-    let end = heights + head.count * 2;
-    if bytes.len() < end {
-        return Err(format!(
-            "{} is truncated: {} bytes, {end} needed for {} height u16s",
-            path.display(),
-            bytes.len(),
-            head.count
-        )
-        .into());
-    }
-    Ok(Canopy {
-        bytes,
-        polygons,
-        heights,
     })
 }
 
@@ -1405,5 +1397,99 @@ mod tests {
                 );
             }
         }
+    }
+
+    // A CNPY v2 of `polygons` (rings of quantized points), with the zeroed height region.
+    fn canopy_fixture(polygons: &[Vec<Vec<(i64, i64)>>]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"CNPY");
+        bytes.extend_from_slice(&CANOPY_FORMAT.to_le_bytes());
+        bytes.extend_from_slice(&40u16.to_le_bytes());
+        bytes.extend_from_slice(&(polygons.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // reserved
+        bytes.extend_from_slice(&(-74.1f64).to_le_bytes());
+        bytes.extend_from_slice(&40.5f64.to_le_bytes());
+        bytes.extend_from_slice(&1e-6f64.to_le_bytes());
+        for polygon in polygons {
+            bytes.extend_from_slice(&(polygon.len() as u16).to_le_bytes());
+            for ring in polygon {
+                bytes.extend_from_slice(&(ring.len() as u32).to_le_bytes());
+                let (mut previous_x, mut previous_y) = (0i64, 0i64);
+                for &(x, y) in ring {
+                    write_varint(&mut bytes, zigzag(x - previous_x));
+                    write_varint(&mut bytes, zigzag(y - previous_y));
+                    previous_x = x;
+                    previous_y = y;
+                }
+            }
+        }
+        bytes.resize(bytes.len() + polygons.len() * 2, 0);
+        bytes
+    }
+
+    #[test]
+    fn canopy_batches_decode_flatten_and_patch_as_the_whole_file_does() {
+        let polygons: Vec<Vec<Vec<(i64, i64)>>> = (0..7)
+            .map(|polygon: i64| {
+                (0..=polygon % 3)
+                    .map(|ring| {
+                        (0..4 + ring + polygon)
+                            .map(|point| (polygon * 90_000 + point * 37, ring * 500 - point * 13))
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
+        let directory = std::env::temp_dir().join("tiler-cnpy-fixture");
+        fs::create_dir_all(&directory).expect("a scratch directory");
+        let path = directory.join("batches.bin");
+        fs::write(&path, canopy_fixture(&polygons)).expect("the fixture");
+
+        let whole = read_polygons(&path, "CNPY", CANOPY_FORMAT).expect("the polygons");
+        let mut batches = read_canopy_batches(&path).expect("the batches");
+        assert_eq!(batches.len(), 7);
+        assert_eq!(batches.rings(), whole.iter().map(Vec::len).sum::<usize>());
+        assert_eq!(
+            batches.vertices(),
+            whole.iter().flatten().map(Vec::len).sum::<usize>()
+        );
+        for size in [1, 3, 7, 100] {
+            batches.rewind();
+            let mut decoded = Vec::new();
+            while batches.left() > 0 {
+                decoded.extend(batches.next_polygons(size));
+            }
+            assert_eq!(decoded.len(), whole.len());
+            for (left, right) in decoded.iter().zip(&whole) {
+                assert_eq!(left.len(), right.len());
+                for (left, right) in left.iter().zip(right) {
+                    let left: Vec<(f64, f64)> = left.iter().map(|c| (c.lng, c.lat)).collect();
+                    let right: Vec<(f64, f64)> = right.iter().map(|c| (c.lng, c.lat)).collect();
+                    assert_eq!(left, right);
+                }
+            }
+        }
+
+        let flat = crate::geometry::flatten(&whole);
+        let batched = crate::geometry::flatten_canopy(&mut batches);
+        assert_eq!(batched.len(), flat.len());
+        for polygon in 0..flat.len() {
+            let left: Vec<(Vec<f64>, Vec<f64>)> = batched
+                .rings(polygon)
+                .map(|ring| (ring.lngs.to_vec(), ring.lats.to_vec()))
+                .collect();
+            let right: Vec<(Vec<f64>, Vec<f64>)> = flat
+                .rings(polygon)
+                .map(|ring| (ring.lngs.to_vec(), ring.lats.to_vec()))
+                .collect();
+            assert_eq!(left, right);
+        }
+
+        batches.set_heights_dm(&[1, 2, 3, 4, 5, 6, 65_535]);
+        let heights = batches.heights_m();
+        assert_eq!(heights[0], 0.1);
+        assert_eq!(heights[6], 6553.5);
+        let body = batches.bytes().len() - 14;
+        assert_eq!(&batches.bytes()[body..body + 2], &1u16.to_le_bytes());
     }
 }
