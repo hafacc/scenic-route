@@ -2,7 +2,7 @@
 
 import { fetchArcgis } from "./arcgis";
 import { cached } from "./cache";
-import type { Polygon } from "./overpass";
+import { type PackedPolygons, PolygonPacker } from "./packed-polygons";
 
 const SERVICE =
   "https://services3.arcgis.com/xJHn8F2NTtwCMFtX/arcgis/rest/services/TreeCanopy2017_Simplified_1ft/FeatureServer/0/query";
@@ -13,19 +13,19 @@ const RETRY_BASE_MS = 5_000; // longer than the shared ladder's: this service ra
 // A floor (~1.08M at last probe) that catches a server-side page cut passing for the layer's end.
 const EXPECTED_POLYGONS = 1_000_000;
 
-interface EsriResponse {
+export interface EsriResponse {
   features?: { geometry?: { rings?: [number, number][][] } }[];
   exceededTransferLimit?: boolean;
 }
 
-export interface CanopyPolygons {
-  polygons: Polygon[];
-  fetched: number;
+export interface CanopyPage {
+  polygons: PackedPolygons;
+  features: number;
   dropped: number; // features with no non-degenerate ring
 }
 
 // Ordered by OBJECTID: without an order an ArcGIS layer may repeat or skip rows between pages.
-function pageUrl(offset: number): string {
+export function canopyPageUrl(offset: number): string {
   const url = new URL(SERVICE);
   url.searchParams.set("where", "1=1");
   url.searchParams.set("outFields", "");
@@ -62,29 +62,36 @@ async function fetchPage(url: string): Promise<EsriResponse> {
   }
 }
 
-// Each page is cached by URL, so a resume after a transient failure skips completed pages.
-export async function fetchCanopyPolygons(): Promise<CanopyPolygons> {
-  const polygons: Polygon[] = [];
-  let fetched = 0;
+// Packs a page's features, dropping rings under four points and features left with none.
+export function packCanopyPage(page: EsriResponse): CanopyPage {
+  const features = page.features ?? [];
+  const packer = new PolygonPacker();
   let dropped = 0;
-  for (let offset = 0; ; offset += PAGE_SIZE) {
-    const url = pageUrl(offset);
-    const page = await cached("arcgis-canopy-2017", url, () => fetchPage(url));
-    const features = page.features ?? [];
-    fetched += features.length;
-    for (const feature of features) {
-      const rings = (feature.geometry?.rings ?? [])
-        .map((ring) => ring.map(([lng, lat]) => ({ lat, lng })))
-        .filter((ring) => ring.length >= 4);
-      if (rings.length > 0) {
-        polygons.push(rings);
-      } else {
-        dropped += 1;
+  for (const feature of features) {
+    for (const ring of feature.geometry?.rings ?? []) {
+      if (ring.length >= 4) {
+        packer.ring(ring);
       }
     }
+    if (!packer.endPolygon()) {
+      dropped += 1;
+    }
+  }
+  return { polygons: packer.finish(), features: features.length, dropped };
+}
+
+// Each page is read once, cached by URL and packed on arrival; a resume skips completed pages.
+export async function* canopyPages(): AsyncGenerator<CanopyPage> {
+  let fetched = 0;
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const url = canopyPageUrl(offset);
+    const page = await cached("arcgis-canopy-2017", url, () => fetchPage(url));
+    const packed = packCanopyPage(page);
+    fetched += packed.features;
     console.error(`  canopy: ${fetched} features fetched`);
+    yield packed;
     // Both checked: some ArcGIS builds return a full final page with the transfer flag off.
-    if (features.length < PAGE_SIZE || page.exceededTransferLimit === false) {
+    if (packed.features < PAGE_SIZE || page.exceededTransferLimit === false) {
       break;
     }
   }
@@ -93,5 +100,4 @@ export async function fetchCanopyPolygons(): Promise<CanopyPolygons> {
       `canopy fetch returned ${fetched} features, ${EXPECTED_POLYGONS} expected: the read was truncated`,
     );
   }
-  return { polygons, fetched, dropped };
 }

@@ -1,8 +1,9 @@
 // OSM records sidewalks as separate ways or as `sidewalk*` road tags; the East Bay mostly tags.
 
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { writeAtomic } from "./cache";
 import { buildNameTable, densify, encodeNetwork, UNNAMED_ID } from "./geometry";
 import type { LandContext } from "./land";
 import type { SourceFile } from "./manifest";
@@ -14,7 +15,7 @@ import {
 } from "./overpass";
 import { projectX, projectY } from "./planar";
 import { SIDEWALK_WIDTH_COUNT, SIDEWALK_WIDTH_DATASET } from "./sf";
-import { type Coord, DATA_SF, NYC_OPEN_DATA } from "./socrata";
+import { type Coord, DATA_SF, NYC_OPEN_DATA, type Paging } from "./socrata";
 import { FLAG_TUNNEL, toInt } from "./streets";
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
@@ -53,6 +54,7 @@ const PROBE_GRID_METERS = 40;
 const SIDEWALK_DATASET = "52n9-sdep"; // NYC planimetric SIDEWALK polygons
 const SIDEWALK_SUB_CODE = "380000"; // street ROW; 380010 is the interior-campus walkway
 const SIDEWALK_POLYGON_COUNT = 44_683; // a floor
+const SIDEWALK_PAGE_ROWS = 2_000; // ~20 MB of GeoJSON a page
 
 // Mirrors crates/tiler/src/sidewalks.rs::half_offset_meters.
 const METERS_PER_FOOT = 0.3048;
@@ -346,19 +348,32 @@ const COMPASS: Record<string, number> = {
   NW: 315,
 };
 
-export const NYC_SURVEY: () => Promise<Survey> = async () =>
-  polygonSurvey(await fetchSurveyedSidewalks());
-export const SF_SURVEY: () => Promise<Survey> = sfSurvey;
+export const NYC_SURVEY = async (paging: Paging): Promise<Survey> =>
+  polygonSurvey(await fetchSurveyedSidewalks(paging));
+export const SF_SURVEY = (_paging: Paging): Promise<Survey> => sfSurvey();
 
-async function fetchSurveyedSidewalks(): Promise<Grid<Ring>> {
-  // Geometry alone, not `*`: these polygons are ~450 MB of GeoJSON already.
-  const rows = await NYC_OPEN_DATA.dataset<PolygonRow>(
+async function fetchSurveyedSidewalks(paging: Paging): Promise<Grid<Ring>> {
+  const grid = new Grid<Ring>(PROBE_GRID_METERS);
+  let feature = 0;
+  // Geometry alone, in small pages: these polygons are ~450 MB of GeoJSON.
+  for await (const rows of NYC_OPEN_DATA.pages<PolygonRow>(
     SIDEWALK_DATASET,
     { $select: "the_geom", $where: `sub_code='${SIDEWALK_SUB_CODE}'` },
     SIDEWALK_POLYGON_COUNT,
-  );
-  const grid = new Grid<Ring>(PROBE_GRID_METERS);
-  let feature = 0;
+    { ...paging, pageSize: SIDEWALK_PAGE_ROWS },
+  )) {
+    feature = addSidewalkRows(grid, rows, feature);
+  }
+  return grid;
+}
+
+// Numbers one feature per polygon part, on from `first`; returns the last number used.
+function addSidewalkRows(
+  grid: Grid<Ring>,
+  rows: readonly PolygonRow[],
+  first: number,
+): number {
+  let feature = first;
   for (const row of rows) {
     for (const polygon of row.the_geom?.coordinates ?? []) {
       feature += 1;
@@ -382,7 +397,7 @@ async function fetchSurveyedSidewalks(): Promise<Grid<Ring>> {
       }
     }
   }
-  return grid;
+  return feature;
 }
 
 function inRing(coords: Float64Array, x: number, y: number): boolean {
@@ -760,34 +775,57 @@ function encodeSidewalks(
   );
 }
 
-// Also stamps the per-side bits into each offsetted street's flags, in place.
+// The OSM ways, their raw elements and the encoded bytes all go out of scope on return.
+async function writeSidewalkWays(
+  cityId: string,
+  land: LandContext,
+): Promise<{ segments: SidewalkSegment[]; file: SourceFile }> {
+  const { south, west, north, east } = land.box;
+  const ways = await fetchSidewalks(south, west, north, east);
+  const { segments, onLandCount } = toSidewalkSegments(ways, land.onLand);
+  const names = buildNameTable(segments);
+  const bytes = encodeSidewalks(segments, names);
+  const file = `${cityId}.bin`;
+  await writeAtomic(join(SIDEWALK_DIR, file), bytes);
+
+  let sidewalkMeters = 0;
+  for (const segment of segments) {
+    sidewalkMeters += segment.kind === KIND_SIDEWALK ? segment.lengthMeters : 0;
+  }
+  console.error(
+    `  sidewalks: ${ways.length} ways fetched, ${onLandCount} on land, ${segments.length} encoded (${(sidewalkMeters / 1000).toFixed(0)} km of sidewalk, ${names.length} distinct names)`,
+  );
+  return {
+    segments,
+    file: {
+      file,
+      format: SIDEWALK_FORMAT,
+      count: segments.length,
+      bytes: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    },
+  };
+}
+
+// Also stamps the per-side bits into each offsetted street's flags, in place; `checkpoint` runs between reads.
 export async function ingestSidewalks(
   cityId: string,
   streets: SidedSegment[],
   land: LandContext,
   buildSurvey: () => Promise<Survey>,
+  checkpoint: (step: string) => void = () => {},
 ): Promise<SourceFile> {
   const started = performance.now();
   await mkdir(SIDEWALK_DIR, { recursive: true });
 
-  const { south, west, north, east } = land.box;
-  const ways = await fetchSidewalks(south, west, north, east);
-  const roads = await fetchSidewalkTags(south, west, north, east);
-  const { segments, onLandCount } = toSidewalkSegments(ways, land.onLand);
-  const names = buildNameTable(segments);
-  const bytes = encodeSidewalks(segments, names);
-  const file = `${cityId}.bin`;
-  await writeFile(join(SIDEWALK_DIR, file), bytes);
-
-  const kept = segments.filter((segment) => segment.kind === KIND_SIDEWALK);
-  const sidewalkKm =
-    kept.reduce((total, segment) => total + segment.lengthMeters, 0) / 1000;
-  console.error(
-    `  sidewalks: ${ways.length} ways fetched, ${onLandCount} on land, ${segments.length} encoded (${sidewalkKm.toFixed(0)} km of sidewalk, ${names.length} distinct names)`,
-  );
-
+  const { segments, file } = await writeSidewalkWays(cityId, land);
+  checkpoint("sidewalk ways");
   const pieces = indexPieces(segments);
+  const { south, west, north, east } = land.box;
+  const roads = await fetchSidewalkTags(south, west, north, east);
+  checkpoint("sidewalk tags");
   const survey = await buildSurvey();
+  checkpoint("sidewalk survey");
   const tags = tagSurvey(roads);
   const stating = roads.filter((road) => {
     const sides = taggedSides(road);
@@ -839,11 +877,5 @@ export async function ingestSidewalks(
   console.error(
     `  sidewalk tags: ${stating} of ${roads.length} roads state a side — ${taggedPavedSideKm.toFixed(0)} km of side paved and ${taggedBareSideKm.toFixed(0)} km stated bare where the survey was silent`,
   );
-  return {
-    file,
-    format: SIDEWALK_FORMAT,
-    count: segments.length,
-    bytes: bytes.length,
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-  };
+  return file;
 }

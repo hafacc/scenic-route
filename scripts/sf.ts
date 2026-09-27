@@ -1,6 +1,7 @@
 import { densify } from "./geometry";
 import { buildLandTest } from "./land-filter";
 import type { Polygon } from "./overpass";
+import { type PackedPolygons, PolygonPacker } from "./packed-polygons";
 import { type Coord, DATA_SF, type Tree } from "./socrata";
 import {
   FLAG_STRUCTURE,
@@ -291,33 +292,28 @@ export function sfTreeOf(row: SfTreeRow): Tree | null {
 const SF_CANOPY_COUNT = 285_000;
 
 export async function fetchSfCanopyPolygons(): Promise<{
-  polygons: Polygon[];
+  polygons: PackedPolygons;
   fetched: number;
   dropped: number;
 }> {
   const rows = await DATA_SF.dataset<{
     the_geom?: { type: string; coordinates: number[][][][] };
   }>("ni2e-vpbg", { $select: "the_geom" }, SF_CANOPY_COUNT);
-  const polygons: Polygon[] = [];
+  const packer = new PolygonPacker();
   let dropped = 0;
   for (const row of rows) {
     for (const parts of row.the_geom?.coordinates ?? []) {
-      const rings = parts
-        .map((ring) =>
-          ring.map(([lng, lat]) => ({
-            lat: lat as number,
-            lng: lng as number,
-          })),
-        )
-        .filter((ring) => ring.length >= 4);
-      if (rings.length === 0) {
+      for (const ring of parts) {
+        if (ring.length >= 4) {
+          packer.ring(ring);
+        }
+      }
+      if (!packer.endPolygon()) {
         dropped += 1;
-      } else {
-        polygons.push(rings);
       }
     }
   }
-  return { polygons, fetched: rows.length, dropped };
+  return { polygons: packer.finish(), fetched: rows.length, dropped };
 }
 
 // SF publishes landmarks as parcels, not points.

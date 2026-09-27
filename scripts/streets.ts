@@ -49,21 +49,37 @@ export const CSCL_NOT_STREETS: ReadonlyMap<number, string> = new Map([
 export function dropNotStreets<Row extends { physicalid?: string }>(
   rows: readonly Row[],
 ): Row[] {
-  const seen = new Set<number>();
-  const kept = rows.filter((row) => {
-    const physicalId = toInt(row.physicalid);
-    if (CSCL_NOT_STREETS.has(physicalId)) {
-      seen.add(physicalId);
-      return false;
-    }
-    return true;
-  });
-  const missing = [...CSCL_NOT_STREETS.keys()].filter((id) => !seen.has(id));
-  if (missing.length > 0) {
-    throw new Error(
-      `CSCL no longer carries physicalid ${missing.join(", ")} from CSCL_NOT_STREETS; recheck the list`,
-    );
-  }
-  console.error(`  dropped ${seen.size} CSCL segments that are no street`);
+  const filter = notStreetFilter();
+  const kept = rows.filter(filter.keep);
+  filter.finish();
   return kept;
+}
+
+// dropNotStreets over a read that arrives in pages: `keep` per row, then `finish` once.
+export function notStreetFilter(): {
+  keep: (row: { physicalid?: string }) => boolean;
+  finish: () => void;
+} {
+  const seen = new Set<number>();
+  return {
+    keep: (row) => {
+      const physicalId = toInt(row.physicalid);
+      if (CSCL_NOT_STREETS.has(physicalId)) {
+        seen.add(physicalId);
+        return false;
+      }
+      return true;
+    },
+    finish: () => {
+      const missing = [...CSCL_NOT_STREETS.keys()].filter(
+        (id) => !seen.has(id),
+      );
+      if (missing.length > 0) {
+        throw new Error(
+          `CSCL no longer carries physicalid ${missing.join(", ")} from CSCL_NOT_STREETS; recheck the list`,
+        );
+      }
+      console.error(`  dropped ${seen.size} CSCL segments that are no street`);
+    },
+  };
 }

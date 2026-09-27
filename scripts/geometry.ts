@@ -59,7 +59,7 @@ export function boxOf(polygons: readonly Polygon[]): Bounds {
   return { south, west, north, east };
 }
 
-function writeHeader(
+export function writeHeader(
   bytes: Uint8Array,
   view: DataView,
   magic: string,
@@ -87,51 +87,62 @@ export interface CrownedTree extends Coord {
 
 export const DECIMETERS_PER_METER = 10; // the crown byte's unit
 
-// Sorted by (lat, lng) so each delta is a short step along a row. layout: scripts/README.md
-export function encodeTrees(
-  format: number,
-  trees: readonly CrownedTree[],
-): Uint8Array {
+// Crowned trees as columns, `length` of each used.
+export interface TreeColumns {
+  length: number;
+  lat: Float64Array;
+  lng: Float64Array;
+  crownRadiusM: Float64Array;
+  genusId: Uint8Array;
+}
+
+// Sorted by (lat, lng) so each delta is a short step along a row; ties keep input order. layout: scripts/README.md
+export function encodeTrees(format: number, trees: TreeColumns): Uint8Array {
+  const count = trees.length;
   let originLng = Number.POSITIVE_INFINITY;
   let originLat = Number.POSITIVE_INFINITY;
-  for (const { lat, lng } of trees) {
-    originLng = Math.min(originLng, lng);
-    originLat = Math.min(originLat, lat);
+  for (let tree = 0; tree < count; tree++) {
+    originLng = Math.min(originLng, trees.lng[tree]);
+    originLat = Math.min(originLat, trees.lat[tree]);
   }
 
-  const quantized = trees
-    .map(({ lat, lng, crownRadiusM, genusId }) => ({
-      x: Math.round((lng - originLng) / COORD_SCALE),
-      y: Math.round((lat - originLat) / COORD_SCALE),
-      crown: Math.min(
-        255,
-        Math.max(0, Math.round(crownRadiusM * DECIMETERS_PER_METER)),
-      ),
-      genusId,
-    }))
-    .sort((left, right) => left.y - right.y || left.x - right.x);
+  const xs = new Float64Array(count);
+  const ys = new Float64Array(count);
+  const order = new Uint32Array(count);
+  for (let tree = 0; tree < count; tree++) {
+    xs[tree] = Math.round((trees.lng[tree] - originLng) / COORD_SCALE);
+    ys[tree] = Math.round((trees.lat[tree] - originLat) / COORD_SCALE);
+    order[tree] = tree;
+  }
+  order.sort(
+    (left, right) =>
+      ys[left] - ys[right] || xs[left] - xs[right] || left - right,
+  );
 
   // Two varints of at most five bytes each per point, then the crown and genus bytes.
-  const bytes = new Uint8Array(HEADER_BYTES + trees.length * 12);
+  const bytes = new Uint8Array(HEADER_BYTES + count * 12);
   const view = new DataView(bytes.buffer);
   let offset = HEADER_BYTES;
   let previousX = 0;
   let previousY = 0;
-  for (const { x, y } of quantized) {
-    offset = writeVarint(bytes, offset, zigzag(x - previousX));
-    offset = writeVarint(bytes, offset, zigzag(y - previousY));
-    previousX = x;
-    previousY = y;
+  for (const tree of order) {
+    offset = writeVarint(bytes, offset, zigzag(xs[tree] - previousX));
+    offset = writeVarint(bytes, offset, zigzag(ys[tree] - previousY));
+    previousX = xs[tree];
+    previousY = ys[tree];
   }
-  for (const { crown } of quantized) {
-    bytes[offset] = crown;
+  for (const tree of order) {
+    bytes[offset] = Math.min(
+      255,
+      Math.max(0, Math.round(trees.crownRadiusM[tree] * DECIMETERS_PER_METER)),
+    );
     offset += 1;
   }
-  for (const { genusId } of quantized) {
-    bytes[offset] = genusId;
+  for (const tree of order) {
+    bytes[offset] = trees.genusId[tree];
     offset += 1;
   }
-  writeHeader(bytes, view, "TREE", format, trees.length, originLng, originLat);
+  writeHeader(bytes, view, "TREE", format, count, originLng, originLat);
   return bytes.subarray(0, offset);
 }
 
@@ -299,17 +310,6 @@ export function encodePolygons(
     originLat,
   );
   return bytes.subarray(0, offset);
-}
-
-// The height region is zeroed here and filled in place by the height pass; 0 reads as unknown.
-export function encodeCanopy(
-  format: number,
-  polygons: readonly Polygon[],
-): Uint8Array {
-  const body = encodePolygons("CNPY", format, polygons);
-  const out = new Uint8Array(body.length + polygons.length * 2);
-  out.set(body);
-  return out;
 }
 
 // The encodePolygons body, then each column in turn: one byte per polygon, in polygon order.
