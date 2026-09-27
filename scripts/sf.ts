@@ -237,48 +237,54 @@ export async function fetchSfStreets(): Promise<Segment[]> {
   return segments;
 }
 
-interface TreeRow {
+// The register as DataSF rebuilt it from Public Works' asset system in 2026; uzd4-f6yf archives the old.
+export interface SfTreeRow {
   latitude?: string;
   longitude?: string;
-  dbh?: string;
-  qspecies?: string;
+  mapdbh?: string;
+  species?: string;
   planttype?: string;
 }
 
-// DPW street-tree register; `dbh` is on only 76% of rows, so imputation does much of the work.
-const SF_TREE_COUNT = 190_000;
+// DPW street-tree register; `mapdbh` is on about 93% of rows, so imputation fills the rest.
+const SF_TREE_COUNT = 144_000;
 
-// Species read "Fraxinus uhdei :: Shamel Ash"; "Tree(s) ::" (11,818 rows) marks an unidentified one.
+// Species read "Fraxinus uhdei :: Shamel Ash"; "Tree(s) ::" and blanks (~2.4k rows) mark an unidentified one.
 const UNIDENTIFIED = new Set(["", "unknown", "tree(s)", "tree", "trees"]);
 
 function sfGenusOf(species: string | undefined): string {
   const scientific = (species ?? "").split("::")[0].trim();
   const genus = scientific.split(/\s+/)[0] ?? "";
-  return UNIDENTIFIED.has(genus.toLowerCase()) ? "" : genus;
+  // ~22 rows spell the genus in lowercase, which would otherwise miss the genus table.
+  return UNIDENTIFIED.has(genus.toLowerCase())
+    ? ""
+    : genus.charAt(0).toUpperCase() + genus.slice(1).toLowerCase();
 }
 
 export async function fetchSfTrees(): Promise<Tree[]> {
-  const rows = await DATA_SF.dataset<TreeRow>(
+  const rows = await DATA_SF.dataset<SfTreeRow>(
     "tkzw-k3nq",
     { $select: "*", $where: "planttype in ('Tree','tree')" },
     SF_TREE_COUNT,
   );
-  const trees: Tree[] = [];
-  for (const row of rows) {
-    const lat = Number.parseFloat(row.latitude ?? "");
-    const lng = Number.parseFloat(row.longitude ?? "");
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      continue;
-    }
-    const dbh = Number.parseFloat(row.dbh ?? "");
-    trees.push({
-      lat,
-      lng,
-      dbhInches: Number.isFinite(dbh) && dbh > 0 ? dbh : 0,
-      genus: sfGenusOf(row.qspecies),
-    });
+  return rows.flatMap((row) => sfTreeOf(row) ?? []);
+}
+
+// A row without a position is dropped; a missing or zero trunk is 0 for the ingest to impute.
+export function sfTreeOf(row: SfTreeRow): Tree | null {
+  const lat = Number.parseFloat(row.latitude ?? "");
+  const lng = Number.parseFloat(row.longitude ?? "");
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
   }
-  return trees;
+  // `mapdbh` floors at 3 in (29% of rows, many saplings); kept as read.
+  const dbh = Number.parseFloat(row.mapdbh ?? "");
+  return {
+    lat,
+    lng,
+    dbhInches: Number.isFinite(dbh) && dbh > 0 ? dbh : 0,
+    genus: sfGenusOf(row.species),
+  };
 }
 
 // The 2013 Urban Forest Plan canopy: aerial imagery, not LiDAR.
