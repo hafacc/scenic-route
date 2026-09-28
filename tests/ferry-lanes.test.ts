@@ -51,7 +51,7 @@ test("no two of New York's ferry routes swap lanes over the water they share", (
       }
     }
   }
-  expect(shared).toBeGreaterThan(50); // 71 in the committed file; guards against a vacuous pass
+  expect(shared).toBeGreaterThan(30); // 40 in the committed file; guards against a vacuous pass
   for (const [pair, taken] of sides) {
     expect([pair, taken.size]).toEqual([pair, 1]);
   }

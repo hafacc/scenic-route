@@ -10,17 +10,17 @@
         "north": 40.91551571540774,
         "east": -73.69948815566987
       },
-      "trees": 898100,
-      "updated": "2026-09-15",
+      "trees": 897496,
+      "updated": "2026-09-27",
       "attribution": "NYC Parks Forestry (ForMS) via NYC Open Data",
       "sourceUrl": "https://data.cityofnewyork.us/d/hn5i-inap",
       "field": {
         "trees": {
           "file": "nyc.bin",
           "format": 3,
-          "count": 924060,
-          "bytes": 5404845,
-          "sha256": "9e91fa3e0b6ede78de215ea30b73a0c73dfca4d27af9d9e01f8ca0ef8dcf1eab"
+          "count": 923710,
+          "bytes": 5402890,
+          "sha256": "9ec0c82e171af1ad2438194384cfa77647c23551adf43e00f9fda53a425a6c02"
         },
         "land": {
           "file": "nyc.bin",
@@ -38,7 +38,7 @@
           "sha256": "16c31e1005d1cb484130db017ae0d2407f138d67df25d4e158caea3c97585c62",
           "squareKm": 172.6,
           "measuredHeights": 496604,
-          "updated": "2026-09-15",
+          "updated": "2026-09-27",
           "attribution": "Tree canopy © NYC OTI / NYC Parks (2017 LiDAR)",
           "sourceUrl": "https://services3.arcgis.com/xJHn8F2NTtwCMFtX/arcgis/rest/services/TreeCanopy2017_Simplified_1ft/FeatureServer/0",
           "heightAttribution": "Canopy heights © Ma et al. 2023 (CC BY 4.0)",
@@ -56,11 +56,11 @@
         },
         "maxDbhInches": 60,
         "imputedDbhInches": 9,
-        "clampedTrees": 206,
-        "imputedTrees": 727,
-        "osmTrees": 25960,
-        "osmTreeDedup": 31700,
-        "osmImputedCrowns": 25956,
+        "clampedTrees": 209,
+        "imputedTrees": 720,
+        "osmTrees": 26214,
+        "osmTreeDedup": 33418,
+        "osmImputedCrowns": 26210,
         "meanCoverOverLand": 0.22,
         "coverSamples": 1000000,
         "coverSeed": 42,
@@ -69,60 +69,60 @@
             {
               "genus": "Quercus",
               "common": "Oak",
-              "count": 134018
+              "count": 134031
             },
             {
               "genus": "Platanus",
               "common": "London planetree",
-              "count": 103484
+              "count": 103403
             },
             {
               "genus": "Acer",
               "common": "Maple",
-              "count": 85975
+              "count": 85742
             },
             {
               "genus": "Gleditsia",
               "common": "Honeylocust",
-              "count": 77703
+              "count": 77693
             },
             {
               "genus": "Tilia",
               "common": "Linden",
-              "count": 60734
+              "count": 60634
             },
             {
               "genus": "Prunus",
               "common": "Cherry",
-              "count": 57496
+              "count": 57437
             },
             {
               "genus": "Pyrus",
               "common": "Pear",
-              "count": 52528
+              "count": 52423
             },
             {
               "genus": "Zelkova",
               "common": "Zelkova",
-              "count": 40684
+              "count": 40697
             },
             {
               "genus": "Ulmus",
               "common": "Elm",
-              "count": 26966
+              "count": 26988
             },
             {
               "genus": "Ginkgo",
               "common": "Ginkgo",
-              "count": 24550
+              "count": 24522
             },
             {
-              "genus": "Fraxinus",
-              "common": "Ash",
-              "count": 20741
+              "genus": "Styphnolobium",
+              "common": "Pagoda tree",
+              "count": 20707
             }
           ],
-          "otherCount": 239181
+          "otherCount": 239433
         },
         "density": {
           "min": 0,
@@ -146,17 +146,17 @@
             "p99": 0.993
           }
         },
-        "updated": "2026-09-15",
+        "updated": "2026-09-27",
         "attribution": "path & tree data © OpenStreetMap contributors",
         "sourceUrl": "https://www.openstreetmap.org/copyright"
       },
       "streets": {
         "file": "nyc.bin",
         "format": 6,
-        "segments": 122661,
-        "vertices": 745932,
-        "bytes": 7379672,
-        "sha256": "d1bf2685369453807cfb09e6d60261d266eef48de88f135d87cf1bc33258cc79",
+        "segments": 122852,
+        "vertices": 746605,
+        "bytes": 7387669,
+        "sha256": "e8ceac6306aa111100ee4058ad42e9c34a8ae0d97f2b929ad40944b30ca3d66b",
         "densifyMeters": 25,
         "sidewalkInsetMeters": 2,
         "alleys": true,
@@ -169,32 +169,32 @@
             "p1": 0,
             "p5": 0,
             "p10": 0.001,
-            "p20": 0.018,
+            "p20": 0.019,
             "p30": 0.055,
             "p40": 0.105,
             "p50": 0.169,
             "p60": 0.246,
-            "p70": 0.341,
-            "p80": 0.467,
-            "p90": 0.656,
-            "p95": 0.803,
-            "p97": 0.885,
+            "p70": 0.342,
+            "p80": 0.468,
+            "p90": 0.657,
+            "p95": 0.804,
+            "p97": 0.886,
             "p99": 0.98
           }
         },
-        "updated": "2026-09-15",
+        "updated": "2026-09-27",
         "attribution": "NYC DoITT Street Centerline (CSCL) via NYC Open Data",
         "sourceUrl": "https://data.cityofnewyork.us/d/inkn-q76z"
       },
       "paths": {
         "file": "nyc.bin",
         "format": 1,
-        "ways": 50376,
-        "segments": 50376,
-        "vertices": 323682,
-        "bytes": 2941492,
-        "sha256": "7a8b36df5b4b08f42175623629c01a5cdd09d2229014d6a57d977836428031f1",
-        "km": 2759.7,
+        "ways": 51362,
+        "segments": 51362,
+        "vertices": 336913,
+        "bytes": 3038012,
+        "sha256": "e76c4c925fc85c82aadb165d0b6c45c18c46c46233eec7281d31c7d61e5ae26b",
+        "km": 2934.3,
         "density": {
           "min": 0,
           "max": 1,
@@ -203,21 +203,21 @@
           "percentiles": {
             "p1": 0,
             "p5": 0,
-            "p10": 0,
-            "p20": 0.033,
-            "p30": 0.103,
-            "p40": 0.196,
+            "p10": 0.001,
+            "p20": 0.036,
+            "p30": 0.107,
+            "p40": 0.199,
             "p50": 0.305,
             "p60": 0.425,
-            "p70": 0.56,
-            "p80": 0.715,
-            "p90": 0.898,
+            "p70": 0.559,
+            "p80": 0.714,
+            "p90": 0.897,
             "p95": 0.976,
             "p97": 0.996,
             "p99": 1
           }
         },
-        "updated": "2026-09-15",
+        "updated": "2026-09-27",
         "attribution": "OpenStreetMap contributors",
         "sourceUrl": "https://www.openstreetmap.org/copyright"
       }
@@ -231,17 +231,17 @@
         "north": 37.90591839002644,
         "east": -122.11396170101138
       },
-      "trees": 298771,
-      "updated": "2026-09-15",
+      "trees": 242487,
+      "updated": "2026-09-27",
       "attribution": "SF Public Works street trees via DataSF; Oakland Public Tree Inventory; City of Berkeley street trees (Arborwell survey), frozen copy",
       "sourceUrl": "https://data.sf.gov/d/tkzw-k3nq",
       "field": {
         "trees": {
           "file": "sf.bin",
           "format": 3,
-          "count": 308962,
-          "bytes": 1728264,
-          "sha256": "a1da8103eca9efd38040898e78a9379eae3f61154a0f93bb2bfcac30e0044aec"
+          "count": 252781,
+          "bytes": 1448065,
+          "sha256": "fe69bc9f9d64f902f4cf860b68c7b401b8ba0c3da6439aca9258b5fbe549ad12"
         },
         "land": {
           "file": "sf.bin",
@@ -259,7 +259,7 @@
           "sha256": "e4ca943a75bf5a168863687a42f364e1371259967d5dddb1bb0a7f8aed21ea50",
           "squareKm": 64.4,
           "measuredHeights": 569178,
-          "updated": "2026-09-15",
+          "updated": "2026-09-27",
           "attribution": "Urban tree canopy © SF Planning (2013 Urban Forest Plan); Canopy © EBRPD / CAL FIRE / Tukman Geospatial (ALCC 1 m LiDAR)",
           "sourceUrl": "https://data.sf.gov/d/ni2e-vpbg",
           "heightAttribution": "Elevation © USGS 3DEP / NASA WERK (CC0); Canopy heights © EBRPD / CAL FIRE / Tukman Geospatial (ALCC 1 m LiDAR CHM)",
@@ -277,73 +277,73 @@
         },
         "maxDbhInches": 60,
         "imputedDbhInches": 7,
-        "clampedTrees": 1080,
-        "imputedTrees": 45216,
-        "osmTrees": 10191,
-        "osmTreeDedup": 3135,
-        "osmImputedCrowns": 10185,
+        "clampedTrees": 752,
+        "imputedTrees": 9147,
+        "osmTrees": 10294,
+        "osmTreeDedup": 3154,
+        "osmImputedCrowns": 10288,
         "meanCoverOverLand": 0.171,
         "coverSamples": 1000000,
         "coverSeed": 42,
         "genus": {
           "table": [
             {
-              "genus": "Prunus",
-              "common": "Cherry",
-              "count": 23004
-            },
-            {
               "genus": "Platanus",
               "common": "London planetree",
-              "count": 22433
+              "count": 19101
+            },
+            {
+              "genus": "Prunus",
+              "common": "Cherry",
+              "count": 17958
             },
             {
               "genus": "Pyrus",
               "common": "Pear",
-              "count": 13258
+              "count": 11106
             },
             {
               "genus": "Magnolia",
               "common": "Magnolia",
-              "count": 12038
+              "count": 9994
             },
             {
               "genus": "Tristaniopsis",
               "common": "Swamp myrtle",
-              "count": 11236
+              "count": 8914
             },
             {
               "genus": "Pittosporum",
               "common": "Victorian box",
-              "count": 10677
-            },
-            {
-              "genus": "Lophostemon",
-              "common": "Brisbane box",
-              "count": 10204
-            },
-            {
-              "genus": "Ficus",
-              "common": "Fig",
-              "count": 9972
-            },
-            {
-              "genus": "Metrosideros",
-              "common": "New Zealand Christmas tree",
-              "count": 9000
+              "count": 8386
             },
             {
               "genus": "Acer",
               "common": "Maple",
-              "count": 8741
+              "count": 8381
             },
             {
               "genus": "Quercus",
               "common": "Oak",
-              "count": 8307
+              "count": 8248
+            },
+            {
+              "genus": "Ficus",
+              "common": "Fig",
+              "count": 7181
+            },
+            {
+              "genus": "Metrosideros",
+              "common": "New Zealand Christmas tree",
+              "count": 6994
+            },
+            {
+              "genus": "Lophostemon",
+              "common": "Brisbane box",
+              "count": 6724
             }
           ],
-          "otherCount": 170092
+          "otherCount": 139794
         },
         "density": {
           "min": 0,
@@ -367,33 +367,33 @@
             "p99": 0.968
           }
         },
-        "updated": "2026-09-15",
+        "updated": "2026-09-27",
         "attribution": "path & tree data © OpenStreetMap contributors",
         "sourceUrl": "https://www.openstreetmap.org/copyright"
       },
       "streets": {
         "file": "sf.bin",
         "format": 6,
-        "segments": 37377,
-        "vertices": 363258,
-        "bytes": 2883243,
-        "sha256": "bf981961b30128a54729d84e767b049a9f7926823375c32fdfccc14f81e250b8",
+        "segments": 37374,
+        "vertices": 363403,
+        "bytes": 2883366,
+        "sha256": "456ed0db67c0c2c45fdf9c8631f473be967485c0efa50e154864b0f905f533e3",
         "densifyMeters": 25,
         "sidewalkInsetMeters": 2,
         "alleys": false,
         "density": {
           "min": 0,
           "max": 1,
-          "mean": 0.191,
-          "median": 0.115,
+          "mean": 0.19,
+          "median": 0.114,
           "percentiles": {
             "p1": 0,
             "p5": 0,
             "p10": 0,
             "p20": 0.01,
             "p30": 0.033,
-            "p40": 0.068,
-            "p50": 0.115,
+            "p40": 0.067,
+            "p50": 0.114,
             "p60": 0.178,
             "p70": 0.257,
             "p80": 0.35,
@@ -403,24 +403,24 @@
             "p99": 0.849
           }
         },
-        "updated": "2026-09-15",
+        "updated": "2026-09-27",
         "attribution": "SF basemap street centerlines via DataSF; Alameda County Street Centerlines via Alameda County GIS",
         "sourceUrl": "https://data.sf.gov/d/3psu-pn9h"
       },
       "paths": {
         "file": "sf.bin",
         "format": 1,
-        "ways": 24426,
-        "segments": 24426,
-        "vertices": 177856,
-        "bytes": 1517166,
-        "sha256": "191963da1a914d58c9f1797c79035271f58985d8beeabe9077f141adbfc8f45d",
-        "km": 1451.6,
+        "ways": 24428,
+        "segments": 24428,
+        "vertices": 169742,
+        "bytes": 1480996,
+        "sha256": "e139892f998fbf3b314921870a05458c31e3eff39d485e4cbfed3a9acfa9649b",
+        "km": 1395.5,
         "density": {
           "min": 0,
           "max": 1,
           "mean": 0.258,
-          "median": 0.136,
+          "median": 0.134,
           "percentiles": {
             "p1": 0,
             "p5": 0,
@@ -428,17 +428,17 @@
             "p20": 0.006,
             "p30": 0.031,
             "p40": 0.073,
-            "p50": 0.136,
-            "p60": 0.223,
-            "p70": 0.34,
-            "p80": 0.507,
-            "p90": 0.763,
-            "p95": 0.92,
-            "p97": 0.969,
+            "p50": 0.134,
+            "p60": 0.22,
+            "p70": 0.337,
+            "p80": 0.508,
+            "p90": 0.773,
+            "p95": 0.926,
+            "p97": 0.971,
             "p99": 0.997
           }
         },
-        "updated": "2026-09-15",
+        "updated": "2026-09-27",
         "attribution": "OpenStreetMap contributors",
         "sourceUrl": "https://www.openstreetmap.org/copyright"
       }
