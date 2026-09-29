@@ -10,7 +10,6 @@ import {
   buildDrawing,
   type DrawStep,
   type RouteDrawing,
-  type StationDot,
 } from "../src/routing/route-drawing";
 import type { RouteResult } from "../src/routing/search";
 import { haversineMeters } from "../src/routing/snap";
@@ -77,6 +76,9 @@ export const ROUTE_COLOR = "#334155"; // slate-700
 const CASING_COLOR = "#ffffff";
 const CONNECTOR_COLOR = "#94a3b8"; // slate-400
 const CONNECTOR_MIN_METERS = 15;
+// A change inside a complex: a thinner dashed line in the route's color, never the street walk's.
+const TRANSFER_WIDTH = 0.6;
+const TRANSFER_DASH = 2;
 // A full-strength badge over a faint line would read as highlighted.
 const ALT_WIDTH = 0.7;
 const ALT_ALPHA = 0.35;
@@ -139,6 +141,7 @@ class RouteGrid extends CanvasGrid {
       const width = base * band.width;
       const walkPath = new Path2D();
       const ferryPath = new Path2D();
+      const transferPath = new Path2D();
       // One path per line ridden, each cased and stroked whole so its joins meet.
       const ridePaths = new Map<string, Path2D>();
       for (const step of band.steps) {
@@ -173,6 +176,8 @@ class RouteGrid extends CanvasGrid {
           path = walkPath;
         } else if (step.mode === "ferry") {
           path = ferryPath;
+        } else if (step.mode === "transfer") {
+          path = transferPath;
         } else {
           const existing = ridePaths.get(step.mode.color);
           path = existing ?? new Path2D();
@@ -203,6 +208,15 @@ class RouteGrid extends CanvasGrid {
         context.strokeStyle = color;
         context.stroke(path);
       }
+      const dash = width * TRANSFER_WIDTH * TRANSFER_DASH;
+      context.setLineDash([dash, dash]);
+      context.lineWidth = width * TRANSFER_WIDTH + CASING_EXTRA;
+      context.strokeStyle = CASING_COLOR;
+      context.stroke(transferPath);
+      context.lineWidth = width * TRANSFER_WIDTH;
+      context.strokeStyle = band.color;
+      context.stroke(transferPath);
+      context.setLineDash([]);
       context.globalAlpha = 1;
     }
   }
@@ -258,6 +272,17 @@ function stationIcon(color: string): L.DivIcon {
   stationIcons.set(color, icon);
   return icon;
 }
+
+// Two opposed arrows on the route's slate, so a change reads apart from the line-colored stops.
+const changeIcon = L.divIcon({
+  className: "",
+  html:
+    '<span class="scenic-change-dot"><svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">' +
+    '<path d="M2 5h10M9 2l3 3-3 3M14 11H4M7 8l-3 3 3 3" fill="none" stroke="#ffffff" stroke-width="1.8"' +
+    ' stroke-linecap="round" stroke-linejoin="round"/></svg></span>',
+  iconSize: [16, 16],
+  iconAnchor: [8, 8],
+});
 
 function routeBounds(result: RouteResult): L.LatLngBounds {
   const { lats, lngs } = result.path;
@@ -408,12 +433,13 @@ export default function RouteLayer({
 
   // Only the chosen or hovered line gets station dots, since an alternative's are noise.
   // biome-ignore lint/correctness/useExhaustiveDependencies: drawingFor reads only its arguments
-  const stations = useMemo<StationDot[]>(() => {
-    if (!graph) {
-      return [];
-    }
+  const { stations, changes } = useMemo<
+    Pick<RouteDrawing, "stations" | "changes">
+  >(() => {
     const highlighted = lines?.find((line) => line.selected)?.result ?? result;
-    return highlighted ? drawingFor(graph, highlighted).stations : [];
+    return graph && highlighted
+      ? drawingFor(graph, highlighted)
+      : { stations: [], changes: [] };
   }, [graph, result, lines, tracks]);
 
   useEffect(() => {
@@ -505,6 +531,16 @@ export default function RouteLayer({
           position={[station.lat, station.lng]}
           icon={stationIcon(station.color)}
           zIndexOffset={850} // under the route badge, over map marks
+          interactive={false}
+        />
+      ))}
+      {changes.map((change, index) => (
+        <Marker
+          // biome-ignore lint/suspicious/noArrayIndexKey: order is identity; coords repeat
+          key={`change-${index}`}
+          position={[change.lat, change.lng]}
+          icon={changeIcon}
+          zIndexOffset={860} // over the two platforms' dots it sits between
           interactive={false}
         />
       ))}

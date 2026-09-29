@@ -6,6 +6,7 @@ import { sliceTrack, trackShapes } from "../subway/tracks";
 import { currentTheme } from "../theme/current";
 import {
   edgeKind,
+  isStationTransfer,
   isStayAboard,
   type RoutingGraph,
   routeOf,
@@ -18,7 +19,8 @@ import { haversineMeters, type Snap } from "./snap";
 export interface DrawStep {
   lngs: Float64Array;
   lats: Float64Array;
-  mode: "walk" | "ferry" | { color: string };
+  // "transfer" is the walk inside a complex from one station's platform to another's.
+  mode: "walk" | "ferry" | "transfer" | { color: string };
 }
 
 export interface StationDot {
@@ -30,10 +32,12 @@ export interface StationDot {
 export interface RouteDrawing {
   steps: DrawStep[];
   stations: StationDot[];
+  // One per change between two stations of a complex, midway along its connector.
+  changes: { lat: number; lng: number }[];
   badge: { lat: number; lng: number } | null;
 }
 
-// A transfer's platforms are meters apart, so the alight and board dots merge; the board's wins.
+// A change on one platform set lands its alight and board dots meters apart; the board's wins.
 const TRANSFER_METERS = 150;
 
 // The end edges are trimmed at the snap projections.
@@ -81,8 +85,17 @@ export function buildDrawing(
 ): RouteDrawing {
   const draw: DrawStep[] = [];
   const stations: StationDot[] = [];
+  const changes: { lat: number; lng: number }[] = [];
   const stepCount = result.steps.length;
   let leg: RideLeg | null = null;
+  // A connector since the last ride, whose far end waits for the next ride's first dot.
+  let connector: DrawStep | null = null;
+  const settleConnector = (): void => {
+    if (connector !== null) {
+      changes.push(halfway(connector));
+      connector = null;
+    }
+  };
 
   // Dots go where the drawing ends, not where the platform node sits.
   const closeLeg = (): void => {
@@ -108,7 +121,13 @@ export function buildDrawing(
     const last = drawn.lats.length - 1;
     const boardDot = { lat: drawn.lats[0], lng: drawn.lngs[0], color };
     const previous = stations[stations.length - 1];
-    if (
+    if (connector !== null) {
+      // Its two platforms keep a dot each, and the connector meets both.
+      const end = connector.lats.length - 1;
+      connector.lats[end] = boardDot.lat;
+      connector.lngs[end] = boardDot.lng;
+      settleConnector();
+    } else if (
       previous &&
       haversineMeters(previous.lat, previous.lng, boardDot.lat, boardDot.lng) <
         TRANSFER_METERS
@@ -155,6 +174,23 @@ export function buildDrawing(
       continue;
     }
     closeLeg();
+    if (isStationTransfer(graph, step.edge)) {
+      // From the alight's dot to the next board's, whichever way the edge is stored.
+      const from = stations[stations.length - 1];
+      const drawn: DrawStep = {
+        lngs: Float64Array.from(lngs),
+        lats: Float64Array.from(lats),
+        mode: "transfer",
+      };
+      if (from) {
+        drawn.lngs[0] = from.lng;
+        drawn.lats[0] = from.lat;
+      }
+      draw.push(drawn);
+      settleConnector();
+      connector = drawn;
+      continue;
+    }
     draw.push({
       lngs: Float64Array.from(lngs),
       lats: Float64Array.from(lats),
@@ -162,7 +198,41 @@ export function buildDrawing(
     });
   }
   closeLeg();
-  return { steps: draw, stations, badge: midpointOf(draw) };
+  settleConnector();
+  return { steps: draw, stations, changes, badge: midpointOf(draw) };
+}
+
+// Interpolated, since a connector is often one straight segment with no vertex near its middle.
+function halfway(step: DrawStep): { lat: number; lng: number } {
+  const spans: number[] = [];
+  let total = 0;
+  for (let vertex = 1; vertex < step.lats.length; vertex++) {
+    const span = haversineMeters(
+      step.lats[vertex - 1],
+      step.lngs[vertex - 1],
+      step.lats[vertex],
+      step.lngs[vertex],
+    );
+    spans.push(span);
+    total += span;
+  }
+  let running = 0;
+  for (let vertex = 1; vertex < step.lats.length; vertex++) {
+    const span = spans[vertex - 1];
+    if (span > 0 && running + span >= total / 2) {
+      const share = (total / 2 - running) / span;
+      return {
+        lat:
+          step.lats[vertex - 1] +
+          share * (step.lats[vertex] - step.lats[vertex - 1]),
+        lng:
+          step.lngs[vertex - 1] +
+          share * (step.lngs[vertex] - step.lngs[vertex - 1]),
+      };
+    }
+    running += span;
+  }
+  return { lat: step.lats[0], lng: step.lngs[0] };
 }
 
 // By length, not vertex count, so a mostly-ridden route's badge doesn't land near an end.
