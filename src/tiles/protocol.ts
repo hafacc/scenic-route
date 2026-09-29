@@ -123,7 +123,7 @@ export interface ShadePrefetchMessage {
   coords: TileCoords[]; // source tiles covering the view, at their baked zoom
 }
 
-// Sent on each toggle; the layers redraw right after.
+// Sent on each toggle; the layers repaint right after.
 export interface ThemeMessage {
   type: "theme";
   theme: ThemeName;
@@ -135,13 +135,21 @@ export interface ShedDecksMessage {
   decks: ShedDecks;
 }
 
+// Redraws live tiles into their own canvases, so the old pixels stay up until the new ones land.
+export interface RepaintMessage {
+  type: "repaint";
+  tileKeys: number[];
+  params: TileParams;
+}
+
 export type ToWorker =
   | InitMessage
   | DrawMessage
   | CancelMessage
   | ShadePrefetchMessage
   | ShedDecksMessage
-  | ThemeMessage;
+  | ThemeMessage
+  | RepaintMessage;
 
 export interface DoneMessage {
   type: "done";

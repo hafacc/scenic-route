@@ -38,7 +38,7 @@ export default function TreeDotsLayer() {
         const { south, west, north, east } = city.bounds;
         const file = city.field.trees.file;
         return new WorkerTileLayer(
-          // The selection rides on each tile request, so a toggle's redraw picks up the new one.
+          // The selection rides on each tile request, so a toggle's repaint picks up the new one.
           () => ({ kind: "tree-dots", file, enabled: [...getEnabledGenera()] }),
           {
             pane: PANE_NAME,
@@ -57,7 +57,7 @@ export default function TreeDotsLayer() {
 
     const unsubscribe = subscribeGenusFilter(() => {
       for (const layer of layers) {
-        layer.redraw();
+        layer.repaint();
       }
     });
 
