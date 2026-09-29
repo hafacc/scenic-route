@@ -1,5 +1,6 @@
 import pRetry from "p-retry";
-import { cached } from "./cache";
+import { cached, dropEntry, readEntry, writeEntry } from "./cache";
+import { type TreeTable, TreeTableBuilder } from "./tree-table";
 
 export interface Coord {
   lat: number;
@@ -12,7 +13,7 @@ export interface Tree extends Coord {
   genus: string;
 }
 
-const PAGE_SIZE = 50_000;
+export const PAGE_SIZE = 50_000;
 // Eight attempts capped at two minutes span 20+ minutes, enough to outlast an outage.
 const MAX_ATTEMPTS = 8;
 const RETRY_BASE_MS = 2_000;
@@ -25,8 +26,8 @@ const APP_TOKEN = process.env.SOCRATA_APP_TOKEN || undefined;
 const BATCH_KEYS = 200;
 const BATCH_WORKERS = 8;
 const BATCH_PROGRESS = 50; // batches between progress lines
-const TREE_DATASET = "hn5i-inap"; // ForMS "Forestry Tree Points"
-const TREE_COUNT = 898_618; // standing trees at the last refresh
+export const TREE_DATASET = "hn5i-inap"; // ForMS "Forestry Tree Points"
+export const TREE_COUNT = 898_618; // standing trees at the last refresh
 // A shortfall past this is a truncated read rather than removals.
 const SHORTFALL = 0.05;
 
@@ -63,7 +64,11 @@ async function retryable<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-async function fetchJson<Row>(url: string): Promise<Row[]> {
+// `signal` abandons the read, retries and all, e.g. a read-ahead nobody will consume.
+async function fetchJson<Row>(
+  url: string,
+  signal?: AbortSignal,
+): Promise<Row[]> {
   const headers: Record<string, string> =
     APP_TOKEN === undefined ? {} : { "X-App-Token": APP_TOKEN };
   try {
@@ -74,7 +79,13 @@ async function fetchJson<Row>(url: string): Promise<Row[]> {
         const response = await retryable(() =>
           fetch(url, {
             headers,
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            signal:
+              signal === undefined
+                ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+                : AbortSignal.any([
+                    signal,
+                    AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+                  ]),
             verbose: VERBOSE,
           } as RequestInit),
         );
@@ -92,6 +103,7 @@ async function fetchJson<Row>(url: string): Promise<Row[]> {
         minTimeout: RETRY_BASE_MS,
         maxTimeout: RETRY_CAP_MS,
         randomize: true,
+        signal,
         onFailedAttempt: ({ error, attemptNumber }) => {
           console.error(
             `  attempt ${attemptNumber}/${MAX_ATTEMPTS} failed after ${attemptShape(Date.now() - attemptStarted)}: ${error}`,
@@ -101,7 +113,7 @@ async function fetchJson<Row>(url: string): Promise<Row[]> {
     );
   } catch (error) {
     // A diagnostic read without the token, from where the failure happened; not a retry.
-    if (APP_TOKEN !== undefined) {
+    if (APP_TOKEN !== undefined && !signal?.aborted) {
       const verdict = await fetch(url, {
         signal: AbortSignal.timeout(15_000),
       }).then(
@@ -111,6 +123,44 @@ async function fetchJson<Row>(url: string): Promise<Row[]> {
       console.error(`  the same read without the app token ${verdict}`);
     }
     throw new Error(`failed to fetch ${url}: ${error}`);
+  }
+}
+
+function pageQuery(
+  query: Record<string, string>,
+  pageSize: number,
+  offset: number,
+): Record<string, string> {
+  return {
+    ...query,
+    $order: ":id",
+    $limit: String(pageSize),
+    $offset: String(offset),
+  };
+}
+
+function resourceUrl(
+  host: string,
+  dataset: string,
+  query: Record<string, string>,
+): string {
+  const url = new URL(`https://${host}/resource/${dataset}.json`);
+  for (const [key, value] of Object.entries(query)) {
+    url.searchParams.set(key, value);
+  }
+  return url.toString();
+}
+
+// A capped or throttled page would otherwise pass for the end of the dataset.
+function checkCount(dataset: string, rows: number, expected: number): void {
+  if (rows < expected * (1 - SHORTFALL)) {
+    throw new Error(
+      `${dataset} returned ${rows} rows, ${expected} expected: the read was truncated`,
+    );
+  } else if (rows !== expected) {
+    console.error(
+      `  note: ${dataset} has ${rows} rows, not the ${expected} expected`,
+    );
   }
 }
 
@@ -124,34 +174,136 @@ async function fetchDataset<Row>(
   return await cached(dataset, cacheKey(host, query), async () => {
     const rows: Row[] = [];
     for (let offset = 0; ; offset += PAGE_SIZE) {
-      const url = new URL(`https://${host}/resource/${dataset}.json`);
-      for (const [key, value] of Object.entries(query)) {
-        url.searchParams.set(key, value);
-      }
-      url.searchParams.set("$order", ":id");
-      url.searchParams.set("$limit", String(PAGE_SIZE));
-      url.searchParams.set("$offset", String(offset));
-
-      const page = await fetchJson<Row>(url.toString());
+      const page = await fetchJson<Row>(
+        resourceUrl(host, dataset, pageQuery(query, PAGE_SIZE, offset)),
+      );
       for (const row of page) {
         rows.push(row);
       }
       console.error(`  fetched ${rows.length}/${expected}`);
       if (page.length < PAGE_SIZE) {
-        // A capped or throttled page would otherwise pass for the end of the dataset.
-        if (rows.length < expected * (1 - SHORTFALL)) {
-          throw new Error(
-            `${dataset} returned ${rows.length} rows, ${expected} expected: the read was truncated`,
-          );
-        } else if (rows.length !== expected) {
-          console.error(
-            `  note: ${dataset} has ${rows.length} rows, not the ${expected} expected`,
-          );
-        }
+        checkCount(dataset, rows.length, expected);
         return rows;
       }
     }
   });
+}
+
+// A page's cache entry and URL.
+export function pageEntry(
+  host: string,
+  dataset: string,
+  query: Record<string, string>,
+  pageSize: number,
+  offset: number,
+): { name: string; key: string; url: string } {
+  const paged = pageQuery(query, pageSize, offset);
+  return {
+    name: `${dataset}-${offset}`,
+    key: cacheKey(host, paged),
+    url: resourceUrl(host, dataset, paged),
+  };
+}
+
+export interface Paging {
+  pageSize?: number;
+  // Pages fetched and parsed at once; one keeps a single page in memory.
+  concurrency?: number;
+}
+
+// The offset of a finished read's short last page.
+interface PagesMarker {
+  lastOffset: number;
+}
+
+// Named like page 0 with the same digest, so a finished read's pages and marker sit side by side.
+export function completeEntry(
+  host: string,
+  dataset: string,
+  query: Record<string, string>,
+  pageSize: number,
+): { name: string; key: string } {
+  const first = pageEntry(host, dataset, query, pageSize, 0);
+  return { name: `${dataset}-complete`, key: first.key };
+}
+
+// A page an entry, trusted only under a marker the count check writes, so no partial read is stitched.
+async function* fetchPages<Row>(
+  host: string,
+  dataset: string,
+  query: Record<string, string>,
+  expected: number,
+  { pageSize = PAGE_SIZE, concurrency = 1 }: Paging = {},
+): AsyncGenerator<Row[]> {
+  const marker = completeEntry(host, dataset, query, pageSize);
+  // Offline, a missing marker has already thrown here.
+  const vouched = await readEntry<PagesMarker>(marker.name, marker.key);
+  if (vouched === null) {
+    // A stale marker would otherwise vouch for pages this read is about to replace.
+    await dropEntry(marker.name, marker.key);
+  }
+  // A vouched read stops at the offset its marker names, so no read-ahead asks for a page past it.
+  const lastOffset = vouched?.value.lastOffset ?? Number.POSITIVE_INFINITY;
+  const controller = new AbortController();
+  // Only a full page is cached as it arrives; the short last one waits for the count check.
+  const read = async (offset: number): Promise<Row[]> => {
+    const entry = pageEntry(host, dataset, query, pageSize, offset);
+    if (vouched !== null) {
+      const hit = await readEntry<Row[]>(entry.name, entry.key);
+      if (hit === null) {
+        // A live page can't be stitched to cached ones, so the next run refetches the whole read.
+        await dropEntry(marker.name, marker.key);
+        throw new Error(
+          `${dataset}: the cache lost page ${offset} of a finished read; rerun to fetch it afresh`,
+        );
+      }
+      return hit.value;
+    }
+    const page = await fetchJson<Row>(entry.url, controller.signal);
+    if (page.length === pageSize) {
+      await writeEntry(entry.name, entry.key, page);
+    }
+    return page;
+  };
+  // Reads run ahead in offset order; one past the end just comes back empty.
+  const ahead: { offset: number; page: Promise<Row[]> }[] = [];
+  let next = 0;
+  let rows = 0;
+  try {
+    for (;;) {
+      while (ahead.length < Math.max(1, concurrency) && next <= lastOffset) {
+        const page = read(next);
+        page.catch(() => {}); // surfaced when awaited, not as an unhandled rejection
+        ahead.push({ offset: next, page });
+        next += pageSize;
+      }
+      const { offset, page: pending } = ahead.shift() as (typeof ahead)[0];
+      const page = await pending;
+      rows += page.length;
+      console.error(`  ${dataset}: fetched ${rows}/${expected}`);
+      yield page;
+      if (page.length < pageSize) {
+        const last = pageEntry(host, dataset, query, pageSize, offset);
+        try {
+          checkCount(dataset, rows, expected);
+        } catch (error) {
+          await dropEntry(last.name, last.key);
+          await dropEntry(marker.name, marker.key);
+          throw error;
+        }
+        if (vouched === null) {
+          await writeEntry(last.name, last.key, page);
+          await writeEntry(marker.name, marker.key, {
+            lastOffset: offset,
+          } satisfies PagesMarker);
+        }
+        return;
+      }
+    }
+  } finally {
+    controller.abort();
+    await Promise.allSettled(ahead.map(({ page }) => page));
+  }
 }
 
 // Named, not positional: both are counts, so a swap would still typecheck.
@@ -213,6 +365,13 @@ export interface Socrata {
     query: Record<string, string>,
     expected: number,
   ): Promise<Row[]>;
+  // The same read a page at a time; the cache holds pages, not the dataset.
+  pages<Row>(
+    dataset: string,
+    query: Record<string, string>,
+    expected: number,
+    paging?: Paging,
+  ): AsyncGenerator<Row[]>;
   keyed<Row>(
     dataset: string,
     select: string,
@@ -228,6 +387,8 @@ function socrata(host: string): Socrata {
   return {
     dataset: (dataset, query, expected) =>
       fetchDataset(host, dataset, query, expected),
+    pages: (dataset, query, expected, paging) =>
+      fetchPages(host, dataset, query, expected, paging),
     keyed: (dataset, select, field, keys, batching) =>
       fetchKeyed(host, dataset, select, field, keys, batching),
     page: (dataset) => `https://${host}/d/${dataset}`,
@@ -263,25 +424,47 @@ function genusOf(genusspecies: string | undefined): string {
   }
 }
 
-// `tpstructure='Full'` excludes stumps and empty pits; a missing dbh is 0 for the ingest to impute.
-export async function fetchNycTrees(): Promise<Tree[]> {
-  // `*`: the cache keys on the query, so a narrow $select would re-page on every added column.
-  const rows = await NYC_OPEN_DATA.dataset<{
-    geometry?: string;
-    dbh?: string;
-    genusspecies?: string;
-  }>(TREE_DATASET, { $select: "*", $where: "tpstructure='Full'" }, TREE_COUNT);
-  const trees: Tree[] = [];
+export interface TreeRow {
+  geometry?: string;
+  dbh?: string;
+  genusspecies?: string;
+}
+
+// Rows without a parseable point are skipped.
+export function treesOfRows(
+  rows: readonly TreeRow[],
+  into: TreeTableBuilder,
+): void {
   for (const row of rows) {
     const coord = row.geometry ? parseWktPoint(row.geometry) : null;
     if (coord) {
       const dbh = Number.parseInt(row.dbh ?? "", 10);
-      trees.push({
-        ...coord,
-        dbhInches: Number.isFinite(dbh) ? dbh : 0,
-        genus: genusOf(row.genusspecies),
-      });
+      into.push(
+        coord.lat,
+        coord.lng,
+        Number.isFinite(dbh) ? dbh : 0,
+        genusOf(row.genusspecies),
+      );
     }
   }
-  return trees;
+}
+
+// `tpstructure='Full'` excludes stumps and empty pits; a missing dbh is 0 for the ingest to impute.
+export const NYC_TREE_QUERY = {
+  $select: "geometry,dbh,genusspecies",
+  $where: "tpstructure='Full'",
+};
+
+// Paged, so only one page's rows are alive beside the trees; `paging` sets how many at once.
+export async function fetchNycTrees(paging: Paging = {}): Promise<TreeTable> {
+  const trees = new TreeTableBuilder();
+  for await (const rows of NYC_OPEN_DATA.pages<TreeRow>(
+    TREE_DATASET,
+    NYC_TREE_QUERY,
+    TREE_COUNT,
+    paging,
+  )) {
+    treesOfRows(rows, trees);
+  }
+  return trees.finish();
 }

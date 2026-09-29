@@ -13,7 +13,7 @@ use crate::Fallible;
 use crate::binfmt::{self, LAND_FORMAT};
 use crate::geometry::{
     Bearing, CoverScratch, PolygonGrid, PolygonIndex, PolygonSet, Projection, blurred_cover,
-    flatten, reach_bounds, round_half_up,
+    flatten_canopy, reach_bounds, round_half_up,
 };
 use crate::manifest::{Bounds, Distribution};
 use crate::sidewalks;
@@ -111,9 +111,9 @@ fn percentile_of(sorted: &[f64], percentile: u32) -> f64 {
     sorted[round_half_up(f64::from(percentile) / 100.0 * last).clamp(0.0, last) as usize]
 }
 
-fn distribution_of(values: &[f64], percentiles: &[u32]) -> Distribution {
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|left, right| left.total_cmp(right));
+// Sorts `sorted` in place rather than a copy; the caller is done with it.
+fn distribution_of(mut sorted: Vec<f64>, percentiles: &[u32]) -> Distribution {
+    sorted.sort_unstable_by(f64::total_cmp);
     let sum: f64 = sorted.iter().sum();
     Distribution {
         min: round(sorted[0]),
@@ -201,13 +201,13 @@ fn fill_densities(network: &mut binfmt::Streets, densities: &[f64]) {
 }
 
 pub fn run(params: &Params) -> Fallible<Report> {
-    let canopy_polygons = binfmt::read_polygons(&params.canopy, "CNPY", binfmt::CANOPY_FORMAT)?;
+    // Flattened a batch at a time and the file dropped, so the rings never sit beside the flat copy.
+    let canopy = flatten_canopy(&mut binfmt::read_canopy_batches(&params.canopy)?);
     let land_polygons = binfmt::read_polygons(&params.land, "LAND", LAND_FORMAT)?;
     let mut streets = binfmt::read_streets(&params.streets)?;
 
     let bounds = reach_bounds(&params.source_box, params.fill_sigma_meters);
     let projection = Projection::new(&bounds);
-    let canopy = flatten(&canopy_polygons);
     let grid = PolygonGrid::new(&canopy);
 
     eprintln!(
@@ -243,6 +243,9 @@ pub fn run(params: &Params) -> Fallible<Report> {
             )
         })
         .collect();
+    let draws = points.draws;
+    drop((points, land_test, land_polygons));
+    let land_density = distribution_of(land_densities, &params.percentiles);
 
     eprintln!(
         "sampling the blurred canopy at both sidewalks of {} street vertices",
@@ -251,6 +254,8 @@ pub fn run(params: &Params) -> Fallible<Report> {
     let street_densities = cover_at_vertices(&streets, &projection, &canopy, &grid, params);
     fill_densities(&mut streets, &street_densities);
     fs::write(&params.streets, &streets.bytes)?;
+    drop(streets);
+    let street_density = distribution_of(street_densities, &params.percentiles);
 
     // The OSM path network, when present, filled in place by the same loop as the streets.
     let path_density = match &params.paths {
@@ -263,16 +268,17 @@ pub fn run(params: &Params) -> Fallible<Report> {
             let path_densities = cover_at_vertices(&paths, &projection, &canopy, &grid, params);
             fill_densities(&mut paths, &path_densities);
             fs::write(path, &paths.bytes)?;
-            Some(distribution_of(&path_densities, &params.percentiles))
+            drop(paths);
+            Some(distribution_of(path_densities, &params.percentiles))
         }
         None => None,
     };
 
     Ok(Report {
         bounds,
-        draws: points.draws,
-        land_density: distribution_of(&land_densities, &params.percentiles),
-        street_density: distribution_of(&street_densities, &params.percentiles),
+        draws,
+        land_density,
+        street_density,
         path_density,
     })
 }

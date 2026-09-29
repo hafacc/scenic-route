@@ -836,7 +836,7 @@ pub fn run(params_file: &Path, report_file: &Path) -> Fallible<()> {
             .map(|footprint| footprint.polygon.clone())
             .collect();
         let roofs = heights::measure(
-            &polygons,
+            heights::Polygons::Slice(&polygons),
             &Source::Mosaic {
                 paths: ndsm_tiles,
                 band: 0,
@@ -845,7 +845,7 @@ pub fn run(params_file: &Path, report_file: &Path) -> Fallible<()> {
             ROOF,
         )?;
         let bases = heights::measure(
-            &polygons,
+            heights::Polygons::Slice(&polygons),
             &Source::Mosaic {
                 paths: ground_tiles,
                 band: 0,

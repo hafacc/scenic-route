@@ -1,8 +1,8 @@
 // Disk cache for raw source reads in .cache/; entries never expire unless the caller sets `maxAgeMs`.
 
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 export const CACHE_DIR = join(import.meta.dirname, "..", ".cache");
 
@@ -96,15 +96,52 @@ function entryPath(name: string, key: string, extension: string): string {
   return join(CACHE_DIR, `${name}.${digest}.${extension}`);
 }
 
+// A sibling of `path` to write before renaming over it.
+export function temporaryPath(path: string): string {
+  return `${path}.${randomUUID()}.tmp`;
+}
+
 // Write then rename, so an interrupted write never leaves a torn file behind.
 export async function writeAtomic(
   path: string,
   contents: string | Uint8Array,
 ): Promise<void> {
-  await mkdir(CACHE_DIR, { recursive: true });
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  await writeFile(temporary, contents);
-  await rename(temporary, path);
+  await mkdir(dirname(path), { recursive: true });
+  const temporary = temporaryPath(path);
+  try {
+    await writeFile(temporary, contents);
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+// An entry's value when it is a usable hit, else null; offline, a missing entry is an error.
+export async function readEntry<Value>(
+  name: string,
+  key: string,
+): Promise<{ value: Value } | null> {
+  const path = entryPath(name, key, "json");
+  const { verdict } = await entryAge(path, null);
+  const body =
+    verdict === "hit" ? await readFile(path, "utf-8").catch(() => null) : null;
+  const entry = body === null ? null : parse<Value>(body);
+  if (entry === null && OFFLINE) {
+    throw offlineError(name, path);
+  }
+  return entry;
+}
+
+export async function writeEntry(
+  name: string,
+  key: string,
+  value: unknown,
+): Promise<void> {
+  await writeAtomic(entryPath(name, key, "json"), JSON.stringify(value));
+}
+
+export async function dropEntry(name: string, key: string): Promise<void> {
+  await rm(entryPath(name, key, "json"), { force: true });
 }
 
 // The key is the request itself, so changing the query lands on a different entry.

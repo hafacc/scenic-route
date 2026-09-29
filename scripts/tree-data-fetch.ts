@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { EAST_BAY_STREET_ATTRIBUTION, fetchEastBayStreets } from "./alameda";
 import {
@@ -17,7 +17,8 @@ import {
 } from "./allometry";
 import { type ArtSource, ingestArt, NYC_ART, SF_ART } from "./art";
 import { type BuildingSource, NYC_BUILDINGS, SF_BUILDINGS } from "./buildings";
-import { fetchCanopyPolygons } from "./canopy";
+import { writeAtomic } from "./cache";
+import { canopyPages } from "./canopy";
 import { CHM_ATTRIBUTION, CHM_SOURCE_URL, fetchChmRaster } from "./chm";
 import {
   BERKELEY_TREE_ATTRIBUTION,
@@ -35,10 +36,10 @@ import {
   buildNameTable,
   type CrownedTree,
   densify,
-  encodeCanopy,
   encodeNetwork,
   encodePolygons,
   encodeTrees,
+  type TreeColumns,
   UNNAMED_ID,
 } from "./geometry";
 import { ingestHighways } from "./highways";
@@ -51,6 +52,7 @@ import {
   SF_LANDMARKS,
 } from "./landmarks";
 import type { Bounds, SourceFile } from "./manifest";
+import { concurrencyOf, memoryBudget, memoryLine, parseMemory } from "./memory";
 import {
   fetchOsmTrees,
   fetchPaths,
@@ -58,6 +60,13 @@ import {
   type PathWay,
   type Polygon,
 } from "./overpass";
+import {
+  type PackedPolygons,
+  PolygonCollector,
+  packPolygons,
+  polygonChunks,
+  writeChunks,
+} from "./packed-polygons";
 import {
   fetchSfCanopyPolygons,
   fetchSfStreets,
@@ -75,14 +84,14 @@ import {
   DATA_SF,
   fetchNycTrees,
   NYC_OPEN_DATA,
-  type Tree,
+  type Paging,
 } from "./socrata";
 import {
-  dropNotStreets,
   FLAG_NON_VEHICULAR,
   FLAG_STRUCTURE,
   FLAG_TUNNEL,
   FLAG_VEHICULAR_ONLY,
+  notStreetFilter,
   ROAD_TYPES,
   type RoadType,
   type Segment,
@@ -94,6 +103,7 @@ import {
   SIDECAR_PATH,
   type TreeDataSidecar,
 } from "./tree-data";
+import { type TreeTable, treeTableOf } from "./tree-table";
 
 // Names are uppercased so the client's prettifier renders them like street names.
 interface PathSegment {
@@ -226,21 +236,24 @@ function crownRadiusMeters(
   return crownDiameterMeters(allometry, dbhInches) / 2;
 }
 
-// A missing dbh (0) gets the city's median rather than a zero crown.
+// A missing dbh (0) gets the city's median rather than a zero crown; `genusIdOf` maps the table's genera.
 function crownTrees(
-  trees: readonly Tree[],
-  genusId: ReadonlyMap<string, number>,
+  trees: TreeTable,
+  genusIdOf: Uint8Array,
   allometry: CrownAllometry,
   medianDbhInches: number,
 ): {
-  crowned: CrownedTree[];
+  crownRadiusM: Float64Array;
+  genusId: Uint8Array;
   clamped: number;
   imputed: number;
 } {
   let clamped = 0;
   let imputed = 0;
-  const crowned = trees.map(({ lat, lng, dbhInches, genus }) => {
-    let dbh = dbhInches;
+  const crownRadiusM = new Float64Array(trees.length);
+  const genusId = new Uint8Array(trees.length);
+  for (let tree = 0; tree < trees.length; tree++) {
+    let dbh = trees.dbhInches[tree];
     if (dbh <= 0) {
       dbh = medianDbhInches;
       imputed += 1;
@@ -248,21 +261,23 @@ function crownTrees(
       dbh = MAX_DBH_INCHES;
       clamped += 1;
     }
-    return {
-      lat,
-      lng,
-      crownRadiusM: crownRadiusMeters(allometry, dbh),
-      genusId: genusId.get(genus) ?? OTHER_GENUS_ID,
-    };
-  });
-  return { crowned, clamped, imputed };
+    crownRadiusM[tree] = crownRadiusMeters(allometry, dbh);
+    genusId[tree] = genusIdOf[trees.genus[tree]];
+  }
+  return { crownRadiusM, genusId, clamped, imputed };
 }
 
-function haversineMeters(from: Coord, to: Coord): number {
-  const fromLat = from.lat * (Math.PI / 180);
-  const toLat = to.lat * (Math.PI / 180);
+// Great-circle meters, as scripts/geometry.ts's haversineMeters over bare numbers.
+function haversineMeters(
+  fromLatDegrees: number,
+  fromLng: number,
+  toLatDegrees: number,
+  toLng: number,
+): number {
+  const fromLat = fromLatDegrees * (Math.PI / 180);
+  const toLat = toLatDegrees * (Math.PI / 180);
   const deltaLat = toLat - fromLat;
-  const deltaLng = (to.lng - from.lng) * (Math.PI / 180);
+  const deltaLng = (toLng - fromLng) * (Math.PI / 180);
   const chord =
     Math.sin(deltaLat / 2) ** 2 +
     Math.cos(fromLat) * Math.cos(toLat) * Math.sin(deltaLng / 2) ** 2;
@@ -278,10 +293,97 @@ interface OsmCrowns {
   imputedCrowns: number; // survivors with no diameter_crown
 }
 
+// Unique across any plausible cell index: |x| stays far below 2^22 and the sum below 2^53.
+const CELL_ROW_STRIDE = 2 ** 23;
+
+// Trunks grouped by dedup cell: sorted numeric keys, CSR offsets into a trunk list, binary-searched.
+class TrunkCells {
+  private readonly keys: Float64Array;
+  private readonly starts: Int32Array;
+  private readonly trunks: Int32Array;
+
+  constructor(
+    private readonly lat: Float64Array,
+    private readonly lng: Float64Array,
+    count: number,
+    private readonly cellLat: number,
+    private readonly cellLng: number,
+  ) {
+    const keyOf = new Float64Array(count);
+    const order = new Int32Array(count);
+    for (let trunk = 0; trunk < count; trunk++) {
+      keyOf[trunk] = this.key(
+        Math.floor(lat[trunk] / cellLat),
+        Math.floor(lng[trunk] / cellLng),
+      );
+      order[trunk] = trunk;
+    }
+    order.sort((left, right) => keyOf[left] - keyOf[right] || left - right);
+    const keys: number[] = [];
+    const starts: number[] = [];
+    for (let at = 0; at < count; at++) {
+      const key = keyOf[order[at]];
+      if (at === 0 || key !== keys[keys.length - 1]) {
+        keys.push(key);
+        starts.push(at);
+      }
+    }
+    starts.push(count);
+    this.keys = Float64Array.from(keys);
+    this.starts = Int32Array.from(starts);
+    this.trunks = order;
+  }
+
+  private key(cellY: number, cellX: number): number {
+    return cellY * CELL_ROW_STRIDE + cellX;
+  }
+
+  // Whether any trunk in the 3x3 cells around the point lies within `meters`.
+  anyWithin(lat: number, lng: number, meters: number): boolean {
+    const cellY = Math.floor(lat / this.cellLat);
+    const cellX = Math.floor(lng / this.cellLng);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const cell = this.find(this.key(cellY + dy, cellX + dx));
+        if (cell < 0) {
+          continue;
+        }
+        for (let at = this.starts[cell]; at < this.starts[cell + 1]; at++) {
+          const trunk = this.trunks[at];
+          if (
+            haversineMeters(lat, lng, this.lat[trunk], this.lng[trunk]) <=
+            meters
+          ) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  private find(key: number): number {
+    let low = 0;
+    let high = this.keys.length - 1;
+    while (low <= high) {
+      const middle = (low + high) >>> 1;
+      const probe = this.keys[middle];
+      if (probe < key) {
+        low = middle + 1;
+      } else if (probe > key) {
+        high = middle - 1;
+      } else {
+        return middle;
+      }
+    }
+    return -1;
+  }
+}
+
 // Grid cells span the dedup radius, so a 3x3 sweep sees every trunk that could be a duplicate.
 function crownOsmTrees(
   osmTrees: readonly OsmTree[],
-  forms: readonly Coord[],
+  trunks: { lat: Float64Array; lng: Float64Array; length: number },
   onLand: (coord: Coord) => boolean,
   centerLat: number,
   allometry: CrownAllometry,
@@ -291,21 +393,13 @@ function crownOsmTrees(
   const cellLng =
     OSM_TREE_DEDUP_METERS /
     (METERS_PER_DEGREE_LAT * Math.cos(centerLat * (Math.PI / 180)));
-  const cellOf = (lat: number, lng: number): [number, number] => [
-    Math.floor(lat / cellLat),
-    Math.floor(lng / cellLng),
-  ];
-  const buckets = new Map<string, Coord[]>();
-  for (const trunk of forms) {
-    const [cellY, cellX] = cellOf(trunk.lat, trunk.lng);
-    const key = `${cellY},${cellX}`;
-    const bucket = buckets.get(key);
-    if (bucket) {
-      bucket.push(trunk);
-    } else {
-      buckets.set(key, [trunk]);
-    }
-  }
+  const cells = new TrunkCells(
+    trunks.lat,
+    trunks.lng,
+    trunks.length,
+    cellLat,
+    cellLng,
+  );
 
   const imputedCrownRadiusM = crownRadiusMeters(allometry, medianDbhInches);
   const crowned: CrownedTree[] = [];
@@ -317,19 +411,7 @@ function crownOsmTrees(
       continue;
     }
     onLandCount += 1;
-    const [cellY, cellX] = cellOf(tree.lat, tree.lng);
-    let duplicate = false;
-    for (let dy = -1; dy <= 1 && !duplicate; dy++) {
-      for (let dx = -1; dx <= 1 && !duplicate; dx++) {
-        for (const trunk of buckets.get(`${cellY + dy},${cellX + dx}`) ?? []) {
-          if (haversineMeters(tree, trunk) <= OSM_TREE_DEDUP_METERS) {
-            duplicate = true;
-            break;
-          }
-        }
-      }
-    }
-    if (duplicate) {
+    if (cells.anyWithin(tree.lat, tree.lng, OSM_TREE_DEDUP_METERS)) {
       deduped += 1;
       continue;
     }
@@ -353,11 +435,13 @@ function crownOsmTrees(
   return { crowned, onLandCount, deduped, imputedCrowns };
 }
 
-// A multi-part CSCL row becomes several records sharing one physicalid.
-function toSegments(rows: StreetRow[]): Segment[] {
-  const segments: Segment[] = [];
+// A multi-part CSCL row becomes several records sharing one physicalid; returns the degenerate parts.
+function appendSegments(
+  rows: readonly StreetRow[],
+  segments: Segment[],
+): number {
   let degenerate = 0;
-  for (const row of dropNotStreets(rows)) {
+  for (const row of rows) {
     const roadType = toInt(row.rw_type) as RoadType;
     if (!row.the_geom || !ROAD_TYPES.includes(roadType)) {
       continue;
@@ -404,24 +488,37 @@ function toSegments(rows: StreetRow[]): Segment[] {
       });
     }
   }
-  if (degenerate > 0) {
-    console.error(`  dropped ${degenerate} degenerate segments`);
-  }
-  return segments;
+  return degenerate;
 }
 
-async function fetchNycStreets(): Promise<Segment[]> {
-  // `*`: the cache keys on the query, so a narrow $select would re-page on every added column.
-  const rows = await NYC_OPEN_DATA.dataset<StreetRow>(
+// The StreetRow fields; a column read later must be added here, which re-pages the cache.
+const CSCL_FIELDS =
+  "the_geom,physicalid,rw_type,streetwidth,posted_speed,nonped,trafdir,stname_label";
+
+async function fetchNycStreets(
+  _land: LandContext,
+  paging: Paging,
+): Promise<Segment[]> {
+  const notStreet = notStreetFilter();
+  const segments: Segment[] = [];
+  let degenerate = 0;
+  for await (const rows of NYC_OPEN_DATA.pages<StreetRow>(
     "inkn-q76z",
     {
-      $select: "*",
+      $select: CSCL_FIELDS,
       $where:
         "rw_type in ('1','5','6','7','10') OR (rw_type in ('3','4') AND (nonped IS NULL OR nonped != 'V'))",
     },
     NYC_SEGMENT_COUNT,
-  );
-  return toSegments(rows);
+    paging,
+  )) {
+    degenerate += appendSegments(rows.filter(notStreet.keep), segments);
+  }
+  notStreet.finish();
+  if (degenerate > 0) {
+    console.error(`  dropped ${degenerate} degenerate segments`);
+  }
+  return segments;
 }
 
 const U32_MAX = 0xffffffff; // the record id is a u32
@@ -472,75 +569,30 @@ function toPathSegments(
   return { segments, onLandCount };
 }
 
-// One vertex decides the whole polygon: fine for crowns, wrong for polygons the coast cuts through.
-function clipCanopyToLand(
-  polygons: Polygon[],
-  onLand: (coord: Coord) => boolean,
-): Polygon[] {
-  const kept: Polygon[] = [];
-  for (const polygon of polygons) {
-    const outer = polygon[0];
-    const midpoint = outer[Math.floor(outer.length / 2)];
-    if (onLand(midpoint)) {
-      kept.push(polygon);
-    }
-  }
-  return kept;
-}
-
-// Signed by winding; Esri winds holes opposite their outer ring, so a polygon's sum nets them out.
-function ringSignedAreaSquareMeters(ring: Coord[], refLat: number): number {
-  const metersPerLng =
-    METERS_PER_DEGREE_LAT * Math.cos(refLat * (Math.PI / 180));
-  let twiceArea = 0;
-  for (
-    let point = 0, previous = ring.length - 1;
-    point < ring.length;
-    point++
-  ) {
-    const currentX = ring[point].lng * metersPerLng;
-    const currentY = ring[point].lat * METERS_PER_DEGREE_LAT;
-    const previousX = ring[previous].lng * metersPerLng;
-    const previousY = ring[previous].lat * METERS_PER_DEGREE_LAT;
-    twiceArea += previousX * currentY - currentX * previousY;
-    previous = point;
-  }
-  return twiceArea / 2;
-}
-
-function canopySquareKm(polygons: Polygon[], refLat: number): number {
-  let squareMeters = 0;
-  for (const polygon of polygons) {
-    let net = 0;
-    for (const ring of polygon) {
-      net += ringSignedAreaSquareMeters(ring, refLat);
-    }
-    squareMeters += Math.abs(net);
-  }
-  return squareMeters / 1e6;
-}
-
-// Paths are left out: the kernel's reach already covers them, and they'd shift the projection.
-function sourceBoxOf(segments: Segment[], trees: Coord[]): Bounds {
-  let south = Number.POSITIVE_INFINITY;
-  let west = Number.POSITIVE_INFINITY;
-  let north = Number.NEGATIVE_INFINITY;
-  let east = Number.NEGATIVE_INFINITY;
-  const swallow = ({ lat, lng }: Coord): void => {
-    south = Math.min(south, lat);
-    north = Math.max(north, lat);
-    west = Math.min(west, lng);
-    east = Math.max(east, lng);
+function emptyBox(): Bounds {
+  return {
+    south: Number.POSITIVE_INFINITY,
+    west: Number.POSITIVE_INFINITY,
+    north: Number.NEGATIVE_INFINITY,
+    east: Number.NEGATIVE_INFINITY,
   };
-  for (const segment of segments) {
-    for (const point of segment.points) {
-      swallow(point);
-    }
-  }
-  for (const tree of trees) {
-    swallow(tree);
-  }
-  return { south, west, north, east };
+}
+
+function swallow(box: Bounds, { lat, lng }: Coord): void {
+  box.south = Math.min(box.south, lat);
+  box.north = Math.max(box.north, lat);
+  box.west = Math.min(box.west, lng);
+  box.east = Math.max(box.east, lng);
+}
+
+// Paths are left out of the source box: the kernel's reach already covers them.
+function unionBox(left: Bounds, right: Bounds): Bounds {
+  return {
+    south: Math.min(left.south, right.south),
+    west: Math.min(left.west, right.west),
+    north: Math.max(left.north, right.north),
+    east: Math.max(left.east, right.east),
+  };
 }
 
 // The per-side sidewalk flag bits are filled in later by ingestSidewalks.
@@ -589,9 +641,7 @@ async function writeSource(
   count: number,
   bytes: Uint8Array,
 ): Promise<SourceFile> {
-  const path = join(DATA_DIR, directory);
-  await mkdir(path, { recursive: true });
-  await writeFile(join(path, file), bytes);
+  await writeAtomic(join(DATA_DIR, directory, file), bytes);
   return {
     file,
     format,
@@ -599,6 +649,44 @@ async function writeSource(
     bytes: bytes.length,
     sha256: createHash("sha256").update(bytes).digest("hex"),
   };
+}
+
+interface CanopyChunk {
+  polygons: PackedPolygons;
+  // Already cut on the land by the source, so not kept or dropped whole against it.
+  landCut: boolean;
+  features: number;
+  dropped: number;
+}
+
+async function* nycCanopy(): AsyncGenerator<CanopyChunk> {
+  for await (const page of canopyPages()) {
+    yield { ...page, landCut: false };
+  }
+}
+
+// Each built in its own call, so the generator holds neither read while its chunk is consumed.
+async function sfCanopyChunk(): Promise<CanopyChunk> {
+  const { polygons, fetched, dropped } = await fetchSfCanopyPolygons();
+  return { polygons, landCut: false, features: fetched, dropped };
+}
+
+async function eastBayCanopyChunk(): Promise<CanopyChunk> {
+  const eastBay = await eastBayCanopy();
+  const polygons = packPolygons(eastBay.polygons);
+  // The memo outlives this stage for the height model, which needs only the height tiles.
+  eastBay.polygons = [];
+  return {
+    polygons,
+    landCut: true,
+    features: eastBay.fetched,
+    dropped: eastBay.dropped,
+  };
+}
+
+async function* bayAreaCanopy(): AsyncGenerator<CanopyChunk> {
+  yield await sfCanopyChunk();
+  yield await eastBayCanopyChunk();
 }
 
 interface CitySources {
@@ -616,16 +704,9 @@ interface CitySources {
   canopySourceUrl: string;
   land: () => Promise<Polygon[]>;
   // The East Bay reads a county layer, and only the land test decides which rows are in.
-  streets: (land: LandContext) => Promise<Segment[]>;
-  trees: () => Promise<Tree[]>;
-  canopy: () => Promise<{
-    // Crowns, kept or dropped whole against the land.
-    polygons: Polygon[];
-    // Already cut on the land by the source, since `clipCanopyToLand` can't cut a polygon.
-    landCut: Polygon[];
-    fetched: number;
-    dropped: number;
-  }>;
+  streets: (land: LandContext, paging: Paging) => Promise<Segment[]>;
+  trees: (paging: Paging) => Promise<TreeTable>;
+  canopy: () => AsyncIterable<CanopyChunk>;
   // Empty means no tree-shade pyramid. A band may measure buildings too; canopy polygons mask them.
   chm: () => Promise<HeightRaster[]>;
   ferries: (() => Promise<FerrySource>) | null;
@@ -635,7 +716,7 @@ interface CitySources {
   art: ArtSource | null;
   buildings: BuildingSource | null;
   // Required: OSM's silence can't tell a mapping gap from a bare curb.
-  survey: () => Promise<Survey>;
+  survey: (paging: Paging) => Promise<Survey>;
   elevation: (() => Promise<ElevationRaster>) | null;
   // The curve from the nearest climate region's reference town; the median from the city's register.
   crownAllometry: CrownAllometry;
@@ -660,7 +741,7 @@ const NYC: CitySources = {
   land: fetchNycLand,
   streets: fetchNycStreets,
   trees: fetchNycTrees,
-  canopy: async () => ({ ...(await fetchCanopyPolygons()), landCut: [] }),
+  canopy: nycCanopy,
   chm: async () => [
     {
       paths: [await fetchChmRaster()],
@@ -703,20 +784,9 @@ const SF: CitySources = {
     ...(await fetchSfStreets()),
     ...(await fetchEastBayStreets(land)),
   ],
-  trees: async () => [
-    ...(await fetchSfTrees()),
-    ...(await fetchEastBayTrees()),
-  ],
-  canopy: async () => {
-    const city = await fetchSfCanopyPolygons();
-    const eastBay = await eastBayCanopy();
-    return {
-      polygons: city.polygons,
-      landCut: eastBay.polygons,
-      fetched: city.fetched + eastBay.fetched,
-      dropped: city.dropped + eastBay.dropped,
-    };
-  },
+  trees: async () =>
+    treeTableOf([...(await fetchSfTrees()), ...(await fetchEastBayTrees())]),
+  canopy: bayAreaCanopy,
   // SF's band includes buildings; the East Bay's canopy model already zeroes buildings and water.
   chm: async () => {
     const raster = await SF_ELEVATION();
@@ -752,9 +822,43 @@ const SF: CitySources = {
 
 const CITIES: Record<string, CitySources> = { nyc: NYC, sf: SF };
 
-async function fetchCity(CITY: CitySources): Promise<void> {
-  const started = performance.now();
+// Bun's global, declared locally as scripts/build-sw.ts does: its full types clash with the DOM lib.
+declare const Bun: { gc(force: boolean): void };
 
+interface Run {
+  city: CitySources;
+  paging: Paging;
+  // Independent stages run side by side; otherwise one at a time, collected between.
+  overlap: boolean;
+  logMemory: boolean;
+}
+
+// A full collection when running one thing at a time, so the next step starts from what is live.
+function checkpoint(run: Run, name: string): void {
+  if (!run.overlap) {
+    Bun.gc(true);
+  }
+  if (run.logMemory) {
+    console.error(`${run.city.id}: ${name} done, ${memoryLine()}`);
+  }
+}
+
+async function stage<T>(
+  run: Run,
+  name: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const value = await work();
+  checkpoint(run, name);
+  return value;
+}
+
+interface LandStage {
+  context: LandContext;
+  file: SourceFile;
+}
+
+async function landStage({ city: CITY }: Run): Promise<LandStage> {
   if (CITY.ferries) {
     const ferries = await CITY.ferries();
     console.error(
@@ -764,39 +868,72 @@ async function fetchCity(CITY: CitySources): Promise<void> {
 
   console.error(`${CITY.id}: fetching the land polygons`);
   const land = await CITY.land();
-  const landBox = boxOf(land);
-
-  const onLand = buildLandTest(land);
-
-  const landContext: LandContext = { onLand, box: landBox };
-  const landmarks = await ingestLandmarks(CITY.id, CITY.landmarks, landContext);
-  const art = await ingestArt(CITY.id, CITY.art, landContext);
-  const highways = await ingestHighways(CITY.id, landContext);
+  const context: LandContext = {
+    onLand: buildLandTest(land),
+    box: boxOf(land),
+  };
+  const landmarks = await ingestLandmarks(CITY.id, CITY.landmarks, context);
+  const art = await ingestArt(CITY.id, CITY.art, context);
+  const highways = await ingestHighways(CITY.id, context);
   console.error(
     `${CITY.id}: landmarks ${landmarks.count}, art ${art.count}, highways ${highways.count} lines`,
   );
+  const file = await writeSource(
+    "land",
+    `${CITY.id}.bin`,
+    LAND_FORMAT,
+    land.length,
+    encodePolygons("LAND", LAND_FORMAT, land),
+  );
+  return { context, file };
+}
 
+interface CanopyStage {
+  file: SourceFile;
+  vertices: number;
+  squareKm: number;
+}
+
+// Packed page by page and streamed out, so neither the polygons as objects nor the blob is ever whole.
+async function canopyStage(
+  { city: CITY }: Run,
+  land: LandContext,
+): Promise<CanopyStage> {
   console.error(`${CITY.id}: fetching tree canopy polygons`);
-  const canopy = await CITY.canopy();
-  const canopyOnLand = [
-    ...clipCanopyToLand(canopy.polygons, onLand),
-    ...canopy.landCut,
-  ];
-  const canopyReferenceLat = (landBox.south + landBox.north) / 2;
-  const canopySquareKilometers = canopySquareKm(
-    canopyOnLand,
-    canopyReferenceLat,
-  );
-  let canopyVertices = 0;
-  for (const polygon of canopyOnLand) {
-    for (const ring of polygon) {
-      canopyVertices += ring.length;
-    }
+  const collected = new PolygonCollector((land.box.south + land.box.north) / 2);
+  let fetched = 0;
+  let dropped = 0;
+  for await (const chunk of CITY.canopy()) {
+    fetched += chunk.features;
+    dropped += chunk.dropped;
+    collected.add(chunk.polygons, chunk.landCut ? null : land.onLand);
   }
+  const squareKm = collected.squareMeters / 1e6;
   console.error(
-    `${CITY.id}: canopy ${canopy.fetched} polygons fetched, ${canopyOnLand.length} on land, ${canopyVertices} vertices, ${canopySquareKilometers.toFixed(1)} km² (${canopy.dropped} dropped as degenerate or too small)`,
+    `${CITY.id}: canopy ${fetched} polygons fetched, ${collected.polygons} on land, ${collected.vertices} vertices, ${squareKm.toFixed(1)} km² (${dropped} dropped as degenerate or too small)`,
   );
 
+  // Heights are written zeroed; `tiler ingest` fills them in place.
+  const file = `${CITY.id}.bin`;
+  await mkdir(join(DATA_DIR, "canopy"), { recursive: true });
+  const written = await writeChunks(
+    join(DATA_DIR, "canopy", file),
+    polygonChunks("CNPY", CANOPY_FORMAT, collected, collected.polygons * 2),
+  );
+  return {
+    file: {
+      file,
+      format: CANOPY_FORMAT,
+      count: collected.polygons,
+      bytes: written.bytes,
+      sha256: written.sha256,
+    },
+    vertices: collected.vertices,
+    squareKm,
+  };
+}
+
+async function chmStage({ city: CITY }: Run): Promise<HeightRaster[]> {
   console.error(`${CITY.id}: fetching the canopy height model`);
   const chm = await CITY.chm();
   for (const raster of chm) {
@@ -804,41 +941,225 @@ async function fetchCity(CITY: CitySources): Promise<void> {
       `${CITY.id}: heights from ${raster.paths.length} ${raster.crs} raster${raster.paths.length === 1 ? "" : "s"}`,
     );
   }
+  return chm;
+}
 
-  // Overpass queries run back to back while a mirror is warm.
+interface PathsStage {
+  ways: number;
+  vertices: number;
+  km: number;
+}
+
+async function pathsStage(
+  { city: CITY }: Run,
+  land: LandContext,
+): Promise<PathsStage> {
   console.error(`${CITY.id}: fetching pedestrian and park paths`);
-  const pathWays = await fetchPaths(
-    landBox.south,
-    landBox.west,
-    landBox.north,
-    landBox.east,
-  );
-  const { segments: pathSegments, onLandCount } = toPathSegments(
-    pathWays,
-    onLand,
-  );
-  const pathNames = buildNameTable(pathSegments);
-  let pathVertices = 0;
-  let pathKm = 0;
-  for (const path of pathSegments) {
-    pathVertices += path.points.length;
-    pathKm += path.lengthMeters;
+  const { south, west, north, east } = land.box;
+  const pathWays = await fetchPaths(south, west, north, east);
+  const { segments, onLandCount } = toPathSegments(pathWays, land.onLand);
+  const names = buildNameTable(segments);
+  let vertices = 0;
+  let km = 0;
+  for (const path of segments) {
+    vertices += path.points.length;
+    km += path.lengthMeters;
   }
-  pathKm /= 1000;
+  km /= 1000;
   console.error(
-    `${CITY.id}: paths ${pathWays.length} fetched, ${onLandCount} on land, ${pathSegments.length} encoded (${pathKm.toFixed(1)} km, ${pathNames.length} distinct names)`,
+    `${CITY.id}: paths ${pathWays.length} fetched, ${onLandCount} on land, ${segments.length} encoded (${km.toFixed(1)} km, ${names.length} distinct names)`,
   );
+  await writeAtomic(
+    join(DATA_DIR, "paths", `${CITY.id}.bin`),
+    encodePaths(segments, names),
+  );
+  return { ways: segments.length, vertices, km };
+}
 
+async function osmTreesStage(
+  { city: CITY }: Run,
+  land: LandContext,
+): Promise<OsmTree[]> {
   console.error(`${CITY.id}: fetching OSM trees`);
-  const osmTreesRaw = await fetchOsmTrees(
-    landBox.south,
-    landBox.west,
-    landBox.north,
-    landBox.east,
+  const { south, west, north, east } = land.box;
+  return await fetchOsmTrees(south, west, north, east);
+}
+
+export interface TreeBlob {
+  bytes: Uint8Array;
+  count: number;
+  box: Bounds; // of the city's trees on land, for the source box
+  cityTrees: number;
+  clamped: number;
+  imputed: number;
+  osm: Omit<OsmCrowns, "crowned"> & { kept: number };
+  genusTable: { genus: string; common: string; count: number }[];
+  otherCount: number;
+}
+
+// Drops `trees` off the land in place, crowns the rest and the OSM trees ForMS lacks, and encodes them.
+export function treeBlob(
+  id: string,
+  trees: TreeTable,
+  osmTrees: readonly OsmTree[],
+  land: LandContext,
+  allometry: CrownAllometry,
+  medianDbhInches: number,
+): TreeBlob {
+  // 55 SF trees sit at a placeholder in the north Pacific, which would stretch the city's bounds.
+  const fetched = trees.length;
+  const probe: Coord = { lat: 0, lng: 0 };
+  let onLand = 0;
+  for (let tree = 0; tree < fetched; tree++) {
+    probe.lat = trees.lat[tree];
+    probe.lng = trees.lng[tree];
+    if (land.onLand(probe)) {
+      trees.lat[onLand] = trees.lat[tree];
+      trees.lng[onLand] = trees.lng[tree];
+      trees.dbhInches[onLand] = trees.dbhInches[tree];
+      trees.genus[onLand] = trees.genus[tree];
+      onLand += 1;
+    }
+  }
+  trees.length = onLand;
+  if (onLand !== fetched) {
+    console.error(
+      `${id}: dropped ${fetched - onLand} trees off the city's land`,
+    );
+  }
+
+  // Genera in first-seen order before the stable sort, as the Map of names this replaced.
+  const genusCounts = new Uint32Array(trees.genera.length);
+  const seen: number[] = [];
+  for (let tree = 0; tree < onLand; tree++) {
+    const genus = trees.genus[tree];
+    if (genus !== 0) {
+      if (genusCounts[genus] === 0) {
+        seen.push(genus);
+      }
+      genusCounts[genus] += 1;
+    }
+  }
+  const topGenera = seen
+    .sort((left, right) => genusCounts[right] - genusCounts[left])
+    .slice(0, TOP_GENUS_COUNT);
+  const genusIdOf = new Uint8Array(trees.genera.length).fill(OTHER_GENUS_ID);
+  topGenera.forEach((genus, index) => {
+    genusIdOf[genus] = index;
+  });
+  const genusTable = topGenera.map((index) => {
+    const genus = trees.genera[index];
+    return {
+      genus,
+      common: GENUS_COMMON_NAMES[genus] ?? genus,
+      count: genusCounts[index],
+    };
+  });
+  const topGenusTotal = genusTable.reduce((sum, { count }) => sum + count, 0);
+
+  const { crownRadiusM, genusId, clamped, imputed } = crownTrees(
+    trees,
+    genusIdOf,
+    allometry,
+    medianDbhInches,
+  );
+  console.error(
+    `${id}: sized ${onLand} crowns (clamped ${clamped} trunks past ${MAX_DBH_INCHES} in, imputed ${imputed} missing dbh at ${medianDbhInches} in)`,
+  );
+  console.error(
+    `${id}: top ${genusTable.length} genera ${genusTable.map((entry) => `${entry.genus}:${entry.count}`).join(", ")}`,
+  );
+  const box = emptyBox();
+  for (let tree = 0; tree < onLand; tree++) {
+    probe.lat = trees.lat[tree];
+    probe.lng = trees.lng[tree];
+    swallow(box, probe);
+  }
+
+  const osm = crownOsmTrees(
+    osmTrees,
+    trees,
+    land.onLand,
+    (land.box.south + land.box.north) / 2,
+    allometry,
+    medianDbhInches,
+  );
+  console.error(
+    `${id}: OSM trees ${osmTrees.length} fetched, ${osm.onLandCount} on land, ${osm.deduped} deduped against ForMS, ${osm.crowned.length} kept (${osm.imputedCrowns} imputed crown)`,
   );
 
+  const count = onLand + osm.crowned.length;
+  const columns: TreeColumns = {
+    length: count,
+    lat: new Float64Array(count),
+    lng: new Float64Array(count),
+    crownRadiusM: new Float64Array(count),
+    genusId: new Uint8Array(count),
+  };
+  columns.lat.set(trees.lat.subarray(0, onLand));
+  columns.lng.set(trees.lng.subarray(0, onLand));
+  columns.crownRadiusM.set(crownRadiusM);
+  columns.genusId.set(genusId);
+  osm.crowned.forEach((tree, index) => {
+    columns.lat[onLand + index] = tree.lat;
+    columns.lng[onLand + index] = tree.lng;
+    columns.crownRadiusM[onLand + index] = tree.crownRadiusM;
+    columns.genusId[onLand + index] = tree.genusId;
+  });
+  return {
+    bytes: encodeTrees(TREE_FORMAT, columns),
+    count,
+    box,
+    cityTrees: onLand,
+    clamped,
+    imputed,
+    osm: {
+      onLandCount: osm.onLandCount,
+      deduped: osm.deduped,
+      imputedCrowns: osm.imputedCrowns,
+      kept: osm.crowned.length,
+    },
+    genusTable,
+    otherCount: onLand - topGenusTotal + osm.crowned.length,
+  };
+}
+
+type TreesStage = Omit<TreeBlob, "bytes" | "count"> & { file: SourceFile };
+
+async function treesStage(
+  run: Run,
+  land: LandContext,
+  osmTrees: readonly OsmTree[],
+): Promise<TreesStage> {
+  const CITY = run.city;
+  console.error(`${CITY.id}: fetching trees`);
+  const { bytes, count, ...summary } = treeBlob(
+    CITY.id,
+    await CITY.trees(run.paging),
+    osmTrees,
+    land,
+    CITY.crownAllometry,
+    CITY.medianDbhInches,
+  );
+  const file = await writeSource(
+    "trees",
+    `${CITY.id}.bin`,
+    TREE_FORMAT,
+    count,
+    bytes,
+  );
+  return { ...summary, file };
+}
+
+interface Streets {
+  segments: Segment[];
+  names: string[];
+}
+
+async function streetsStage(run: Run, land: LandContext): Promise<Streets> {
+  const CITY = run.city;
   console.error(`${CITY.id}: fetching street segments`);
-  const segments = await CITY.streets(landContext);
+  const segments = await CITY.streets(land, run.paging);
   const names = buildNameTable(segments);
   const unnamed = segments.filter(
     (segment) => segment.nameId === UNNAMED_ID,
@@ -846,114 +1167,127 @@ async function fetchCity(CITY: CitySources): Promise<void> {
   console.error(
     `${CITY.id}: ${names.length} distinct street names, ${unnamed} unnamed segments`,
   );
-  console.error(`${CITY.id}: fetching trees`);
-  const allTrees = await CITY.trees();
-  // 55 SF trees sit at a placeholder in the north Pacific, which would stretch the city's bounds.
-  const trees = allTrees.filter((tree) => onLand(tree));
-  if (trees.length !== allTrees.length) {
-    console.error(
-      `${CITY.id}: dropped ${allTrees.length - trees.length} trees off the city's land`,
-    );
-  }
+  return { segments, names };
+}
 
-  const genusCounts = new Map<string, number>();
-  for (const tree of trees) {
-    if (tree.genus !== "") {
-      genusCounts.set(tree.genus, (genusCounts.get(tree.genus) ?? 0) + 1);
-    }
-  }
-  const topGenera = [...genusCounts.entries()]
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, TOP_GENUS_COUNT);
-  const genusId = new Map(topGenera.map(([genus], index) => [genus, index]));
-  const genusTable = topGenera.map(([genus, count]) => ({
-    genus,
-    common: GENUS_COMMON_NAMES[genus] ?? genus,
-    count,
-  }));
-  const topGenusTotal = topGenera.reduce((sum, [, count]) => sum + count, 0);
+interface SidewalksStage {
+  sidewalks: SourceFile;
+  segments: number;
+  vertices: number;
+  box: Bounds;
+}
 
-  const { crowned, clamped, imputed } = crownTrees(
-    trees,
-    genusId,
-    CITY.crownAllometry,
-    CITY.medianDbhInches,
-  );
-  console.error(
-    `${CITY.id}: sized ${crowned.length} crowns (clamped ${clamped} trunks past ${MAX_DBH_INCHES} in, imputed ${imputed} missing dbh at ${CITY.medianDbhInches} in)`,
-  );
-  console.error(
-    `${CITY.id}: top ${genusTable.length} genera ${genusTable.map((entry) => `${entry.genus}:${entry.count}`).join(", ")}`,
-  );
-
-  const osm = crownOsmTrees(
-    osmTreesRaw,
-    trees,
-    onLand,
-    (landBox.south + landBox.north) / 2,
-    CITY.crownAllometry,
-    CITY.medianDbhInches,
-  );
-  console.error(
-    `${CITY.id}: OSM trees ${osmTreesRaw.length} fetched, ${osm.onLandCount} on land, ${osm.deduped} deduped against ForMS, ${osm.crowned.length} kept (${osm.imputedCrowns} imputed crown)`,
-  );
-  const allCrowned = [...crowned, ...osm.crowned];
-
-  const file = `${CITY.id}.bin`;
-  const treeFile = await writeSource(
-    "trees",
-    file,
-    TREE_FORMAT,
-    allCrowned.length,
-    encodeTrees(TREE_FORMAT, allCrowned),
-  );
-  const landFile = await writeSource(
-    "land",
-    file,
-    LAND_FORMAT,
-    land.length,
-    encodePolygons("LAND", LAND_FORMAT, land),
-  );
-  // Heights are written zeroed; `tiler ingest` fills them in place.
-  const canopyPath = join(DATA_DIR, "canopy", file);
-  const canopyFile = await writeSource(
-    "canopy",
-    file,
-    CANOPY_FORMAT,
-    canopyOnLand.length,
-    encodeCanopy(CANOPY_FORMAT, canopyOnLand),
-  );
-
-  // Sets the streets' per-side sidewalk bits, so it runs before they are encoded.
+// Sets the streets' per-side sidewalk bits, then writes the streets.
+async function sidewalksStage(
+  run: Run,
+  land: LandContext,
+  { segments, names }: Streets,
+): Promise<SidewalksStage> {
+  const CITY = run.city;
   console.error(`${CITY.id}: fetching sidewalks`);
   const sidewalks = await ingestSidewalks(
     CITY.id,
     segments,
-    landContext,
-    CITY.survey,
+    land,
+    () => CITY.survey(run.paging),
+    (step) => checkpoint(run, step),
   );
-
-  const streetPath = join(DATA_DIR, "streets", file);
-  await mkdir(join(DATA_DIR, "streets"), { recursive: true });
-  await writeFile(streetPath, encodeStreets(segments, names));
-
-  const pathPath = join(DATA_DIR, "paths", file);
-  await mkdir(join(DATA_DIR, "paths"), { recursive: true });
-  await writeFile(pathPath, encodePaths(pathSegments, pathNames));
-
+  await writeAtomic(
+    join(DATA_DIR, "streets", `${CITY.id}.bin`),
+    encodeStreets(segments, names),
+  );
   let vertices = 0;
+  const box = emptyBox();
   for (const segment of segments) {
     vertices += segment.points.length;
+    for (const point of segment.points) {
+      swallow(box, point);
+    }
+  }
+  return { sidewalks, segments: segments.length, vertices, box };
+}
+
+// Waits out every stage before rethrowing, so a failure never leaves another still writing.
+async function settleAll<T extends readonly unknown[]>(
+  work: {
+    [K in keyof T]: Promise<T[K]>;
+  },
+): Promise<T> {
+  const settled = await Promise.allSettled(work);
+  const failures = settled.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason] : [],
+  );
+  if (failures.length === 1) {
+    throw failures[0];
+  } else if (failures.length > 1) {
+    throw new AggregateError(failures, `${failures.length} stages failed`);
+  }
+  return settled.map(
+    (outcome) => (outcome as PromiseFulfilledResult<unknown>).value,
+  ) as unknown as T;
+}
+
+async function fetchCity(run: Run): Promise<void> {
+  const started = performance.now();
+  const CITY = run.city;
+  const file = `${CITY.id}.bin`;
+
+  const land = await stage(run, "land", () => landStage(run));
+  const context = land.context;
+  const canopyWork = () =>
+    stage(run, "canopy", () => canopyStage(run, context));
+  const chmWork = () => stage(run, "chm", () => chmStage(run));
+  const pathsWork = () => stage(run, "paths", () => pathsStage(run, context));
+  const osmWork = () =>
+    stage(run, "osm trees", () => osmTreesStage(run, context));
+  const treesWork = (osm: OsmTree[]) =>
+    stage(run, "trees", () => treesStage(run, context, osm));
+  const streetsWork = async () => {
+    const streets = await stage(run, "streets", () =>
+      streetsStage(run, context),
+    );
+    return await stage(run, "sidewalks", () =>
+      sidewalksStage(run, context, streets),
+    );
+  };
+
+  let canopy: CanopyStage;
+  let chm: HeightRaster[];
+  let paths: PathsStage;
+  let trees: TreesStage;
+  let streets: SidewalksStage;
+  if (run.overlap) {
+    // The Overpass reads stay back to back: paths, OSM trees, then the sidewalks' two.
+    [canopy, chm, [paths, trees, streets]] = await settleAll([
+      canopyWork(),
+      chmWork(),
+      (async () => {
+        const paths = await pathsWork();
+        const osm = await osmWork();
+        const [trees, streets] = await settleAll([
+          treesWork(osm),
+          streetsWork(),
+        ]);
+        return [paths, trees, streets] as const;
+      })(),
+    ]);
+  } else {
+    // Canopy first, while nothing else is held; streets last, as their segments live through two stages.
+    canopy = await canopyWork();
+    chm = await chmWork();
+    paths = await pathsWork();
+    trees = await treesWork(await osmWork());
+    streets = await streetsWork();
   }
 
   const params: IngestParams = {
-    canopy: canopyPath,
+    canopy: join(DATA_DIR, "canopy", file),
     land: join(DATA_DIR, "land", file),
-    streets: streetPath,
-    paths: pathPath,
+    streets: join(DATA_DIR, "streets", file),
+    paths: join(DATA_DIR, "paths", file),
     chm: chm.map(({ paths, band, crs }) => ({ paths, band, crs })),
-    sourceBox: sourceBoxOf(segments, trees),
-    landBox,
+    sourceBox: unionBox(streets.box, trees.box),
+    landBox: context.box,
     fillSigmaMeters: FILL_SIGMA_METERS,
     tightSigmaAlongMeters: TIGHT_SIGMA_ALONG_METERS,
     tightSigmaAcrossMeters: TIGHT_SIGMA_ACROSS_METERS,
@@ -986,28 +1320,28 @@ async function fetchCity(CITY: CitySources): Promise<void> {
             sourceUrl: chm[0].sourceUrl,
           }
         : null,
-    trees: treeFile,
-    land: landFile,
+    trees: trees.file,
+    land: land.file,
     canopy: {
-      file: canopyFile.file,
-      format: canopyFile.format,
-      polygons: canopyFile.count,
-      vertices: canopyVertices,
-      squareKm: Math.round(canopySquareKilometers * 10) / 10,
+      file: canopy.file.file,
+      format: canopy.file.format,
+      polygons: canopy.file.count,
+      vertices: canopy.vertices,
+      squareKm: Math.round(canopy.squareKm * 10) / 10,
     },
     streets: {
       file,
       format: STREET_FORMAT,
-      segments: segments.length,
-      vertices,
+      segments: streets.segments,
+      vertices: streets.vertices,
       densifyMeters: DENSIFY_METERS,
     },
     paths: {
       file,
       format: PATH_FORMAT,
-      ways: pathSegments.length,
-      vertices: pathVertices,
-      km: Math.round(pathKm * 10) / 10,
+      ways: paths.ways,
+      vertices: paths.vertices,
+      km: Math.round(paths.km * 10) / 10,
     },
     field: {
       fillSigmaMeters: FILL_SIGMA_METERS,
@@ -1017,43 +1351,61 @@ async function fetchCity(CITY: CitySources): Promise<void> {
       crownAllometry: CITY.crownAllometry,
       maxDbhInches: MAX_DBH_INCHES,
       imputedDbhInches: CITY.medianDbhInches,
-      clampedTrees: clamped,
-      imputedTrees: imputed,
-      osmTrees: osm.crowned.length,
-      osmTreeDedup: osm.deduped,
-      osmImputedCrowns: osm.imputedCrowns,
+      clampedTrees: trees.clamped,
+      imputedTrees: trees.imputed,
+      osmTrees: trees.osm.kept,
+      osmTreeDedup: trees.osm.deduped,
+      osmImputedCrowns: trees.osm.imputedCrowns,
       coverSamples: COVER_SAMPLES,
       coverSeed: COVER_SEED,
       genus: {
-        table: genusTable,
-        otherCount: trees.length - topGenusTotal + osm.crowned.length,
+        table: trees.genusTable,
+        otherCount: trees.otherCount,
       },
     },
-    cityTrees: trees.length,
-    sidewalks,
+    cityTrees: trees.cityTrees,
+    sidewalks: streets.sidewalks,
   };
 
-  await mkdir(dirname(INGEST_PARAMS_PATH), { recursive: true });
-  await writeFile(INGEST_PARAMS_PATH, JSON.stringify(params));
-  await writeFile(SIDECAR_PATH, JSON.stringify(sidecar));
+  await writeAtomic(INGEST_PARAMS_PATH, JSON.stringify(params));
+  await writeAtomic(SIDECAR_PATH, JSON.stringify(sidecar));
 
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   console.error(`${CITY.id}: fetched and encoded in ${seconds}s`);
+  if (run.logMemory) {
+    console.error(`${CITY.id}: finished, ${memoryLine()}`);
+  }
 }
 
-// `--refresh` belongs to scripts/cache.ts; it is declared so parseArgs doesn't reject it.
-const { values } = parseArgs({
-  options: {
-    city: { type: "string" },
-    refresh: { type: "boolean" },
-  },
-});
-const known = Object.keys(CITIES).join(", ");
-if (values.city === undefined) {
-  throw new Error(`--city is required, one of: ${known}`);
+if (import.meta.main) {
+  // `--refresh` belongs to scripts/cache.ts; it is declared so parseArgs doesn't reject it.
+  const { values } = parseArgs({
+    options: {
+      city: { type: "string" },
+      refresh: { type: "boolean" },
+      // A byte budget for running ahead, as `tiler build --memory`; small means one thing at a time.
+      memory: { type: "string", default: "auto" },
+      // RSS, peak RSS and heap after each stage.
+      "log-memory": { type: "boolean", default: false },
+    },
+  });
+  const known = Object.keys(CITIES).join(", ");
+  if (values.city === undefined) {
+    throw new Error(`--city is required, one of: ${known}`);
+  }
+  const city = CITIES[values.city];
+  if (!city) {
+    throw new Error(`no city ${values.city}; known: ${known}`);
+  }
+  const budget = memoryBudget(parseMemory(values.memory));
+  const { pageWorkers, overlapStages } = concurrencyOf(budget.bytes);
+  console.error(
+    `${city.id}: memory budget ${(budget.bytes / 2 ** 30).toFixed(1)} GiB (${budget.why}): ${pageWorkers} Socrata page${pageWorkers === 1 ? "" : "s"} at once, stages ${overlapStages ? "overlapping" : "one at a time"}`,
+  );
+  await fetchCity({
+    city,
+    paging: { concurrency: pageWorkers },
+    overlap: overlapStages,
+    logMemory: values["log-memory"],
+  });
 }
-const city = CITIES[values.city];
-if (!city) {
-  throw new Error(`no city ${values.city}; known: ${known}`);
-}
-await fetchCity(city);

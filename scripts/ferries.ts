@@ -1,9 +1,10 @@
 // Segment time is the median crossing plus half the median headway, capped. See scripts/README.md.
 
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { writeAtomic } from "./cache";
 import {
   COORD_SCALE,
   EARTH_RADIUS_METERS,
@@ -715,7 +716,7 @@ export async function ingestFerries(cityId: string): Promise<FerrySource> {
   for (const source of feedsOf(cityId)) {
     console.error(`ferries: fetching ${source.name}`);
     const zip = await fetchGtfsZip(source.cacheKey, source.url);
-    await writeFile(join(FERRY_DIR, source.zipFile), zip);
+    await writeAtomic(join(FERRY_DIR, source.zipFile), zip);
     loaded.push({ source, feed: parseGtfs(zip) });
   }
 
@@ -745,7 +746,7 @@ export async function ingestFerries(cityId: string): Promise<FerrySource> {
 
   const bytes = encodeFerries(graph);
   const file = `${cityId}.bin`;
-  await writeFile(join(FERRY_DIR, file), bytes);
+  await writeAtomic(join(FERRY_DIR, file), bytes);
 
   const nameOf = new Map(graph.stops.map((stop) => [stop.key, stop.name]));
   const minutes = (seconds: number): string => (seconds / 60).toFixed(1);

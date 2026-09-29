@@ -300,10 +300,10 @@ a public ArcGIS feature service (`TreeCanopy2017_Simplified_1ft`), which `script
 rings, each page disk-cached like every other source read. It is land-clipped against the borough
 polygons (the same ring-midpoint test the paths use, though the service is NYC-only and spills
 essentially nothing), and encoded to `data/canopy/<id>.bin` in the **shared polygon byte-format**
-(the `LAND` polygon header and varint-delta rings, see "Binary layouts") — the shared
-`encodePolygons` encoder, under its own magic **`CNPY`** so a canopy blob self-identifies rather
-than masquerading as another polygon source. `binfmt.rs::read_polygons` is already generic over the
-magic, so nothing in the tiler changes to read it.
+(the `LAND` polygon header and varint-delta rings, see "Binary layouts") — `encodePolygons`'
+layout, streamed from packed pages by `polygonChunks`, under its own magic **`CNPY`** so a canopy
+blob self-identifies rather than masquerading as another polygon source. `binfmt.rs::read_polygons`
+is already generic over the magic, so nothing in the tiler changes to read it.
 
 This is the **cover source itself**: `tiler ingest` convolves the canopy indicator with a Gaussian
 and samples it at each sidewalk offset, so the byte in every street and path density blob — and,
@@ -1206,6 +1206,37 @@ cargo run --release --bin tiler -- ingest --params .build/ingest.json --report .
 bun run scripts/tree-data-manifest.ts           # -> src/tree-cover/manifest.json
 ```
 
+**`--memory auto|<size>|0`** is the fetch half's budget for running ahead of itself, with `tiler
+build --memory`'s semantics: a size such as `512M` or `2G` (powers of 1024), `0` for none, or `auto`
+(the default), which is the tiler's own formula — three quarters of what `MemAvailable` (or a
+tighter cgroup v2 limit) leaves past a 3 GiB reserve, never under an eighth of it. It never changes
+the output, only the order work happens in:
+
+- **Socrata pages in flight**: one per 512 MiB of budget, one to four. Under 512 MiB a paged read
+  holds a single page's rows at a time.
+- **Stage overlap**: from 2 GiB, the canopy, the height model and the chain of paths → OSM trees →
+  (trees ∥ streets → sidewalks) run side by side, the Overpass reads still back to back. Below it the
+  stages run one at a time, canopy first, with a full collection between each.
+
+The fetch is a set of stages — land, canopy, height model, paths, OSM trees, trees, streets,
+sidewalks — each writing its own `.bin` and handing on only counts, boxes and hashes; only the
+streets' segments cross a stage boundary, into the sidewalks stage that stamps their per-side bits
+before they are written. The big reads are built never to be whole: the canopy is packed a page at a
+time into flat `Float64Array` rings (16 bytes a vertex), land-tested, measured and then streamed to
+`data/canopy/<id>.bin` in the `encodePolygons` layout, so neither the polygons as objects nor the
+encoded blob exists at once; ForMS, the CSCL centerline and the sidewalk survey are read through
+`pages()`, one cache entry per page, and select only the columns the code reads. A read's pages are
+trusted only under a completion marker written once its row count checks out, so a partial read is
+refetched whole rather than stitched to pages from another day, and a truncated last page is never
+cached. The trees are held as columns (`scripts/tree-table.ts`: `Float64Array` lat, lng and
+diameter, a `Uint16Array` genus index into a string table), and the OSM-tree dedup looks trunks up
+in sorted numeric cell keys with a CSR index rather than a map of `"y,x"` strings; any trunk within
+5 m dedups, so the order is irrelevant. Each page is read once — nothing is fetched twice in case the
+source moved in between. Every `.bin` is written through a temporary file and renamed into place, so
+a failed stage leaves the previous file whole. `--log-memory` prints RSS, peak RSS (`VmHWM`) and the
+JS heap after every stage. To set a budget other than `auto`, run the fetch directly and then
+`bun run tree-data-finish`.
+
 The fetch half pages the sources, encodes every `.bin` and writes two JSON files: `ingest.json`, the
 model constants and file paths the tiler needs, and `tree-data.json`, the sidecar carrying what the
 manifest half needs from the fetch half — the genus table, the credits and the counts. The blobs
@@ -1647,12 +1678,16 @@ The **`LAND` polygon layout** — the same 40-byte header, then `count` even-odd
 varint-delta rings — under its own magic so it self-identifies, followed by **one trailing region**
 of a `u16` little-endian per polygon in the same polygon order: the **crown height in decimeters**,
 as `BLDG` carries its roof heights. It is NYC's 2017 LiDAR tree-canopy footprint (~1.08 M polygons,
-land-clipped), the *measured* field the cover is blurred from. `encodeCanopy` writes the region
-zeroed and `tiler ingest` fills it in place from the separate canopy height model (above); **0
-means unknown**, not flat. Read the geometry alone with the generic `read_polygons(path, "CNPY", 2)`
-— which is what `tiler ingest` (convolving and sampling it into the streets/paths density blobs),
-the canopy pass (rasterizing it into the fill pyramid) and the graph pass (integrating it *unblurred*
-along each sidewalk into the direct-canopy edge byte) do — or with the heights through `read_canopy`.
+land-clipped), the *measured* field the cover is blurred from. The fetch (`polygonChunks` in
+`scripts/packed-polygons.ts`) writes the region zeroed and `tiler ingest` fills it in place from the
+separate canopy height model (above); **0 means unknown**, not flat. Every reader goes through
+`read_canopy_batches`, which steps over the polygons once to find the heights and count the rings
+and vertices, then decodes them a batch at a time: `flatten_canopy` builds the flat `PolygonSet`
+straight from the batches, sized once, for `tiler ingest` (convolving and sampling it into the streets/paths density blobs), the canopy pass
+(rasterizing it into the fill pyramid) and the graph pass (integrating it *unblurred* along each
+sidewalk into the direct-canopy edge byte); the height pass projects each batch into its raster's
+grid; the shade pass slices crowns per batch. None of them ever holds the ~34 M vertices as
+`Vec<Polygon>` rings beside the flat copy.
 
 ### `data/landmarks/<id>.bin` and `data/art/<id>.bin` — the scenic POIs, magic `LMRK` / `ARTW` (v1)
 

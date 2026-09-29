@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchEastBayLandmarks } from "./alameda";
+import { writeAtomic } from "./cache";
 import { encodePoints, type NamedPoint } from "./geometry";
 import { type LandContext, loadLandContext } from "./land";
 import type { SourceFile } from "./manifest";
@@ -74,7 +75,7 @@ export async function ingestLandmarks(
   const points = source ? await source(land) : [];
   const bytes = encodePoints(LANDMARK_MAGIC, LANDMARK_FORMAT, points);
   const file = `${cityId}.bin`;
-  await writeFile(join(LANDMARK_DIR, file), bytes);
+  await writeAtomic(join(LANDMARK_DIR, file), bytes);
 
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   const kib = (bytes.length / 1024).toFixed(1);

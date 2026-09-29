@@ -1,8 +1,9 @@
 // Public art POIs: the PDC inventory skews to sculpture, so OSM tourism=artwork adds the murals.
 
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { writeAtomic } from "./cache";
 import { encodePoints, haversineMeters, type NamedPoint } from "./geometry";
 import { type LandContext, loadLandContext } from "./land";
 import type { SourceFile } from "./manifest";
@@ -90,7 +91,7 @@ export async function ingestArt(
 
   const bytes = encodePoints(ART_MAGIC, ART_FORMAT, points);
   const file = `${cityId}.bin`;
-  await writeFile(join(ART_DIR, file), bytes);
+  await writeAtomic(join(ART_DIR, file), bytes);
 
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   const kib = (bytes.length / 1024).toFixed(1);

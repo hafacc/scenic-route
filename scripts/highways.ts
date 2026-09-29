@@ -1,8 +1,9 @@
 // Highways and elevated rail as raw polylines, not graph edges: their nuisance is areal.
 
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { writeAtomic } from "./cache";
 import { encodeClassifiedPolygons } from "./geometry";
 import { fetchHpmsVolumes } from "./hpms";
 import { type LandContext, loadLandContext } from "./land";
@@ -191,7 +192,7 @@ export async function ingestHighways(
     severities.map((severity) => Math.round(severity * 255)),
   );
   const file = `${cityId}.bin`;
-  await writeFile(join(HIGHWAY_DIR, file), bytes);
+  await writeAtomic(join(HIGHWAY_DIR, file), bytes);
 
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   const kib = (bytes.length / 1024).toFixed(1);
