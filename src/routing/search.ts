@@ -25,6 +25,7 @@ import {
   edgeName,
   edgePath,
   edgeSideLabel,
+  isStationTransfer,
   isStayAboard,
   laneOf,
   otherEnd,
@@ -403,6 +404,9 @@ function reconstruct(
       // Station walks count as walking, and are out in the weather unlike the platform and train.
       if (step.kind === "board" || step.kind === "ride") {
         transitSeconds += seconds;
+        sums.shelter += seconds;
+      } else if (isStationTransfer(graph, step.edge)) {
+        // A change between two stations of a complex is walked underground.
         sums.shelter += seconds;
       } else if (step.kind === "ferry") {
         // A boat has a cabin and a pier has none, so the wait is time on a pier.

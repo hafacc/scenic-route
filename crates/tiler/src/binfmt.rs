@@ -1379,18 +1379,6 @@ mod tests {
                     "{city} entrance is a way in or a way out"
                 );
             }
-            let mut complex_size: std::collections::HashMap<u16, usize> = Default::default();
-            for station in &transit.stations {
-                if station.complex != 0 {
-                    *complex_size.entry(station.complex).or_default() += 1;
-                }
-            }
-            assert!(
-                transit.stations.iter().all(|station| {
-                    !station.split || complex_size.get(&station.complex).copied().unwrap_or(0) <= 1
-                }),
-                "{city} splits no station that shares a transfer complex"
-            );
             for pattern in &transit.patterns {
                 assert!(pattern.stops.len() >= 2, "{city} pattern rides somewhere");
                 assert_eq!(pattern.stops.len(), pattern.offsets.len());

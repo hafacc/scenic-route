@@ -3362,7 +3362,7 @@ This pyramid is **lossless** WebP where the canopy one is lossy: a lossy encode 
 but stores the two chroma planes at quarter resolution, measured 18-22 off, and here R and G are
 data.
 
-### `public/routing/{id}.bin` — the routing graph, magic `GRPH` (v12, derived, gitignored)
+### `public/routing/{id}.bin` — the routing graph, magic `GRPH` (v13, derived, gitignored)
 
 The graph pass contracts STRT into the graph the client routes on, then expands it into the edges a
 walker actually uses. For a city carrying a PATH layer it first **conflates** the OSM pedestrian/park
@@ -3615,7 +3615,7 @@ entry, so the two cannot disagree about padding.
 | 11 | street name id into the name table (0xFFFF = unnamed) | u16 | E |
 | 12 | **duration seconds**: a ferry's crossing-plus-wait, or a transit edge's walk or ride; 0 for every walking kind and for a board edge, whose wait is the timetable's to answer | u16 | E |
 | 13 | kind and side: bits 0–2 kind (0 sidewalk, 1 crossing, 2 link, 3 path, 4 ferry, 5 access, 6 board, 7 ride — the last three are transit, below); bits 3–5 side (0 none, 1 N, 2 E, 3 S, 4 W) | u8 | E |
-| 14 | flags: bit0 structure, bit1 steps, bit2 **geometry-right** (this sidewalk lies right of its stored geometry direction; clear = left), bit3 **OSM** (this edge came from the conflated OSM path network), bit4 **tunnel** (under a deck rather than on one: a tunnel street, a way OSM tags `tunnel`/`covered=yes`, or a sidewalk or crossing conflated to one). On an **access** edge, which carries none of the walking bits, the top three describe the door instead: bit5 **exit-only** (traversable from node a, the station, and not into it), bit6 **entry-only** (the reverse), bit7 **elevator** (a lift rather than a stair, which is also the only kind whose base seconds differ). A graph written before them reads 0, which is a two-way stair. On a **ride** edge, which carries none of either set, bit6 means **stay aboard**: this ride is the free one-way step from a stop's arrival node onto its boarding node | u8 | E |
+| 14 | flags: bit0 structure, bit1 steps, bit2 **geometry-right** (this sidewalk lies right of its stored geometry direction; clear = left), bit3 **OSM** (this edge came from the conflated OSM path network), bit4 **tunnel** (under a deck rather than on one: a tunnel street, a way OSM tags `tunnel`/`covered=yes`, or a sidewalk or crossing conflated to one). On an **access** edge, which carries none of the walking bits, the top three describe the door instead: bit5 **exit-only** (traversable from node a, the station, and not into it), bit6 **entry-only** (the reverse), bit7 **elevator** (a lift rather than a stair, which is also the only kind whose base seconds differ). A graph written before them reads 0, which is a two-way stair. On a **ride** edge, which carries none of either set, bit6 means **stay aboard**: this ride is the free one-way step from a stop's arrival node onto its boarding node. On an access edge bit1 means **transfer** (v13): one station's exit to another station's entry in the same complex, always with bit5 set | u8 | E |
 | 15 | cover, 0–254, this edge's own single value; 0 for a ferry and every transit kind | u8 | E |
 | 16 | landmark amenity, 0–254 (a discount attribute; 0 for a timed kind) | u8 | E |
 | 17 | public-art amenity, 0–254 (a discount attribute; 0 for a timed kind) | u8 | E |
@@ -3716,12 +3716,18 @@ route cross it.
 **Transit** (v11) is the rail topology of `data/transit/<city>.bin` (`TRNS` above) baked into the
 graph, and it is the one thing here that adds NODES. A ferry rides between two walking nodes; a train
 cannot, because a rider's wait belongs to one line running one way and not to the station. So each
-**transfer complex** becomes a node of its own — one node for the whole of Times Sq, and one per
-station where the feed publishes no complex — standing at its members' centroid; each stop of each
-stop pattern becomes a **platform**, standing on the stop its own line calls at; a **board** edge
-joins the station node to the platform, an **access** edge joins the platform back to it, and a
-**ride** edge joins one stop's platform to the next's. A transfer therefore needs no edge of its own, and a
-transfer *inside* a complex never reaches the street: alight, and board again.
+**station** becomes a node of its own, standing at its own point — Times Sq is five, one per GTFS
+station of its complex (v13; through v12 a complex was one node at its members' centroid, so every
+change inside it cost the same 30 s however far the walk); each stop of each stop pattern becomes a
+**platform**, standing on the stop its own line calls at; a **board** edge joins the station node to
+the platform, an **access** edge joins the platform back to it, and a **ride** edge joins one stop's
+platform to the next's. A change at one station is an alight and a board again; a change between two
+stations of a complex is a **transfer edge**, an access edge carrying flag bit 1, from the one's exit
+to the other's entry, one per pair TRNS carries, so it never reaches the street either. It costs the
+agency's `min_transfer_time` where it publishes one, since the agency knows the passage and the
+straight line between two station points does not, and where no agency times the pair (South Ferry
+to Whitehall St, every Bay Area join) the straight walk at 1.3 m/s, rounded up, plus 30 s, a stair
+between two platforms. It is named for the complex.
 
 Each side of a station stands on **two nodes at the one point**: the ENTRY, which every door leads in
 to and every board edge leaves from, and the EXIT, which every alight lands on and every door leads
@@ -3758,7 +3764,9 @@ single nearest sidewalk or path (250 m, the pier's reach), that edge is cut at t
 access edge runs from each side node the entrance's `sides` mask names to the cut — two of them for a
 two-way door, one into the entry and one out of the exit, each flagged with its direction. A group no
 published entrance can be walked INTO — a station the agency lists none for, and one whose every
-listed door opens outwards — falls back to the station's own point projected onto *every* walking
+listed door opens outwards — first takes the doors of the nearest station of its complex that has one
+(the MTA files every Union Sq door under the 4/5/6 or the N/Q/R/W, none under the L), and failing
+that falls back to the station's own point projected onto *every* walking
 edge within 40 m, capped at the six nearest, which is a door mid-block rather than whichever corner a
 single snap happened to find. Doors that land on one walking node with the same kind and the same
 directions are one way in, priced at the cheapest of them; a lift beside an exit-only stair stays two.
@@ -3774,8 +3782,8 @@ every member is a stop on the pavement (the TRNS `surface` flag), plus in each c
 station point out to that door at 1.3 m/s; 30 s for every walk back out, the
 pattern's own stop-to-stop figure for a ride, and **0 for a board** — what a board costs is the wait,
 which is a function of the clock and comes from `public/transit-schedule/` at route time, not from
-the graph. A board or an alight inside a complex spans the passage between two of its platforms, and
-costs those same seconds however far that runs.
+the graph. A board and an alight are both zero meters long, since a station's nodes and its platforms
+stand on the one point; a transfer edge carries the seconds above.
 Their cover, every scenic attribute, their source id and their side are all zero or the sentinel, and
 none of them carries geometry: like a ferry, a transit edge lifts no max the A* lower bound is taken
 from. Their two endpoints are ordinary nodes of the merged component labels, so a station joins the

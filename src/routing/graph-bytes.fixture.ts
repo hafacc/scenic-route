@@ -1,4 +1,4 @@
-// GRPH v12 bytes built the way the tiler builds them, so tests exercise the Rust writer's layout.
+// GRPH v13 bytes built the way the tiler builds them, so tests exercise the Rust writer's layout.
 
 import {
   FORMAT_VERSION,

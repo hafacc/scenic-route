@@ -1,4 +1,4 @@
-// Layout in scripts/README.md (GRPH v12); columns are viewed in place, so decoding copies nothing.
+// Layout in scripts/README.md (GRPH v13); columns are viewed in place, so decoding copies nothing.
 
 import { cityById } from "../cities";
 import type { FerryTimetable } from "./ferry-schedule";
@@ -28,6 +28,8 @@ export const ENTRY_ONLY_FLAG = 0x40;
 export const ELEVATOR_FLAG = 0x80;
 // A ride's only flag, borrowing the entry-only door bit; the edge kind tells the two apart.
 export const STAY_ABOARD_FLAG = 0x40;
+// An access edge between two stations of a complex, borrowing the steps bit no station edge spends.
+export const TRANSFER_FLAG = 0x2;
 
 export const NO_SOURCE_ID = 0xffffffff;
 // The ordinal is a u8 and the side fits three bits, so a u32 source id stays inside an exact double.
@@ -238,8 +240,8 @@ export interface TransitRoute {
 
 const MAGIC = "GRPH";
 // Exported so a fixture writing its own header can't drift from it.
-export const FORMAT_VERSION = 12;
-// 64 fixed bytes then a 48-entry (offset, byteLength, tag) directory, of which v12 fills 35.
+export const FORMAT_VERSION = 13;
+// 64 fixed bytes then a 48-entry (offset, byteLength, tag) directory, of which v13 fills 35.
 const HEADER_BYTES = 640;
 const DIRECTORY_AT = 64;
 const DIRECTORY_ENTRY_BYTES = 12;
@@ -690,7 +692,11 @@ export function transitForward(
 export function stationName(graph: RoutingGraph, node: number): string | null {
   for (let slot = graph.csr[node]; slot < graph.csr[node + 1]; slot++) {
     const edge = graph.adjacency[slot];
-    if (edgeKind(graph, edge) === "access" && graph.edgeNodeA[edge] === node) {
+    if (
+      edgeKind(graph, edge) === "access" &&
+      graph.edgeNodeA[edge] === node &&
+      !isStationTransfer(graph, edge)
+    ) {
       const name = edgeName(graph, edge);
       if (name !== null) {
         return name;
@@ -710,6 +716,14 @@ export function isSurfaceStop(graph: RoutingGraph, edge: number): boolean {
     graph.edgeDurationSeconds[edge] -
     graph.edgeLength[edge] / WALK_METERS_PER_SECOND;
   return stair < (SURFACE_ACCESS_SECONDS + UNDERGROUND_ACCESS_SECONDS) / 2;
+}
+
+// The walk from one station of a complex to another's platforms; named for the complex.
+export function isStationTransfer(graph: RoutingGraph, edge: number): boolean {
+  return (
+    edgeKind(graph, edge) === "access" &&
+    (graph.edgeFlags[edge] & TRANSFER_FLAG) !== 0
+  );
 }
 
 // Internal to one boarding: costs nothing, covers no ground, and is no stop of the ride.
