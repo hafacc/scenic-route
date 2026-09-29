@@ -76,7 +76,8 @@ jobs:
         run: |
           staged="$(mktemp -d)"
           mkdir -p "$staged/sheds" "$staged/ferry-schedule" "$staged/transit-schedule"
-          cp public/sheds/*.bin "$staged/sheds/"
+          # Per city, and the bins alone: inputs.json is build-sheds' to write, never this job's.
+          (cd public && cp --parents sheds/*/*.bin "$staged/")
           cp public/ferry-schedule/*.bin "$staged/ferry-schedule/"
           cp public/transit-schedule/*.bin "$staged/transit-schedule/"
           git config user.name "github-actions[bot]"
@@ -85,7 +86,7 @@ jobs:
             git fetch --depth=1 origin main
             git reset --quiet --hard FETCH_HEAD
             mkdir -p public/sheds public/ferry-schedule public/transit-schedule
-            cp "$staged"/sheds/*.bin public/sheds/
+            (root="$PWD" && cd "$staged" && cp --parents sheds/*/*.bin "$root/public/")
             cp "$staged"/ferry-schedule/*.bin public/ferry-schedule/
             cp "$staged"/transit-schedule/*.bin public/transit-schedule/
             git add public/sheds public/ferry-schedule public/transit-schedule

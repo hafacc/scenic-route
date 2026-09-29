@@ -4,12 +4,12 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { GraphIdentity } from "../src/routing/graph";
+import { SHED_CITIES } from "../src/routing/shed-cities";
 import { loadGraphBytes } from "./build-sheds";
+import { shedDir as shedDirOf } from "./graph-inputs";
 import { decodeShedArtifact, shedGraphMismatch } from "./shed-encode";
 
-const PUBLIC_DIR = join(import.meta.dirname, "..", "public");
-const GRAPH_PATH = join(PUBLIC_DIR, "routing", "nyc.bin");
-const SHED_DIR = join(PUBLIC_DIR, "sheds");
+const ROUTING_DIR = join(import.meta.dirname, "..", "public", "routing");
 
 export async function checkSheds(
   graphPath: string,
@@ -48,16 +48,23 @@ export async function checkSheds(
     throw new Error(
       `${mismatch}, so every shed would resolve to nothing on the deployed map.` +
         " A graph-input change and its re-place are one deploy: `bun run build-sheds`, commit" +
-        " public/sheds, then deploy. scripts/README.md has the whole refresh procedure.",
+        ` ${shedDir}, then deploy. scripts/README.md has the whole refresh procedure.`,
     );
   }
   console.error(
     `sheds: ${artifact.open.length.toLocaleString()} standing, placed against key space ${keyHash}` +
-      ` (graph ${hash})`,
+      ` (graph ${hash}, ${graphPath})`,
   );
 }
 
+// Every shed city against its own graph, or one pair named on the command line.
 if (import.meta.main) {
-  const [graphPath = GRAPH_PATH, shedDir = SHED_DIR] = process.argv.slice(2);
-  await checkSheds(graphPath, shedDir);
+  const [graphPath, shedDir] = process.argv.slice(2);
+  if (graphPath !== undefined && shedDir !== undefined) {
+    await checkSheds(graphPath, shedDir);
+  } else {
+    for (const city of SHED_CITIES) {
+      await checkSheds(join(ROUTING_DIR, `${city}.bin`), shedDirOf(city));
+    }
+  }
 }

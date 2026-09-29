@@ -3,12 +3,21 @@
 
 import { readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
+import type { ShedCity } from "../src/routing/shed-cities";
 
 const ROOT = join(import.meta.dirname, "..");
 const PROBE_REPORT = join(ROOT, ".build", "key-probe.json");
 const INPUTS_REPORT = join(ROOT, ".build", "graph-inputs.json");
+
+// public/sheds/<city>/, placed on public/routing/<city>.bin.
+export function shedDir(city: ShedCity): string {
+  return join(ROOT, "public", "sheds", city);
+}
+
 // Beside the artifact, not in its header: a *.bin header change is a format bump for both readers.
-export const SHED_INPUTS_PATH = join(ROOT, "public", "sheds", "inputs.json");
+export function shedInputsPath(city: ShedCity): string {
+  return join(shedDir(city), "inputs.json");
+}
 
 async function report<Report>(path: string, script: string): Promise<Report> {
   const text = await readFile(path, "utf-8").catch(() => null);
@@ -21,23 +30,23 @@ async function report<Report>(path: string, script: string): Promise<Report> {
   return JSON.parse(text) as Report;
 }
 
-// Data half: the plan's sources plus their bytes. `files` makes a shrunken set visible in the diff.
-export async function graphInputStamp(): Promise<{
+// Data half: the city's sources plus their bytes. `files` makes a shrunken set visible in the diff.
+export async function graphInputStamp(city: ShedCity): Promise<{
   stamp: string;
   files: number;
 }> {
-  const { stamp, files } = await report<{ stamp?: string; files?: number }>(
-    INPUTS_REPORT,
-    "graph-inputs",
-  );
+  const { cities } = await report<{
+    cities?: Record<string, { stamp?: string; files?: number }>;
+  }>(INPUTS_REPORT, "graph-inputs");
+  const { stamp, files } = cities?.[city] ?? {};
   if (stamp === undefined || files === undefined) {
-    throw new Error("tiler graph-inputs reported no stamp");
+    throw new Error(`tiler graph-inputs reported no stamp for ${city}`);
   }
   return { stamp, files };
 }
 
 // Code half: the key hash the pipeline produces on a fixture of real NYC slices, which stamps
-// behavior rather than source text.
+// behavior rather than source text. One per tiler, so every city's record carries the same one.
 export async function keySpaceProbe(): Promise<string> {
   const { keyHash } = await report<{ keyHash?: string }>(
     PROBE_REPORT,
@@ -56,21 +65,23 @@ export interface ShedInputs {
   keySpace: string;
 }
 
-export async function currentShedInputs(): Promise<ShedInputs> {
+export async function currentShedInputs(city: ShedCity): Promise<ShedInputs> {
   const [{ stamp, files }, keySpace] = await Promise.all([
-    graphInputStamp(),
+    graphInputStamp(city),
     keySpaceProbe(),
   ]);
   return { stamp, files, keySpace };
 }
 
-export async function readShedInputs(): Promise<ShedInputs | null> {
-  const text = await readFile(SHED_INPUTS_PATH, "utf-8").catch(() => null);
+export async function readShedInputs(
+  city: ShedCity,
+): Promise<ShedInputs | null> {
+  const text = await readFile(shedInputsPath(city), "utf-8").catch(() => null);
   return text === null ? null : (JSON.parse(text) as ShedInputs);
 }
 
-export async function writeShedInputs(): Promise<ShedInputs> {
-  const inputs = await currentShedInputs();
-  await writeFile(SHED_INPUTS_PATH, `${JSON.stringify(inputs, null, 2)}\n`);
+export async function writeShedInputs(city: ShedCity): Promise<ShedInputs> {
+  const inputs = await currentShedInputs(city);
+  await writeFile(shedInputsPath(city), `${JSON.stringify(inputs, null, 2)}\n`);
   return inputs;
 }

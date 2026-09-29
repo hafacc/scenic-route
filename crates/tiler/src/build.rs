@@ -1691,6 +1691,18 @@ fn input_oid(path: &Path) -> Fallible<String> {
     }
 }
 
+/// What `bun run check-shed-inputs` compares against each `public/sheds/<city>/inputs.json`.
+#[derive(Serialize)]
+struct GraphInputs {
+    cities: BTreeMap<String, CityInputs>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+struct CityInputs {
+    stamp: String,
+    files: usize,
+}
+
 /// What the graph's durable key space is a function of, stamped for the committed shed artifact.
 impl Plan {
     /// The files that can put a key in the space; the exhaustive match forces a call per source.
@@ -1739,24 +1751,31 @@ impl Plan {
         }
         Ok((hex(&digest.finalize()), files))
     }
-}
 
-/// What `bun run check-shed-inputs` compares against `public/sheds/inputs.json`.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GraphInputs {
-    stamp: String,
-    files: usize,
+    /// One stamp per city, so a city's shed artifact goes stale on its own sources alone.
+    fn key_space_stamps(
+        &self,
+        cities: &[(&City, &PlanCity)],
+    ) -> Fallible<BTreeMap<String, CityInputs>> {
+        cities
+            .iter()
+            .map(|&pair| {
+                let (stamp, files) = self.key_space_stamp(&[pair])?;
+                Ok((pair.1.id.clone(), CityInputs { stamp, files }))
+            })
+            .collect()
+    }
 }
 
 /// `tiler graph-inputs`: stamps the key space of the plan's sources decision without building.
 pub fn graph_inputs(plan_file: &Path, report: &Path) -> Fallible<()> {
     let plan: Plan = serde_json::from_slice(&fs::read(plan_file)?)?;
     let manifest: Manifest = serde_json::from_slice(&fs::read(&plan.manifest)?)?;
-    let cities = plan.pair(&manifest)?;
-    let (stamp, files) = plan.key_space_stamp(&cities)?;
-    eprintln!("graph inputs: {files} files stamped {stamp}");
-    crate::write_report(report, &GraphInputs { stamp, files })
+    let cities = plan.key_space_stamps(&plan.pair(&manifest)?)?;
+    for (id, CityInputs { stamp, files }) in &cities {
+        eprintln!("graph inputs: {id}: {files} files stamped {stamp}");
+    }
+    crate::write_report(report, &GraphInputs { cities })
 }
 
 #[cfg(test)]
@@ -3074,6 +3093,28 @@ mod tests {
         fs::write(data.join("sidewalks").join("nyc.bin"), "re-ingested").expect("a source");
 
         assert_ne!(stamped(&key_space_plan(&data, KEY_SPACE)), before);
+    }
+
+    /// Each city's shed artifact is stamped apart, so one city's data never stales another's.
+    #[test]
+    fn a_city_s_stamp_does_not_move_with_another_city_s_sources() {
+        let data = planted_data("stamp-per-city");
+        let manifest = manifest();
+        let plan = key_space_plan(&data, KEY_SPACE);
+        let stamps = |plan: &Plan| {
+            plan.key_space_stamps(&plan.pair(&manifest).expect("a pairing"))
+                .expect("the stamps")
+        };
+        let before = stamps(&plan);
+        fs::write(data.join("streets").join("sf.bin"), "re-ingested").expect("a source");
+        fs::write(data.join("sidewalks").join("sf.bin"), "re-ingested").expect("a source");
+        let after = stamps(&plan);
+
+        // New York's streets, paths, sidewalks; SF's streets, sidewalks.
+        assert_eq!(before["nyc"].files, 3);
+        assert_eq!(before["sf"].files, 2);
+        assert_eq!(after["nyc"], before["nyc"]);
+        assert_ne!(after["sf"], before["sf"]);
     }
 
     /// A withheld source moves the stamp as much as a changed file.

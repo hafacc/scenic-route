@@ -14,9 +14,9 @@ import {
   DEFAULT_DECK_DEPTH_METERS,
   decodeSheds,
   type EdgeDeck,
+  loadSheds,
   MIN_DECK_DEPTH_METERS,
   SHED_OBLIQUE_FLOOR,
-  SHED_URLS,
   type Shed,
   type ShedField,
   type ShedHistory,
@@ -26,6 +26,7 @@ import {
   shedField,
   shedShade,
   shedsOn,
+  shedUrls,
 } from "./sheds";
 import {
   CLOSED_BASE64,
@@ -421,10 +422,12 @@ test("a doubtful placement covers its edge like any other", () => {
   expect(doubted).toBeGreaterThan(0); // or the fixture has nothing doubtful in it
 });
 
+// Served for New York alone, so a fetch of any other city's artifact fails the test.
+const NEW_YORK = cityById("nyc")!;
 const SERVED: Record<string, string> = {
-  [SHED_URLS.open]: OPEN_BASE64,
-  [SHED_URLS.closed]: CLOSED_BASE64,
-  [SHED_URLS.index]: INDEX_BASE64,
+  [shedUrls("nyc").open]: OPEN_BASE64,
+  [shedUrls("nyc").closed]: CLOSED_BASE64,
+  [shedUrls("nyc").index]: INDEX_BASE64,
 };
 const realFetch = globalThis.fetch;
 afterAll(() => {
@@ -448,7 +451,7 @@ test("computeEdgeSheds fills the graph with the day's coverage, capped below 1",
   const { day, edges } = COVERAGE[COVERAGE.length - 1];
   const highest = edges[edges.length - 1][0];
   const cut = namedGraph(highest);
-  await computeEdgeSheds(cut, new Date(2017, 11, 28 + day));
+  await computeEdgeSheds(cut, new Date(2017, 11, 28 + day), NEW_YORK);
 
   const sheds = cut.sheds as NonNullable<RoutingGraph["sheds"]>;
   expect(sheds.coverage.length).toBe(highest);
@@ -485,12 +488,25 @@ test("a graph the artifact was not placed against costs no scaffolding", async (
   const other = namedGraph(EDGE_COUNT);
   other.keyHash = "0000000000000000";
   await expect(
-    computeEdgeSheds(other, new Date(2017, 11, 28 + day)),
+    computeEdgeSheds(other, new Date(2017, 11, 28 + day), NEW_YORK),
   ).rejects.toThrow(GRAPH_KEY_HASH);
 
   const sheds = other.sheds as NonNullable<RoutingGraph["sheds"]>;
   expect(sheds.maxCoverage).toBe(0);
   expect(sheds.coverage.every((byte) => byte === 0)).toBe(true);
+});
+
+// The fixture server throws on any other URL, so these pass only without a fetch.
+test("a city with no shed artifact stands nothing, without fetching one", async () => {
+  serveFixture();
+  const { day } = COVERAGE[COVERAGE.length - 1];
+  const history = await loadSheds("sf");
+  expect(shedsOn(namedGraph(EDGE_COUNT), history, day)).toEqual([]);
+
+  const other = namedGraph(EDGE_COUNT);
+  await computeEdgeSheds(other, new Date(2017, 11, 28 + day), cityById("sf")!);
+  const sheds = other.sheds as NonNullable<RoutingGraph["sheds"]>;
+  expect(sheds.maxCoverage).toBe(0);
 });
 
 test("a Date maps to its own local calendar day", () => {

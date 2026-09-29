@@ -11,6 +11,7 @@ import {
   scheduleBucket,
   sunAt,
 } from "./shade";
+import { hasSheds } from "./shed-cities";
 
 // Unmeasured; DOB requires 8 ft of clearance and typical decks run 12-15 ft.
 export const DECK_HEIGHT_METERS = 4;
@@ -53,11 +54,18 @@ const SHED_BASE =
   process.env.NEXT_PUBLIC_SHED_BASE ??
   (process.env.NODE_ENV === "development" ? "sheds" : SHED_MAIN_URL);
 
-export const SHED_URLS = {
-  open: `${SHED_BASE}/open.bin`,
-  closed: `${SHED_BASE}/closed.bin`,
-  index: `${SHED_BASE}/index.bin`,
-} as const;
+// Per city, placed against that city's graph alone.
+export function shedUrls(cityId: string): {
+  open: string;
+  closed: string;
+  index: string;
+} {
+  return {
+    open: `${SHED_BASE}/${cityId}/open.bin`,
+    closed: `${SHED_BASE}/${cityId}/closed.bin`,
+    index: `${SHED_BASE}/${cityId}/index.bin`,
+  };
+}
 
 // `edge` is -1 when this graph has no edge by the artifact's durable key.
 export interface ShedSpan {
@@ -474,7 +482,10 @@ export async function computeEdgeSheds(
   forCity: City = activeCity(),
 ): Promise<void> {
   graph.sheds = shedField(graph, new Map(), date, forCity);
-  const history = await loadSheds();
+  if (!hasSheds(forCity.id)) {
+    return;
+  }
+  const history = await loadSheds(forCity.id);
   if (!sameGraph(graph, history)) {
     throw new Error(
       `the shed artifact was placed against key space ${history.graphKeyHash}, this graph's is` +
@@ -489,7 +500,7 @@ export async function computeEdgeSheds(
   );
 }
 
-let historyPromise: Promise<ShedHistory> | null = null;
+const historyPromises = new Map<string, Promise<ShedHistory>>();
 
 async function fetchBuffer(path: string): Promise<ArrayBuffer> {
   const url = artifactUrl(path);
@@ -500,18 +511,44 @@ async function fetchBuffer(path: string): Promise<ArrayBuffer> {
   return response.arrayBuffer();
 }
 
-export function loadSheds(): Promise<ShedHistory> {
-  if (!historyPromise) {
-    historyPromise = Promise.all([
-      fetchBuffer(SHED_URLS.open),
-      fetchBuffer(SHED_URLS.closed),
-      fetchBuffer(SHED_URLS.index),
+const NO_RECORDS: ShedFile = {
+  bytes: new Uint8Array(0),
+  count: 0,
+  spanCount: 0,
+  firstDay: 0,
+  records: 0,
+};
+
+// Placed against no graph, so every graph reads it as standing nothing.
+const NO_SHEDS: ShedHistory = {
+  graphKeyHash: "none",
+  lastDay: 0,
+  open: NO_RECORDS,
+  closed: NO_RECORDS,
+  months: new Uint16Array(0),
+  offsets: new Uint32Array(0),
+  closeDays: new Uint16Array(0),
+};
+
+// A city with no artifact gets an empty history without a fetch, which would only 404.
+export function loadSheds(cityId: string): Promise<ShedHistory> {
+  if (!hasSheds(cityId)) {
+    return Promise.resolve(NO_SHEDS);
+  }
+  let history = historyPromises.get(cityId);
+  if (!history) {
+    const urls = shedUrls(cityId);
+    history = Promise.all([
+      fetchBuffer(urls.open),
+      fetchBuffer(urls.closed),
+      fetchBuffer(urls.index),
     ])
       .then(([open, closed, index]) => decodeSheds(open, closed, index))
       .catch((error: unknown) => {
-        historyPromise = null; // a failed load must not be memoized
+        historyPromises.delete(cityId); // a failed load must not be memoized
         throw error;
       });
+    historyPromises.set(cityId, history);
   }
-  return historyPromise;
+  return history;
 }

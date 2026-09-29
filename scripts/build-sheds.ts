@@ -1,5 +1,5 @@
 // The artifact must be a function of the feed and its end date alone, so incremental runs match it.
-// Reads public/routing/nyc.bin, so it runs after `bun run build-tiles`.
+// Reads public/routing/<city>.bin, so it runs after `bun run build-tiles`.
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -9,7 +9,8 @@ import {
   NO_SOURCE_ID,
   type RoutingGraph,
 } from "../src/routing/graph";
-import { writeShedInputs } from "./graph-inputs";
+import type { ShedCity } from "../src/routing/shed-cities";
+import { shedDir, writeShedInputs } from "./graph-inputs";
 import {
   CONFIDENCE_CEILING,
   DEPTH_CEILING,
@@ -50,10 +51,8 @@ import {
 
 const PUBLIC_DIR = join(import.meta.dirname, "..", "public");
 const ROUTING_DIR = join(PUBLIC_DIR, "routing");
-// The one committed directory under public/; the tile build neither renders nor clears it.
-export const SHED_DIR = join(PUBLIC_DIR, "sheds");
-const GRAPH_PATH = join(ROUTING_DIR, "nyc.bin");
-const VERSION_PATH = join(ROUTING_DIR, "nyc.version.json");
+// The city the DOB permit feed covers; another city's sheds are another permit source.
+export const DOB_CITY: ShedCity = "nyc";
 const SIDE_MASK = 0x7; // the graph's kind-and-side byte, bits 3-5
 const METERS_PER_MILE = 1609.344;
 const PROGRESS_EVERY = 5_000;
@@ -70,16 +69,18 @@ export function loadGraphBytes(source: Uint8Array): RoutingGraph {
   return { ...graph, keyHash: graphKeyHashOf(graph) };
 }
 
-async function loadGraph(): Promise<RoutingGraph> {
-  const graph = loadGraphBytes(await readFile(GRAPH_PATH));
-  const version = (await readFile(VERSION_PATH, "utf-8").catch(() => null)) as
-    | string
-    | null;
+async function loadGraph(city: ShedCity): Promise<RoutingGraph> {
+  const graphPath = join(ROUTING_DIR, `${city}.bin`);
+  const graph = loadGraphBytes(await readFile(graphPath));
+  const version = (await readFile(
+    join(ROUTING_DIR, `${city}.version.json`),
+    "utf-8",
+  ).catch(() => null)) as string | null;
   if (version !== null) {
     const declared = JSON.parse(version) as GraphIdentity;
     if (declared.hash !== graph.hash || declared.keyHash !== graph.keyHash) {
       throw new Error(
-        `${GRAPH_PATH} is ${graph.hash}/${graph.keyHash}, its version file says` +
+        `${graphPath} is ${graph.hash}/${graph.keyHash}, its version file says` +
           ` ${declared.hash}/${declared.keyHash}`,
       );
     }
@@ -248,19 +249,22 @@ export function encodedShedsOf(
 }
 
 export async function writeShedArtifact(
+  city: ShedCity,
   encoded: readonly EncodedShed[],
   graphKeyHash: string,
   lastDay: number,
   counts: readonly number[],
 ): Promise<void> {
   const artifact = encodeSheds(encoded, graphKeyHash, lastDay, counts);
-  await mkdir(SHED_DIR, { recursive: true });
+  // Committed under public/; the tile build neither renders nor clears it.
+  const dir = shedDir(city);
+  await mkdir(dir, { recursive: true });
   for (const [name, bytes] of [
     ["open.bin", artifact.open],
     ["closed.bin", artifact.closed],
     ["index.bin", artifact.index],
   ] as const) {
-    await writeFile(join(SHED_DIR, name), bytes);
+    await writeFile(join(dir, name), bytes);
     console.error(`  ${name}: ${bytes.length.toLocaleString()} bytes`);
   }
 }
@@ -370,7 +374,7 @@ export async function buildSheds(): Promise<void> {
   const parcels = await fetchShedParcels(parcelRequestsOf(attributes));
   const records = attributes.map((reading) => toShedRecord(reading, parcels));
 
-  const graph = await loadGraph();
+  const graph = await loadGraph(DOB_CITY);
   const started = performance.now();
   const index = buildSidewalkIndex(graph);
   console.error(
@@ -384,6 +388,7 @@ export async function buildSheds(): Promise<void> {
     placed.get(interval.attributes)!;
   const day = shedDayOf(lastDay);
   await writeShedArtifact(
+    DOB_CITY,
     encodedShedsOf(
       permits,
       (interval) => ({
@@ -397,7 +402,7 @@ export async function buildSheds(): Promise<void> {
     counts,
   );
   // Stamped only here: update-sheds re-stamping would launder an input change nobody re-placed.
-  const inputs = await writeShedInputs();
+  const inputs = await writeShedInputs(DOB_CITY);
   console.error(
     `  inputs.json: ${inputs.files} committed key-space inputs stamped ${inputs.stamp}, key probe` +
       ` ${inputs.keySpace}`,

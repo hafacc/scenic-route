@@ -46,7 +46,7 @@ tiler build --plan <file.json> [--jobs <count|half>]          # the nine passes 
             [--only <pass>[:<city>],…] [--force]              # …or only some of them, stamps ignored or not
 tiler ingest --params <file.json> --report <file.json>        # fills the canopy crown heights and the street & path density blobs, in place
 tiler key-probe --report <file.json>                          # the graph pipeline over a fixture, for the durable key hash the shed gate stamps
-tiler graph-inputs --plan <file.json> --report <file.json>    # the other half of that gate: the plan's sources decision, and the bytes it names
+tiler graph-inputs --plan <file.json> --report <file.json>    # the other half of that gate: each city's sources decision and the bytes it names, stamped per city
 ```
 
 There were ten. Seven of them were argv wrappers over the module function `tiler build` already
@@ -3825,13 +3825,19 @@ An edge reads positive when net sunlit and negative when net shaded; the clamp i
 `|attr| <= 127/128 < 1`, and with it the cost model's `1 - w*attr` positive for `|w| <= 1`. A ferry
 edge has no polyline and reads 0 in both rows — its cost never consults the attribute.
 
-### `public/sheds/` — the sidewalk-shed history, magic `SHED` (v3, derived, **committed**)
+### `public/sheds/<city>/` — the sidewalk-shed history, magic `SHED` (v3, derived, **committed**)
 
 Every scaffolding permit New York has issued since **2017-12-28**, placed on the GRPH edges it stands
 over. Not baked by `tiler`: `bun run build-sheds` (`scripts/build-sheds.ts`) does the whole pipeline
 and writes these three files; `bun run update-sheds` keeps them current without ever running it
 again. It reads `public/routing/nyc.bin`, so it runs **after** `bun run build-tiles`, which bakes
-that graph and never touches this directory. Nothing empties `public/routing` any more either: the
+that graph and never touches this directory. **The artifact is per city**: each city in
+`SHED_CITIES` (`src/routing/shed-cities.ts`) has its own `open.bin`, `closed.bin`, `index.bin` and
+`inputs.json` under `public/sheds/<city>/`, placed on that city's graph, and the client fetches the
+active city's, or nothing for a city not listed. Only New York has a permit source (the DOB feed, `DOB_CITY` in `build-sheds.ts`), so
+the list is `["nyc"]`; adding a city is a permit source that writes its directory plus an entry in
+the list — `check-sheds`, `check-shed-inputs` and the daily job's commit step already go over every
+listed city. Nothing empties `public/routing` any more either: the
 graph pass removes exactly its own per-city pieces when that city's stamp fails, and the driver's
 sweep only takes away names belonging to a city the manifest dropped. All dates are
 **day numbers from 2017-12-28**, which a u16 holds until 2197.
@@ -4100,16 +4106,17 @@ a reason to steer clear of it rather than to discount it.
 
 The DOB publishes a new snapshot every morning, so this is the one artifact rebuilt by a job rather
 than by a deploy. `.github/workflows/sheds.yml` runs `bun run update-sheds` at 15:00 UTC, which reads
-the three committed files out of the checkout, rewrites them, and pushes one ordinary commit to
-`main`. `build.yml`'s push trigger ignores `public/sheds/**`, so that commit does not fire a lint+test
-run; `paths-ignore` is not on the `pull_request` trigger, so a person editing the pipeline still gets
-one. The push is never forced — not even `--force-with-lease`, whose lease is checked against the tip
-this checkout fetched, which is exactly the human push it would be overwriting. A rejected push
-re-reads `main`, re-stages the same three files on the new tip and commits again, up to three times;
+each shed city's committed files under `public/sheds/<city>/` out of the checkout, rewrites them,
+and pushes one ordinary commit to `main`. `build.yml`'s push trigger ignores `public/sheds/**`, so
+that commit does not fire a lint+test run; `paths-ignore` is not on the `pull_request` trigger, so
+a person editing the pipeline still gets one. The push is never forced — not even
+`--force-with-lease`, whose lease is checked against the tip this checkout fetched, which is exactly
+the human push it would be overwriting. A rejected push
+re-reads `main`, re-stages the same files on the new tip and commits again, up to three times;
 nothing else is ever staged, so there is nothing for a retry to conflict with.
 
 That commit is what the client reads. It fetches
-`raw.githubusercontent.com/hafacc/scenic-route/main/public/sheds/{open,closed,index}.bin` — `raw`
+`raw.githubusercontent.com/hafacc/scenic-route/main/public/sheds/<city>/{open,closed,index}.bin` — `raw`
 serves any branch with `access-control-allow-origin: *`, gzip, an etag, a five-minute cache and range
 requests — **so the scaffolding on the map is as fresh as the job, not as the last deploy**, which
 matters because Pages ships on `workflow_dispatch` only. A dev server reads its own `public/sheds/`
@@ -4220,7 +4227,7 @@ someone forgot, not a license to skip one.
 3. `bun run build-sheds` — re-derives all 72,020 records against the new graph from the DOB history
    and the tax lots. Two minutes, deterministic, disk-cached; it is not a migration and keeps no
    state from the old artifact.
-4. Commit `public/sheds/*.bin` (plain git — **never** LFS) alongside the sources, one push.
+4. Commit `public/sheds/<city>/` (plain git — **never** LFS) alongside the sources, one push.
 5. `bun run check-sheds`, then dispatch the deploy.
 
 `check-sheds` compares the key space of the graph `build-tiles` wrote against the one the committed
@@ -4243,8 +4250,9 @@ client, for however long it took someone to dispatch one. So `bun run check-shed
 (`scripts/check-shed-inputs.ts`) runs on every push and pull request instead, over what the graph is
 built *from* rather than the graph itself: the tiler stamps that in two halves,
 `scripts/graph-inputs.ts` reads the two reports, `build-sheds` records them in
-`public/sheds/inputs.json` beside the artifact it places, and the two are compared. A change without
-a re-place fails the run and says which half moved.
+`public/sheds/<city>/inputs.json` beside the artifact it places, and the two are compared for every
+city in `SHED_CITIES`. A change without a re-place fails the run and says which city and which half
+moved.
 
 ### What the stamp covers, and why it is so small
 
@@ -4257,7 +4265,10 @@ whole tiler crate and `Cargo.lock` — and that cost a full re-place for an edit
 that provoked the narrowing touched `graph.rs`, went stale, and re-placed to a **byte-identical**
 artifact.
 
-**The data half** is three committed files per city — six today — hashed as bytes:
+**The data half** is three committed files per city, hashed as bytes. `tiler graph-inputs` reports
+one stamp **per city**, and a city's `inputs.json` records its own alone — so a San Francisco
+re-ingest, which cannot move a key New York's artifact resolves through, costs no re-place, and a
+city with no sheds has nothing to go stale. New York's three:
 
 | in | why |
 | --- | --- |
