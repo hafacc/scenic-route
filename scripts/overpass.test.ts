@@ -1,11 +1,34 @@
 import { expect, test } from "bun:test";
 import {
   cemeteryLanes,
+  golfPath,
   NUISANCE_CLASS,
   nuisanceLineOf,
   type OverpassElement,
   tunneled,
 } from "./overpass";
+
+test("a golf cart path or golfers' path is no walk, whatever foot says", () => {
+  expect(
+    golfPath({ highway: "path", golf: "cartpath", golf_cart: "yes" }),
+  ).toBe(true);
+  expect(golfPath({ highway: "service", golf: "cartpath" })).toBe(true);
+  expect(golfPath({ highway: "path", golf: "path", foot: "designated" })).toBe(
+    true,
+  );
+  expect(golfPath({ highway: "footway", golf: "path" })).toBe(true);
+});
+
+test("a public path across a course carries no golf tag and stays", () => {
+  expect(
+    golfPath({ highway: "cycleway", name: "Putnam Trail", foot: "designated" }),
+  ).toBe(false);
+  expect(golfPath({ highway: "footway", foot: "designated" })).toBe(false);
+  // golf_cart=yes only lets carts use a path; it does not make one theirs.
+  expect(golfPath({ highway: "footway", golf_cart: "yes" })).toBe(false);
+  // A course feature is not a path class, so it never reaches the extract anyway.
+  expect(golfPath({ golf: "fairway" })).toBe(false);
+});
 
 test("a way is in a tunnel when the tag says so, whatever value it says it with", () => {
   expect(tunneled({ tunnel: "yes" })).toBe(true);
@@ -194,6 +217,10 @@ test("a cemetery lane that is barred or a parking aisle stays out", () => {
       lane(6, { highway: "residential" }, INSIDE),
     ),
   ).toEqual([]);
+});
+
+test("a golf cart path inside a cemetery is no lane either", () => {
+  expect(kept(lane(1, { golf: "cartpath" }, INSIDE))).toEqual([]);
 });
 
 test("a closed grave_yard way is a cemetery too", () => {
