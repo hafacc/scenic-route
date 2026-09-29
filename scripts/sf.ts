@@ -3,9 +3,11 @@ import { buildLandTest } from "./land-filter";
 import type { Polygon } from "./overpass";
 import { type Coord, DATA_SF, type Tree } from "./socrata";
 import {
+  FLAG_STRUCTURE,
   ROAD_PATH,
   ROAD_STEPS,
   ROAD_STREET,
+  ROAD_TUNNEL,
   type RoadType,
   type Segment,
   toInt,
@@ -39,7 +41,7 @@ export async function fetchSfLand(): Promise<Polygon[]> {
   return polygons;
 }
 
-interface StreetRow {
+export interface StreetRow {
   line?: { type: string; coordinates: [number, number][] };
   cnn?: string;
   layer?: string;
@@ -75,6 +77,7 @@ const WALKABLE_LAYERS: Record<string, RoadType> = {
 
 // No `ALY`: the alley type means New York's pavementless service way; SF's alleys have sidewalks.
 const TYPE_OVERRIDES: Record<string, RoadType> = {
+  TUNL: ROAD_TUNNEL, // Stockton and the Broadway (Robert C Levy) bores, both with sidewalks
   STPS: ROAD_STEPS,
   STWY: ROAD_STEPS,
   WALK: ROAD_PATH,
@@ -83,7 +86,7 @@ const TYPE_OVERRIDES: Record<string, RoadType> = {
   PLZ: ROAD_PATH,
 };
 
-function roadTypeOf(row: StreetRow): RoadType | null {
+export function roadTypeOf(row: StreetRow): RoadType | null {
   const layer = WALKABLE_LAYERS[row.layer ?? ""];
   if (layer === undefined) {
     return null;
@@ -203,7 +206,7 @@ export async function fetchSfStreets(): Promise<Segment[]> {
     const area = areas.get(String(toInt(row.cnn)));
     const lengthFeet = dense.lengthMeters / METERS_PER_FOOT;
     const width =
-      roadType === ROAD_STREET
+      roadType === ROAD_STREET || roadType === ROAD_TUNNEL
         ? roadwayFeet(
             area !== undefined && lengthFeet > 0
               ? area / lengthFeet
@@ -221,7 +224,7 @@ export async function fetchSfStreets(): Promise<Segment[]> {
       streetWidth: width,
       postedSpeed: 0, // not on SF's centerline
       // `classcode = 1` occurs only on the dropped FREEWAYS layer, so nothing is vehicular-only.
-      flags: 0,
+      flags: roadType === ROAD_TUNNEL ? FLAG_STRUCTURE : 0,
       name: (row.streetname ?? "").trim(),
       nameId: UNNAMED_ID,
       points: dense.points,
