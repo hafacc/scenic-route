@@ -24,12 +24,16 @@ import {
 import { fetchStationEntrances, type OsmStationEntrance } from "./overpass";
 import { type Coord, NY_STATE_OPEN_DATA } from "./socrata";
 import {
+  buildComplexes,
+  type ComplexGroup,
+  type ComplexModel,
   centroid,
   clusterByName,
-  nextComplexId,
   parseColor,
+  publishedTransfers,
   type Rgb,
-  transferComplexes,
+  stationNamesAgree,
+  stationNameTokens,
 } from "./subway-format";
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
@@ -47,6 +51,10 @@ const SURFACE_FLAG = 1;
 const SPLIT_FLAG = 2;
 const ENTRY_FLAG = 1;
 const EXIT_FLAG = 2;
+// The transfer section, after the name table: a v2 reader never looks past the names.
+const COMPLEX_BYTES = 8;
+const TRANSFER_BYTES = 8;
+const PUBLISHED_FLAG = 1;
 
 // A `sides` mask: bit d for GTFS `direction_id` d.
 export const NORTHBOUND_SIDE = 1;
@@ -87,6 +95,8 @@ export interface TransitFeedSource {
   underground: ReadonlySet<string>;
   displayName?: (feedName: string) => string;
   entrances?: (feed: GtfsFeed) => Promise<FeedEntrances>;
+  // Complexes an agency publishes beyond its transfers.txt pairs.
+  complexGroups?: () => Promise<ComplexGroup[]>;
 }
 
 export interface FeedEntrance extends Coord {
@@ -185,6 +195,32 @@ const MTA_ENTRANCE_KINDS: Readonly<Record<string, EntranceKind>> = {
 const MTA_ENTRANCE_DATASET = "i9wp-a4ja";
 const MTA_ENTRANCE_ROWS = 2_120;
 
+// "MTA Subway Stations and Complexes": names each complex and lists its stations' GTFS ids.
+const MTA_COMPLEX_DATASET = "5f5g-n3cz";
+const MTA_COMPLEX_ROWS = 445;
+
+interface MtaComplexRow {
+  stop_name?: string;
+  gtfs_stop_ids?: string;
+}
+
+// South Ferry and Whitehall St share a complex id but no transfers.txt pair.
+async function mtaComplexGroups(): Promise<ComplexGroup[]> {
+  const rows = await NY_STATE_OPEN_DATA.dataset<MtaComplexRow>(
+    MTA_COMPLEX_DATASET,
+    { $select: "stop_name,gtfs_stop_ids" },
+    MTA_COMPLEX_ROWS,
+  );
+  return rows.map((row) => ({
+    keys: (row.gtfs_stop_ids ?? "")
+      .split(";")
+      .map((id) => id.trim())
+      .filter((id) => id !== "")
+      .map((id) => `mta:${id}`),
+    name: row.stop_name?.trim() || undefined,
+  }));
+}
+
 interface MtaEntranceRow {
   gtfs_stop_id?: string;
   entrance_type?: string;
@@ -239,31 +275,40 @@ async function mtaEntrances(): Promise<FeedEntrances> {
   const matched = new Set<string>();
   const entrances: FeedEntrance[] = [];
   for (const row of rows) {
-    // Some rows name two stations of one complex, which the graph makes one node anyway.
-    const stationId = (row.gtfs_stop_id ?? "").split(";")[0].trim();
+    // A row naming two stations of one complex is a door into each.
+    const stationIds = (row.gtfs_stop_id ?? "")
+      .split(";")
+      .map((id) => id.trim())
+      .filter((id) => id !== "");
     const lat = Number(row.entrance_latitude);
     const lng = Number(row.entrance_longitude);
     const kind = MTA_ENTRANCE_KINDS[(row.entrance_type ?? "").trim()];
-    if (stationId === "" || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    if (
+      stationIds.length === 0 ||
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng)
+    ) {
       continue;
     } else if (kind === undefined) {
       console.error(`  entrance type "${row.entrance_type}": unknown, dropped`);
       continue;
     }
-    const key = entranceKey(stationId, lng, lat);
+    const key = entranceKey(stationIds[0], lng, lat);
     const sides = overrides.get(key);
     if (sides !== undefined) {
       matched.add(key);
     }
-    entrances.push({
-      stationId,
-      lat,
-      lng,
-      kind,
-      entry: row.entry_allowed === "YES",
-      exit: row.exit_allowed === "YES",
-      sides: sides ?? null,
-    });
+    for (const stationId of stationIds) {
+      entrances.push({
+        stationId,
+        lat,
+        lng,
+        kind,
+        entry: row.entry_allowed === "YES",
+        exit: row.exit_allowed === "YES",
+        sides: sides ?? null,
+      });
+    }
   }
   if (matched.size !== overrides.size) {
     const lost = [...overrides.keys()].filter((key) => !matched.has(key));
@@ -533,6 +578,7 @@ const CITY_FEEDS: Readonly<Record<string, readonly TransitFeedSource[]>> = {
       groupKey: (row) => row.route_id,
       underground: NO_UNDERGROUND,
       entrances: mtaEntrances,
+      complexGroups: mtaComplexGroups,
     },
   ],
   sf: [
@@ -586,7 +632,10 @@ export async function loadFeeds(cityId: string): Promise<LoadedFeed[]> {
     console.error(`transit: reading ${source.name}`);
     loaded.push({
       source,
-      feed: parseGtfs(await fetchGtfsZipFile(source.cacheKey, source.url)),
+      feed: parseGtfs(
+        await fetchGtfsZipFile(source.cacheKey, source.url),
+        source.routeTypes,
+      ),
     });
   }
   return loaded;
@@ -594,11 +643,23 @@ export async function loadFeeds(cityId: string): Promise<LoadedFeed[]> {
 
 export interface TransitStation extends Coord {
   name: string;
-  // transfers.txt component, from 1; 0 for none. Stations sharing an id are one transfer point.
+  // Complex id from 1, the same the SBWY file carries; 0 for none.
   complex: number;
   surface: boolean;
-  // No free crossover; never set within a complex, where a transfer never reaches the street.
+  // No free crossover, so the graph gives each direction its own nodes.
   split: boolean;
+}
+
+export interface TransitComplex {
+  id: number;
+  name: string;
+}
+
+// Station indices; `seconds` null where the agency publishes no time, so the graph estimates it.
+export interface TransitTransfer {
+  from: number;
+  to: number;
+  seconds: number | null;
 }
 
 export interface TransitEntrance extends Coord {
@@ -639,6 +700,9 @@ export interface TransitTopology {
   entrances: readonly TransitEntrance[];
   routes: readonly TransitRoute[];
   patterns: readonly TransitPattern[];
+  // Only complexes of two or more stations.
+  complexes: readonly TransitComplex[];
+  transfers: readonly TransitTransfer[];
 }
 
 export interface PatternCounts {
@@ -728,7 +792,6 @@ function feedStations(
   feed: GtfsFeed,
   source: TransitFeedSource,
   keptTrips: ReadonlySet<string>,
-  complexes: ReadonlyMap<string, number>,
 ): { stations: RawStation[]; stationOfStop: Map<string, string> } {
   const stopRow = new Map(feed.stops.map((stop) => [stop.stop_id, stop]));
   const publishesParents = feed.stops.some(
@@ -759,7 +822,7 @@ function feedStations(
       lat,
       lng,
       name,
-      complex: complexes.get(stationId) ?? 0,
+      complex: 0,
       // A feed that models parent stations is describing enclosed places, not the curb.
       surface: !publishesParents && !source.underground.has(name),
     });
@@ -780,9 +843,6 @@ function mergeByName(
   const merged: RawStation[] = [];
   const mergedKeyOf = new Map<string, string>();
   for (const cluster of clusterByName(stations)) {
-    const ids = cluster
-      .map(({ complex }) => complex)
-      .filter((complex) => complex !== 0);
     // Lowest, so the key doesn't depend on feed order.
     const key = cluster.map(({ key: member }) => member).sort()[0];
     for (const member of cluster) {
@@ -792,7 +852,7 @@ function mergeByName(
       ...centroid(cluster),
       key,
       name: cluster[0].name,
-      complex: ids.length === 0 ? 0 : Math.min(...ids),
+      complex: 0,
       surface: cluster.every((one) => one.surface),
     });
   }
@@ -806,64 +866,21 @@ function mergeByName(
 
 // A long concourse: Embarcadero's BART and Muni platforms are about this far apart.
 const NAMED_TRANSFER_METERS = 150;
+// Muni's lone direction pairs stand 5-54 m apart; Powell's 76 m pair joins through BART.
+const DIRECTION_PAIR_METERS = 60;
 
-const NAME_NOISE: ReadonlySet<string> = new Set([
-  "station",
-  "bart",
-  "muni",
-  "metro",
-  "mezzanine",
-  "level",
-  "platform",
-  "st",
-  "street",
-]);
-
-// Stripped only from the end: BART has a Downtown Berkeley.
-const DIRECTION_WORDS: ReadonlySet<string> = new Set([
-  "inbound",
-  "outbound",
-  "outbd",
-  "downtown",
-  "downtn",
-]);
-
-function nameTokens(name: string): string[] {
-  const tokens = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .split(" ")
-    .filter((token) => token !== "" && !NAME_NOISE.has(token));
-  while (tokens.length > 1 && DIRECTION_WORDS.has(tokens[tokens.length - 1])) {
-    tokens.pop();
-  }
-  return tokens;
+interface NamedJoin {
+  left: string;
+  right: string;
+  meters: number;
 }
 
-// True when one name's tokens run contiguously inside the other's.
-function namesAgree(
-  left: readonly string[],
-  right: readonly string[],
-): boolean {
-  const [inner, outer] =
-    left.length <= right.length ? [left, right] : [right, left];
-  if (inner.length === 0) {
-    return false;
-  }
-  for (let start = 0; start + inner.length <= outer.length; start++) {
-    if (inner.every((token, index) => token === outer[start + index])) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// Cross-feed transfers, which neither SF feed publishes; a station brings its whole complex along.
-function joinNamedComplexes(
-  stations: RawStation[],
+// Neither SF feed publishes transfers: joins across feeds by name, and a Metro station's directions.
+function namedGroups(
+  stations: readonly RawStation[],
   feedOfKey: ReadonlyMap<string, string>,
-  firstId: number,
-): { left: string; right: string; meters: number }[] {
+  directionPlatforms: ReadonlySet<string>,
+): { groups: ComplexGroup[]; joined: NamedJoin[] } {
   const parent = stations.map((_station, index) => index);
   const find = (index: number): number => {
     let root = index;
@@ -873,71 +890,160 @@ function joinNamedComplexes(
     parent[index] = root;
     return root;
   };
-  for (let index = 0; index < stations.length; index++) {
-    const complex = stations[index].complex;
-    if (complex !== 0) {
-      for (let other = 0; other < index; other++) {
-        if (stations[other].complex === complex) {
-          parent[find(index)] = find(other);
-          break;
-        }
-      }
-    }
-  }
-
-  const tokens = stations.map((station) => nameTokens(station.name));
-  const joined: { left: string; right: string; meters: number }[] = [];
+  const tokens = stations.map((station) => stationNameTokens(station.name));
+  const joined: NamedJoin[] = [];
   for (let index = 0; index < stations.length; index++) {
     for (let other = index + 1; other < stations.length; other++) {
+      const left = stations[index];
+      const right = stations[other];
+      const sameFeed = feedOfKey.get(left.key) === feedOfKey.get(right.key);
+      const reach = !sameFeed
+        ? NAMED_TRANSFER_METERS
+        : directionPlatforms.has(left.key) && directionPlatforms.has(right.key)
+          ? DIRECTION_PAIR_METERS
+          : 0;
+      const meters = haversineMeters(left, right);
       if (
-        feedOfKey.get(stations[index].key) ===
-        feedOfKey.get(stations[other].key)
+        reach === 0 ||
+        meters > reach ||
+        !stationNamesAgree(tokens[index], tokens[other])
       ) {
         continue;
       }
-      const meters = haversineMeters(stations[index], stations[other]);
-      if (
-        meters > NAMED_TRANSFER_METERS ||
-        !namesAgree(tokens[index], tokens[other])
-      ) {
-        continue;
-      }
-      joined.push({
-        left: stations[index].name,
-        right: stations[other].name,
-        meters,
-      });
+      joined.push({ left: left.name, right: right.name, meters });
       parent[find(index)] = find(other);
     }
   }
-  if (joined.length === 0) {
-    return joined;
-  }
 
-  const members = new Map<number, number[]>();
+  const members = new Map<number, string[]>();
   for (let index = 0; index < stations.length; index++) {
     const root = find(index);
     const group = members.get(root);
     if (group) {
-      group.push(index);
+      group.push(stations[index].key);
     } else {
-      members.set(root, [index]);
+      members.set(root, [stations[index].key]);
     }
   }
-  let nextId = firstId;
-  for (const group of members.values()) {
-    if (group.length < 2) {
-      continue;
-    }
-    const existing = group
-      .map((index) => stations[index].complex)
-      .filter((complex) => complex !== 0);
-    const id = existing.length > 0 ? Math.min(...existing) : nextId++;
-    for (const index of group) {
-      stations[index].complex = id;
+  const groups = [...members.values()]
+    .filter((keys) => keys.length > 1)
+    .map((keys) => ({ keys }));
+  return { groups, joined };
+}
+
+export interface FeedStationTable {
+  source: TransitFeedSource;
+  feed: GtfsFeed;
+  stations: RawStation[];
+  stationOfStop: Map<string, string>;
+}
+
+// A stop's station key: the merged station it rides from, else its parent, else itself.
+function stationKeyOf(table: FeedStationTable, stopId: string): string {
+  const merged = table.stationOfStop.get(stopId);
+  if (merged !== undefined) {
+    return merged;
+  }
+  const stop = table.feed.stops.find((row) => row.stop_id === stopId);
+  return `${table.source.id}:${stop?.parent_station?.trim() || stopId}`;
+}
+
+// The one complex model both the display and the routing ingest write, so their ids agree.
+function complexModel(
+  tables: readonly FeedStationTable[],
+  groups: readonly ComplexGroup[],
+): ComplexModel {
+  const feedOfKey = new Map<string, string>();
+  const directionPlatforms = new Set<string>();
+  const stations: RawStation[] = [];
+  for (const table of tables) {
+    for (const station of table.stations) {
+      feedOfKey.set(station.key, table.source.id);
+      stations.push(station);
+      if (table.source.underground.has(station.name)) {
+        directionPlatforms.add(station.key);
+      }
     }
   }
-  return joined;
+  stations.sort(
+    (left, right) =>
+      left.lat - right.lat ||
+      left.lng - right.lng ||
+      (left.name < right.name ? -1 : 1),
+  );
+  const named = namedGroups(stations, feedOfKey, directionPlatforms);
+  for (const { left, right, meters } of named.joined) {
+    console.error(
+      `  one complex: "${left}" and "${right}", ${meters.toFixed(0)} m apart`,
+    );
+  }
+  const displayOf = new Map(
+    tables.map(({ source }) => [source.id, source.displayName]),
+  );
+  const published = tables.map((table) =>
+    publishedTransfers(table.feed, (stopId) => stationKeyOf(table, stopId)),
+  );
+  return buildComplexes(
+    stations.map(({ key, lat, lng, name }) => {
+      const display = displayOf.get(feedOfKey.get(key) ?? "");
+      return {
+        key,
+        lat,
+        lng,
+        name: display === undefined ? name : display(name),
+      };
+    }),
+    published.flatMap(({ pairs }) => pairs),
+    [...groups, ...named.groups],
+    published.flatMap(({ blocked }) => blocked),
+  );
+}
+
+// Trips of the feed's kept route types, keyed by trip id.
+function keptTripsOf(feed: GtfsFeed, source: TransitFeedSource): Set<string> {
+  const routeIds = new Set(
+    feedRoutes(feed, source).flatMap(({ feedRouteIds }) => feedRouteIds),
+  );
+  return new Set(
+    feed.trips
+      .filter((trip) => routeIds.has(trip.route_id))
+      .map((trip) => trip.trip_id),
+  );
+}
+
+export async function loadComplexGroups(
+  loaded: readonly LoadedFeed[],
+): Promise<ComplexGroup[]> {
+  const groups: ComplexGroup[] = [];
+  for (const { source } of loaded) {
+    if (source.complexGroups !== undefined) {
+      console.error(`transit: reading ${source.name} complexes`);
+      groups.push(...(await source.complexGroups()));
+    }
+  }
+  return groups;
+}
+
+// For the display ingest: a stop's complex id, by feed id and the stop or parent id it names.
+export function cityComplexes(
+  loaded: readonly LoadedFeed[],
+  groups: readonly ComplexGroup[],
+): { complexOf: (feedId: string, stopId: string) => number } {
+  const tables = loaded.map(({ source, feed }) => ({
+    source,
+    feed,
+    ...feedStations(feed, source, keptTripsOf(feed, source)),
+  }));
+  const model = complexModel(tables, groups);
+  const tableOf = new Map(tables.map((table) => [table.source.id, table]));
+  return {
+    complexOf: (feedId, stopId) => {
+      const table = tableOf.get(feedId);
+      return table === undefined
+        ? 0
+        : (model.complexOf.get(stationKeyOf(table, stopId)) ?? 0);
+    },
+  };
 }
 
 function tripStopTimes(feed: GtfsFeed): Map<string, GtfsRow[]> {
@@ -1199,7 +1305,6 @@ export interface EntranceCounts {
   unmatched: string[]; // station ids with no station in the topology
   dropped: number; // entrances at those stations
   split: number;
-  splitInComplex: string[];
   sidedByTrack: number;
 }
 
@@ -1227,23 +1332,12 @@ function placeEntrances(
   patterns: readonly TransitPattern[],
   tracks: RouteTracks,
 ): { entrances: TransitEntrance[]; counts: EntranceCounts } {
-  // Most transfers.txt stations transfer only to themselves; a complex means a shared id.
-  const complexSize = new Map<number, number>();
-  for (const { complex } of stations) {
-    if (complex !== 0) {
-      complexSize.set(complex, (complexSize.get(complex) ?? 0) + 1);
-    }
-  }
-
   const unmatched = new Set<string>();
-  const splitInComplex: string[] = [];
   for (const { source } of loaded) {
     for (const stationId of byFeed.get(source.id)?.split ?? []) {
       const index = stationIndexOf.get(`${source.id}:${stationId}`);
       if (index === undefined) {
         unmatched.add(`${source.id}:${stationId}`);
-      } else if ((complexSize.get(stations[index].complex) ?? 0) > 1) {
-        splitInComplex.push(stations[index].name);
       } else {
         stations[index].split = true;
       }
@@ -1316,7 +1410,6 @@ function placeEntrances(
       unmatched: [...unmatched].sort(),
       dropped,
       split: stations.filter((station) => station.split).length,
-      splitInComplex,
       sidedByTrack: onTrack,
     },
   };
@@ -1329,6 +1422,7 @@ export function buildTopology(
   minPatternShare: number = MIN_PATTERN_SHARE,
   feedEntrances: ReadonlyMap<string, FeedEntrances> = new Map(),
   tracks: RouteTracks = new Map(),
+  complexGroups: readonly ComplexGroup[] = [],
 ): {
   topology: TransitTopology;
   counts: PatternCounts;
@@ -1350,16 +1444,11 @@ export function buildTopology(
   const routes = collected.sort((left, right) => (left.id < right.id ? -1 : 1));
   const indexOfRoute = new Map(routes.map((route, index) => [route.id, index]));
 
-  const perFeed: {
-    source: TransitFeedSource;
-    feed: GtfsFeed;
-    routeOfTrip: Map<string, number>;
-    stationOfStop: Map<string, string>;
-  }[] = [];
+  const perFeed: (FeedStationTable & { routeOfTrip: Map<string, number> })[] =
+    [];
   const rawStations: RawStation[] = [];
   const feedOfKey = new Map<string, string>();
 
-  let firstComplexId = 1;
   for (const { source, feed } of loaded) {
     // Per feed: four Muni bus route_ids equal BART route_ids.
     const artifactOf = feedRouteIds.get(source.id) ?? new Map<string, string>();
@@ -1370,20 +1459,20 @@ export function buildTopology(
         routeOfTrip.set(trip.trip_id, index);
       }
     }
-    // Each feed's complex ids start past the previous feed's.
-    const complexes = transferComplexes(feed, firstComplexId);
-    firstComplexId = nextComplexId(complexes);
     const { stations, stationOfStop } = feedStations(
       feed,
       source,
       new Set(routeOfTrip.keys()),
-      complexes,
     );
     for (const station of stations) {
       feedOfKey.set(station.key, source.id);
     }
     rawStations.push(...stations);
-    perFeed.push({ source, feed, routeOfTrip, stationOfStop });
+    perFeed.push({ source, feed, routeOfTrip, stations, stationOfStop });
+  }
+  const model = complexModel(perFeed, complexGroups);
+  for (const station of rawStations) {
+    station.complex = model.complexOf.get(station.key) ?? 0;
   }
 
   // South to north, west to east, then name, like every other point source.
@@ -1393,15 +1482,6 @@ export function buildTopology(
       left.lng - right.lng ||
       (left.name < right.name ? -1 : 1),
   );
-  for (const { left, right, meters } of joinNamedComplexes(
-    rawStations,
-    feedOfKey,
-    firstComplexId,
-  )) {
-    console.error(
-      `  one complex: "${left}" and "${right}", ${meters.toFixed(0)} m apart`,
-    );
-  }
   const stationIndexOf = new Map(
     rawStations.map((station, index) => [station.key, index]),
   );
@@ -1570,15 +1650,36 @@ export function buildTopology(
     tracks,
   );
 
+  const complexes = [...model.names]
+    .map(([id, name]) => ({ id, name }))
+    .sort((left, right) => left.id - right.id);
+  const transfers: TransitTransfer[] = [];
+  for (const { from, to, seconds } of model.transfers) {
+    const fromIndex = stationIndexOf.get(from);
+    const toIndex = stationIndexOf.get(to);
+    if (fromIndex !== undefined && toIndex !== undefined) {
+      transfers.push({ from: fromIndex, to: toIndex, seconds });
+    }
+  }
+  transfers.sort((left, right) => left.from - right.from || left.to - right.to);
+
   return {
-    topology: { stations, entrances, routes, patterns },
+    topology: {
+      stations,
+      entrances,
+      routes,
+      patterns,
+      complexes,
+      transfers,
+    },
     counts: { raw: raw.size, kept: patterns.length, droppedTrips },
     entranceCounts,
   };
 }
 
 export function encodeTopology(topology: TransitTopology): Uint8Array {
-  const { stations, entrances, routes, patterns } = topology;
+  const { stations, entrances, routes, patterns, complexes, transfers } =
+    topology;
   if (stations.length > 0xffff) {
     throw new Error(
       `${stations.length} stations: an entrance's station is a u16`,
@@ -1600,6 +1701,7 @@ export function encodeTopology(topology: TransitTopology): Uint8Array {
     ...new Set([
       ...stations.map((station) => station.name),
       ...routes.flatMap((route) => [route.id, route.shortName, route.longName]),
+      ...complexes.map((complex) => complex.name),
     ]),
   ].sort();
   if (names.length > 0xffff) {
@@ -1723,13 +1825,41 @@ export function encodeTopology(topology: TransitTopology): Uint8Array {
     nameTable.set(bytes, 4 + nameStarts.byteLength + nameStarts[index]);
   });
 
+  const transferTable = new Uint8Array(
+    8 + complexes.length * COMPLEX_BYTES + transfers.length * TRANSFER_BYTES,
+  );
+  const transferView = new DataView(transferTable.buffer);
+  transferView.setUint32(0, complexes.length, true);
+  complexes.forEach((complex, index) => {
+    const record = 4 + index * COMPLEX_BYTES;
+    transferView.setUint16(record, complex.id, true);
+    transferView.setUint32(record + 4, nameIndex.get(complex.name) ?? 0, true);
+  });
+  const transferStart = 4 + complexes.length * COMPLEX_BYTES;
+  transferView.setUint32(transferStart, transfers.length, true);
+  transfers.forEach((transfer, index) => {
+    const record = transferStart + 4 + index * TRANSFER_BYTES;
+    transferView.setUint16(record, transfer.from, true);
+    transferView.setUint16(record + 2, transfer.to, true);
+    transferView.setUint16(
+      record + 4,
+      Math.min(0xffff, transfer.seconds ?? 0),
+      true,
+    );
+    transferView.setUint8(
+      record + 6,
+      transfer.seconds === null ? 0 : PUBLISHED_FLAG,
+    );
+  });
+
   const stationOffset = HEADER_BYTES;
   const entranceOffset = stationOffset + stationTable.length;
   const routeOffset = entranceOffset + entranceTable.length;
   const patternOffset = routeOffset + routeTable.length;
   const stopOffset = patternOffset + patternTable.length;
   const nameOffset = stopOffset + stopBlob.length;
-  const total = nameOffset + nameTable.length;
+  const transferOffset = Math.ceil((nameOffset + nameTable.length) / 4) * 4;
+  const total = transferOffset + transferTable.length;
 
   const bytes = new Uint8Array(total);
   const view = new DataView(bytes.buffer);
@@ -1748,12 +1878,14 @@ export function encodeTopology(topology: TransitTopology): Uint8Array {
   view.setUint32(48, nameOffset, true);
   view.setUint32(52, total, true);
   view.setUint32(56, entrances.length, true);
+  view.setUint32(60, transferOffset, true);
   bytes.set(stationTable, stationOffset);
   bytes.set(entranceTable, entranceOffset);
   bytes.set(routeTable, routeOffset);
   bytes.set(patternTable, patternOffset);
   bytes.set(stopBlob, stopOffset);
   bytes.set(nameTable, nameOffset);
+  bytes.set(transferTable, transferOffset);
   return bytes;
 }
 
@@ -1864,7 +1996,33 @@ export function decodeTopology(bytes: Uint8Array): TransitTopology {
     });
   }
 
-  return { stations, entrances, routes, patterns };
+  // 0 in a file written before the transfer section.
+  const transferOffset = view.getUint32(60, true);
+  const complexes: TransitComplex[] = [];
+  const transfers: TransitTransfer[] = [];
+  if (transferOffset !== 0) {
+    const complexCount = view.getUint32(transferOffset, true);
+    for (let index = 0; index < complexCount; index++) {
+      const record = transferOffset + 4 + index * COMPLEX_BYTES;
+      complexes.push({
+        id: view.getUint16(record, true),
+        name: names[view.getUint32(record + 4, true)] ?? "",
+      });
+    }
+    const transferStart = transferOffset + 4 + complexCount * COMPLEX_BYTES;
+    const transferCount = view.getUint32(transferStart, true);
+    for (let index = 0; index < transferCount; index++) {
+      const record = transferStart + 4 + index * TRANSFER_BYTES;
+      const published = (view.getUint8(record + 6) & PUBLISHED_FLAG) !== 0;
+      transfers.push({
+        from: view.getUint16(record, true),
+        to: view.getUint16(record + 2, true),
+        seconds: published ? view.getUint16(record + 4, true) : null,
+      });
+    }
+  }
+
+  return { stations, entrances, routes, patterns, complexes, transfers };
 }
 
 export async function buildTransit(cityId: string): Promise<void> {
@@ -1876,11 +2034,20 @@ export async function buildTransit(cityId: string): Promise<void> {
     MIN_PATTERN_SHARE,
     await loadEntrances(loaded),
     readRouteTracks(cityId),
+    await loadComplexGroups(loaded),
   );
   const bytes = encodeTopology(topology);
   await writeFile(join(TRANSIT_DIR, `${cityId}.bin`), bytes);
 
-  const { stations, entrances, routes, patterns } = topology;
+  const { stations, entrances, routes, patterns, transfers } = topology;
+  for (const complex of topology.complexes) {
+    const members = stations.filter(
+      (station) => station.complex === complex.id,
+    );
+    console.error(
+      `  complex ${complex.id} "${complex.name}": ${members.map(({ name }) => name).join(", ")}`,
+    );
+  }
   routes.forEach((route, index) => {
     const mine = patterns.filter((pattern) => pattern.routeIndex === index);
     const stops = new Set(mine.flatMap((pattern) => [...pattern.stops]));
@@ -1892,11 +2059,6 @@ export async function buildTransit(cityId: string): Promise<void> {
   const complexes = new Set(
     stations.map(({ complex }) => complex).filter((complex) => complex !== 0),
   );
-  for (const name of entranceCounts.splitInComplex) {
-    console.error(
-      `  ${name}: no free crossover, but inside a transfer complex; kept as one station`,
-    );
-  }
   if (entranceCounts.unmatched.length > 0) {
     console.error(
       `  ${entranceCounts.unmatched.length} station id(s) the feeds do not carry, ` +
@@ -1908,6 +2070,8 @@ export async function buildTransit(cityId: string): Promise<void> {
   console.error(
     `transit: ${cityId} ${routes.length} routes, ${stations.length} stations ` +
       `(${surface} at street level, ${complexes.size} transfer complexes, ` +
+      `${transfers.length} transfer pairs ` +
+      `(${transfers.filter(({ seconds }) => seconds === null).length} unpublished), ` +
       `${entranceCounts.split} split by direction), ` +
       `${entrances.length} entrances ` +
       `(${entranceCounts.sidedByTrack} sided against drawn track), ` +

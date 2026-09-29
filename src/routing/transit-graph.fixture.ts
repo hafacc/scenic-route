@@ -8,6 +8,7 @@ import {
   EXIT_ONLY_FLAG,
   type RoutingGraph,
   STAY_ABOARD_FLAG,
+  TRANSFER_FLAG,
 } from "./graph";
 import { encodeGraph } from "./graph-bytes.fixture";
 import { haversineMeters, type Snap } from "./snap";
@@ -71,7 +72,7 @@ const NODES: readonly [number, number][] = [
   [EAST_X, STATION_Y], // 8 the east platform's
 ];
 
-// The longest board edge in New York: a transfer complex's centroid to its platform. Opt-in.
+// A board edge as long as New York's once ran, from a complex's centroid to its platform. Opt-in.
 export const PLATFORM_SETBACK_METERS = 251;
 const PLATFORM_SETBACK_UNITS = Math.round(
   PLATFORM_SETBACK_METERS /
@@ -1317,4 +1318,317 @@ export function threeStopTimetable(date: Date): TransitTimetable {
     ],
   };
   return resolveTimetable(record, date, FIXTURE_TIME_ZONE);
+}
+
+// A change between two stations of one complex, 145 m apart: the A to 14 St, the L on from 8 Av.
+export const COMPLEX_SOUTH_STATION = "Chambers St";
+export const COMPLEX_FROM_STATION = "14 St";
+export const COMPLEX_TO_STATION = "8 Av";
+export const COMPLEX_NORTH_STATION = "Bedford Av";
+export const COMPLEX_NAME = "14 St / 8 Av";
+export const COMPLEX_FIRST_LINE = "A";
+export const COMPLEX_SECOND_LINE = "L";
+export const COMPLEX_A_LANE = 0x0505_0505;
+export const COMPLEX_L_LANE = 0x0606_0606;
+// The MTA's own minimum for this pair, which the tiler bakes as it stands.
+export const COMPLEX_PUBLISHED_SECONDS = 90;
+const COMPLEX_EAST = 1_720; // ~145 m east at this latitude
+const COMPLEX_LINE_Y = 19_000; // ~2.1 km to each outer station
+
+const COMPLEX_NAMES = [
+  "8TH AVE",
+  "W 14TH ST",
+  COMPLEX_SOUTH_STATION,
+  COMPLEX_FROM_STATION,
+  COMPLEX_TO_STATION,
+  COMPLEX_NORTH_STATION,
+  COMPLEX_NAME,
+  COMPLEX_FIRST_LINE,
+  "A line",
+  "a",
+  COMPLEX_SECOND_LINE,
+  "L line",
+  "l",
+];
+const [
+  CX_AVENUE,
+  CX_STREET,
+  CX_SOUTH_NAME,
+  CX_FROM_NAME,
+  CX_TO_NAME,
+  CX_NORTH_NAME,
+  CX_COMPLEX_NAME,
+  CX_A_SHORT,
+  CX_A_LONG,
+  CX_A_ID,
+  CX_L_SHORT,
+  CX_L_LONG,
+  CX_L_ID,
+] = COMPLEX_NAMES.map((_name, index) => index);
+
+export const COMPLEX_SOUTH_DOOR_NODE = 0;
+export const COMPLEX_NORTH_DOOR_NODE = 1;
+const CX_SOUTH_ENTRY = 5;
+const CX_SOUTH_EXIT = 6;
+export const COMPLEX_FROM_ENTRY = 7;
+export const COMPLEX_FROM_EXIT = 8;
+export const COMPLEX_TO_ENTRY = 9;
+export const COMPLEX_TO_EXIT = 10;
+const CX_NORTH_ENTRY = 11;
+const CX_NORTH_EXIT = 12;
+
+const COMPLEX_NODES: readonly [number, number][] = [
+  [0, -COMPLEX_LINE_Y - 1_000], // 0 the pavement by the south station
+  [COMPLEX_EAST, COMPLEX_LINE_Y + 1_000], // 1 by the north one
+  [40_000, 0], // 2 the long walk's far corner, ~3.4 km east
+  [0, -600], // 3 the pavement over 14 St
+  [COMPLEX_EAST, -600], // 4 and over 8 Av
+  [0, -COMPLEX_LINE_Y], // 5, 6 the south station
+  [0, -COMPLEX_LINE_Y],
+  [0, 0], // 7, 8 14 St
+  [0, 0],
+  [COMPLEX_EAST, 0], // 9, 10 8 Av
+  [COMPLEX_EAST, 0],
+  [COMPLEX_EAST, COMPLEX_LINE_Y], // 11, 12 the north station
+  [COMPLEX_EAST, COMPLEX_LINE_Y],
+  [0, -COMPLEX_LINE_Y], // 13, 14 the A's south platform: boarding, arrival
+  [0, -COMPLEX_LINE_Y],
+  [0, 0], // 15, 16 the A's 14 St platform
+  [0, 0],
+  [COMPLEX_EAST, 0], // 17, 18 the L's 8 Av platform
+  [COMPLEX_EAST, 0],
+  [COMPLEX_EAST, COMPLEX_LINE_Y], // 19, 20 the L's north platform
+  [COMPLEX_EAST, COMPLEX_LINE_Y],
+];
+
+function complexMeters(from: number, to: number): number {
+  return haversineMeters(
+    ORIGIN_LAT + COMPLEX_NODES[from][1] * SCALE,
+    ORIGIN_LNG + COMPLEX_NODES[from][0] * SCALE,
+    ORIGIN_LAT + COMPLEX_NODES[to][1] * SCALE,
+    ORIGIN_LNG + COMPLEX_NODES[to][0] * SCALE,
+  );
+}
+
+export const COMPLEX_TRANSFER_SECONDS = COMPLEX_PUBLISHED_SECONDS;
+
+function complexDoors(entry: number, exit: number, door: number, name: number) {
+  const seconds = Math.round(
+    90 + complexMeters(entry, door) / WALK_METERS_PER_SECOND,
+  );
+  return [
+    {
+      a: entry,
+      b: door,
+      kind: KIND_ACCESS,
+      seconds,
+      name,
+      flags: ENTRY_ONLY_FLAG,
+    },
+    {
+      a: exit,
+      b: door,
+      kind: KIND_ACCESS,
+      seconds,
+      name,
+      flags: EXIT_ONLY_FLAG,
+    },
+  ];
+}
+
+function stationTransfer(exit: number, entry: number): EdgeSpec {
+  return {
+    a: exit,
+    b: entry,
+    kind: KIND_ACCESS,
+    seconds: COMPLEX_TRANSFER_SECONDS,
+    name: CX_COMPLEX_NAME,
+    flags: EXIT_ONLY_FLAG | TRANSFER_FLAG,
+  };
+}
+
+export const COMPLEX_TRANSFER = 15;
+
+const COMPLEX_EDGES: readonly EdgeSpec[] = [
+  {
+    a: 0,
+    b: 2,
+    kind: KIND_SIDEWALK,
+    seconds: 0,
+    name: CX_AVENUE,
+    side: SIDE_EAST,
+  },
+  {
+    a: 2,
+    b: 1,
+    kind: KIND_SIDEWALK,
+    seconds: 0,
+    name: CX_AVENUE,
+    side: SIDE_EAST,
+  },
+  {
+    a: 3,
+    b: 4,
+    kind: KIND_SIDEWALK,
+    seconds: 0,
+    name: CX_STREET,
+    side: SIDE_WEST,
+  },
+  ...complexDoors(CX_SOUTH_ENTRY, CX_SOUTH_EXIT, 0, CX_SOUTH_NAME),
+  ...complexDoors(COMPLEX_FROM_ENTRY, COMPLEX_FROM_EXIT, 3, CX_FROM_NAME),
+  ...complexDoors(COMPLEX_TO_ENTRY, COMPLEX_TO_EXIT, 4, CX_TO_NAME),
+  ...complexDoors(CX_NORTH_ENTRY, CX_NORTH_EXIT, 1, CX_NORTH_NAME),
+  splitTransfer(CX_SOUTH_ENTRY, CX_SOUTH_EXIT, CX_SOUTH_NAME),
+  splitTransfer(COMPLEX_FROM_ENTRY, COMPLEX_FROM_EXIT, CX_FROM_NAME),
+  splitTransfer(COMPLEX_TO_ENTRY, COMPLEX_TO_EXIT, CX_TO_NAME),
+  splitTransfer(CX_NORTH_ENTRY, CX_NORTH_EXIT, CX_NORTH_NAME),
+  stationTransfer(COMPLEX_FROM_EXIT, COMPLEX_TO_ENTRY),
+  stationTransfer(COMPLEX_TO_EXIT, COMPLEX_FROM_ENTRY),
+  { a: CX_SOUTH_ENTRY, b: 13, kind: KIND_BOARD, seconds: 0, name: CX_A_SHORT },
+  {
+    a: 14,
+    b: CX_SOUTH_EXIT,
+    kind: KIND_ACCESS,
+    seconds: ALIGHT_SECONDS,
+    name: NAME_NONE,
+  },
+  { a: 13, b: 16, kind: KIND_RIDE, seconds: RIDE_SECONDS, name: CX_A_SHORT },
+  {
+    a: COMPLEX_FROM_ENTRY,
+    b: 15,
+    kind: KIND_BOARD,
+    seconds: 0,
+    name: CX_A_SHORT,
+  },
+  {
+    a: 16,
+    b: COMPLEX_FROM_EXIT,
+    kind: KIND_ACCESS,
+    seconds: ALIGHT_SECONDS,
+    name: NAME_NONE,
+  },
+  {
+    a: COMPLEX_TO_ENTRY,
+    b: 17,
+    kind: KIND_BOARD,
+    seconds: 0,
+    name: CX_L_SHORT,
+  },
+  {
+    a: 18,
+    b: COMPLEX_TO_EXIT,
+    kind: KIND_ACCESS,
+    seconds: ALIGHT_SECONDS,
+    name: NAME_NONE,
+  },
+  { a: 17, b: 20, kind: KIND_RIDE, seconds: RIDE_SECONDS, name: CX_L_SHORT },
+  { a: CX_NORTH_ENTRY, b: 19, kind: KIND_BOARD, seconds: 0, name: CX_L_SHORT },
+  {
+    a: 20,
+    b: CX_NORTH_EXIT,
+    kind: KIND_ACCESS,
+    seconds: ALIGHT_SECONDS,
+    name: NAME_NONE,
+  },
+  stayAboard(14, 13),
+  stayAboard(16, 15),
+  stayAboard(18, 17),
+  stayAboard(20, 19),
+];
+
+export const COMPLEX_SOUTH_SIDEWALK = 0;
+export const COMPLEX_NORTH_SIDEWALK = 1;
+
+const COMPLEX_DOOR_STREETS = COMPLEX_EDGES.flatMap((spec, edge) => {
+  const pavement = COMPLEX_EDGES.find(
+    (walk) =>
+      walk.kind === KIND_SIDEWALK && (walk.a === spec.b || walk.b === spec.b),
+  );
+  return spec.kind === KIND_ACCESS &&
+    pavement !== undefined &&
+    (spec.flags ?? 0) & (ENTRY_ONLY_FLAG | EXIT_ONLY_FLAG)
+    ? [{ edge, street: pavement.name, side: pavement.side ?? 0 }]
+    : [];
+});
+
+export function complexGraph(): RoutingGraph {
+  const lat = (node: number): number =>
+    ORIGIN_LAT + COMPLEX_NODES[node][1] * SCALE;
+  const lng = (node: number): number =>
+    ORIGIN_LNG + COMPLEX_NODES[node][0] * SCALE;
+  const graph = decodeGraph(
+    encodeGraph({
+      originLng: ORIGIN_LNG,
+      originLat: ORIGIN_LAT,
+      scale: SCALE,
+      nodes: COMPLEX_NODES.map(([qx, qy]) => ({ qx, qy })),
+      edges: COMPLEX_EDGES.map((spec) => ({
+        a: spec.a,
+        b: spec.b,
+        kind: spec.kind,
+        side: spec.side,
+        flags: spec.flags,
+        length: haversineMeters(
+          lat(spec.a),
+          lng(spec.a),
+          lat(spec.b),
+          lng(spec.b),
+        ),
+        nameId: spec.name,
+        durationSeconds: spec.seconds,
+      })),
+      names: COMPLEX_NAMES,
+      transitRoutes: [
+        {
+          color: [0x00, 0x39, 0xa6],
+          textColor: [0xff, 0xff, 0xff],
+          shortName: CX_A_SHORT,
+          longName: CX_A_LONG,
+          id: CX_A_ID,
+        },
+        {
+          color: [0xa7, 0xa9, 0xac],
+          textColor: [0x00, 0x00, 0x00],
+          shortName: CX_L_SHORT,
+          longName: CX_L_LONG,
+          id: CX_L_ID,
+        },
+      ],
+      board: [
+        { edge: 17, lane: COMPLEX_A_LANE, route: 0, stop: 0 },
+        { edge: 20, lane: COMPLEX_A_LANE, route: 0, stop: 1 },
+        { edge: 22, lane: COMPLEX_L_LANE, route: 1, stop: 0 },
+        { edge: 25, lane: COMPLEX_L_LANE, route: 1, stop: 1 },
+      ],
+      ride: [
+        { edge: 19, route: 0 },
+        { edge: 24, route: 1 },
+      ],
+      doors: COMPLEX_DOOR_STREETS,
+    }),
+    { hash: "0", keyHash: "0" },
+  );
+  const record: ScheduleRecord = {
+    firstDay: 20200101,
+    lastDay: 0,
+    services: [{ mask: 0x7f, startDay: 20200101, endDay: 20301231 }],
+    exceptions: [],
+    patterns: [
+      { laneId: COMPLEX_A_LANE, offsets: [0, RIDE_SECONDS] },
+      { laneId: COMPLEX_L_LANE, offsets: [0, RIDE_SECONDS] },
+    ],
+    lanes: [0, 1].map((pattern) => ({
+      pattern,
+      service: 0,
+      bands: [
+        { start: FIRST_DEPARTURE, end: LAST_DEPARTURE, headway: SPLIT_HEADWAY },
+      ],
+    })),
+  };
+  graph.transit = resolveTimetable(
+    record,
+    departureAt(FIRST_DEPARTURE),
+    FIXTURE_TIME_ZONE,
+  );
+  return graph;
 }

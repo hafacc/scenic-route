@@ -3,38 +3,28 @@
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  fetchGtfsZipFile,
-  type GtfsFeed,
-  type GtfsRow,
-  parseGtfs,
-} from "./gtfs";
+import type { GtfsFeed, GtfsRow } from "./gtfs";
 import type { Coord } from "./socrata";
 import {
   centroid,
   chooseLines,
   clusterByName,
   encodeSubway,
-  nextComplexId,
   parseColor,
   type Rgb,
   type ShapeVariant,
   type TransitRoute,
   type TransitStation,
-  transferComplexes,
 } from "./subway-format";
-import { muniStationName } from "./transit";
+import {
+  cityComplexes,
+  loadComplexGroups,
+  loadFeeds,
+  muniStationName,
+} from "./transit";
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const SUBWAY_DIR = join(DATA_DIR, "subway");
-
-// Keyless; documented at https://www.sfmta.com/reports/gtfs-transit-data.
-const MUNI_FEED_URL =
-  "https://muni-gtfs.apps.sfmta.com/data/muni_gtfs-current.zip";
-const MUNI_CACHE_KEY = "gtfs-muni";
-// Redirects to the current dated zip; api.bart.gov/gtfs/google_transit.zip still serves a 2013 feed.
-const BART_FEED_URL = "https://www.bart.gov/dev/schedules/google_transit.zip";
-const BART_CACHE_KEY = "gtfs-bart";
 
 // Metro lines and the F (0) and cable cars (5); buses alone wouldn't fit the station mask's 32 routes.
 const MUNI_ROUTE_TYPES = new Set(["0", "5"]);
@@ -192,7 +182,7 @@ function bartRoutes(feed: GtfsFeed): FeedRoute[] {
 function feedStations(
   feed: GtfsFeed,
   routeOfTrip: ReadonlyMap<string, number>,
-  complexes: ReadonlyMap<string, number>,
+  complexOf: (stationId: string) => number,
   displayName: (feedName: string) => string = (feedName) => feedName,
 ): TransitStation[] {
   const stopRow = new Map(feed.stops.map((stop) => [stop.stop_id, stop]));
@@ -221,7 +211,7 @@ function feedStations(
       lng,
       name: displayName(row.stop_name?.trim() ?? ""),
       routeMask,
-      complex: complexes.get(stationId) ?? 0,
+      complex: complexOf(stationId),
     });
   }
   return stations;
@@ -279,8 +269,18 @@ async function ingestSubwaySf(cityId: string): Promise<void> {
   const started = performance.now();
   await mkdir(SUBWAY_DIR, { recursive: true });
 
-  const muni = parseGtfs(await fetchGtfsZipFile(MUNI_CACHE_KEY, MUNI_FEED_URL));
-  const bart = parseGtfs(await fetchGtfsZipFile(BART_CACHE_KEY, BART_FEED_URL));
+  // The routing ingest's feeds and complex model, so both files carry the same complex ids.
+  const loaded = await loadFeeds(cityId);
+  const feedOf = (id: string): GtfsFeed => {
+    const found = loaded.find(({ source }) => source.id === id);
+    if (found === undefined) {
+      throw new Error(`no ${id} feed for ${cityId}`);
+    }
+    return found.feed;
+  };
+  const muni = feedOf("muni");
+  const bart = feedOf("bart");
+  const { complexOf } = cityComplexes(loaded, await loadComplexGroups(loaded));
 
   const muniFeedRoutes = muniRoutes(muni);
   const bartFeedRoutes = bartRoutes(bart);
@@ -303,20 +303,17 @@ async function ingestSubwaySf(cityId: string): Promise<void> {
   }
 
   const indexOf = new Map(routes.map((route, index) => [route.id, index]));
-  // Complex ids are per feed, so BART's start past Muni's.
-  const muniComplexes = transferComplexes(muni, 1);
-  const bartComplexes = transferComplexes(bart, nextComplexId(muniComplexes));
   const stations = mergeStations([
     ...feedStations(
       muni,
       tripRouteIndex(muni, muniFeedRoutes, indexOf),
-      muniComplexes,
+      (stationId) => complexOf("muni", stationId),
       muniStationName,
     ),
     ...feedStations(
       bart,
       tripRouteIndex(bart, bartFeedRoutes, indexOf),
-      bartComplexes,
+      (stationId) => complexOf("bart", stationId),
     ),
   ]);
 

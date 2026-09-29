@@ -2,7 +2,7 @@
 
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { buildDirections } from "./directions";
+import { buildDirections, formatChangeTime } from "./directions";
 import {
   doorStreet,
   ELEVATOR_FLAG,
@@ -17,6 +17,11 @@ import {
 import { findRoute, type RouteResult } from "./search";
 import type { Snap } from "./snap";
 import {
+  COMPLEX_NORTH_DOOR_NODE,
+  COMPLEX_NORTH_SIDEWALK,
+  COMPLEX_SOUTH_DOOR_NODE,
+  COMPLEX_SOUTH_SIDEWALK,
+  complexGraph,
   departureAt,
   FIRST_DEPARTURE,
   SPLIT_DOWNTOWN_BOARD,
@@ -276,10 +281,10 @@ test("a change of train crosses from the station's exit back to its entry", () =
 
   expect(doorsUsed(route)).toContain(UNDERPASS_TRANSFER);
   expect(route.rides).toHaveLength(2);
-  // The transfer walk tells a reader nothing the "Change at" does not.
+  // The step from exit to entry tells a reader nothing the "Change at" does not.
   expect(stationText(graph, route)).toEqual([
     `Enter ${UNDERPASS_SOUTH_STATION} by the stair on the east side of Flatbush Avenue`,
-    `Change at ${UNDERPASS_STATION}`,
+    `Change at ${UNDERPASS_STATION} for the B`,
     `Get off at ${UNDERPASS_NORTH_STATION}`,
     `Exit ${UNDERPASS_NORTH_STATION} by the stair on the east side of Flatbush Avenue`,
   ]);
@@ -304,4 +309,37 @@ test("a door on a corner is named by its own street and not the one walked in on
   expect(stationText(graph, route)[0]).toBe(
     `Enter ${UNDERPASS_SOUTH_STATION} by the stair on the east side of Flatbush Avenue`,
   );
+});
+
+test("a change is timed to the half minute", () => {
+  expect(formatChangeTime(90)).toBe("~1½ min");
+  expect(formatChangeTime(112)).toBe("~2 min");
+  expect(formatChangeTime(20)).toBe("~½ min");
+  expect(formatChangeTime(300)).toBe("~5 min");
+});
+
+// The walk between two stations of a complex is the change's own, not an alight's 0 m.
+test("a change between two stations of a complex names both, the line, and the walk", () => {
+  const graph = complexGraph();
+  const route = findRoute(
+    graph,
+    snapAtNode(graph, COMPLEX_SOUTH_DOOR_NODE, COMPLEX_SOUTH_SIDEWALK),
+    snapAtNode(graph, COMPLEX_NORTH_DOOR_NODE, COMPLEX_NORTH_SIDEWALK),
+    transitWeights(),
+  ) as RouteResult;
+
+  const maneuvers = buildDirections(graph, route).filter(
+    (maneuver) => maneuver.kind === "station" || maneuver.kind === "transit",
+  );
+  expect(maneuvers.map((maneuver) => maneuver.text)).toEqual([
+    "Enter Chambers St by the stair on the east side of 8th Avenue",
+    "Take the A at 8:04 AM toward 14 St (1 stop)",
+    "Change at 14 St for the L at 8 Av (500 ft, ~1½ min)",
+    "Take the L at 8:10 AM toward Bedford Av (1 stop)",
+    "Get off at Bedford Av",
+    "Exit Bedford Av by the stair on the east side of 8th Avenue",
+  ]);
+  const change = maneuvers[2];
+  expect(change.station).toBe("change");
+  expect(change.lengthMeters).toBeCloseTo(145, 0);
 });

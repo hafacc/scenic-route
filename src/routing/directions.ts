@@ -4,6 +4,7 @@ import {
   edgeName,
   edgePath,
   isElevatorDoor,
+  isStationTransfer,
   isStayAboard,
   isSurfaceStop,
   otherEnd,
@@ -85,6 +86,13 @@ export function formatDuration(seconds: number): string {
   return `${Math.max(1, Math.round(seconds / 60))} min`;
 }
 
+// To the half minute, since a change is short enough that a whole one misstates it: "~1½ min".
+export function formatChangeTime(seconds: number): string {
+  const halves = Math.max(1, Math.round(seconds / 30));
+  const whole = Math.floor(halves / 2);
+  return `~${whole > 0 ? whole : ""}${halves % 2 === 1 ? "½" : ""} min`;
+}
+
 const COMPASS_8: readonly string[] = [
   "north",
   "northeast",
@@ -161,6 +169,10 @@ interface Run {
   // Tells a reader which of a station's several ways in to take; raw name, null when there is none.
   doorName: string | null;
   doorSide: SideLabel;
+  // An alight's walk on to another station of its complex; null for a change on the one platform set.
+  changeTo: string | null;
+  changeMeters: number;
+  changeSeconds: number;
   lngs: number[];
   lats: number[];
 }
@@ -181,6 +193,9 @@ const NO_TRANSIT = {
   stationElevator: false,
   doorName: null,
   doorSide: null,
+  changeTo: null,
+  changeMeters: 0,
+  changeSeconds: 0,
 } as const;
 
 // Node b when traveled a -> b, else node a.
@@ -360,8 +375,21 @@ function buildRuns(
             : stationName(graph, to) === null
               ? "exit"
               : "change";
-      // The preceding alight already says "Change at ...", so this emits nothing.
+      // The preceding alight says "Change at ...", and a walk to another station of the complex joins it.
       if (action === "change") {
+        const alight = runs[runs.length - 1];
+        if (
+          isStationTransfer(graph, step.edge) &&
+          alight?.kind === "station" &&
+          alight.stationAction === "alight"
+        ) {
+          alight.changeTo = stationName(graph, to);
+          alight.changeMeters += step.lengthMeters;
+          alight.changeSeconds += graph.edgeDurationSeconds[step.edge];
+          alight.lengthMeters += step.lengthMeters;
+          alight.stepEnd = index + 1;
+          appendPoints(alight, stepTravelPoints(graph, step));
+        }
         continue;
       }
       const door = doorStreet(graph, step.edge);
@@ -696,8 +724,17 @@ export function buildDirections(
         doorName === null
           ? ""
           : ` by the ${doorKind} on ${descriptor(run.doorSide, doorName)}`;
+      const nextLine = changing ? runs[runIndex + 1].transitRoute : null;
+      const onward =
+        run.changeTo === null || run.changeTo === place
+          ? ""
+          : ` at ${run.changeTo}`;
+      const walk =
+        run.changeTo === null
+          ? ""
+          : ` (${formatDistance(run.changeMeters)}, ${formatChangeTime(run.changeSeconds)})`;
       const text = changing
-        ? `Change at ${place ?? "the station"}`
+        ? `Change at ${place ?? "the station"}${nextLine ? ` for the ${nextLine}` : ""}${onward}${walk}`
         : run.stationAction === "alight"
           ? `Get off at ${place ?? "your stop"}`
           : run.stationAction === "enter"

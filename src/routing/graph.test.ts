@@ -152,7 +152,7 @@ function graphBytes(
 
 const identity = { hash: "0", keyHash: "0" };
 
-describe("the v12 graph decoder", () => {
+describe("the v13 graph decoder", () => {
   const graph = decodeGraph(graphBytes(true), identity);
 
   test("reads every edge kind the format has", () => {

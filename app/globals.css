@@ -184,6 +184,18 @@ html {
   box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
 }
 
+/* A change between two stations of a complex, midway along the connector. */
+.scenic-change-dot {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  border: 2px solid #ffffff;
+  background: #334155;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+}
+
 .leaflet-container.scenic-picking,
 .leaflet-container.scenic-picking .leaflet-grab,
 .leaflet-container.scenic-picking .leaflet-interactive {

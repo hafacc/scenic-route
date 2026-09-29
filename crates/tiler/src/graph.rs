@@ -87,8 +87,8 @@ pub const SIDE_SOUTH: u8 = 3;
 const SIDE_WEST: u8 = 4;
 const FLAG_GEOMETRY_RIGHT: u8 = 1 << 2; // this sidewalk lies right of its stored geometry direction
 
-// v12 lays the graph out by column so the client views each column in place.
-const GRAPH_FORMAT: u16 = 12;
+// v13 gives each station of a complex its own nodes, joined by platform-to-platform transfer edges.
+const GRAPH_FORMAT: u16 = 13;
 // The relief field's zoom: about 5 m pixels at San Francisco's latitude.
 const RELIEF_FIELD_ZOOM: u32 = 15;
 // 64 header bytes plus a 48-entry section directory; a reader zero-fills an absent column.
@@ -142,6 +142,10 @@ const ACCESS_ENTRY_ONLY: u8 = 1 << 6;
 const ACCESS_ELEVATOR: u8 = 1 << 7;
 // RIDE only: the free step from a stop's arrival node onto its boarding node (staying aboard).
 const RIDE_STAY_ABOARD: u8 = 1 << 6;
+// ACCESS only, beside the exit-only bit: one station's exit to another's entry, borrowing the steps bit.
+const ACCESS_TRANSFER: u8 = 1 << 1;
+// What an untimed transfer adds to its walk: a stair between two platforms.
+const UNPUBLISHED_TRANSFER_SECONDS: u16 = 30;
 // How far OSM's corner may stand from where a fan corner would go and still be that corner.
 const SEAM_RADIUS_METERS: f64 = 12.0;
 // How far an invented corner reaches to join an OSM node with a link edge.
@@ -1405,6 +1409,137 @@ fn timed_kind(kind: u8) -> bool {
     matches!(kind, KIND_FERRY | KIND_ACCESS | KIND_BOARD | KIND_RIDE)
 }
 
+/// One platform-to-platform transfer; `seconds` is the agency's minimum when `published`.
+#[derive(Clone, Copy)]
+struct StationTransfer {
+    from: u16,
+    to: u16,
+    seconds: u16,
+    published: bool,
+}
+
+/// TRNS's transfer section: complex names by id, and the transfers between two stations.
+#[derive(Default)]
+struct TransitTransfers {
+    complex_names: HashMap<u16, String>,
+    transfers: Vec<StationTransfer>,
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Fallible<u16> {
+    bytes
+        .get(offset..offset + 2)
+        .map(|slice| u16::from_le_bytes([slice[0], slice[1]]))
+        .ok_or_else(|| format!("TRNS runs out at byte {offset}").into())
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Fallible<u32> {
+    bytes
+        .get(offset..offset + 4)
+        .map(|slice| u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+        .ok_or_else(|| format!("TRNS runs out at byte {offset}").into())
+}
+
+/// The section past TRNS's name table, which binfmt's v2 reader never reaches; offset 0 is none.
+fn read_transfers(
+    path: &std::path::Path,
+    stations: &[binfmt::TransitStation],
+) -> Fallible<TransitTransfers> {
+    const COMPLEX_BYTES: usize = 8;
+    const TRANSFER_BYTES: usize = 8;
+    const PUBLISHED: u8 = 1 << 0;
+    let bytes = fs::read(path)?;
+    let section = read_u32(&bytes, 60)? as usize;
+    if section == 0 {
+        // A file from before the section still shares complex ids, and would build no transfer at all.
+        let mut seen = HashSet::new();
+        if let Some(shared) = stations
+            .iter()
+            .map(|station| station.complex)
+            .find(|&complex| complex != 0 && !seen.insert(complex))
+        {
+            return Err(format!(
+                "{} has stations sharing complex {shared} but no transfer section: rerun `bun run \
+                 build-transit` to write one",
+                path.display()
+            )
+            .into());
+        }
+        return Ok(TransitTransfers::default());
+    }
+    // A count the rest of the file cannot hold is corruption, not a reason to allocate.
+    let fits = |count: usize, table: usize, record: usize| -> Fallible<usize> {
+        if count > bytes.len().saturating_sub(table) / record {
+            Err(format!(
+                "{}: {count} records run off the file at byte {table}",
+                path.display()
+            )
+            .into())
+        } else {
+            Ok(count)
+        }
+    };
+    let name_offset = read_u32(&bytes, 48)? as usize;
+    let name_count = read_u32(&bytes, name_offset)? as usize;
+    let blob = name_offset + 4 + 4 * (name_count + 1);
+    let name = |id: usize| -> Fallible<String> {
+        if id >= name_count {
+            return Err(format!("{}: complex name {id} of {name_count}", path.display()).into());
+        }
+        let start = blob + read_u32(&bytes, name_offset + 4 + 4 * id)? as usize;
+        let end = blob + read_u32(&bytes, name_offset + 8 + 4 * id)? as usize;
+        let text = bytes
+            .get(start..end)
+            .ok_or_else(|| format!("{}: name {id} runs off the file", path.display()))?;
+        Ok(String::from_utf8_lossy(text).into_owned())
+    };
+    let complex_count = fits(
+        read_u32(&bytes, section)? as usize,
+        section + 4,
+        COMPLEX_BYTES,
+    )?;
+    let mut complex_names = HashMap::with_capacity(complex_count);
+    for index in 0..complex_count {
+        let record = section + 4 + index * COMPLEX_BYTES;
+        complex_names.insert(
+            read_u16(&bytes, record)?,
+            name(read_u32(&bytes, record + 4)? as usize)?,
+        );
+    }
+    let transfer_table = section + 4 + complex_count * COMPLEX_BYTES;
+    let transfer_count = fits(
+        read_u32(&bytes, transfer_table)? as usize,
+        transfer_table + 4,
+        TRANSFER_BYTES,
+    )?;
+    let mut transfers = Vec::with_capacity(transfer_count);
+    for index in 0..transfer_count {
+        let record = transfer_table + 4 + index * TRANSFER_BYTES;
+        let flags = *bytes
+            .get(record + 6)
+            .ok_or_else(|| format!("{}: transfer {index} runs off the file", path.display()))?;
+        transfers.push(StationTransfer {
+            from: read_u16(&bytes, record)?,
+            to: read_u16(&bytes, record + 2)?,
+            seconds: read_u16(&bytes, record + 4)?,
+            published: flags & PUBLISHED != 0,
+        });
+    }
+    Ok(TransitTransfers {
+        complex_names,
+        transfers,
+    })
+}
+
+/// The agency's own minimum where it publishes one, since it knows the passage; else the walk plus a stair.
+fn transfer_seconds(transfer: &StationTransfer, meters: f64) -> u16 {
+    if transfer.published {
+        return transfer.seconds;
+    }
+    // Up, so a baked second never undercuts the walk it stands for.
+    let walk = (meters / ACCESS_WALK_METERS_PER_SECOND).ceil();
+    (walk + f64::from(UNPUBLISHED_TRANSFER_SECONDS)).min(f64::from(u16::MAX)) as u16
+}
+
 /// One transit edge; its length is the straight node-to-node distance.
 #[allow(clippy::too_many_arguments)]
 fn transit_edge(
@@ -1435,81 +1570,73 @@ fn transit_edge(
     }
 }
 
-/// One station node's worth of the topology; the node stands at its members' centroid.
+/// One station's nodes: every station keeps its own, at its own point, whatever complex it is in.
 struct StationGroup {
     lng: f64,
     lat: f64,
     name: String,
     surface: bool,
-    member_points: Vec<(f64, f64)>,
     /// Two sides where the agency publishes no free crossover, with no edge between them.
     sides: usize,
     /// The published ways in, indexed into the topology's entrance table.
     entrances: Vec<usize>,
+    /// Doors taken from the nearest station of its complex, having none of its own to enter by.
+    borrowed: bool,
 }
 
-/// One group per transfer complex or lone station, so a transfer is an alight and a board.
+/// A station of a complex the entrance data files nothing enterable under takes its nearest mate's.
 fn station_groups(
     stations: &[binfmt::TransitStation],
     entrances: &[binfmt::TransitEntrance],
-) -> (Vec<StationGroup>, Vec<usize>) {
-    let mut group_of_complex: HashMap<u16, usize> = HashMap::new();
-    let mut members: Vec<Vec<usize>> = Vec::new();
-    let mut group_of_station: Vec<usize> = Vec::with_capacity(stations.len());
-    for (index, station) in stations.iter().enumerate() {
-        let group = if station.complex == 0 {
-            members.push(Vec::new());
-            members.len() - 1
-        } else {
-            *group_of_complex.entry(station.complex).or_insert_with(|| {
-                members.push(Vec::new());
-                members.len() - 1
-            })
-        };
-        members[group].push(index);
-        group_of_station.push(group);
-    }
-    let mut entrances_of_group: Vec<Vec<usize>> = vec![Vec::new(); members.len()];
+) -> Vec<StationGroup> {
+    let mut own: Vec<Vec<usize>> = vec![Vec::new(); stations.len()];
     for (index, entrance) in entrances.iter().enumerate() {
-        entrances_of_group[group_of_station[usize::from(entrance.station)]].push(index);
+        own[usize::from(entrance.station)].push(index);
     }
-
-    let groups = members
+    let enterable = |station: usize| own[station].iter().any(|&door| entrances[door].entry);
+    let mut members: HashMap<u16, Vec<usize>> = HashMap::new();
+    for (index, station) in stations.iter().enumerate() {
+        if station.complex != 0 {
+            members.entry(station.complex).or_default().push(index);
+        }
+    }
+    stations
         .iter()
-        .zip(entrances_of_group)
-        .map(|(member, entrances)| {
-            let mut counts: HashMap<&str, usize> = HashMap::new();
-            for &station in member {
-                *counts.entry(stations[station].name.as_str()).or_insert(0) += 1;
-            }
-            let mut commonest = ("", 0usize);
-            for &station in member {
-                let name = stations[station].name.as_str();
-                if counts[name] > commonest.1 {
-                    commonest = (name, counts[name]);
+        .enumerate()
+        .map(|(index, station)| {
+            let mut doors = own[index].clone();
+            let mut borrowed = false;
+            if !enterable(index) {
+                let mate = members
+                    .get(&station.complex)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|&other| other != index && enterable(other))
+                    .min_by(|&left, &right| {
+                        let east = station.lat.to_radians().cos();
+                        let apart = |other: usize| {
+                            ((stations[other].lng - station.lng) * east)
+                                .hypot(stations[other].lat - station.lat)
+                        };
+                        apart(left).total_cmp(&apart(right)).then(left.cmp(&right))
+                    });
+                if let Some(mate) = mate {
+                    doors.extend_from_slice(&own[mate]);
+                    borrowed = true;
                 }
             }
-            let count = member.len() as f64;
             StationGroup {
-                lng: member.iter().map(|&one| stations[one].lng).sum::<f64>() / count,
-                lat: member.iter().map(|&one| stations[one].lat).sum::<f64>() / count,
-                name: commonest.0.to_string(),
-                surface: member.iter().all(|&one| stations[one].surface),
-                member_points: member
-                    .iter()
-                    .map(|&one| (stations[one].lng, stations[one].lat))
-                    .collect(),
-                // A complex keeps one node, since a transfer inside it is free.
-                sides: if member.len() == 1 && stations[member[0]].split {
-                    2
-                } else {
-                    1
-                },
-                entrances,
+                lng: station.lng,
+                lat: station.lat,
+                name: station.name.clone(),
+                surface: station.surface,
+                sides: if station.split { 2 } else { 1 },
+                entrances: doors,
+                borrowed,
             }
         })
-        .collect();
-    (groups, group_of_station)
+        .collect()
 }
 
 /// Where one member station meets the pavement.
@@ -1816,8 +1943,12 @@ struct TransitBuild {
     collapsed_stations: usize,
     /// Access edges joining station nodes to the pavement: one per direction per door per side.
     street_doors: usize,
-    /// The exit-to-entry edges a change of train crosses.
+    /// The exit-to-entry edges a change of train at one station crosses.
     transfer_edges: usize,
+    /// The exit-to-entry edges between two stations of a complex, one per published or joined pair.
+    station_transfers: usize,
+    /// Stations of a complex with no enterable door of their own, entered by a mate's doors.
+    borrowed_doors: usize,
     /// The mid-block nodes those joins cut into the walking network.
     pavement_cuts: usize,
     /// Platform nodes: two per stop of every pattern (board and alight).
@@ -1840,6 +1971,7 @@ struct TransitBuild {
 #[allow(clippy::too_many_arguments)]
 fn append_transit(
     transit: &binfmt::Transit,
+    transfers: &TransitTransfers,
     node_lng: &mut Vec<i32>,
     node_lat: &mut Vec<i32>,
     v2_edges: &mut Vec<V2Edge>,
@@ -1865,7 +1997,8 @@ fn append_transit(
     }
 
     // Each published entrance projects onto the edge under it; none falls back to the station point.
-    let (groups, group_of_station) = station_groups(&transit.stations, &transit.entrances);
+    let groups = station_groups(&transit.stations, &transit.entrances);
+    built.borrowed_doors = groups.iter().filter(|group| group.borrowed).count();
     let candidates: Vec<u32> = v2_edges
         .iter()
         .enumerate()
@@ -1934,23 +2067,18 @@ fn append_transit(
         // A split group with one side served stands on that node rather than inventing doors.
         let missing = if served == 0 { both_sides } else { 0 };
         if missing != 0 {
-            let mut found: Vec<(f64, PavementFoot)> = Vec::new();
-            for &(member_lng, member_lat) in &group.member_points {
-                let point = (quantize_x(member_lng), quantize_y(member_lat));
-                found.extend(pavement_feet(
-                    point,
-                    false,
-                    &grid,
-                    &candidates,
-                    v2_edges,
-                    geometry_polys,
-                    origin_lng,
-                    origin_lat,
-                    scale,
-                    meters_per_unit,
-                ));
-            }
-            // Nearest first across the whole group, so a complex spends its doors on the nearest.
+            let mut found = pavement_feet(
+                (quantize_x(group.lng), quantize_y(group.lat)),
+                false,
+                &grid,
+                &candidates,
+                v2_edges,
+                geometry_polys,
+                origin_lng,
+                origin_lat,
+                scale,
+                meters_per_unit,
+            );
             found.sort_by(|left, right| {
                 left.0
                     .total_cmp(&right.0)
@@ -2129,6 +2257,49 @@ fn append_transit(
         }
     }
 
+    // A change between two stations of a complex: off one's exit, straight onto the other's entry.
+    for transfer in &transfers.transfers {
+        let (from, to) = (usize::from(transfer.from), usize::from(transfer.to));
+        let (Some(exits), Some(entries)) = (group_nodes.get(from), group_nodes.get(to)) else {
+            continue;
+        };
+        let complex = transit.stations[from].complex;
+        let name_id = match transfers.complex_names.get(&complex) {
+            Some(name) if complex == transit.stations[to].complex => {
+                intern_name(all_names, &mut interned, name)
+            }
+            _ => UNNAMED,
+        };
+        for exit in exits {
+            for entry in entries {
+                let meters = node_distance(
+                    node_lng,
+                    node_lat,
+                    exit.exit,
+                    entry.entry,
+                    origin_lng,
+                    origin_lat,
+                    scale,
+                );
+                v2_edges.push(transit_edge(
+                    node_lng,
+                    node_lat,
+                    exit.exit,
+                    entry.entry,
+                    KIND_ACCESS,
+                    transfer_seconds(transfer, meters),
+                    name_id,
+                    ACCESS_EXIT_ONLY | ACCESS_TRANSFER,
+                    origin_lng,
+                    origin_lat,
+                    scale,
+                ));
+                built.access_edges += 1;
+                built.station_transfers += 1;
+            }
+        }
+    }
+
     for pattern in &transit.patterns {
         // Skip dropped stations; the kept stop index is the feed's, so departures stay aligned.
         let kept: Vec<(&StationSide, (i32, i32), u32, u16)> = pattern
@@ -2140,7 +2311,7 @@ fn append_transit(
                 let station = &transit.stations[stop as usize];
                 let point = (quantize_x(station.lng), quantize_y(station.lat));
                 // A split station boards from the nodes of its own direction.
-                let places = &group_nodes[group_of_station[stop as usize]];
+                let places = &group_nodes[stop as usize];
                 places
                     .get(usize::from(pattern.direction) % places.len().max(1))
                     .map(|place| (place, point, offset, index as u16))
@@ -4240,6 +4411,8 @@ fn topology(args: &Args) -> Fallible<Base> {
         entrances: transit_station_entrances,
         fallback_stations: transit_fallback_stations,
         transfer_edges: transit_transfer_edges,
+        station_transfers: transit_station_transfers,
+        borrowed_doors: transit_borrowed_doors,
         door_table: transit_door_names,
         street_doors: transit_street_doors,
         pavement_cuts: transit_pavement_cuts,
@@ -4253,18 +4426,23 @@ fn topology(args: &Args) -> Fallible<Base> {
         board_table: transit_board_names,
         ride_table: transit_ride_names,
     } = match &args.transit {
-        Some(transit_file) => append_transit(
-            &binfmt::read_transit(transit_file)?,
-            &mut node_lng,
-            &mut node_lat,
-            &mut v2_edges,
-            &mut geometry_polys,
-            &mut all_names,
-            origin_lng,
-            origin_lat,
-            scale,
-            meters_per_unit,
-        ),
+        Some(transit_file) => {
+            let transit = binfmt::read_transit(transit_file)?;
+            let transfers = read_transfers(transit_file, &transit.stations)?;
+            append_transit(
+                &transit,
+                &transfers,
+                &mut node_lng,
+                &mut node_lat,
+                &mut v2_edges,
+                &mut geometry_polys,
+                &mut all_names,
+                origin_lng,
+                origin_lat,
+                scale,
+                meters_per_unit,
+            )
+        }
         None => TransitBuild::default(),
     };
     let node_count = node_lng.len();
@@ -4684,6 +4862,8 @@ fn topology(args: &Args) -> Fallible<Base> {
         "transitSplitStations": transit_split_stations,
         "transitCollapsedStations": transit_collapsed_stations,
         "transitTransferEdges": transit_transfer_edges,
+        "transitStationTransfers": transit_station_transfers,
+        "transitBorrowedDoors": transit_borrowed_doors,
         "transitPlatformNodes": transit_platform_nodes,
         "transitStationEntrances": transit_station_entrances,
         "transitFallbackStations": transit_fallback_stations,
@@ -5782,6 +5962,8 @@ mod tests {
         assert_eq!(ACCESS_EXIT_ONLY, GRPH_BUILDING_RIGHT);
         // A ride's flag borrows a door's bit; the kind tells them apart.
         assert_eq!(RIDE_STAY_ABOARD, ACCESS_ENTRY_ONLY);
+        // A transfer's flag borrows the steps bit, which no station edge spends.
+        assert_eq!(ACCESS_TRANSFER, GRPH_STEPS);
     }
 
     // Two stations in one transfer complex, each on its own line, plus a terminus for each line.
@@ -5889,10 +6071,19 @@ mod tests {
     type PavementGraph = (Vec<i32>, Vec<i32>, Vec<V2Edge>, Vec<(Vec<i32>, Vec<i32>)>);
 
     fn run_transit_on(graph: PavementGraph, transit: &binfmt::Transit) -> TransitRun {
+        run_transfers_on(graph, transit, &TransitTransfers::default())
+    }
+
+    fn run_transfers_on(
+        graph: PavementGraph,
+        transit: &binfmt::Transit,
+        transfers: &TransitTransfers,
+    ) -> TransitRun {
         let (mut node_lng, mut node_lat, mut edges, mut geometry_polys) = graph;
         let mut names: Vec<String> = vec![PAVEMENT_STREET.to_string()];
         let built = append_transit(
             transit,
+            transfers,
             &mut node_lng,
             &mut node_lat,
             &mut edges,
@@ -6151,47 +6342,53 @@ mod tests {
     }
 
     #[test]
-    fn one_complex_takes_one_station_node_at_its_members_centroid() {
+    fn each_station_of_a_complex_keeps_its_own_nodes_at_its_own_point() {
         let run = run_transit(&transfer_fixture());
 
-        assert_eq!(
-            run.built.stations, 6,
-            "the complex is one pair of nodes, not two"
-        );
+        assert_eq!(run.built.stations, 8, "a pair of nodes per station");
         assert_eq!(
             run.built.pavement_cuts, 4,
-            "one cut per member station of the four"
+            "one cut per station of the four"
         );
-        // The four cuts are numbered along the sidewalk, then the station nodes in feed order.
-        let (entry, _) = station_sides(&run, "W 4 St-Wash Sq")[0];
-        assert_eq!(entry, 6);
-        assert_eq!(run.node_lng[entry as usize], 200);
-        assert_eq!(run.node_lat[entry as usize], 100);
-        let doors = doors_from(&run, entry, entry);
-        assert_eq!(
-            doors.len(),
-            2,
-            "each member of the complex brings its own way in"
-        );
-        let feet: Vec<i32> = doors
-            .iter()
-            .map(|edge| run.node_lng[edge.b as usize])
-            .collect();
-        assert_eq!(
-            feet,
-            vec![100, 300],
-            "one under each member, not one corner for both"
-        );
-        for edge in &doors {
-            assert!(
-                baked_seconds(edge) > UNDERGROUND_ACCESS_SECONDS,
-                "the walk out to the door is charged on top of the stair"
-            );
-            assert_eq!(
-                run.names[edge.name_id as usize], "W 4 St-Wash Sq",
-                "the name its members share"
-            );
+        let sides = station_sides(&run, "W 4 St-Wash Sq");
+        assert_eq!(sides.len(), 2, "the complex's two stations, a pair each");
+        for ((entry, _), lng) in sides.into_iter().zip([100, 300]) {
+            assert_eq!(run.node_lng[entry as usize], lng, "on its own point");
+            assert_eq!(run.node_lat[entry as usize], 100);
+            let doors = doors_from(&run, entry, entry);
+            let feet: Vec<i32> = doors
+                .iter()
+                .map(|edge| run.node_lng[edge.b as usize])
+                .collect();
+            assert_eq!(feet, vec![lng], "its own way in, not its mate's");
         }
+    }
+
+    #[test]
+    fn a_station_of_a_complex_with_no_door_of_its_own_enters_by_its_nearest_mates() {
+        let mut transit = transfer_fixture();
+        transit.entrances = vec![entrance(
+            100,
+            10,
+            0,
+            0b11,
+            binfmt::EntranceKind::Stair,
+            true,
+            true,
+        )];
+        let run = run_transit_on(transfer_graph(), &transit);
+
+        assert_eq!(run.built.borrowed_doors, 1);
+        let sides = station_sides(&run, "W 4 St-Wash Sq");
+        for (entry, _) in sides {
+            let doors = doors_from(&run, entry, entry);
+            assert_eq!(doors.len(), 1, "the one published door, and no fallback");
+            assert_eq!(run.node_lng[doors[0].b as usize], 100);
+        }
+        assert_eq!(
+            run.built.pavement_cuts, 3,
+            "the shared door cuts the pavement once"
+        );
     }
 
     fn entrance(
@@ -6534,15 +6731,28 @@ mod tests {
     }
 
     #[test]
-    fn a_complex_stays_one_node_whatever_its_members_say() {
+    fn a_station_of_a_complex_with_no_free_crossover_splits_like_any_other() {
         let mut transit = transfer_fixture();
         transit.stations[0].split = true;
-        transit.stations[1].split = true;
-        let run = run_transit_on(transfer_graph(), &transit);
+        let run = run_transfers_on(transfer_graph(), &transit, &complex_transfers());
 
-        assert_eq!(run.built.split_stations, 0);
-        assert_eq!(run.built.stations, 6, "the complex is still one pair");
-        assert_eq!(station_sides(&run, "W 4 St-Wash Sq").len(), 1);
+        assert_eq!(run.built.split_stations, 1);
+        let sides = station_sides(&run, "W 4 St-Wash Sq");
+        assert_eq!(
+            sides.len(),
+            3,
+            "two sides for the split station, one for its mate"
+        );
+        // The mate's transfer lands on both sides' entries.
+        let (_, mate_exit) = sides[2];
+        for &(entry, _) in &sides[..2] {
+            assert!(
+                run.edges.iter().any(|edge| edge.a == mate_exit
+                    && edge.b == entry
+                    && edge.flags & ACCESS_TRANSFER != 0),
+                "a transfer onto side entry {entry}"
+            );
+        }
     }
 
     #[test]
@@ -6576,13 +6786,34 @@ mod tests {
         );
     }
 
+    fn complex_transfers() -> TransitTransfers {
+        TransitTransfers {
+            complex_names: HashMap::from([(7, "W 4 St".to_string())]),
+            transfers: vec![
+                StationTransfer {
+                    from: 0,
+                    to: 1,
+                    seconds: 90,
+                    published: true,
+                },
+                StationTransfer {
+                    from: 1,
+                    to: 0,
+                    seconds: 0,
+                    published: false,
+                },
+            ],
+        }
+    }
+
     #[test]
-    fn a_transfer_inside_a_complex_is_an_alight_and_a_board() {
-        let run = run_transit(&transfer_fixture());
+    fn a_transfer_runs_from_one_platforms_exit_to_the_others_entry() {
+        let run = run_transfers_on(transfer_graph(), &transfer_fixture(), &complex_transfers());
         let TransitRun {
             node_lng,
             edges,
             built,
+            names,
             ..
         } = &run;
 
@@ -6597,7 +6828,6 @@ mod tests {
         };
         let arrived = platform_of(1, 1);
         let departing = platform_of(2, 0);
-        assert_ne!(arrived, departing);
         assert_eq!(
             (node_lng[arrived as usize], node_lng[departing as usize]),
             (100, 300),
@@ -6612,19 +6842,136 @@ mod tests {
             .iter()
             .find(|edge| edge.b == departing && edge.kind == KIND_BOARD)
             .expect("the way onto the departing platform");
-        let (entry, exit) = station_sides(&run, "W 4 St-Wash Sq")[0];
-        assert_eq!(alight.b, exit, "the alight lands on the complex's exit");
-        assert_eq!(board.a, entry, "and the next board leaves from its entry");
-        assert!(
-            edges
-                .iter()
-                .any(|edge| edge.a == exit && edge.b == entry && edge.kind == KIND_ACCESS),
-            "with the change of train between them"
-        );
+        let sides = station_sides(&run, "W 4 St-Wash Sq");
+        let ((_, exit), (entry, _)) = (sides[0], sides[1]);
+        assert_eq!(alight.b, exit, "the alight lands on its own station's exit");
         assert_eq!(
-            baked_seconds(alight),
-            ALIGHT_SECONDS,
-            "and it costs a step off the train, not a walk to the street"
+            board.a, entry,
+            "and the next board leaves the other's entry"
+        );
+        assert_eq!(baked_seconds(alight), ALIGHT_SECONDS);
+        assert_eq!(alight.length, 0.0, "a step off the train, not a walk");
+
+        let transfer = edges
+            .iter()
+            .find(|edge| edge.a == exit && edge.b == entry)
+            .expect("the change between the two");
+        assert_eq!(transfer.kind, KIND_ACCESS);
+        assert_eq!(transfer.flags, ACCESS_EXIT_ONLY | ACCESS_TRANSFER);
+        assert_eq!(
+            names[transfer.name_id as usize], "W 4 St",
+            "named for the complex"
+        );
+        assert!((transfer.length - 17.0).abs() < 0.5, "200 units east, 17 m");
+        assert_eq!(
+            baked_seconds(transfer),
+            90,
+            "the published minimum, whatever the walk"
+        );
+        let back = edges
+            .iter()
+            .find(|edge| edge.a == sides[1].1 && edge.b == sides[0].0)
+            .expect("the unpublished way back");
+        assert_eq!(
+            baked_seconds(back),
+            14 + UNPUBLISHED_TRANSFER_SECONDS,
+            "the walk and a stair"
+        );
+        assert_eq!(built.station_transfers, 2);
+    }
+
+    #[test]
+    fn the_transfer_section_reads_back_past_the_name_table() {
+        let mut bytes = vec![0u8; 64];
+        bytes[0..4].copy_from_slice(b"TRNS");
+        bytes[48..52].copy_from_slice(&64u32.to_le_bytes());
+        // The name table: one name, "W 4 St".
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&6u32.to_le_bytes());
+        bytes.extend_from_slice(b"W 4 St");
+        while bytes.len() % 4 != 0 {
+            bytes.push(0);
+        }
+        let section = bytes.len() as u32;
+        bytes[60..64].copy_from_slice(&section.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&[7, 0, 0, 0, 0, 0, 0, 0]);
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0, 1, 0, 90, 0, 1, 0]);
+        bytes.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0]);
+        let path = std::env::temp_dir().join(format!("trns-transfers-{}.bin", std::process::id()));
+        fs::write(&path, &bytes).expect("the fixture");
+
+        let read = read_transfers(&path, &[]).expect("the section");
+        fs::remove_file(&path).ok();
+        assert_eq!(
+            read.complex_names.get(&7).map(String::as_str),
+            Some("W 4 St")
+        );
+        let pairs: Vec<(u16, u16, u16, bool)> = read
+            .transfers
+            .iter()
+            .map(|one| (one.from, one.to, one.seconds, one.published))
+            .collect();
+        assert_eq!(pairs, vec![(0, 1, 90, true), (1, 0, 0, false)]);
+
+        bytes[60..64].copy_from_slice(&0u32.to_le_bytes());
+        fs::write(&path, &bytes).expect("the older fixture");
+        let lone = transfer_fixture().stations.split_off(2);
+        let older = read_transfers(&path, &lone).expect("no section, and no complex to need one");
+        assert!(older.transfers.is_empty() && older.complex_names.is_empty());
+        let stale = read_transfers(&path, &transfer_fixture().stations)
+            .err()
+            .expect("a complex but no section")
+            .to_string();
+        assert!(stale.contains("build-transit"), "{stale}");
+
+        // A count the file cannot hold is an error, not an allocation.
+        bytes[60..64].copy_from_slice(&section.to_le_bytes());
+        let at = section as usize;
+        bytes[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        fs::write(&path, &bytes).expect("the corrupt fixture");
+        let corrupt = read_transfers(&path, &[]);
+        fs::remove_file(&path).ok();
+        assert!(corrupt.is_err());
+    }
+
+    #[test]
+    fn a_transfer_to_a_dropped_station_is_skipped() {
+        let mut transit = transfer_fixture();
+        // Far past the snap radius from any pavement, so the station is dropped.
+        transit.stations[1].lat = 40.25 + 20_000.0 * 1e-6;
+        let run = run_transfers_on(transfer_graph(), &transit, &complex_transfers());
+
+        assert_eq!(run.built.unsnapped, 1);
+        assert_eq!(run.built.station_transfers, 0);
+        assert!(
+            !run.edges
+                .iter()
+                .any(|edge| edge.flags & ACCESS_TRANSFER != 0 && edge.kind == KIND_ACCESS)
+        );
+    }
+
+    #[test]
+    fn a_published_transfer_time_stands_and_an_unpublished_one_is_the_walk_and_a_stair() {
+        let published = StationTransfer {
+            from: 0,
+            to: 1,
+            seconds: 90,
+            published: true,
+        };
+        assert_eq!(transfer_seconds(&published, 145.0), 90, "14 St to 8 Av");
+        assert_eq!(transfer_seconds(&published, 50.0), 90);
+        let unpublished = StationTransfer {
+            seconds: 0,
+            published: false,
+            ..published
+        };
+        assert_eq!(
+            transfer_seconds(&unpublished, 127.0),
+            98 + UNPUBLISHED_TRANSFER_SECONDS,
+            "127 m at 1.3 m/s, rounded up"
         );
     }
 

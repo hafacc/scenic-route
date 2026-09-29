@@ -15,8 +15,10 @@ import {
 import { buildDirections } from "./directions";
 import {
   clearEdgePathCache,
+  isStationTransfer,
   otherEnd,
   type RoutingGraph,
+  stationName,
   stopIndexOf,
 } from "./graph";
 import { findRoute, networkMetersTo, type RouteResult } from "./search";
@@ -24,6 +26,17 @@ import type { Snap } from "./snap";
 import {
   ACCESS_SECONDS,
   ALIGHT_SECONDS,
+  COMPLEX_FROM_EXIT,
+  COMPLEX_FROM_STATION,
+  COMPLEX_NORTH_DOOR_NODE,
+  COMPLEX_NORTH_SIDEWALK,
+  COMPLEX_SOUTH_DOOR_NODE,
+  COMPLEX_SOUTH_SIDEWALK,
+  COMPLEX_TO_ENTRY,
+  COMPLEX_TO_STATION,
+  COMPLEX_TRANSFER,
+  COMPLEX_TRANSFER_SECONDS,
+  complexGraph,
   departureAt,
   departureReaching,
   EAST_ACCESS_SECONDS,
@@ -505,4 +518,41 @@ test("a ride through a station is one leg of two stops", () => {
   const [, ride] = maneuvers;
   expect(ride.durationSeconds).toBe(2 * RIDE_SECONDS);
   expect(ride.stops).toBe(2);
+});
+
+// Off one station's platform and onto the other's, never out through the street between them.
+test("a change between two stations of a complex takes the transfer edge at its baked seconds", () => {
+  const graph = complexGraph();
+  expect(isStationTransfer(graph, COMPLEX_TRANSFER)).toBe(true);
+  expect(graph.edgeLength[COMPLEX_TRANSFER]).toBeCloseTo(145, 0);
+  expect(COMPLEX_TRANSFER_SECONDS).toBe(90);
+  // The transfer is named for the complex, which is no station's name.
+  expect(stationName(graph, COMPLEX_FROM_EXIT)).toBe(COMPLEX_FROM_STATION);
+  expect(stationName(graph, COMPLEX_TO_ENTRY)).toBe(COMPLEX_TO_STATION);
+
+  const route = findRoute(
+    graph,
+    snapAtNode(graph, COMPLEX_SOUTH_DOOR_NODE, COMPLEX_SOUTH_SIDEWALK),
+    snapAtNode(graph, COMPLEX_NORTH_DOOR_NODE, COMPLEX_NORTH_SIDEWALK),
+    transitWeights(),
+  ) as RouteResult;
+  expect(
+    route.rides.map((ride) => [ride.boardStation, ride.alightStation]),
+  ).toEqual([
+    ["Chambers St", COMPLEX_FROM_STATION],
+    [COMPLEX_TO_STATION, "Bedford Av"],
+  ]);
+  const transfer = route.steps.find((step) => step.edge === COMPLEX_TRANSFER);
+  expect(transfer?.forward).toBe(true);
+  // The walk between the two stations is underground, sheltered like the platforms.
+  expect(route.factors.shelter * route.travelSeconds).toBeGreaterThanOrEqual(
+    COMPLEX_TRANSFER_SECONDS + 2 * RIDE_SECONDS,
+  );
+  expect(rawSeconds(graph, COMPLEX_TRANSFER, COMPLEX_FROM_EXIT)).toBe(
+    COMPLEX_TRANSFER_SECONDS,
+  );
+  // One way only: no path backs up the transfer onto the platform it left.
+  expect(
+    effSeconds(graph, COMPLEX_TRANSFER, transitWeights(), 0, COMPLEX_TO_ENTRY),
+  ).toBe(Number.POSITIVE_INFINITY);
 });
