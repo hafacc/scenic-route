@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fetchGtfsZipFile, type GtfsFeed, parseGtfs } from "./gtfs";
+import type { GtfsFeed } from "./gtfs";
 import type { SourceFile } from "./manifest";
 import type { Coord } from "./socrata";
 import {
@@ -13,14 +13,11 @@ import {
   SUBWAY_FORMAT,
   type TransitRoute,
   type TransitStation,
-  transferComplexes,
 } from "./subway-format";
+import { cityComplexes, loadComplexGroups, loadFeeds } from "./transit";
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const SUBWAY_DIR = join(DATA_DIR, "subway");
-
-const FEED_URL = "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip";
-const FEED_CACHE_KEY = "gtfs-subway";
 
 // 1 is the subway; 2 is heavy rail, here only the Staten Island Railway, which the MTA map draws.
 const KEPT_ROUTE_TYPES = new Set(["1", "2"]);
@@ -217,7 +214,7 @@ function buildRoutes(feed: GtfsFeed): TransitRoute[] {
 function buildStations(
   feed: GtfsFeed,
   routeIndex: ReadonlyMap<string, number>,
-  complexes: ReadonlyMap<string, number>,
+  complexOf: (stationId: string) => number,
 ): TransitStation[] {
   const stopRow = new Map(feed.stops.map((stop) => [stop.stop_id, stop]));
   const routeOf = new Map(
@@ -287,7 +284,7 @@ function buildStations(
       lng,
       name: row.stop_name?.trim() ?? "",
       routeMask,
-      complex: complexes.get(stationId) ?? 0,
+      complex: complexOf(stationId),
     });
   }
   console.error(
@@ -418,11 +415,15 @@ export async function ingestSubway(cityId: string): Promise<SourceFile> {
   const started = performance.now();
   await mkdir(SUBWAY_DIR, { recursive: true });
 
-  const feed = parseGtfs(await fetchGtfsZipFile(FEED_CACHE_KEY, FEED_URL));
+  // The routing ingest's feed and complex model, so both files carry the same complex ids.
+  const loaded = await loadFeeds(cityId);
+  const [{ source, feed }] = loaded;
+  const { complexOf } = cityComplexes(loaded, await loadComplexGroups(loaded));
   const routes = buildRoutes(feed);
   const routeIndex = new Map(routes.map((route, index) => [route.id, index]));
-  const complexes = transferComplexes(feed, 1);
-  const stations = buildStations(feed, routeIndex, complexes);
+  const stations = buildStations(feed, routeIndex, (stationId) =>
+    complexOf(source.id, stationId),
+  );
   reachTerminals(routes, stations);
   const bytes = encodeSubway(routes, stations);
   const file = `${cityId}.bin`;
@@ -463,7 +464,7 @@ export async function ingestSubway(cityId: string): Promise<SourceFile> {
   console.error(
     `  complexes: ${members.size} over the ${stations.length} stations, ${joined.length} of them` +
       ` holding more than one (the largest ${Math.max(0, ...joined)}), ` +
-      `${members.get(0) ?? 0} stations transfers.txt never names`,
+      `${members.get(0) ?? 0} stations in none`,
   );
   console.error(
     `subway: ${routes.length} routes, ${lines} lines, ${vertices} vertices, ` +

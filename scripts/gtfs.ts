@@ -163,13 +163,109 @@ function readTable(files: Map<string, Uint8Array>, table: string): GtfsRow[] {
   return [];
 }
 
-export function parseGtfs(zip: Uint8Array): GtfsFeed {
+// The cells of one CSV line up to `column`, honoring quotes; enough to read a key column.
+function cellAt(line: string, column: number): string {
+  let cell = 0;
+  let field = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
+    if (quoted) {
+      if (char === '"' && line[index + 1] === '"') {
+        field += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        field += char;
+      }
+    } else if (char === '"') {
+      quoted = true;
+    } else if (char === ",") {
+      if (cell === column) {
+        return field;
+      }
+      cell += 1;
+      field = "";
+    } else if (char !== "\r") {
+      field += char;
+    }
+  }
+  return cell === column ? field : "";
+}
+
+// Only the stop times of kept trips: Muni's 97 MB of bus calls would not fit this machine's memory.
+function readStopTimes(
+  files: Map<string, Uint8Array>,
+  keptTrips: ReadonlySet<string> | null,
+): GtfsRow[] {
+  if (keptTrips === null) {
+    return readTable(files, "stop_times");
+  }
+  const decoder = new TextDecoder();
+  for (const [name, contents] of files) {
+    if (name === "stop_times.txt" || name.endsWith("/stop_times.txt")) {
+      return keptStopTimes(decoder.decode(contents), keptTrips);
+    }
+  }
+  return [];
+}
+
+// Line-filtered before parsing, so rows of dropped trips never become objects.
+export function keptStopTimes(
+  text: string,
+  keptTrips: ReadonlySet<string>,
+): GtfsRow[] {
+  const headerEnd = text.indexOf("\n");
+  const header = text.slice(0, headerEnd < 0 ? text.length : headerEnd);
+  const tripColumn = header
+    .replace(/^\uFEFF/, "")
+    .replace(/\r$/, "")
+    .split(",")
+    .map((cell) => cell.replaceAll('"', "").trim())
+    .indexOf("trip_id");
+  if (tripColumn < 0 || headerEnd < 0) {
+    return parseCsv(text);
+  }
+  const kept = [header];
+  let start = headerEnd + 1;
+  while (start < text.length) {
+    const end = text.indexOf("\n", start);
+    const line = text.slice(start, end < 0 ? text.length : end);
+    if (keptTrips.has(cellAt(line, tripColumn))) {
+      kept.push(line);
+    }
+    start = end < 0 ? text.length : end + 1;
+  }
+  return parseCsv(kept.join("\n"));
+}
+
+// `routeTypes` keeps only those routes' stop times; every other table is read whole.
+export function parseGtfs(
+  zip: Uint8Array,
+  routeTypes: ReadonlySet<string> | null = null,
+): GtfsFeed {
   const files = unzip(zip);
+  const routes = readTable(files, "routes");
+  const trips = readTable(files, "trips");
+  let keptTrips: Set<string> | null = null;
+  if (routeTypes !== null) {
+    const keptRoutes = new Set(
+      routes
+        .filter((route) => routeTypes.has(route.route_type))
+        .map((route) => route.route_id),
+    );
+    keptTrips = new Set(
+      trips
+        .filter((trip) => keptRoutes.has(trip.route_id))
+        .map((trip) => trip.trip_id),
+    );
+  }
   return {
-    routes: readTable(files, "routes"),
-    trips: readTable(files, "trips"),
+    routes,
+    trips,
     stops: readTable(files, "stops"),
-    stopTimes: readTable(files, "stop_times"),
+    stopTimes: readStopTimes(files, keptTrips),
     calendar: readTable(files, "calendar"),
     calendarDates: readTable(files, "calendar_dates"),
     shapes: readTable(files, "shapes"),

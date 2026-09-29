@@ -2,15 +2,18 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fixtureFeeds } from "../src/routing/transit.fixture";
+import type { GtfsFeed } from "./gtfs";
 import type { OsmStationEntrance } from "./overpass";
 import {
   BOTH_SIDES,
   buildTopology,
+  cityComplexes,
   curatedLines,
   decodeTopology,
   encodeTopology,
   type FeedEntrance,
   type FeedEntrances,
+  type LoadedFeed,
   matchStationEntrances,
   muniStationName,
   NORTHBOUND_SIDE,
@@ -155,7 +158,7 @@ test("the entrances and the split flag survive the encoder", () => {
   );
 });
 
-test("the New York no-crossover list splits every station it names but one", () => {
+test("the New York no-crossover list splits every station it names", () => {
   const ids = curatedLines("nyc-no-crossover.txt");
   expect(ids).toHaveLength(87);
   expect(new Set(ids).size).toBe(ids.length);
@@ -163,9 +166,9 @@ test("the New York no-crossover list splits every station it names but one", () 
   const committed = decodeTopology(
     new Uint8Array(readFileSync(join(TRANSIT_DIR, "nyc.bin"))),
   );
-  // One of the 87 is inside a transfer complex, which is one node whatever its members say.
+  // Bleecker St too, though it is in a complex: each station keeps its own nodes.
   expect(committed.stations.filter((station) => station.split)).toHaveLength(
-    86,
+    87,
   );
 });
 
@@ -279,4 +282,122 @@ test("a Muni stop is named for the place, not the platform", () => {
   expect(muniStationName("Church St & Duboce Ave")).toBe(
     "Church St & Duboce Ave",
   );
+});
+
+const METRO_PLATFORMS: readonly [string, string, number][] = [
+  ["1", "Metro Castro Station/Downtown", 0],
+  ["2", "Metro Castro Station/Outbound", 9],
+  ["3", "Metro Powell Station/Downtown", 3000],
+  ["4", "Metro Powell Station/Outbound", 3076],
+  ["5", "Van Ness Station Outbound", 6000],
+  ["6", "Metro Van Ness Station", 6014],
+];
+
+// Muni-like: no parent stations, no transfers.txt, one row per direction's platform.
+function metroFeeds(): LoadedFeed[] {
+  const stops = METRO_PLATFORMS.map(([id, name, meters]) => ({
+    stop_id: id,
+    stop_name: name,
+    stop_lat: String(37.76 + meters / 111_320),
+    stop_lon: "-122.43",
+  }));
+  const trips = [
+    { trip_id: "in", route_id: "K", service_id: "all", direction_id: "1" },
+    { trip_id: "out", route_id: "K", service_id: "all", direction_id: "0" },
+  ];
+  const stopTimes = ["in", "out"].flatMap((tripId, direction) =>
+    METRO_PLATFORMS.filter((_, index) => index % 2 === direction).map(
+      ([stopId], index) => ({
+        trip_id: tripId,
+        stop_id: stopId,
+        stop_sequence: String(index + 1),
+        arrival_time: `06:0${index}:00`,
+        departure_time: `06:0${index}:00`,
+      }),
+    ),
+  );
+  const feed: GtfsFeed = {
+    routes: [{ route_id: "K", route_type: "0", route_short_name: "K" }],
+    trips,
+    stops,
+    stopTimes,
+    calendar: [],
+    calendarDates: [],
+    shapes: [],
+    frequencies: [],
+    transfers: [],
+  };
+  return [
+    {
+      source: {
+        id: "muni",
+        name: "Muni",
+        url: "",
+        cacheKey: "",
+        routeTypes: new Set(["0"]),
+        routePrefix: "muni:",
+        groupKey: (row) => row.route_id,
+        underground: new Set(METRO_PLATFORMS.map(([, name]) => name)),
+        displayName: muniStationName,
+      },
+      feed,
+    },
+  ];
+}
+
+test("a Metro station's two direction platforms are one complex, both ways estimated", () => {
+  const { topology } = buildTopology(metroFeeds());
+  const byName = (name: string) =>
+    topology.stations.filter((station) => station.name === name);
+
+  const castro = byName("Castro");
+  expect(castro).toHaveLength(2);
+  expect(castro[0].complex).toBeGreaterThan(0);
+  expect(castro[1].complex).toBe(castro[0].complex);
+  const vanNess = byName("Van Ness");
+  expect(vanNess[0].complex).toBeGreaterThan(0);
+  expect(vanNess[1].complex).toBe(vanNess[0].complex);
+  // 76 m apart, past the direction pair's reach: Powell's join comes through BART.
+  expect(byName("Powell").map(({ complex }) => complex)).toEqual([0, 0]);
+
+  expect(topology.complexes.map(({ name }) => name).sort()).toEqual([
+    "Castro",
+    "Van Ness",
+  ]);
+  expect(topology.transfers).toHaveLength(4);
+  for (const transfer of topology.transfers) {
+    expect(transfer.seconds).toBeNull();
+    expect(topology.stations[transfer.from].complex).toBe(
+      topology.stations[transfer.to].complex,
+    );
+  }
+});
+
+test("complexes and transfer pairs survive the encoder", () => {
+  const { topology } = buildTopology(metroFeeds());
+  const withTimed = {
+    ...topology,
+    transfers: [...topology.transfers, { from: 0, to: 1, seconds: 90 }],
+  };
+
+  const decoded = decodeTopology(encodeTopology(withTimed));
+
+  expect(decoded.complexes).toEqual(topology.complexes);
+  expect(decoded.transfers).toEqual(withTimed.transfers);
+  expect(decoded.stations.map(({ complex }) => complex)).toEqual(
+    topology.stations.map(({ complex }) => complex),
+  );
+});
+
+test("the display ingest's complex ids are the routing ingest's", () => {
+  const feeds = metroFeeds();
+  const { topology } = buildTopology(feeds);
+  const { complexOf } = cityComplexes(feeds, []);
+  for (const [stopId, , meters] of METRO_PLATFORMS) {
+    const station = topology.stations.find(
+      ({ lat }) => Math.abs(lat - (37.76 + meters / 111_320)) < 1e-6,
+    );
+    expect(complexOf("muni", stopId)).toBe(station?.complex ?? -1);
+  }
+  expect(complexOf("muni", "1")).toBeGreaterThan(0);
 });

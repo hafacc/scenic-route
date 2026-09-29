@@ -53,59 +53,246 @@ export interface ShapeVariant {
 // GTFS transfer_type 3: no transfer possible between the pair.
 const NO_TRANSFER = "3";
 
-// Empty, not one complex per station, when no transfer joins two different stations (Muni, BART).
-export function transferComplexes(
+// One station a complex can hold; `key` is unique across a city's feeds.
+export interface ComplexStation extends Coord {
+  key: string;
+  name: string;
+}
+
+// Directed, as transfers.txt is; `seconds` is null where no agency publishes the time.
+export interface TransferPair {
+  from: string;
+  to: string;
+  seconds: number | null;
+}
+
+// Stations one source calls a single complex, with that source's name for the whole when it has one.
+export interface ComplexGroup {
+  keys: readonly string[];
+  name?: string;
+}
+
+export interface ComplexModel {
+  // 0 = in no complex; set on every station of a city whose agency publishes transfers.
+  complexOf: Map<string, number>;
+  // Only complexes of two or more stations.
+  names: Map<number, string>;
+  transfers: TransferPair[];
+}
+
+// A feed's own pairs between distinct stations, mapped onto the city's station keys.
+export function publishedTransfers(
   feed: GtfsFeed,
-  firstId: number,
-): Map<string, number> {
-  const parentOf = new Map(
-    feed.stops.map((stop) => [
-      stop.stop_id,
-      stop.parent_station?.trim() || stop.stop_id,
-    ]),
+  keyOfStop: (stopId: string) => string,
+): { pairs: TransferPair[]; blocked: TransferPair[] } {
+  const pairs: TransferPair[] = [];
+  const blocked: TransferPair[] = [];
+  for (const row of feed.transfers) {
+    const from = keyOfStop(row.from_stop_id);
+    const to = keyOfStop(row.to_stop_id);
+    const seconds = Number.parseInt(row.min_transfer_time ?? "", 10);
+    if (from === to) {
+    } else if (row.transfer_type === NO_TRANSFER) {
+      blocked.push({ from, to, seconds: null });
+    } else {
+      pairs.push({
+        from,
+        to,
+        seconds: Number.isFinite(seconds) ? seconds : null,
+      });
+    }
+  }
+  return { pairs, blocked };
+}
+
+const NAME_NOISE: ReadonlySet<string> = new Set([
+  "station",
+  "bart",
+  "muni",
+  "metro",
+  "mezzanine",
+  "level",
+  "platform",
+  "st",
+  "street",
+]);
+
+// Stripped only from the end: BART has a Downtown Berkeley.
+const DIRECTION_WORDS: ReadonlySet<string> = new Set([
+  "inbound",
+  "outbound",
+  "outbd",
+  "downtown",
+  "downtn",
+  "northbound",
+  "southbound",
+]);
+
+export function stationNameTokens(name: string): string[] {
+  const tokens = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(" ")
+    .filter((token) => token !== "" && !NAME_NOISE.has(token));
+  while (tokens.length > 1 && DIRECTION_WORDS.has(tokens[tokens.length - 1])) {
+    tokens.pop();
+  }
+  return tokens;
+}
+
+// True when one name's tokens run contiguously inside the other's.
+export function stationNamesAgree(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  const [inner, outer] =
+    left.length <= right.length ? [left, right] : [right, left];
+  if (inner.length === 0) {
+    return false;
+  }
+  for (let start = 0; start + inner.length <= outer.length; start++) {
+    if (inner.every((token, index) => token === outer[start + index])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// "14 St/8 Av" -> "14 St / 8 Av".
+function spacedSlashes(name: string): string {
+  return name.replace(/\s*\/\s*/g, " / ");
+}
+
+// Agreeing names ("Powell", "Powell Street") keep the shortest; the rest join as "A / B".
+function joinedName(names: readonly string[]): string {
+  const kept: string[] = [];
+  const ordered = [...new Set(names)].sort(
+    (left, right) => left.length - right.length || (left < right ? -1 : 1),
   );
+  for (const name of ordered) {
+    const tokens = stationNameTokens(name);
+    if (
+      !kept.some((one) => stationNamesAgree(stationNameTokens(one), tokens))
+    ) {
+      kept.push(name);
+    }
+  }
+  return kept.sort().join(" / ");
+}
+
+// Published pairs join their stations; a group joins all of its own and pairs those left unpaired.
+export function buildComplexes(
+  stations: readonly ComplexStation[],
+  published: readonly TransferPair[],
+  groups: readonly ComplexGroup[],
+  // transfer_type 3: an agency saying no transfer between the pair, which no group may add.
+  blocked: readonly TransferPair[] = [],
+): ComplexModel {
+  const byKey = new Map(stations.map((station) => [station.key, station]));
   const parent = new Map<string, string>();
-  const find = (station: string): string => {
-    const seen = parent.get(station);
-    if (seen === undefined || seen === station) {
-      return station;
+  const find = (key: string): string => {
+    const seen = parent.get(key);
+    if (seen === undefined || seen === key) {
+      return key;
     }
     const root = find(seen);
-    parent.set(station, root);
+    parent.set(key, root);
     return root;
   };
-
-  let joins = 0;
-  for (const row of feed.transfers) {
-    if (row.transfer_type === NO_TRANSFER) {
-      continue;
-    }
-    const from = parentOf.get(row.from_stop_id) ?? row.from_stop_id;
-    const to = parentOf.get(row.to_stop_id) ?? row.to_stop_id;
-    if (from === to) {
-      continue;
-    }
-    // Lower id wins the root, so numbering is independent of row order.
-    const roots = [find(from), find(to)].sort();
+  const union = (left: string, right: string): void => {
+    // Lower key wins the root, so numbering is independent of row order.
+    const roots = [find(left), find(right)].sort();
     parent.set(roots[1], roots[0]);
-    joins += 1;
+  };
+
+  const transfers: TransferPair[] = [];
+  const paired = new Set<string>();
+  const pairKey = (from: string, to: string): string => `${from}\u0000${to}`;
+  const refused = new Set(blocked.map(({ from, to }) => pairKey(from, to)));
+  for (const pair of published) {
+    const key = pairKey(pair.from, pair.to);
+    if (!byKey.has(pair.from) || !byKey.has(pair.to) || paired.has(key)) {
+      continue;
+    }
+    paired.add(key);
+    transfers.push(pair);
+    union(pair.from, pair.to);
   }
-  if (joins === 0) {
-    return new Map();
+  const named: { members: string[]; name: string }[] = [];
+  for (const group of groups) {
+    const members = [...new Set(group.keys)].filter((key) => byKey.has(key));
+    if (members.length < 2) {
+      continue;
+    }
+    for (const from of members) {
+      union(members[0], from);
+      for (const to of members) {
+        const key = pairKey(from, to);
+        if (from !== to && !paired.has(key) && !refused.has(key)) {
+          paired.add(key);
+          transfers.push({ from, to, seconds: null });
+        }
+      }
+    }
+    if (group.name !== undefined) {
+      named.push({ members, name: group.name });
+    }
   }
 
-  const ids = new Map<string, number>();
-  const complexes = new Map<string, number>();
-  for (const station of [...new Set(parentOf.values())].sort()) {
-    const root = find(station);
-    let id = ids.get(root);
-    if (id === undefined) {
-      id = firstId + ids.size;
-      ids.set(root, id);
+  const everyStation = published.length > 0;
+  const members = new Map<string, string[]>();
+  for (const key of [...byKey.keys()].sort()) {
+    const root = find(key);
+    const group = members.get(root);
+    if (group) {
+      group.push(key);
+    } else {
+      members.set(root, [key]);
     }
-    complexes.set(station, id);
   }
-  return complexes;
+  const complexOf = new Map<string, number>();
+  const names = new Map<number, string>();
+  let nextId = 1;
+  for (const [root, keys] of members) {
+    if (keys.length < 2 && !everyStation) {
+      for (const key of keys) {
+        complexOf.set(key, 0);
+      }
+      continue;
+    }
+    const id = nextId++;
+    for (const key of keys) {
+      complexOf.set(key, id);
+    }
+    if (keys.length < 2) {
+      continue;
+    }
+    // The agency's name for the most of it, else the members' own.
+    let best: { covered: number; name: string } | null = null;
+    for (const group of named) {
+      const covered = group.members.filter((key) => find(key) === root).length;
+      if (
+        covered > 1 &&
+        (best === null ||
+          covered > best.covered ||
+          (covered === best.covered && group.name < best.name))
+      ) {
+        best = { covered, name: group.name };
+      }
+    }
+    names.set(
+      id,
+      best === null
+        ? joinedName(keys.map((key) => byKey.get(key)?.name ?? ""))
+        : spacedSlashes(best.name),
+    );
+  }
+  transfers.sort(
+    (left, right) =>
+      (left.from < right.from ? -1 : left.from > right.from ? 1 : 0) ||
+      (left.to < right.to ? -1 : left.to > right.to ? 1 : 0),
+  );
+  return { complexOf, names, transfers };
 }
 
 // A terminal's several curbs arrive as separate stops in every feed here.
@@ -157,10 +344,6 @@ export function centroid(points: readonly Coord[]): Coord {
     lat: points.reduce((sum, one) => sum + one.lat, 0) / points.length,
     lng: points.reduce((sum, one) => sum + one.lng, 0) / points.length,
   };
-}
-
-export function nextComplexId(complexes: ReadonlyMap<string, number>): number {
-  return Math.max(0, ...complexes.values()) + 1;
 }
 
 export function parseColor(hex: string, fallback: string): Rgb {
