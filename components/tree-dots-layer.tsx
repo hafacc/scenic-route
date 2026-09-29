@@ -13,7 +13,7 @@ import {
 import manifest from "../src/tree-cover/manifest.json";
 import { useCity } from "./city-context";
 
-// Below MIN_ZOOM raster tiles carry the overlay; above, they would blur, so each tree is a disc.
+// From MIN_ZOOM each tree is a disc over the genus wash, which is too soft to show one.
 
 const MIN_ZOOM = 15;
 const MAX_ZOOM = 20;
@@ -25,7 +25,7 @@ export default function TreeDotsLayer() {
   const active = useCity();
 
   useEffect(() => {
-    // The raster layer's pane, so the handoff happens at the same depth; create it if missing.
+    // Its own pane, above the tile pane the wash draws in, so every dot lands on top of it.
     if (!map.getPane(PANE_NAME)) {
       const pane = map.createPane(PANE_NAME);
       pane.style.zIndex = String(PANE_Z_INDEX);

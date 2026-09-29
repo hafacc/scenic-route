@@ -26,7 +26,7 @@ export default function TreeLegend() {
   }
 
   const rows = genus.table.map((entry, id) => ({ id, common: entry.common }));
-  rows.push({ id: OTHER_GENUS_ID, common: "Other" });
+  rows.push({ id: OTHER_GENUS_ID, common: "Other / unmapped" });
 
   const anyOn = enabled.size > 0;
 
@@ -34,7 +34,7 @@ export default function TreeLegend() {
     <div className="rounded-2xl bg-white/85 px-3 py-2.5 shadow-lg ring-1 ring-black/5 backdrop-blur-md dark:bg-slate-800/80 dark:ring-white/10">
       <div className="mb-1.5 flex items-center justify-between gap-3">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-          Tree genus
+          Genus canopy
         </p>
         <button
           type="button"

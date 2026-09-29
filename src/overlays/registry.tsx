@@ -46,7 +46,7 @@ const StreetScoreLayer = dynamic(
 const CanopyLayer = dynamic(() => import("../../components/canopy-layer"), {
   ssr: false,
 });
-const GenusLayer = dynamic(() => import("../../components/genus-gl-layer"), {
+const GenusLayer = dynamic(() => import("../../components/genus-layer"), {
   ssr: false,
 });
 const DiningLayer = dynamic(() => import("../../components/dining-layer"), {
@@ -273,7 +273,7 @@ export const OVERLAYS: readonly OverlayDef[] = [
 // Genus recolors every tree, so it doesn't compose with the other layers.
   {
     id: "genus",
-    label: "Tree genus",
+    label: "Genus canopy",
     icon: <PiTreeStructureFill className="h-4 w-4" aria-hidden="true" />,
     swatch: null, // a color per genus, in its own key
     render: () => <GenusLayer />,

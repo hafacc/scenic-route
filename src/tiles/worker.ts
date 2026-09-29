@@ -2,6 +2,7 @@ import { setBaseUrl } from "./base-url";
 import { canopyRenderer } from "./canopy";
 import { commercialRenderer } from "./commercial";
 import { elevationRenderer } from "./elevation";
+import { genusRenderer } from "./genus";
 import { historicRenderer } from "./historic";
 import { industrialRenderer } from "./industrial";
 import { linesRenderer } from "./lines";
@@ -38,13 +39,27 @@ async function run<Params, Data>(
   }
   const context = canvas.getContext("2d");
   if (context) {
-    const paint = repeatable(context, ratio, (target) => {
-      renderer.draw(target, data, coords, params, ratio);
-    });
+    const paint = (loaded: Data): void => {
+      repeatable(context, ratio, (target) => {
+        renderer.draw(target, loaded, coords, params, ratio);
+      })();
+    };
+    // A restore reloads from the renderers' caches, so a painted tile doesn't pin its decoded sources.
+    const restore = (): void => {
+      renderer.load(params, coords).then(
+        (loaded) => {
+          // A repaint that landed meanwhile owns the canvas now.
+          if (current()) {
+            paint(loaded);
+          }
+        },
+        () => undefined,
+      );
+    };
     // Registered before painting: the context may already be lost, and then the restore paints it.
     live.get(tileKey)?.();
-    live.set(tileKey, repaintOnRestore(canvas, paint));
-    paint();
+    live.set(tileKey, repaintOnRestore(canvas, restore));
+    paint(data);
   }
 }
 
@@ -72,6 +87,8 @@ function rasterize(
       return run(treeDotsRenderer, params, message, current);
     case "canopy":
       return run(canopyRenderer, params, message, current);
+    case "genus":
+      return run(genusRenderer, params, message, current);
     case "elevation":
       return run(elevationRenderer, params, message, current);
     case "shade":

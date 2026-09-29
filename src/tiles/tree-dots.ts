@@ -5,7 +5,7 @@ import type { TileCoords, TreeDotsParams } from "./protocol";
 import type { TileRenderer } from "./renderer";
 import { type Cursor, readVarint } from "./varint";
 
-// Live dots above the raster half; sizing mirrors crates/tiler/src/genus_field.rs so nothing jumps.
+// Live dots over the genus wash (crates/tiler/src/genus_field.rs) from z15, each at its crown size.
 const TREE_URL = "trees/{file}"; // relative, picks up the deploy basePath; layout: scripts/README.md
 const TREE_FORMAT = 3;
 
@@ -16,7 +16,8 @@ const DECIMETERS_PER_METER = 10;
 
 const MIN_DOT_PX = 1.5; // a visibility floor; above it the dot is the crown's true size
 const MAX_CROWN_METERS = 25.5; // the crown byte's ceiling (255 dm)
-const DOT_ALPHA = 0.85;
+// Under the wash's hue at full strength, so a dot sits in its palette rather than on top of it.
+const DOT_ALPHA = 0.75;
 
 const CELL_DEG = 0.004; // ~440 m buckets
 

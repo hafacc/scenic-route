@@ -3,20 +3,20 @@ import { hexToRgb, type Rgb } from "../theme/palette";
 
 export const OTHER_GENUS_ID = 11;
 
-// Spaced around the wheel so a blend of a few never averages onto a third hue.
+// Softened and spread in lightness as well as hue, so neighbors stay apart under deuteranopia.
 export const GENUS_HEX: readonly string[] = [
-  "#e15759", // red
-  "#f28e2b", // orange
-  "#edc948", // yellow
-  "#8cb43a", // lime
-  "#4e9f50", // green
-  "#3fb0a0", // teal
-  "#4b8fc9", // blue
-  "#6a5bd0", // indigo
-  "#9b57c4", // violet
-  "#c353b0", // magenta
-  "#db5478", // rose
-  "#9ca3af", // Other — neutral medium gray
+  "#a95553", // red, dark
+  "#c3854d", // orange
+  "#d5b455", // yellow, light
+  "#637d21", // olive, dark
+  "#61a26a", // green
+  "#62cdbc", // teal, light
+  "#40a0b9", // cyan-blue
+  "#89adf2", // periwinkle, light
+  "#c09fd7", // lavender, light
+  "#945d7f", // plum, dark
+  "#c88197", // rose
+  "#a3b39c", // Other: a pale gray sage, also the hue of canopy no inventory names
 ];
 
 export const GENUS_COLORS: readonly Rgb[] = GENUS_HEX.map(hexToRgb);

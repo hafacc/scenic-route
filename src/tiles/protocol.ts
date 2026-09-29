@@ -53,6 +53,16 @@ export interface TreeDotsParams {
   enabled: number[];
 }
 
+export interface GenusParams {
+  kind: "genus";
+  url: string; // a {layer}/{z}/{x}/{y} template over the genus field's four packed layers
+  canopyUrl: string; // a {z}/{x}/{y} template over the canopy, which shapes the wash
+  maxNativeZoom: number; // the genus field's finest baked level
+  canopyMaxNativeZoom: number; // the canopy's
+  // the legend's selection, snapshotted at request
+  enabled: number[];
+}
+
 export interface CanopyParams {
   kind: "canopy";
   url: string; // a {z}/{x}/{y} template
@@ -89,6 +99,7 @@ export type TileParams =
   | SubwayParams
   | PoiParams
   | TreeDotsParams
+  | GenusParams
   | CanopyParams
   | ElevationParams
   | ShadeParams;
