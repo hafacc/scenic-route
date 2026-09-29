@@ -277,6 +277,19 @@ only when they carry pedestrians (`rw_type` 3/4 with `nonped != 'V'`) — that i
 East River crossings — and every kept row is flagged (record byte 23) so a router can drop the
 vehicular-only streets the overlay still draws.
 
+A few CSCL segments pass every one of those rules and are still no street anyone should be routed
+along. `CSCL_NOT_STREETS` in `scripts/streets.ts` lists them by `physicalid`, each with its reason,
+and the ingest drops them whole, so they are neither drawn nor routed. The one entry today is
+`133944`, an unnamed 2.5 km "street" that is Floyd Bennett Field's abandoned runway 06/24. Dropping
+it strands, on purpose, the ~337 m of OSM paths that lead only onto it — way `418636922` (22 m) and
+ways `418636926` and `418636929` (315 m) — which the island drop takes out of the graph and
+`stranded.bin` out of the overlay; way `418637742` stays anchored. A general rule was measured and
+not taken: every NYC segment lying along an OSM runway
+(`aeroway=runway` or `abandoned:aeroway=runway`) is that runway plus Aviation Road (`133945`,
+`167382`, `167383`), the park's open road laid on runway 15/33, which must stay; San Francisco and
+the East Bay have none. Runway 12/30 enters from no source. If a CSCL release drops a listed
+`physicalid`, the fetch fails and names it, so a stale entry cannot linger unnoticed.
+
 ### The measured LiDAR canopy (`CNPY` v2)
 
 The map's cover is the **measured 2017 LiDAR tree canopy**, lightly blurred — not a point-KDE
