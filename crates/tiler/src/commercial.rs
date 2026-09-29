@@ -43,6 +43,8 @@ const SEATING_FLAG: u8 = 2;
 
 // Segments register in every ~330 m cell their box overlaps; a point scans its radius.
 const SEGMENT_CELL_DEG: f64 = 0.003;
+// Each chunk quantizes to 1e-6 degrees from its own origin, so two copies differ by at most this.
+const COPY_TOLERANCE_DEG: f64 = 2e-6;
 
 pub struct Args {
     pub manifest: PathBuf,
@@ -197,19 +199,60 @@ fn perpendicular_in_span_squared(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
     closest_x * closest_x + closest_y * closest_y
 }
 
+fn same_geometry(left: &Segment, right: &Segment) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(a, b)| {
+            (a.lng - b.lng).abs() <= COPY_TOLERANCE_DEG
+                && (a.lat - b.lat).abs() <= COPY_TOLERANCE_DEG
+        })
+}
+
+/// Per segment, its first copy: chunks file a segment in every z12 tile its box touches.
+fn first_copies(segments: &[Segment], buckets: &HashMap<(i64, i64), Vec<u32>>) -> Vec<u32> {
+    let mut first_copy: Vec<u32> = (0..segments.len() as u32).collect();
+    for (index, segment) in segments.iter().enumerate() {
+        let Some(start) = segment.first() else {
+            continue;
+        };
+        // Every cell the tolerance reaches, since a copy's box can stop just short of this one's.
+        let cells_x = cell(start.lng - COPY_TOLERANCE_DEG)..=cell(start.lng + COPY_TOLERANCE_DEG);
+        'cells: for cell_x in cells_x {
+            for cell_y in
+                cell(start.lat - COPY_TOLERANCE_DEG)..=cell(start.lat + COPY_TOLERANCE_DEG)
+            {
+                for &other in buckets.get(&(cell_x, cell_y)).into_iter().flatten() {
+                    let other = other as usize;
+                    if other < index
+                        && first_copy[other] as usize == other
+                        && same_geometry(segment, &segments[other])
+                    {
+                        first_copy[index] = other as u32;
+                        break 'cells;
+                    }
+                }
+            }
+        }
+    }
+    first_copy
+}
+
 /// The segment a point fronts, or None; `seen` and `generation` dedup without allocating.
+/// Only a segment's first copy is a candidate, so a lot can't split a block's signals between copies.
 struct Attributor<'a> {
     segments: &'a [Segment],
     buckets: HashMap<(i64, i64), Vec<u32>>,
+    first_copy: Vec<u32>,
     seen: Vec<u32>,
     generation: u32,
 }
 
 impl<'a> Attributor<'a> {
     fn new(segments: &'a [Segment]) -> Self {
+        let buckets = build_segment_index(segments);
         Self {
             segments,
-            buckets: build_segment_index(segments),
+            first_copy: first_copies(segments, &buckets),
+            buckets,
             seen: vec![0; segments.len()],
             generation: 0,
         }
@@ -231,7 +274,9 @@ impl<'a> Attributor<'a> {
                 };
                 for index in bucket {
                     let index = *index as usize;
-                    if self.seen[index] == self.generation {
+                    if self.seen[index] == self.generation
+                        || self.first_copy[index] as usize != index
+                    {
                         continue;
                     }
                     self.seen[index] = self.generation;
@@ -285,7 +330,12 @@ fn commercial_fraction(commercial: u32, total: u32) -> u8 {
 }
 
 /// Attribute every source to the segment it fronts, reduced to three signal bytes per segment.
-fn compute_signals(data: &Path, city_id: &str, segments: &[Segment]) -> Fallible<Signals> {
+/// Also returns each segment's first copy, so the lines can list a block once.
+fn compute_signals(
+    data: &Path,
+    city_id: &str,
+    segments: &[Segment],
+) -> Fallible<(Signals, Vec<u32>)> {
     let mut attributor = Attributor::new(segments);
     let count = segments.len();
     let mut signals = Signals {
@@ -356,7 +406,20 @@ fn compute_signals(data: &Path, city_id: &str, segments: &[Segment]) -> Fallible
         }
     }
 
-    Ok(signals)
+    copy_to_duplicates(&mut signals, &attributor.first_copy);
+    Ok((signals, attributor.first_copy))
+}
+
+/// Every copy takes its first copy's signals, so a block's band can't end at a chunk seam.
+fn copy_to_duplicates(signals: &mut Signals, first_copy: &[u32]) {
+    for (index, first) in first_copy.iter().enumerate() {
+        let first = *first as usize;
+        if first != index {
+            signals.commercial_frac[index] = signals.commercial_frac[first];
+            signals.median_height[index] = signals.median_height[first];
+            signals.flags[index] = signals.flags[first];
+        }
+    }
 }
 
 /// One chunk's signals as a CMRC file: the 12-byte header, then 3 bytes per segment.
@@ -384,11 +447,16 @@ fn qualifies(signals: &Signals, index: usize) -> bool {
 }
 
 /// The qualifying polylines as CMLN single-ring LAND polygons; an empty city's origin is infinity.
-fn encode_qualifying_lines(segments: &[Segment], signals: &Signals) -> (Vec<u8>, usize) {
+/// Only first copies, so a block filed in several chunks is one line.
+fn encode_qualifying_lines(
+    segments: &[Segment],
+    signals: &Signals,
+    first_copy: &[u32],
+) -> (Vec<u8>, usize) {
     let lines: Vec<&Segment> = segments
         .iter()
         .enumerate()
-        .filter(|(index, _)| qualifies(signals, *index))
+        .filter(|(index, _)| first_copy[*index] as usize == *index && qualifies(signals, *index))
         .map(|(_, segment)| segment)
         .collect();
     let mut origin = Coord {
@@ -442,7 +510,7 @@ pub fn run(args: &Args, chunks: &crate::chunks::Chunks) -> Fallible<Lines> {
             eprintln!("{}: no served street chunks, skipped", city.id);
             continue;
         }
-        let signals = compute_signals(&args.data, &city.id, &segments)?;
+        let (signals, first_copy) = compute_signals(&args.data, &city.id, &segments)?;
 
         for chunk in &chunks {
             let row = args.signals.join(chunk.tile_x.to_string());
@@ -453,7 +521,7 @@ pub fn run(args: &Args, chunks: &crate::chunks::Chunks) -> Fallible<Lines> {
             )?;
         }
 
-        let (lines, passing) = encode_qualifying_lines(&segments, &signals);
+        let (lines, passing) = encode_qualifying_lines(&segments, &signals, &first_copy);
         let line_file = args.lines.join(format!("{}.bin", city.id));
         fs::write(&line_file, lines)?;
         written.by_city.insert(city.id.clone(), line_file);
@@ -585,6 +653,71 @@ mod tests {
         assert!(!qualifies(&signals(200, 12, 0), 0));
         // The block nothing snapped to: 255 reads as not low-rise rather than as flat ground.
         assert!(!qualifies(&signals(200, NO_BUILDINGS, SEATING_FLAG), 0));
+    }
+
+    /// The same block as two chunks quantize it: a tenth of a meter apart.
+    fn two_copies() -> Vec<Segment> {
+        let copy = |segment: &Segment| {
+            segment
+                .iter()
+                .map(|vertex| Coord {
+                    lng: vertex.lng + 1e-6,
+                    lat: vertex.lat - 1e-6,
+                })
+                .collect::<Segment>()
+        };
+        let block = vec![at(0.0, 0.0), at(100.0, 0.0)];
+        vec![block.clone(), copy(&block)]
+    }
+
+    #[test]
+    fn chunk_copies_of_a_block_collapse_to_the_first() {
+        let segments = two_copies();
+        let mut attributor = Attributor::new(&segments);
+
+        assert_eq!(attributor.first_copy, vec![0, 0]);
+        // South of both copies, so nearer the second, but only the first is a candidate.
+        assert_eq!(
+            attributor.frontage(at(50.0, -20.0), FRONTAGE_METERS),
+            Some(0)
+        );
+        assert_eq!(
+            attributor.frontage(at(50.0, 20.0), FRONTAGE_METERS),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn a_qualifying_block_filed_twice_is_one_line() {
+        let segments = two_copies();
+        let signals = Signals {
+            commercial_frac: vec![200, 200],
+            median_height: vec![12, 12],
+            flags: vec![SEATING_FLAG, SEATING_FLAG],
+        };
+        let (_, passing) = encode_qualifying_lines(&segments, &signals, &[0, 0]);
+
+        assert_eq!(passing, 1);
+    }
+
+    #[test]
+    fn a_parallel_block_is_not_a_copy() {
+        let segments = two_blocks();
+        assert_eq!(Attributor::new(&segments).first_copy, vec![0, 1]);
+    }
+
+    #[test]
+    fn copies_take_their_first_copys_signals() {
+        let mut signals = Signals {
+            commercial_frac: vec![200, 0, 9],
+            median_height: vec![12, NO_BUILDINGS, 30],
+            flags: vec![SEATING_FLAG, 0, 0],
+        };
+        copy_to_duplicates(&mut signals, &[0, 0, 2]);
+
+        assert_eq!(signals.commercial_frac, vec![200, 200, 9]);
+        assert_eq!(signals.median_height, vec![12, 12, 30]);
+        assert_eq!(signals.flags, vec![SEATING_FLAG, SEATING_FLAG, 0]);
     }
 
     /// Too few fronting lots reads 0, separating a commercial strip from a corner shop.
