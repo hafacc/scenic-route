@@ -1,6 +1,6 @@
 import { resolveUrl } from "./base-url";
 import { drawLabels, type PlacedLabels, placeLabels } from "./labels";
-import { projectX, projectY, unproject } from "./mercator";
+import { pixelsToDegrees, projectX, projectY, unproject } from "./mercator";
 import type { PoiParams, TileCoords } from "./protocol";
 import type { TileRenderer } from "./renderer";
 import { themeName } from "./theme";
@@ -151,7 +151,9 @@ function draw(
 
   const northWest = unproject(originX, originY, zoom);
   const southEast = unproject(originX + TILE_SIZE, originY + TILE_SIZE, zoom);
-  const margin = radius / TILE_SIZE / 2 ** zoom + CELL_DEG;
+  // The dot plus half its 1 px outline.
+  const reach = radius + 0.5;
+  const margin = pixelsToDegrees(reach, zoom);
   const cellX0 = Math.floor((northWest.lng - margin) / CELL_DEG);
   const cellX1 = Math.floor((southEast.lng + margin) / CELL_DEG);
   const cellY0 = Math.floor((southEast.lat - margin) / CELL_DEG);
@@ -170,10 +172,10 @@ function draw(
         const px = projectX(points.lngs[point], zoom) - originX;
         const py = projectY(points.lats[point], zoom) - originY;
         if (
-          px < -radius ||
-          px > TILE_SIZE + radius ||
-          py < -radius ||
-          py > TILE_SIZE + radius
+          px < -reach ||
+          px > TILE_SIZE + reach ||
+          py < -reach ||
+          py > TILE_SIZE + reach
         ) {
           continue;
         }

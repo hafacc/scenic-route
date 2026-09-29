@@ -9,18 +9,21 @@ import {
   type ThemeName,
 } from "../theme/palette";
 import { resolveUrl } from "./base-url";
-import { projectX, projectY, unproject } from "./mercator";
+import { cachedLru } from "./lru";
+import { projectX, projectY } from "./mercator";
 import type { StreetScoreParams, TileCoords } from "./protocol";
 import type { TileRenderer } from "./renderer";
+import { tileMetersPerPixel } from "./soft-edge";
 import { themeName } from "./theme";
 
 // One chunk per z12 tile (layout: scripts/README.md); relative, so it picks up the deploy's basePath.
 const CHUNK_URL = "streets/{x}/{y}.bin";
 const CHUNK_ZOOM = 12;
 const SIDES = 2;
+// The most a chunk's one byte of decimeters can offset a sidewalk.
+const MAX_OFFSET_METERS = 25.5;
 
 const TILE_SIZE = 256;
-const EQUATOR_METERS_PER_PIXEL = 156_543.033_92; // web mercator, at the equator, at z0
 
 // Lines read as street width: ~1.5 px at z13 (the layer's minZoom), 5 px at z17.
 const WIDTH_ANCHOR_ZOOM = 13;
@@ -50,6 +53,7 @@ function levels(theme: ThemeName): readonly string[] {
 // A z12 chunk covers a screen or more, so a few dozen hold any pan; older ones are refetched.
 const CHUNK_CACHE_LIMIT = 48;
 const chunks = new Map<string, Promise<Segment[]>>();
+const missingChunks = new Set<string>();
 
 // Left is CSCL's l_ side (the first density byte); canvas y runs south, so its normal is (ty, -tx).
 // Tangents skip coincident neighbors, since vertices can sit closer than the 0.1 m quantum.
@@ -80,49 +84,81 @@ function leftNormals(
   }
 }
 
-// A 404 is an all-water tile and caches as empty; any other failure is evicted so it can be retried.
-function loadChunk(tileX: number, tileY: number): Promise<Segment[]> {
+// Also commercial's; a 404 (all water) is remembered outside the LRU, and any other failure is retried.
+export function loadStreetChunk(
+  tileX: number,
+  tileY: number,
+): Promise<Segment[]> {
   const key = `${tileX}/${tileY}`;
-  const pending = chunks.get(key);
-  if (pending) {
-    // Re-inserted, so the eviction below is an LRU.
-    chunks.delete(key);
-    chunks.set(key, pending);
-    return pending;
-  } else {
+  if (missingChunks.has(key)) {
+    return Promise.resolve([]);
+  }
+  return cachedLru(chunks, key, CHUNK_CACHE_LIMIT, async () => {
     const url = resolveUrl(
       CHUNK_URL.replace("{x}", String(tileX)).replace("{y}", String(tileY)),
     );
-    const request = fetch(url)
-      .then(async (response) => {
-        if (response.ok) {
-          return decodeStreetChunk(await response.arrayBuffer());
-        } else if (response.status === 404) {
-          return [];
-        } else {
-          throw new Error(`${url}: ${response.status} ${response.statusText}`);
-        }
-      })
-      .catch((error: unknown) => {
-        // Only this request: an evicted one's late failure mustn't drop its replacement.
-        if (chunks.get(key) === request) {
-          chunks.delete(key);
-        }
-        throw error;
-      });
-    chunks.set(key, request);
-    while (chunks.size > CHUNK_CACHE_LIMIT) {
-      const [oldest] = chunks.keys();
-      chunks.delete(oldest);
+    const response = await fetch(url);
+    if (response.ok) {
+      return decodeStreetChunk(await response.arrayBuffer());
+    } else if (response.status === 404) {
+      missingChunks.add(key);
+      chunks.delete(key);
+      return [];
+    } else {
+      throw new Error(`${url}: ${response.status} ${response.statusText}`);
     }
-    return request;
+  });
+}
+
+// The z12 chunks under a tile grown by `margin` px; with no margin, just the ones it sits in.
+export function chunksAround(
+  coords: TileCoords,
+  margin: number,
+): { x: number; y: number }[] {
+  const chunkPx = TILE_SIZE * 2 ** (coords.z - CHUNK_ZOOM);
+  const first = (tile: number) =>
+    Math.floor((tile * TILE_SIZE - margin) / chunkPx);
+  const last = (tile: number) =>
+    Math.ceil(((tile + 1) * TILE_SIZE + margin) / chunkPx) - 1;
+  const found: { x: number; y: number }[] = [];
+  for (let x = first(coords.x); x <= last(coords.x); x++) {
+    for (let y = first(coords.y); y <= last(coords.y); y++) {
+      found.push({ x, y });
+    }
   }
+  return found;
+}
+
+// The tile's own chunks must load; a neighbour only feeds the margin, so a failed one is left out.
+export function loadAround<Loaded>(
+  coords: TileCoords,
+  margin: number,
+  loadOne: (x: number, y: number) => Promise<Loaded>,
+  missing: Loaded,
+): Promise<Loaded[]> {
+  const own = new Set(chunksAround(coords, 0).map(({ x, y }) => `${x}/${y}`));
+  return Promise.all(
+    chunksAround(coords, margin).map(({ x, y }) =>
+      own.has(`${x}/${y}`)
+        ? loadOne(x, y)
+        : loadOne(x, y).catch((): Loaded => missing),
+    ),
+  );
+}
+
+function strokeWidth(zoom: number): number {
+  return BASE_WIDTH * WIDTH_PER_ZOOM ** (zoom - WIDTH_ANCHOR_ZOOM);
 }
 
 // Also the genus wash's (./genus.ts), which strokes the same lines as a density mask.
-export function loadStreets(coords: TileCoords): Promise<Segment[]> {
-  const shift = coords.z - CHUNK_ZOOM;
-  return loadChunk(coords.x >> shift, coords.y >> shift);
+export async function loadStreets(coords: TileCoords): Promise<Segment[]> {
+  // Chunks are filed by bbox alone, so a neighbour's sidewalk reaches in by a width plus the widest offset.
+  const width = strokeWidth(coords.z);
+  const margin =
+    width + Math.max(MAX_OFFSET_METERS / tileMetersPerPixel(coords), width);
+  const loaded = await loadAround(coords, margin, loadStreetChunk, []);
+  // Each chunk's copy of a shared segment is quantized from its own origin, so they differ by ~0.1 m at most.
+  return loaded.length === 1 ? loaded[0] : loaded.flat();
 }
 
 // The stroke per density level that `strokeStreets` takes: a byte's level is `byte >> 3`.
@@ -137,15 +173,8 @@ export function strokeStreets(
 ): void {
   const originX = coords.x * TILE_SIZE;
   const originY = coords.y * TILE_SIZE;
-  const width = BASE_WIDTH * WIDTH_PER_ZOOM ** (coords.z - WIDTH_ANCHOR_ZOOM);
-  const center = unproject(
-    originX + TILE_SIZE / 2,
-    originY + TILE_SIZE / 2,
-    coords.z,
-  );
-  const metersPerPixel =
-    (EQUATOR_METERS_PER_PIXEL * Math.cos((center.lat * Math.PI) / 180)) /
-    2 ** coords.z;
+  const width = strokeWidth(coords.z);
+  const metersPerPixel = tileMetersPerPixel(coords);
 
   context.lineCap = "butt";
   context.lineJoin = "round";

@@ -9,6 +9,7 @@ const TILE_SIZE = 256;
 const ZOOM = 17; // over LABEL_MIN_ZOOM, so labels draw
 const LINE_HEIGHT = 12;
 const GAP_PX = 3;
+const OUTLINE_PX = 3; // the halo a label is filed by, past its text box
 const RADIUS = Math.min(7, 3.5 + Math.max(0, ZOOM - 14) * 0.6);
 
 // Per character rather than a flat width, so truncated names and same-length names still differ.
@@ -209,9 +210,16 @@ test("a label is drawn by every tile its box reaches, at one world position", ()
     }
   }
 
+  // A tile the halo reaches draws the label, so reach is the text box grown by the outline.
   let spanning = 0;
   for (const label of everywhere.values()) {
-    const { x0, x1, y0, y1 } = labelBox(label);
+    const box = labelBox(label);
+    const [x0, x1, y0, y1] = [
+      box.x0 - OUTLINE_PX,
+      box.x1 + OUTLINE_PX,
+      box.y0 - OUTLINE_PX,
+      box.y1 + OUTLINE_PX,
+    ];
     let tiles = 0;
     for (const [key, ops] of drawn) {
       const [tileX, tileY] = key.split(",").map(Number);

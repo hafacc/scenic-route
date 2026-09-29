@@ -7,12 +7,13 @@ import {
 } from "../subway/format";
 import { resolveUrl } from "./base-url";
 import { drawLabels, type PlacedLabels, placeLabels } from "./labels";
-import { projectX, projectY, unproject } from "./mercator";
+import { pixelsToDegrees, projectX, projectY, unproject } from "./mercator";
 import {
   bucketize,
   laneRibbons,
   laneSpacingPx,
   type Polyline,
+  widestLane,
 } from "./polylines";
 import type { SubwayParams, TileCoords } from "./protocol";
 import type { TileRenderer } from "./renderer";
@@ -36,6 +37,7 @@ const LANE_BLEND_M = 250;
 const STATION_MIN_ZOOM = 13;
 const STATION_LABEL_ZOOM = 15;
 const STATION_BASE_RADIUS_PX = 2.5;
+const STATION_OUTLINE_PX = 1.5; // the dot's ring; a bullet's 1 px outline is thinner
 const STATION_LABEL_COLOR = "#ffffff"; // legible on either theme over the outline ./labels strokes
 // Rings a station whose routes differ in color, and colors a line whose route the file doesn't name.
 const NEUTRAL_COLOR = "#334155"; // slate-700
@@ -78,6 +80,8 @@ interface Subway {
   lines: DrawnLine[];
   // Line indices by `${cellX},${cellY}` over each line's bounding box.
   buckets: Map<string, number[]>;
+  // In lane widths, so a tile widens its query by the farthest a line is drawn off its vertices.
+  widestLane: number;
   stationBuckets: Map<string, number[]>;
   bullets: RouteBullet[];
   // Per marker, in the feed's route order.
@@ -159,6 +163,7 @@ export function decodeSubwayTiles(buffer: ArrayBuffer): Subway {
   return {
     lines: drawn,
     buckets: bucketize(drawn, CELL_DEG),
+    widestLane: widestLane(ribbons),
     stationBuckets: bucketize(
       stations.map(({ lng, lat }) => ({
         lngs: Float64Array.of(lng),
@@ -410,18 +415,21 @@ function drawStations(
         const markerX = projectX(subway.lngs[station], zoom) - originX;
         const markerY = projectY(subway.lats[station], zoom) - originY;
         const { halfWidth, halfHeight } = markerExtent(subway, station, zoom);
+        // Half the widest outline, which strokes past the marker's edge.
+        const reachX = halfWidth + STATION_OUTLINE_PX / 2;
+        const reachY = halfHeight + STATION_OUTLINE_PX / 2;
         if (
-          markerX < -halfWidth ||
-          markerX > TILE_SIZE + halfWidth ||
-          markerY < -halfHeight ||
-          markerY > TILE_SIZE + halfHeight
+          markerX < -reachX ||
+          markerX > TILE_SIZE + reachX ||
+          markerY < -reachY ||
+          markerY > TILE_SIZE + reachY
         ) {
           continue;
         }
         if (zoom >= BULLET_ZOOM) {
           drawBullets(context, subway, station, markerX, markerY, zoom);
         } else {
-          context.lineWidth = 1.5;
+          context.lineWidth = STATION_OUTLINE_PX;
           context.fillStyle = "#ffffff";
           context.beginPath();
           context.arc(markerX, markerY, halfWidth, 0, 2 * Math.PI);
@@ -480,10 +488,16 @@ function draw(
   const originY = coords.y * TILE_SIZE;
   const northWest = unproject(originX, originY, zoom);
   const southEast = unproject(originX + TILE_SIZE, originY + TILE_SIZE, zoom);
-  const cellX0 = Math.floor(northWest.lng / CELL_DEG);
-  const cellX1 = Math.floor(southEast.lng / CELL_DEG);
-  const cellY0 = Math.floor(southEast.lat / CELL_DEG);
-  const cellY1 = Math.floor(northWest.lat / CELL_DEG);
+  // Widened by how far a stroke reaches past its line's bounding box: half its width plus a lane shift.
+  const spacing = laneSpacingPx(zoom, LANE_SPACING_PX, LANE_FULL_ZOOM);
+  const margin = pixelsToDegrees(
+    LINE_WIDTH_PX / 2 + subway.widestLane * spacing,
+    zoom,
+  );
+  const cellX0 = Math.floor((northWest.lng - margin) / CELL_DEG);
+  const cellX1 = Math.floor((southEast.lng + margin) / CELL_DEG);
+  const cellY0 = Math.floor((southEast.lat - margin) / CELL_DEG);
+  const cellY1 = Math.floor((northWest.lat + margin) / CELL_DEG);
 
   drawLines(context, subway, coords, cellX0, cellX1, cellY0, cellY1);
   if (zoom >= STATION_MIN_ZOOM) {

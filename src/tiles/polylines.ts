@@ -51,6 +51,26 @@ export function decodeNames(
   return names;
 }
 
+// The farthest any vertex sits off its line, in lane widths, mitred normals included.
+export function widestLane(
+  ribbons: readonly {
+    lanes: Float64Array;
+    normalX: Float64Array;
+    normalY: Float64Array;
+  }[],
+): number {
+  let widest = 0;
+  for (const { lanes, normalX, normalY } of ribbons) {
+    for (let vertex = 0; vertex < lanes.length; vertex++) {
+      widest = Math.max(
+        widest,
+        Math.abs(lanes[vertex]) * Math.hypot(normalX[vertex], normalY[vertex]),
+      );
+    }
+  }
+  return widest;
+}
+
 // Polyline indices keyed `${cellX},${cellY}`, each under every cell its bounding box spans.
 export function bucketize(
   polylines: readonly Polyline[],
