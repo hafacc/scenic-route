@@ -3797,8 +3797,9 @@ files, and the SHDE rows, which are keyed by edge index, shuffled with them.
 
 The graph pass writes the OSM way ids of the paths its **island drop** takes away entirely
 — a way every edge of which sat in a component nothing CSCL anchored, so no route can enter or leave
-it. 4,036 ways, of which 3,979 are `PATH` records covering 204.5 km. The header is the magic, a
-`u16` format, a `u16` header size (12) and a `u32` count, then that many `u32` way ids, ascending.
+it. 2,219 ways in New York, of which 2,177 are `PATH` records covering 85.5 km, and 979 in San
+Francisco (965 records, 42.0 km). The header is the magic, a `u16` format, a `u16` header size (12)
+and a `u32` count, then that many `u32` way ids, ascending.
 
 It exists because the overlay and the router are built from different sets. The chunks pass draws
 straight from `data/paths/<id>.bin`, which never sees the drop, so without the list the tree-cover
@@ -3815,6 +3816,10 @@ records, 31.5 km — off this list by cutting the routable line each of them was
 
 The list says nothing about whether those trails are walkable on the ground — most are. It records
 only that *this* graph cannot route them, which is what the overlay must not contradict.
+
+The North Forty is on the list on purpose (DESIGN.md, "The overlay may not offer a walk the router
+cannot give"): its footway, way 852053710, stops at node 7947936101 on the edge of the grass, and
+the nearest pedestrian way the graph carries, way 1330428046, is 36 m away across runway 12/30.
 
 ### `public/routing/shade/<city>/` — the per-edge occlusion fractions, magic `SHDB` (v2, derived, gitignored)
 
