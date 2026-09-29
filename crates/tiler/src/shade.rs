@@ -242,18 +242,18 @@ fn overlaps(left: &Bounds, right: &Bounds) -> bool {
         || left.south > right.north)
 }
 
-/// Casters of one kind: each one's box over all its hulls and their estimated heap, gridded per
+/// Casters of one kind: each one's box over all its hulls and their estimated size, gridded per
 /// tile. Both are worked out from the geometry, so building the index generates no hull.
 struct CasterIndex {
     boxes: Vec<Bounds>,
-    est: Vec<usize>,
+    est: Vec<HullSize>,
     grid: BoxGrid,
 }
 
 impl CasterIndex {
-    /// `measure(caster)` is a box holding its hulls over every slot, and their `hull_bytes` at most.
-    fn new(count: usize, measure: impl Fn(usize) -> (Bounds, usize) + Sync) -> Self {
-        let (boxes, est): (Vec<Bounds>, Vec<usize>) =
+    /// `measure(caster)` is a box holding its hulls over every slot, and their `HullSize` at most.
+    fn new(count: usize, measure: impl Fn(usize) -> (Bounds, HullSize) + Sync) -> Self {
+        let (boxes, est): (Vec<Bounds>, Vec<HullSize>) =
             (0..count).into_par_iter().map(&measure).unzip();
         let grid = BoxGrid::new(&boxes);
         Self { boxes, est, grid }
@@ -268,36 +268,93 @@ impl CasterIndex {
     /// The estimated heap of the hulls of the casters overlapping `clip`.
     fn bytes_over(&self, clip: &Bounds, scratch: &mut Vec<u32>) -> usize {
         self.overlapping(clip, scratch);
-        scratch
+        self.size_of(scratch).bytes()
+    }
+
+    /// The estimated size of `casters`' hulls.
+    fn size_of(&self, casters: &[u32]) -> HullSize {
+        casters
             .iter()
             .map(|caster| self.est[*caster as usize])
             .sum()
     }
 }
 
-// A flattened hull's heap in PolygonSet's nested layout, malloc headers included: the
-// per-polygon ring vector and box, each ring's two coordinate vectors, then 16 B a vertex.
-const POLYGON_BYTES: usize = 72;
-const RING_BYTES: usize = 80;
+// A flattened hull's heap in PolygonSet's CSR layout: box and offset, a ring offset, 16 B a vertex.
+const POLYGON_BYTES: usize = 36;
+const RING_BYTES: usize = 4;
 const VERTEX_BYTES: usize = 16;
+// A one-ring hull before flattening, malloc headers included.
+const NESTED_HULL_BYTES: usize = 72;
 
-/// The estimated heap `hulls` take once flattened.
-fn hull_bytes(hulls: &[Polygon]) -> usize {
-    hulls
-        .iter()
-        .map(|polygon| {
-            POLYGON_BYTES
-                + polygon
-                    .iter()
-                    .map(|ring| RING_BYTES + VERTEX_BYTES * ring.len())
-                    .sum::<usize>()
-        })
-        .sum()
+/// A hull set's counts, which size a flattened set exactly and price its heap.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+struct HullSize {
+    polygons: usize,
+    rings: usize,
+    vertices: usize,
 }
 
-/// `hull_bytes` of `polygons` one-ring hulls carrying `vertices` between them.
-fn one_ring_bytes(polygons: usize, vertices: usize) -> usize {
-    polygons * (POLYGON_BYTES + RING_BYTES) + vertices * VERTEX_BYTES
+impl HullSize {
+    fn of(hulls: &[Polygon]) -> HullSize {
+        HullSize {
+            polygons: hulls.len(),
+            rings: hulls.iter().map(Vec::len).sum(),
+            vertices: hulls.iter().flatten().map(Vec::len).sum(),
+        }
+    }
+
+    /// `polygons` one-ring hulls carrying `vertices` between them.
+    fn one_ring(polygons: usize, vertices: usize) -> HullSize {
+        HullSize {
+            polygons,
+            rings: polygons,
+            vertices,
+        }
+    }
+
+    /// The heap the hulls take once flattened.
+    fn bytes(self) -> usize {
+        self.polygons * POLYGON_BYTES + self.rings * RING_BYTES + self.vertices * VERTEX_BYTES
+    }
+
+    /// One of `parts` equal shares, as the planner prices one sample's layer.
+    fn share(self, parts: usize) -> HullSize {
+        let parts = parts.max(1);
+        HullSize {
+            polygons: self.polygons / parts,
+            rings: self.rings / parts,
+            vertices: self.vertices / parts,
+        }
+    }
+
+    /// An empty set sized for these hulls, so appending them never regrows it.
+    fn set(self) -> PolygonSet {
+        PolygonSet::with_capacity(self.polygons, self.rings, self.vertices)
+    }
+}
+
+impl std::ops::Add for HullSize {
+    type Output = HullSize;
+    fn add(self, other: HullSize) -> HullSize {
+        HullSize {
+            polygons: self.polygons + other.polygons,
+            rings: self.rings + other.rings,
+            vertices: self.vertices + other.vertices,
+        }
+    }
+}
+
+impl std::ops::AddAssign for HullSize {
+    fn add_assign(&mut self, other: HullSize) {
+        *self = *self + other;
+    }
+}
+
+impl std::iter::Sum for HullSize {
+    fn sum<I: Iterator<Item = HullSize>>(sizes: I) -> HullSize {
+        sizes.fold(HullSize::default(), |total, size| total + size)
+    }
 }
 
 /// The box that holds nothing, which any union leaves as the other side.
@@ -774,7 +831,7 @@ impl CityShade {
         crown_rings.push(ring_hulls.len() as u32);
         let footprints = CasterIndex::new(casters.polygons.len(), |index| {
             let polygon = std::slice::from_ref(&casters.polygons[index]);
-            (geometry::box_of(polygon), hull_bytes(polygon))
+            (geometry::box_of(polygon), HullSize::of(polygon))
         });
         Self {
             casters,
@@ -792,25 +849,25 @@ impl CityShade {
         index: usize,
         samples: &[Sample],
         max_shadow_meters: f64,
-    ) -> (Bounds, usize) {
+    ) -> (Bounds, HullSize) {
         let height = self.casters.heights[index];
         let Some(outer) = self.casters.polygons[index].first() else {
-            return (EMPTY, 0);
+            return (EMPTY, HullSize::default());
         };
         if outer.len() < 3 || height <= 0.0 {
-            return (EMPTY, 0);
+            return (EMPTY, HullSize::default());
         }
         let meters_per_lng = ring_meters_per_lng(outer);
         let ground = ring_box(outer);
         let vertices = outer.len();
         // One hull of every vertex moved and not, or both rings and a quad per edge.
-        let bytes = if self.footprint_hulls[index] {
-            one_ring_bytes(1, 2 * vertices)
+        let size = if self.footprint_hulls[index] {
+            HullSize::one_ring(1, 2 * vertices)
         } else {
-            one_ring_bytes(vertices + 2, 6 * vertices)
+            HullSize::one_ring(vertices + 2, 6 * vertices)
         };
         let mut bounds = EMPTY;
-        let mut est = 0;
+        let mut est = HullSize::default();
         for sample in samples {
             let distance = (height * sample.shadow_per_height).min(max_shadow_meters);
             if distance <= 0.0 {
@@ -818,7 +875,7 @@ impl CityShade {
             }
             let moved = shifted(&ground, offset(distance, sample, meters_per_lng));
             bounds = union(&bounds, &union(&ground, &moved));
-            est += bytes;
+            est += size;
         }
         (bounds, est)
     }
@@ -831,13 +888,13 @@ impl CityShade {
         sample: &Sample,
         max_shadow_meters: f64,
         max_zoom: u32,
-    ) -> (Bounds, usize) {
+    ) -> (Bounds, HullSize) {
         let crown = &self.casters.crowns[index];
         let Some(first) = crown.levels.first().and_then(|level| level.first()) else {
-            return (EMPTY, 0);
+            return (EMPTY, HullSize::default());
         };
         let mut bounds = EMPTY;
-        let mut est = 0;
+        let mut est = HullSize::default();
         for segment in crown::crown_segments(
             self.casters.crown_heights[index],
             sample.shadow_per_height,
@@ -864,14 +921,14 @@ impl CityShade {
                 bounds = union(&bounds, &union(&moved, &shifted(&moved, delta)));
                 let vertices = ring.len();
                 est += if delta.0 == 0.0 && delta.1 == 0.0 {
-                    one_ring_bytes(1, vertices)
+                    HullSize::one_ring(1, vertices)
                 } else if self.ring_hulls[level_start + at] {
-                    one_ring_bytes(1, 2 * vertices)
+                    HullSize::one_ring(1, 2 * vertices)
                 } else {
                     // Both rings and the strips: a run needs a facing edge and ends on one that
                     // isn't, or is cut every MAX_SWEEP_RUN vertices, and a strip doubles its run.
                     let strips = vertices / 2 + vertices / (MAX_SWEEP_RUN - 1) + 1;
-                    one_ring_bytes(2 + strips, 2 * vertices + 2 * (vertices + strips))
+                    HullSize::one_ring(2 + strips, 2 * vertices + 2 * (vertices + strips))
                 };
             }
         }
@@ -971,7 +1028,7 @@ impl Scene<'_> {
 
     /// The estimated bytes of one whole-city pass of every layer's hulls.
     fn whole_pass(&self) -> usize {
-        let est = |index: &CasterIndex| index.est.iter().sum::<usize>();
+        let est = |index: &CasterIndex| index.est.iter().copied().sum::<HullSize>().bytes();
         est(&self.shadows.buildings)
             + self.shadows.trees.as_ref().map_or(0, est)
             + est(&self.shade.footprints)
@@ -1941,17 +1998,22 @@ fn render_root(
             continue;
         }
         report.hulls += scratch.candidates.len();
-        let mut parts = Vec::new();
+        // Sized up front as the planner prices it, so appending batches never copies the set.
+        let size = index.size_of(&scratch.candidates);
+        let mut set = match layer {
+            Layer::Building(_) => size.share(scene.bucket.samples.len()),
+            Layer::Crown | Layer::Footprint => size,
+        }
+        .set();
         for caster in &scratch.candidates {
             scene.hulls(layer, *caster as usize, &mut hulls);
             if hulls.len() >= FILL_BATCH {
-                parts.push(geometry::flatten(&hulls));
+                set.extend(&hulls);
                 hulls.clear();
             }
         }
-        parts.push(geometry::flatten(&hulls));
+        set.extend(&hulls);
         hulls.clear();
-        let set = PolygonSet::concat(parts);
         let grid = PolygonGrid::new(&set);
         for (frame, planes) in frames.iter().zip(&mut planes) {
             if footprints && !planes.any() {
@@ -2441,8 +2503,9 @@ pub fn bake_bin_bytes(edge_polys: &[Vec<Coord>]) -> usize {
     let Some(spec) = grid_spec(edge_polys) else {
         return 0;
     };
-    let hull = POLYGON_BYTES + RING_BYTES + BATCH_HULL_VERTICES * VERTEX_BYTES;
-    spec.cols * spec.rows + 2 * edge_polys.len() + 2 * FILL_BATCH * hull
+    let hull =
+        NESTED_HULL_BYTES + POLYGON_BYTES + RING_BYTES + 2 * BATCH_HULL_VERTICES * VERTEX_BYTES;
+    spec.cols * spec.rows + 2 * edge_polys.len() + FILL_BATCH * hull
 }
 
 /// Bins to bake at once: as many as `budget` holds, at least `floor`, and no more than
@@ -2920,7 +2983,7 @@ mod tests {
             // Held down to z11 with working sets too small for the upper zooms, so roots land at
             // several depths and the quadrant west of the city catches the spill into it.
             let mut mixed = 0;
-            for per_task in (16..256).map(|step| step << 14) {
+            for per_task in (16..256).map(|step| step << 13) {
                 let schedule = planner.schedule_with(per_task, Some(11), usize::MAX);
                 if schedule.roots.len() < 2 || schedule.held.is_empty() {
                     continue;
@@ -3033,9 +3096,9 @@ mod tests {
                 if !hulls.is_empty() {
                     assert_eq!(bits(&analytic), bits(&hulled), "{kind} {caster}");
                 }
-                let bytes = hull_bytes(&hulls);
-                assert!(index.est[caster] >= bytes, "{kind} {caster}");
-                estimated += index.est[caster];
+                let bytes = HullSize::of(&hulls).bytes();
+                assert!(index.est[caster].bytes() >= bytes, "{kind} {caster}");
+                estimated += index.est[caster].bytes();
                 actual += bytes;
             }
             assert!(

@@ -101,15 +101,20 @@ pub fn round_half_up(value: f64) -> f64 {
     }
 }
 
-/// Rings in flat arrays with each polygon's bounding box, so a tile can reject polygons cheaply.
+/// Rings in flat CSR arrays with each polygon's bounding box, so a tile rejects polygons cheaply.
 pub struct PolygonSet {
-    rings: Vec<Vec<RingXy>>,
+    lngs: Vec<f64>, // every ring's vertices, ring after ring
+    lats: Vec<f64>,
+    ring_starts: Vec<u32>, // offsets into lngs/lats, one per ring plus a final end
+    polygon_starts: Vec<u32>, // offsets into ring_starts, one per polygon plus a final end
     boxes: Vec<Bounds>,
 }
 
-struct RingXy {
-    lngs: Vec<f64>,
-    lats: Vec<f64>,
+/// One ring of a PolygonSet, borrowed as its two coordinate slices.
+#[derive(Clone, Copy)]
+pub struct RingXy<'a> {
+    pub lngs: &'a [f64],
+    pub lats: &'a [f64],
 }
 
 pub fn box_of(polygons: &[Polygon]) -> Bounds {
@@ -132,44 +137,76 @@ pub fn box_of(polygons: &[Polygon]) -> Bounds {
     bounds
 }
 
+/// The polygons as one set, counted first so every array is sized exactly once.
 pub fn flatten(polygons: &[Polygon]) -> PolygonSet {
-    let mut set = PolygonSet {
-        rings: Vec::with_capacity(polygons.len()),
-        boxes: Vec::with_capacity(polygons.len()),
-    };
-    for polygon in polygons {
-        set.boxes.push(box_of(std::slice::from_ref(polygon)));
-        set.rings.push(
-            polygon
-                .iter()
-                .map(|ring| RingXy {
-                    lngs: ring.iter().map(|point| point.lng).collect(),
-                    lats: ring.iter().map(|point| point.lat).collect(),
-                })
-                .collect(),
-        );
-    }
+    let rings: usize = polygons.iter().map(Vec::len).sum();
+    let vertices: usize = polygons.iter().flatten().map(Vec::len).sum();
+    let mut set = PolygonSet::with_capacity(polygons.len(), rings, vertices);
+    set.extend(polygons);
     set
+}
+
+/// A CSR offset, which a set past 4 G vertices or rings could not hold.
+fn offset(len: usize) -> u32 {
+    u32::try_from(len).expect("polygon set over u32")
 }
 
 impl PolygonSet {
     /// How many polygons the set holds.
     pub fn len(&self) -> usize {
-        self.rings.len()
+        self.boxes.len()
     }
 
-    /// The parts' polygons in order as one set, sized once so no outer vector ever regrows.
-    pub fn concat(parts: Vec<PolygonSet>) -> PolygonSet {
-        let total = parts.iter().map(PolygonSet::len).sum();
-        let mut set = PolygonSet {
-            rings: Vec::with_capacity(total),
-            boxes: Vec::with_capacity(total),
-        };
-        for part in parts {
-            set.rings.extend(part.rings);
-            set.boxes.extend(part.boxes);
+    /// The rings of polygon `index`, outer first as flattened.
+    pub fn rings(&self, index: usize) -> impl ExactSizeIterator<Item = RingXy<'_>> + '_ {
+        let (first, last) = (
+            self.polygon_starts[index] as usize,
+            self.polygon_starts[index + 1] as usize,
+        );
+        self.ring_starts[first..=last].windows(2).map(|bounds| {
+            let (start, end) = (bounds[0] as usize, bounds[1] as usize);
+            RingXy {
+                lngs: &self.lngs[start..end],
+                lats: &self.lats[start..end],
+            }
+        })
+    }
+
+    /// An empty set with room for that many polygons, rings and vertices, so filling it never regrows.
+    pub fn with_capacity(polygons: usize, rings: usize, vertices: usize) -> PolygonSet {
+        let mut ring_starts = Vec::with_capacity(rings + 1);
+        ring_starts.push(0);
+        let mut polygon_starts = Vec::with_capacity(polygons + 1);
+        polygon_starts.push(0);
+        PolygonSet {
+            lngs: Vec::with_capacity(vertices),
+            lats: Vec::with_capacity(vertices),
+            ring_starts,
+            polygon_starts,
+            boxes: Vec::with_capacity(polygons),
         }
-        set
+    }
+
+    /// Appends `polygons` in order, growing only past what the set was sized for.
+    pub fn extend(&mut self, polygons: &[Polygon]) {
+        let rings: usize = polygons.iter().map(Vec::len).sum();
+        let vertices: usize = polygons.iter().flatten().map(Vec::len).sum();
+        self.lngs.reserve(vertices);
+        self.lats.reserve(vertices);
+        self.ring_starts.reserve(rings);
+        self.polygon_starts.reserve(polygons.len());
+        self.boxes.reserve(polygons.len());
+        for polygon in polygons {
+            for ring in polygon {
+                for point in ring {
+                    self.lngs.push(point.lng);
+                    self.lats.push(point.lat);
+                }
+                self.ring_starts.push(offset(self.lngs.len()));
+            }
+            self.polygon_starts.push(offset(self.ring_starts.len() - 1));
+            self.boxes.push(box_of(std::slice::from_ref(polygon)));
+        }
     }
 
     /// Whether a point lands on any of `candidates`: even-odd per polygon, overlaps don't cancel.
@@ -181,7 +218,7 @@ impl PolygonSet {
                 false
             } else {
                 let mut inside = false;
-                for ring in &self.rings[index] {
+                for ring in self.rings(index) {
                     if ring.lngs.is_empty() {
                         continue;
                     }
@@ -229,7 +266,7 @@ impl PolygonSet {
             {
                 false
             } else {
-                self.rings[index].iter().any(|ring| {
+                self.rings(index).any(|ring| {
                     let meters = |vertex: usize| {
                         (
                             (ring.lngs[vertex] - lng) * meters_per_degree_lng,
@@ -278,7 +315,8 @@ fn fill_indices(
     indices: impl Iterator<Item = usize>,
 ) -> usize {
     let mut crossings: Vec<f64> = Vec::new();
-    let mut projected: Vec<(Vec<f64>, Vec<f64>)> = Vec::new();
+    // The polygon's vertices projected, flat like the set's, reused across polygons.
+    let (mut xs, mut ys, mut ring_starts): (Vec<f64>, Vec<f64>, Vec<usize>) = Default::default();
     let mut drawn = 0;
     for index in indices {
         let polygon = &set.boxes[index];
@@ -293,19 +331,20 @@ fn fill_indices(
 
         let mut low_row = f64::INFINITY;
         let mut high_row = f64::NEG_INFINITY;
-        projected.clear();
-        for ring in &set.rings[index] {
-            let mut xs: Vec<f64> = Vec::with_capacity(ring.lngs.len());
-            let mut ys: Vec<f64> = Vec::with_capacity(ring.lngs.len());
-            for (lng, lat) in ring.lngs.iter().zip(&ring.lats) {
+        xs.clear();
+        ys.clear();
+        ring_starts.clear();
+        for ring in set.rings(index) {
+            ring_starts.push(xs.len());
+            for (lng, lat) in ring.lngs.iter().zip(ring.lats) {
                 let (x, y) = project(*lng, *lat);
                 low_row = low_row.min(y);
                 high_row = high_row.max(y);
                 xs.push(x);
                 ys.push(y);
             }
-            projected.push((xs, ys));
         }
+        ring_starts.push(xs.len());
 
         let first_row = low_row.floor().max(0.0) as usize;
         let last_row = high_row.ceil().min((height as f64) - 1.0);
@@ -315,9 +354,13 @@ fn fill_indices(
         for row in first_row..=(last_row as usize) {
             let line = row as f64 + 0.5;
             crossings.clear();
-            for (xs, ys) in &projected {
-                let mut previous = xs.len() - 1;
-                for point in 0..xs.len() {
+            for bounds in ring_starts.windows(2) {
+                let (start, end) = (bounds[0], bounds[1]);
+                if end == start {
+                    continue;
+                }
+                let mut previous = end - 1;
+                for point in start..end {
                     if (ys[point] > line) != (ys[previous] > line) {
                         crossings.push(
                             xs[point]
@@ -351,7 +394,7 @@ pub fn fill_polygons(
     clip: &Bounds,
     project: impl Fn(f64, f64) -> (f64, f64),
 ) -> usize {
-    fill_indices(mask, width, height, set, clip, project, 0..set.rings.len())
+    fill_indices(mask, width, height, set, clip, project, 0..set.len())
 }
 
 /// Fill only the polygons a grid gathered for this tile; `candidates` is already deduplicated.
@@ -570,9 +613,9 @@ pub fn blurred_cover(
         scratch.ring_starts.clear();
         let mut low_row = f64::INFINITY;
         let mut high_row = f64::NEG_INFINITY;
-        for ring in &set.rings[index] {
+        for ring in set.rings(index) {
             scratch.ring_starts.push(scratch.xs.len());
-            for (ring_lng, ring_lat) in ring.lngs.iter().zip(&ring.lats) {
+            for (ring_lng, ring_lat) in ring.lngs.iter().zip(ring.lats) {
                 let meter_x = (ring_lng - lng) * meters_per_degree_lng;
                 let meter_y = (ring_lat - lat) * METERS_PER_DEGREE_LAT;
                 let along = meter_x * along_x + meter_y * along_y;
