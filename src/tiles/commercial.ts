@@ -1,21 +1,20 @@
 import { COMMERCIAL_COLOR } from "../overlays/colors";
-import { decodeStreetChunk } from "../streets/chunk";
 import { hexToRgb, type ThemeName } from "../theme/palette";
 import { resolveUrl } from "./base-url";
+import { cachedLru } from "./lru";
 import { projectX, projectY } from "./mercator";
 import type { CommercialParams, TileCoords } from "./protocol";
 import type { TileRenderer } from "./renderer";
 import { BLUR_PAD, compositeSoft, tileMetersPerPixel } from "./soft-edge";
+import { loadAround, loadStreetChunk } from "./street-score";
 import { themeName } from "./theme";
 
 // Signals are baked per segment by crates/tiler/src/commercial.rs; the gate runs here to stay tunable.
 
 const TILE_SIZE = 256;
+const CHUNK_ZOOM = 12; // the street chunks' zoom
 
 // Relative, so it picks up the deploy's basePath.
-const CHUNK_URL = "streets/{x}/{y}.bin";
-const CHUNK_ZOOM = 12;
-
 const COMMERCIAL_URL = "commercial/{x}/{y}.bin";
 const COMMERCIAL_MAGIC = "CMRC";
 const COMMERCIAL_FORMAT = 1;
@@ -54,10 +53,9 @@ interface Segment {
   lats: Float64Array;
 }
 
-// `qualifies` is the gate per segment; `longest` sizes the draw's scratch arrays.
+// A chunk's segments that pass the gate; `longest` sizes the draw's scratch arrays.
 interface ChunkModel {
   segments: Segment[];
-  qualifies: Uint8Array;
   longest: number;
 }
 
@@ -66,11 +64,6 @@ interface Signals {
   commercialFrac: Uint8Array;
   medianHeight: Uint8Array;
   flags: Uint8Array;
-}
-
-interface TileData {
-  segments: Segment[];
-  signals: Signals;
 }
 
 function decodeCommercial(buffer: ArrayBuffer): Signals {
@@ -99,150 +92,75 @@ function decodeCommercial(buffer: ArrayBuffer): Signals {
   return { commercialFrac, medianHeight, flags };
 }
 
-const chunks = new Map<string, Promise<Segment[]>>();
-const signalChunks = new Map<string, Promise<Signals | null>>();
-
-// A 404 is a water tile and caches as empty; any other failure is evicted so it can be retried.
-function loadChunk(tileX: number, tileY: number): Promise<Segment[]> {
-  const key = `${tileX}/${tileY}`;
-  const pending = chunks.get(key);
-  if (pending) {
-    return pending;
-  }
-  const url = resolveUrl(
-    CHUNK_URL.replace("{x}", String(tileX)).replace("{y}", String(tileY)),
-  );
-  const request = fetch(url)
-    .then(async (response) => {
-      if (response.ok) {
-        // Keep only the geometry, since the segments stay cached.
-        const buffer = await response.arrayBuffer();
-        return decodeStreetChunk(buffer).map((segment) => ({
-          lngs: segment.lngs,
-          lats: segment.lats,
-        }));
-      } else if (response.status === 404) {
-        return [];
-      } else {
-        throw new Error(`${url}: ${response.status} ${response.statusText}`);
-      }
-    })
-    .catch((error: unknown) => {
-      chunks.delete(key);
-      throw error;
-    });
-  chunks.set(key, request);
-  return request;
-}
-
-// A 404 (water, or not yet built) is null, and the tile draws nothing.
-function loadSignals(tileX: number, tileY: number): Promise<Signals | null> {
-  const key = `${tileX}/${tileY}`;
-  const pending = signalChunks.get(key);
-  if (pending) {
-    return pending;
-  }
+// A 404 (water, or not yet built) is null, and the chunk draws nothing.
+async function loadSignals(
+  tileX: number,
+  tileY: number,
+): Promise<Signals | null> {
   const url = resolveUrl(
     COMMERCIAL_URL.replace("{x}", String(tileX)).replace("{y}", String(tileY)),
   );
-  const request = fetch(url)
-    .then(async (response) => {
-      if (response.ok) {
-        return decodeCommercial(await response.arrayBuffer());
-      } else if (response.status === 404) {
-        return null;
-      } else {
-        throw new Error(`${url}: ${response.status} ${response.statusText}`);
-      }
-    })
-    .catch((error: unknown) => {
-      signalChunks.delete(key);
-      throw error;
-    });
-  signalChunks.set(key, request);
-  return request;
+  const response = await fetch(url);
+  if (response.ok) {
+    return decodeCommercial(await response.arrayBuffer());
+  } else if (response.status === 404) {
+    return null;
+  } else {
+    throw new Error(`${url}: ${response.status} ${response.statusText}`);
+  }
 }
 
-// Missing or misaligned signals become all zeros, so nothing qualifies.
-async function loadTile(tileX: number, tileY: number): Promise<TileData> {
-  const [segments, signals] = await Promise.all([
-    loadChunk(tileX, tileY),
-    loadSignals(tileX, tileY),
-  ]);
-  if (signals && signals.commercialFrac.length === segments.length) {
-    return { segments, signals };
-  }
-  const count = segments.length;
-  return {
-    segments,
-    signals: {
-      commercialFrac: new Uint8Array(count),
-      medianHeight: new Uint8Array(count),
-      flags: new Uint8Array(count),
-    },
-  };
-}
-
-// Below z12 a tile spans a 2^(12-z) square of chunks, so an overview fetches only those under it.
-function coveringChunks(coords: TileCoords): { x: number; y: number }[] {
-  if (coords.z >= CHUNK_ZOOM) {
-    const shift = coords.z - CHUNK_ZOOM;
-    return [{ x: coords.x >> shift, y: coords.y >> shift }];
-  }
-  const span = 1 << (CHUNK_ZOOM - coords.z);
-  const baseX = coords.x << (CHUNK_ZOOM - coords.z);
-  const baseY = coords.y << (CHUNK_ZOOM - coords.z);
-  const chunkList: { x: number; y: number }[] = [];
-  for (let offsetX = 0; offsetX < span; offsetX++) {
-    for (let offsetY = 0; offsetY < span; offsetY++) {
-      chunkList.push({ x: baseX + offsetX, y: baseY + offsetY });
-    }
-  }
-  return chunkList;
-}
-
+// Models hold only the qualifying geometry, so a wide overview fits many.
+const MODEL_CACHE_LIMIT = 512;
 const chunkModels = new Map<string, Promise<ChunkModel>>();
 
+// Missing or misaligned signals mean nothing qualifies.
 function loadChunkModel(tileX: number, tileY: number): Promise<ChunkModel> {
-  const key = `${tileX}/${tileY}`;
-  const pending = chunkModels.get(key);
-  if (pending) {
-    return pending;
-  }
-  const request = loadTile(tileX, tileY)
-    .then(({ segments, signals }) => {
-      const qualifies = new Uint8Array(segments.length);
+  return cachedLru(
+    chunkModels,
+    `${tileX}/${tileY}`,
+    MODEL_CACHE_LIMIT,
+    async () => {
+      const [segments, signals] = await Promise.all([
+        loadStreetChunk(tileX, tileY),
+        loadSignals(tileX, tileY),
+      ]);
+      const qualifying: Segment[] = [];
       let longest = 0;
-      for (let index = 0; index < segments.length; index++) {
-        longest = Math.max(longest, segments[index].lngs.length);
-        const commercial = signals.commercialFrac[index] / 255;
-        const flagged =
-          (signals.flags[index] & (FLAG_OPEN_STREET | FLAG_SEATING)) !== 0;
-        if (
-          commercial >= COMMERCIAL_FRACTION &&
-          signals.medianHeight[index] <= LOW_RISE_METERS &&
-          flagged
-        ) {
-          qualifies[index] = 1;
+      if (signals?.commercialFrac.length === segments.length) {
+        for (let index = 0; index < segments.length; index++) {
+          const flagged =
+            (signals.flags[index] & (FLAG_OPEN_STREET | FLAG_SEATING)) !== 0;
+          if (
+            signals.commercialFrac[index] / 255 >= COMMERCIAL_FRACTION &&
+            signals.medianHeight[index] <= LOW_RISE_METERS &&
+            flagged
+          ) {
+            const { lngs, lats } = segments[index];
+            qualifying.push({ lngs, lats });
+            longest = Math.max(longest, lngs.length);
+          }
         }
       }
-      return { segments, qualifies, longest };
-    })
-    .catch((error: unknown) => {
-      chunkModels.delete(key);
-      throw error;
-    });
-  chunkModels.set(key, request);
-  return request;
+      return { segments: qualifying, longest };
+    },
+  );
 }
 
+const NO_MODEL: ChunkModel = { segments: [], longest: 0 };
+
+function bandWidth(coords: TileCoords): number {
+  return Math.max(MIN_BAND_PX, BAND_METERS / tileMetersPerPixel(coords));
+}
+
+// Chunks are filed by bbox alone, so a neighbour's band reaches in by its width plus the blur pad.
 function load(
   _params: CommercialParams,
   coords: TileCoords,
 ): Promise<ChunkModel[]> {
-  return Promise.all(
-    coveringChunks(coords).map(({ x, y }) => loadChunkModel(x, y)),
-  );
+  // Below z12 the band is at its 4 px floor, so a ~3 px cut at a chunk seam is accepted to skip neighbours.
+  const margin = coords.z < CHUNK_ZOOM ? 0 : bandWidth(coords) + BLUR_PAD;
+  return loadAround(coords, margin, loadChunkModel, NO_MODEL);
 }
 
 // Stroked opaque as one union so crossings don't darken; square caps fill T and L corners flush.
@@ -272,7 +190,7 @@ function draw(
 ): void {
   const originX = coords.x * TILE_SIZE;
   const originY = coords.y * TILE_SIZE;
-  const width = Math.max(MIN_BAND_PX, BAND_METERS / tileMetersPerPixel(coords));
+  const width = bandWidth(coords);
   const margin = width + BLUR_PAD;
 
   const band = new Path2D();
@@ -284,12 +202,8 @@ function draw(
   const xs = new Float64Array(longest);
   const ys = new Float64Array(longest);
 
-  for (const { segments, qualifies } of models) {
-    for (let index = 0; index < segments.length; index++) {
-      if (qualifies[index] === 0) {
-        continue;
-      }
-      const { lngs, lats } = segments[index];
+  for (const { segments } of models) {
+    for (const { lngs, lats } of segments) {
       let left = Number.POSITIVE_INFINITY;
       let right = Number.NEGATIVE_INFINITY;
       let low = Number.POSITIVE_INFINITY;

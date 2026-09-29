@@ -531,3 +531,60 @@ test("records in different complexes stay apart however close", () => {
   expect(data.names).toEqual(["Rector St", "Rector St"]);
   expect(data.stationRoutes).toEqual([[0], [1]]);
 });
+
+// A cell edge `gap` px west of a tile edge at `zoom`, so a line just past it is filed out of the tile's cells.
+function cellEdgeNearTile(
+  zoom: number,
+  low: number,
+  high: number,
+): { lng: number; tileX: number } {
+  for (let cell = -7400; ; cell++) {
+    const lng = cell * 0.01;
+    const x = projectX(lng, zoom);
+    const gap = TILE_SIZE - (x % TILE_SIZE);
+    if (gap >= low && gap <= high) {
+      return { lng, tileX: Math.floor(x / TILE_SIZE) + 1 };
+    }
+  }
+}
+
+test("a line filed just outside the tile's cells still strokes its half-width in", () => {
+  const zoom = 18;
+  // Under half the 2 px stroke west of the tile once 2e-6° (~0.4 px) past the cell edge.
+  const { lng, tileX } = cellEdgeNearTile(zoom, 0.1, 0.4);
+  const line = [
+    { lng: lng - 2e-6, lat: 40.7 },
+    { lng: lng - 2e-6, lat: 40.71 },
+  ];
+  const data = decodeSubwayTiles(
+    encodeSbwy([{ color: "009952", shortName: "6", lines: [line] }], []),
+  );
+  const tileY = Math.floor(projectY(40.705, zoom) / TILE_SIZE);
+  expect(drawTile(data, tileX, tileY, zoom).length).toBeGreaterThan(0);
+});
+
+test("a marker just outside the tile still draws the ring that reaches in", () => {
+  const zoom = 14;
+  const radius = 2.5 + 0.4; // stationRadius at z14
+  const west = (TILE_X + 1) * TILE_SIZE;
+  const ringOnly = unproject(
+    west - radius - 0.4,
+    TILE_Y * TILE_SIZE + 128,
+    zoom,
+  );
+  const clear = unproject(west - radius - 1, TILE_Y * TILE_SIZE + 128, zoom);
+  const markers = (stop: { lng: number; lat: number }) =>
+    drawTile(
+      decodeSubwayTiles(
+        encodeSbwy(
+          [{ color: "009952", shortName: "6", lines: [] }],
+          [{ lng: stop.lng, lat: stop.lat, name: "51 St", routes: 1 }],
+        ),
+      ),
+      TILE_X + 1,
+      TILE_Y,
+      zoom,
+    ).filter(({ op }) => op === "arc").length;
+  expect(markers(ringOnly)).toBe(1);
+  expect(markers(clear)).toBe(0);
+});

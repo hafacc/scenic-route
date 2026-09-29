@@ -10,6 +10,7 @@ import {
   crownSegments,
   frameFor,
   type PolygonSink,
+  scratchLayer,
 } from "./sweep";
 
 // No baked pyramid carries shed decks, so only these tests catch their shadows going wrong.
@@ -423,4 +424,44 @@ test("sweeps every facing run of a concave crown slice", () => {
   expect(reference).toBeGreaterThan(0);
   expect(missed * 100).toBeLessThan(reference);
   expect(extra * 100).toBeLessThan(reference);
+});
+
+test("a reused scratch layer clears every device pixel of a rounded-up canvas", () => {
+  const cleared: number[][] = [];
+  let scale = 1;
+  const stand = globalThis as unknown as { OffscreenCanvas: unknown };
+  const previous = stand.OffscreenCanvas;
+  stand.OffscreenCanvas = class {
+    width: number;
+    height: number;
+    constructor(width: number, height: number) {
+      this.width = width;
+      this.height = height;
+    }
+    getContext() {
+      return {
+        canvas: this,
+        setTransform: (a: number) => {
+          scale = a;
+        },
+        clearRect: (x: number, y: number, width: number, height: number) => {
+          cleared.push([x * scale, y * scale, width * scale, height * scale]);
+        },
+      };
+    }
+  };
+  try {
+    // 256 × 1.1 is 281.6, so the canvas rounds up to 282 device pixels.
+    const size = Math.round(256 * 1.1);
+    scratchLayer(0, size, 1.1);
+    scratchLayer(0, size, 1.1);
+  } finally {
+    stand.OffscreenCanvas = previous;
+  }
+  expect(cleared.length).toBe(2);
+  for (const [x, y, width, height] of cleared) {
+    expect([x, y]).toEqual([0, 0]);
+    expect(width).toBeGreaterThanOrEqual(282);
+    expect(height).toBeGreaterThanOrEqual(282);
+  }
 });

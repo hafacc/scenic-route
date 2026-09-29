@@ -1,7 +1,7 @@
 import { resolveUrl } from "./base-url";
 import { roundedPath } from "./ferry-curve";
 import { routeStyles } from "./ferry-routes";
-import { projectX, projectY, unproject } from "./mercator";
+import { pixelsToDegrees, projectX, projectY, unproject } from "./mercator";
 import {
   bucketize,
   decodeNames,
@@ -9,6 +9,7 @@ import {
   laneSpacingPx,
   type Polyline,
   readPolyline,
+  widestLane,
 } from "./polylines";
 import type { LinesParams, TileCoords } from "./protocol";
 import type { TileRenderer } from "./renderer";
@@ -23,6 +24,7 @@ const EQUATOR_METERS_PER_PX = 156_543.033_92;
 
 // Per HWAY class byte, a rough carriageway width in meters, so the line covers the road it marks.
 const CLASS_WIDTH_M = [25, 20, 16, 13, 10, 8];
+const WIDEST_CLASS_M = Math.max(...CLASS_WIDTH_M);
 // Per class byte, the severity a v2 blob (no severity region) reads as; scripts/highways.ts CLASS_SEVERITY.
 const V2_CLASS_SEVERITY = [1, 0.582, 0.249, 0.133, 0.086, 1];
 // So a zoomed-out line stays visible rather than thinning to nothing.
@@ -57,6 +59,8 @@ interface Lines {
   buckets: Map<string, number[]>;
   // Index-aligned with polylines; null for a source with no route identity (HWAY).
   ribbons: Ribbon[] | null;
+  // In lane widths, the farthest a ribbon is drawn off its vertices; 0 without ribbons.
+  widestLane: number;
   // Index-aligned with polylines; null for FERR, which has no classes.
   classes: Uint8Array | null;
   // Index-aligned with polylines, 0..1; null for FERR.
@@ -191,6 +195,7 @@ export function decodeLines(
       polylines,
       buckets: bucketize(polylines, CELL_DEG),
       ribbons: null,
+      widestLane: 0,
       classes,
       severities,
     };
@@ -212,6 +217,7 @@ export function decodeLines(
       polylines,
       buckets: bucketize(polylines, CELL_DEG),
       ribbons,
+      widestLane: widestLane(ribbons),
       classes: null,
       severities: null,
     };
@@ -259,16 +265,26 @@ function draw(
   context.lineJoin = "round";
   context.lineCap = "round";
   const spacing = laneSpacingPx(zoom, LANE_SPACING_PX, LANE_FULL_ZOOM);
+  // In CSS pixels: the worker has already scaled the context by the device pixel ratio.
+  const metersPerPx =
+    (EQUATOR_METERS_PER_PX *
+      Math.cos(((northWest.lat + southEast.lat) / 2) * (Math.PI / 180))) /
+    2 ** zoom;
+  // Widened by how far a stroke reaches past its line's bounding box: half its width plus a lane shift.
+  const widest = lines.classes
+    ? Math.max(WIDEST_CLASS_M / metersPerPx, MIN_ROAD_WIDTH_PX)
+    : LINE_WIDTH_PX;
+  const margin = pixelsToDegrees(widest / 2 + lines.widestLane * spacing, zoom);
   const visible: number[] = [];
   const seen = new Set<number>();
   for (
-    let cellX = Math.floor(northWest.lng / CELL_DEG);
-    cellX <= Math.floor(southEast.lng / CELL_DEG);
+    let cellX = Math.floor((northWest.lng - margin) / CELL_DEG);
+    cellX <= Math.floor((southEast.lng + margin) / CELL_DEG);
     cellX++
   ) {
     for (
-      let cellY = Math.floor(southEast.lat / CELL_DEG);
-      cellY <= Math.floor(northWest.lat / CELL_DEG);
+      let cellY = Math.floor((southEast.lat - margin) / CELL_DEG);
+      cellY <= Math.floor((northWest.lat + margin) / CELL_DEG);
       cellY++
     ) {
       for (const index of lines.buckets.get(`${cellX},${cellY}`) ?? []) {
@@ -304,11 +320,6 @@ function draw(
 
   const { classes, severities } = lines;
   if (classes && severities) {
-    // In CSS pixels: the worker has already scaled the context by the device pixel ratio.
-    const metersPerPx =
-      (EQUATOR_METERS_PER_PX *
-        Math.cos(((northWest.lat + southEast.lat) / 2) * (Math.PI / 180))) /
-      2 ** zoom;
     // Keyed so ascending order paints faintest first, then narrowest first within a level.
     const groups = new Map<number, number[]>();
     for (const index of visible) {

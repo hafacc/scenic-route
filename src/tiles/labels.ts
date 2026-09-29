@@ -7,6 +7,7 @@ const LABEL_FONT = "600 11px system-ui, sans-serif";
 const LABEL_MAX_CHARS = 26; // long names truncate with an ellipsis so a box stays bounded
 const LABEL_LINE_HEIGHT = 12;
 const LABEL_GAP_PX = 3; // between the marker's edge and the start of the text
+const LABEL_OUTLINE_PX = 3; // the dark halo's stroke, half of which reaches past the text box
 
 // In world pixels at its zoom.
 export interface PlacedLabel {
@@ -19,7 +20,7 @@ export interface PlacedLabel {
   y1: number;
 }
 
-// By `${tileX},${tileY}`; overlapping boxes share a tile, so this doubles as the collision index.
+// By `${tileX},${tileY}`: every tile a label's box, grown by its halo, reaches.
 export type PlacedLabels = Map<string, PlacedLabel[]>;
 
 interface Box {
@@ -147,7 +148,14 @@ export function placeLabels(
       continue;
     }
     occupy(taken, label);
-    occupy(byTile, label);
+    // Filed by its outline's reach too, so a tile it only grazes still draws the halo.
+    occupy(byTile, {
+      ...label,
+      x0: label.x0 - LABEL_OUTLINE_PX,
+      y0: label.y0 - LABEL_OUTLINE_PX,
+      x1: label.x1 + LABEL_OUTLINE_PX,
+      y1: label.y1 + LABEL_OUTLINE_PX,
+    });
   }
   return byTile;
 }
@@ -169,7 +177,7 @@ export function drawLabels(
   context.font = LABEL_FONT;
   context.textAlign = "left";
   context.textBaseline = above ? "bottom" : "top";
-  context.lineWidth = 3;
+  context.lineWidth = LABEL_OUTLINE_PX;
   context.lineJoin = "round";
   context.strokeStyle = "rgba(0, 0, 0, 0.75)";
   context.fillStyle = color;

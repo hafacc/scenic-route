@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { decodeLines, linesRenderer } from "./lines";
 import { projectX, projectY, unproject } from "./mercator";
+import { widestLane } from "./polylines";
 import type { LinesParams } from "./protocol";
 
 // Crossings are shaped from vertices outside the tile, so these pin seam agreement and lane offsets.
@@ -687,3 +688,45 @@ test("a route stacks on the side of the bundle it leaves by", () => {
 });
 
 // Over NYC's eight real routes: where two share a cell, the later one's lane is a whole lane higher.
+
+test("the widest lane counts a mitred normal's stretch", () => {
+  const ribbon = {
+    lanes: Float64Array.of(0, -1.5, 1),
+    normalX: Float64Array.of(1, 0, 1),
+    normalY: Float64Array.of(0, 1, 1),
+  };
+  expect(widestLane([ribbon])).toBeCloseTo(1.5, 9);
+  expect(
+    widestLane([{ ...ribbon, lanes: Float64Array.of(0, 0, 2) }]),
+  ).toBeCloseTo(2 * Math.SQRT2, 9);
+  expect(widestLane([])).toBe(0);
+});
+
+// A cell edge `gap` px west of a tile edge at `zoom`, so a line just past it is filed out of the tile's cells.
+function cellEdgeNearTile(
+  zoom: number,
+  cellDeg: number,
+  low: number,
+  high: number,
+): { lng: number; tileX: number } {
+  for (let cell = Math.floor(-74 / cellDeg); ; cell++) {
+    const lng = cell * cellDeg;
+    const x = projectX(lng, zoom);
+    const gap = TILE_SIZE - (x % TILE_SIZE);
+    if (gap >= low && gap <= high) {
+      return { lng, tileX: Math.floor(x / TILE_SIZE) + 1 };
+    }
+  }
+}
+
+test("a road filed just outside the tile's cells still strokes its half-width in", () => {
+  const zoom = 18;
+  const { lng, tileX } = cellEdgeNearTile(zoom, 0.01, 5, 15);
+  const road = [
+    { lng: lng - 2e-6, lat: 40.7 },
+    { lng: lng - 2e-6, lat: 40.71 },
+  ];
+  const data = decodeLines(encodeHway([{ points: road, klass: 0 }]), "hway");
+  const tileY = Math.floor(projectY(40.705, zoom) / TILE_SIZE);
+  expect(drawTile(data, tileX, tileY, zoom).length).toBeGreaterThan(0);
+});

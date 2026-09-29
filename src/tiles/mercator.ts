@@ -34,3 +34,8 @@ export function unproject(x: number, y: number, zoom: number): LatLng {
     lng: (mercatorX * DEGREES_PER_RADIAN) / EARTH_RADIUS,
   };
 }
+
+// Screen pixels at `zoom` as degrees of longitude, which also bounds them in latitude.
+export function pixelsToDegrees(pixels: number, zoom: number): number {
+  return (pixels * 360) / (256 * 2 ** zoom);
+}

@@ -665,7 +665,7 @@ export function castBases(
 // Reused across draws; the worker rasterizes one tile at a time.
 const scratch: (OffscreenCanvasRenderingContext2D | null)[] = [null, null];
 
-function layer(
+export function scratchLayer(
   slot: number,
   size: number,
   ratio: number,
@@ -677,10 +677,12 @@ function layer(
       : new OffscreenCanvas(size, size).getContext("2d");
   scratch[slot] = context;
   if (context) {
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    // Cleared in device pixels, so a rounded-up size leaves no stale edge.
+    context.setTransform(1, 0, 0, 1, 0, 0);
     context.globalAlpha = 1;
     context.globalCompositeOperation = "source-over";
-    context.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
+    context.clearRect(0, 0, context.canvas.width, context.canvas.height);
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
   }
   return context;
 }
@@ -769,7 +771,7 @@ export function drawSweep(
   castBases(bases, chunks, frame);
 
   const size = Math.round(TILE_SIZE * ratio);
-  const shade = layer(0, size, ratio);
+  const shade = scratchLayer(0, size, ratio);
   if (!shade) {
     return;
   }
@@ -789,7 +791,7 @@ export function drawSweep(
   shade.fillStyle = "#000";
   shade.fill(bases);
 
-  const crown = crownsDrawn > 0 ? layer(1, size, ratio) : null;
+  const crown = crownsDrawn > 0 ? scratchLayer(1, size, ratio) : null;
   if (crown) {
     crown.fillStyle = `rgb(${slate})`;
     crown.fill(crowns);
