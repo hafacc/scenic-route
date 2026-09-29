@@ -5,7 +5,7 @@ const DB_NAME = "scenic-route-sw";
 const DB_VERSION = 2;
 const ENTRIES = "entries";
 const TOTALS = "totals";
-// Survives a deploy, since `wipe()` clears only the accounting stores.
+// Survives a deploy, since `drop()` clears only the accounting stores.
 const CONFIG = "config";
 const BY_AGE = "by-age";
 
@@ -226,10 +226,14 @@ export async function writeConfig(key: string, value: unknown): Promise<void> {
   await finished(transaction);
 }
 
-export async function wipe(): Promise<void> {
+// For a cache deleted whole, whose rows would otherwise count against the store forever.
+export async function drop(store: string): Promise<void> {
   const db = await open();
   const transaction = db.transaction([ENTRIES, TOTALS], "readwrite");
-  transaction.objectStore(ENTRIES).clear();
-  transaction.objectStore(TOTALS).clear();
+  // Arrays sort after every string, so this spans each of the store's urls.
+  transaction
+    .objectStore(ENTRIES)
+    .delete(IDBKeyRange.bound([store], [store, []]));
+  transaction.objectStore(TOTALS).delete(store);
   await finished(transaction);
 }

@@ -1,33 +1,43 @@
 import {
+  drop,
   forget,
   overflowing,
   readConfig,
   record,
   touch,
-  wipe,
   writeConfig,
 } from "./ledger";
 import {
+  chunked,
+  dropsMost,
   type Filed,
   fileRequest,
   isGraph,
+  missRequest,
+  outdated,
   pageFor,
+  type Stamps,
   type Store,
+  sameStamps,
   shadeKey,
 } from "./policy";
 
 // Owns storage policy only; an offline cache miss rejects rather than answering 404.
 // Built by scripts/build-sw.ts into out/sw.js; the committed public/sw.js is a no-cache dev stub.
 
-// Replaced at build time; the version is the deploy's git sha, so every deploy gets new cache names.
+// Replaced at build time; the version is the deploy's git sha, so every deploy gets a new shell.
 declare const SW_VERSION: string;
 declare const SW_PRECACHE: readonly string[];
+declare const SW_STAMPS: Stamps;
 declare const SW_CITIES: readonly {
   west: number;
   south: number;
   east: number;
   north: number;
 }[];
+
+// Named once, since a define is pasted in at every use.
+const STAMPS = SW_STAMPS;
 
 interface ExtendableEventLike {
   waitUntil(promise: Promise<unknown>): void;
@@ -57,7 +67,7 @@ const scope = globalThis as unknown as {
     type: "message",
     handler: (event: MessageEventLike) => void,
   ): void;
-  registration: { scope: string };
+  registration: { scope: string; installing: unknown; waiting: unknown };
   clients: { claim(): Promise<void> };
   skipWaiting(): Promise<void>;
 };
@@ -93,16 +103,20 @@ function capFor(which: Store): number {
 // A pan hits dozens of tiles at once, so a hit's read time is recorded only when this stale.
 const TOUCH_AFTER_MS = 10 * 60 * 1000;
 
+// Data outlives a deploy, which evicts only the units whose stamp it changed; the shell never does.
 const STORES: Record<Store, string> = {
   shell: `shell-${SW_VERSION}`,
-  routing: `routing-${SW_VERSION}`,
-  overlay: `overlay-${SW_VERSION}`,
+  routing: "routing",
+  overlay: "overlay",
 };
 const CURRENT = new Set(Object.values(STORES));
 
-// Kept in a real cache so it survives worker restarts and a deploy's purge destroys it.
+// Kept in a real cache so it survives worker restarts.
 const seasonMarker = (city: string): string =>
   `${scope.registration.scope}__sw/shade-season/${city}`;
+
+// The stamps the data caches hold content of, kept beside it in the routing cache.
+const stampsMarker = (): string => `${scope.registration.scope}__sw/stamps`;
 
 scope.addEventListener("install", (event) => {
   event.waitUntil(
@@ -124,7 +138,16 @@ scope.addEventListener("activate", (event) => {
           await caches.delete(name);
         }
       }
-      await wipe().catch(() => {});
+      // The last shell's rows went with its cache; the precache was never counted.
+      await drop("shell").catch(() => {});
+      // A sweep that fails may leave data it can't vouch for, so it costs everything instead.
+      stampsSettled = keepUnchanged()
+        .catch(async () => {
+          await clearData();
+          await writeStamps();
+        })
+        .catch(() => {});
+      await stampsSettled;
       // Only takes clients an older worker let go of; on a first visit it avoids needing a reload.
       await scope.clients.claim();
     })(),
@@ -148,6 +171,84 @@ scope.addEventListener("message", (event) => {
   }
 });
 
+// Set on activate; otherwise checked once per worker start, since a sweep cut short leaves no marker.
+let stampsSettled: Promise<void> | null = null;
+
+function stampsVouched(): Promise<void> {
+  stampsSettled ??= (async () => {
+    if (!sameStamps(await storedStamps(), STAMPS)) {
+      await clearData();
+      await writeStamps();
+    }
+  })().catch(() => {});
+  return stampsSettled;
+}
+
+// Keeps what this deploy didn't change, so a deploy doesn't cost both graphs and every tile.
+async function keepUnchanged(): Promise<void> {
+  const before = await storedStamps();
+  if (before === null) {
+    // A first install, the sha-named era, or a sweep cut short: nothing says what is held.
+    await clearData();
+  } else {
+    // Dropped first, so a sweep cut short leaves no claim and the next activate clears everything.
+    const routing = await caches.open(STORES.routing);
+    await routing.delete(stampsMarker());
+    for (const which of ["routing", "overlay"] as const) {
+      await sweep(which, before);
+    }
+  }
+  await writeStamps();
+}
+
+async function writeStamps(): Promise<void> {
+  const routing = await caches.open(STORES.routing);
+  await routing.put(stampsMarker(), new Response(JSON.stringify(STAMPS)));
+}
+
+async function storedStamps(): Promise<Stamps | null> {
+  const routing = await caches.open(STORES.routing);
+  const marker = await routing.match(stampsMarker());
+  return marker
+    ? ((await marker.json().catch(() => null)) as Stamps | null)
+    : null;
+}
+
+async function sweep(which: Store, before: Stamps): Promise<void> {
+  const cache = await caches.open(STORES[which]);
+  const keys = await cache.keys();
+  const doomed = keys
+    .map(({ url }) => url)
+    .filter((url) => outdated(url, scope.registration.scope, before, STAMPS));
+  if (dropsMost(doomed.length, keys.length)) {
+    await caches.delete(STORES[which]);
+    await drop(which).catch(() => {});
+  } else {
+    await discard(which, doomed);
+  }
+}
+
+const DELETE_BATCH = 64;
+
+// Every cache delete goes through here so the ledger forgets in step; batched, as a sweep can drop thousands.
+async function discard(which: Store, urls: string[]): Promise<void> {
+  if (urls.length === 0) {
+    return;
+  }
+  const cache = await caches.open(STORES[which]);
+  for (const batch of chunked(urls, DELETE_BATCH)) {
+    await Promise.all(batch.map((url) => cache.delete(url)));
+  }
+  await forget(which, urls).catch(() => {});
+}
+
+async function clearData(): Promise<void> {
+  for (const which of ["routing", "overlay"] as const) {
+    await caches.delete(STORES[which]);
+    await drop(which).catch(() => {});
+  }
+}
+
 // Evicts now, since a lowered cap is usually meant to get the space back.
 async function setOverlayCap(bytes: number | null): Promise<void> {
   capFromPage = true;
@@ -156,17 +257,14 @@ async function setOverlayCap(bytes: number | null): Promise<void> {
   await evict("overlay", capFor("overlay"));
 }
 
-// Only the worker can do this, since the cache name carries the deploy's sha.
+// Through the worker, so the ledger forgets what the cache drops.
 async function clearOverlays(): Promise<void> {
   const cache = await caches.open(STORES.overlay);
   const keys = await cache.keys();
-  for (const request of keys) {
-    await cache.delete(request);
-  }
-  await forget(
+  await discard(
     "overlay",
     keys.map(({ url }) => url),
-  ).catch(() => {});
+  );
 }
 
 scope.addEventListener("fetch", (event) => {
@@ -210,6 +308,9 @@ async function serve(event: FetchEventLike, filed: Filed): Promise<Response> {
   if (filed.store === "shell" && request.mode === "navigate") {
     return await servePage(request, filed.path);
   }
+  if (filed.store !== "shell") {
+    await stampsVouched();
+  }
   const cache = await caches.open(STORES[filed.store]);
   if (filed.fresh) {
     // Daily feeds: network first, since a stale permit or timetable is worse than a slow one.
@@ -233,7 +334,11 @@ async function serve(event: FetchEventLike, filed: Filed): Promise<Response> {
     event.waitUntil(read(filed.store, key));
     return hit;
   }
-  const response = await fetch(request);
+  const response = await fetch(
+    filed.store === "shell"
+      ? request
+      : missRequest(request, scope.registration.scope),
+  );
   // Not 404s: the pyramids are sparse on purpose, and a cached one would outlive the next deploy.
   if (response.ok) {
     event.waitUntil(store(filed.store, key, response.clone()));
@@ -248,6 +353,13 @@ async function store(
   key: string,
   response: Response,
 ): Promise<void> {
+  // A successor installing or waiting may already be live upstream, and these stamps can't vouch for it.
+  if (
+    which !== "shell" &&
+    (scope.registration.installing || scope.registration.waiting)
+  ) {
+    return;
+  }
   const cache = await caches.open(STORES[which]);
   // A Response whose body a failed `put` touched can't be cloned, so buffer it for the retry.
   const body = await response.blob();
@@ -304,14 +416,7 @@ async function evict(which: Store, cap: number): Promise<void> {
     const filed = fileRequest(url, scope.registration.scope, SW_CITIES);
     return !filed || !isGraph(filed.path);
   });
-  if (doomed.length === 0) {
-    return;
-  }
-  const cache = await caches.open(STORES[which]);
-  for (const url of doomed) {
-    await cache.delete(url);
-  }
-  await forget(which, doomed).catch(() => {});
+  await discard(which, doomed);
 }
 
 // Not written back, since caching navigations would file one copy of the page per share link.
@@ -383,10 +488,7 @@ async function purgeOtherSeasons(
         doomed.push(request.url);
       }
     }
-    for (const url of doomed) {
-      await cache.delete(url);
-    }
-    await forget(which, doomed).catch(() => {});
+    await discard(which, doomed);
   }
 }
 

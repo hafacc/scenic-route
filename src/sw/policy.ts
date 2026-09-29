@@ -164,3 +164,68 @@ export function isGraph(path: string): boolean {
 function binNumber(text: string | undefined): number | null {
   return text !== undefined && /^\d+$/.test(text) ? Number(text) : null;
 }
+
+// A deploy's content hash per unit of what it serves, baked into the worker by scripts/build-sw.ts.
+export type Stamps = Readonly<Record<string, string>>;
+
+// Fine enough that one city's rebuild keeps the other's, coarse enough to bake into the worker.
+export function contentUnit(path: string): string {
+  const parts = path.split("/");
+  const depth = shadeKey(path) ? 4 : parts[0] === "tiles" ? 3 : 2;
+  return parts.slice(0, depth).join("/");
+}
+
+// A unit that changed, appeared or went away; another host's (unstamped, mutable) files always are.
+export function outdated(
+  url: string,
+  scope: string,
+  before: Stamps,
+  after: Stamps,
+): boolean {
+  const target = new URL(url);
+  const root = new URL(scope);
+  if (
+    target.origin !== root.origin ||
+    !target.pathname.startsWith(root.pathname)
+  ) {
+    return true;
+  }
+  const unit = contentUnit(target.pathname.slice(root.pathname.length));
+  return stampOf(before, unit) !== stampOf(after, unit);
+}
+
+function stampOf(stamps: Stamps, unit: string): string | undefined {
+  return Object.hasOwn(stamps, unit) ? stamps[unit] : undefined;
+}
+
+// Whether a stored marker vouches for exactly these stamps, whatever order its keys came back in.
+export function sameStamps(stored: Stamps | null, current: Stamps): boolean {
+  if (stored === null) {
+    return false;
+  }
+  const units = Object.keys(current);
+  return (
+    Object.keys(stored).length === units.length &&
+    units.every((unit) => stampOf(stored, unit) === current[unit])
+  );
+}
+
+// Revalidated on a miss, so a stale HTTP or CDN copy isn't pinned under a stamp that now matches.
+export function missRequest(request: Request, scope: string): Request {
+  return new URL(request.url).origin === new URL(scope).origin
+    ? new Request(request, { cache: "no-cache" })
+    : request;
+}
+
+// Past half the cache, deleting it whole beats a delete per entry.
+export function dropsMost(doomed: number, total: number): boolean {
+  return doomed > 0 && doomed * 2 > total;
+}
+
+export function chunked<Item>(items: readonly Item[], size: number): Item[][] {
+  const chunks: Item[][] = [];
+  for (let start = 0; start < items.length; start += size) {
+    chunks.push(items.slice(start, start + size));
+  }
+  return chunks;
+}
