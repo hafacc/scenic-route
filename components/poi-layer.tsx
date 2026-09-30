@@ -24,12 +24,14 @@ export default function PoiLayer({
   dir,
   magic,
   color,
+  labelColor,
   labelAnchor,
 }: {
   overlay: OverlayId;
   dir: string; // blob at <dir>/<city>.bin
   magic: string; // 4-byte magic, e.g. "LMRK"
   color: Record<ThemeName, string>; // CSS fill color, per theme
+  labelColor?: Record<ThemeName, string>; // label fill when `color` is too faint for text
   labelAnchor: "top" | "bottom";
 }) {
   const map = useMap();
@@ -49,7 +51,7 @@ export default function PoiLayer({
         // Relative, so it picks up the basePath the deploy injects.
         const url = `${dir}/${city.id}.bin`;
         return new WorkerTileLayer(
-          () => ({ kind: "poi", url, magic, color, labelAnchor }),
+          () => ({ kind: "poi", url, magic, color, labelColor, labelAnchor }),
           {
             pane: PANE_NAME,
             bounds: L.latLngBounds([south, west], [north, east]),
@@ -72,7 +74,7 @@ export default function PoiLayer({
         layer.remove();
       }
     };
-  }, [map, overlay, dir, magic, color, labelAnchor, active.id]);
+  }, [map, overlay, dir, magic, color, labelColor, labelAnchor, active.id]);
 
   return null;
 }

@@ -1,5 +1,8 @@
+import { FLAVORS } from "../basemap/flavor";
+import type { ThemeName } from "../theme/palette";
 import { projectX, projectY } from "./mercator";
 import type { TileCoords } from "./protocol";
+import { themeName } from "./theme";
 
 const TILE_SIZE = 256;
 // A generic stack, so the worker resolves it without any font plumbing.
@@ -7,7 +10,18 @@ const LABEL_FONT = "600 11px system-ui, sans-serif";
 const LABEL_MAX_CHARS = 26; // long names truncate with an ellipsis so a box stays bounded
 const LABEL_LINE_HEIGHT = 12;
 const LABEL_GAP_PX = 3; // between the marker's edge and the start of the text
-const LABEL_OUTLINE_PX = 3; // the dark halo's stroke, half of which reaches past the text box
+const LABEL_OUTLINE_PX = 3; // the halo's stroke, half of which reaches past the text box
+
+const LABEL_HALO_ALPHA = 0.88; // near-opaque, so labels look cut out of the map
+
+// The basemap's own background, so the halo reads as a gap in the map rather than a shadow.
+export function labelHalo(theme: ThemeName): string {
+  const hex = FLAVORS[theme].background as string;
+  const [red, green, blue] = [1, 3, 5].map((at) =>
+    Number.parseInt(hex.slice(at, at + 2), 16),
+  );
+  return `rgba(${red}, ${green}, ${blue}, ${LABEL_HALO_ALPHA})`;
+}
 
 // In world pixels at its zoom.
 export interface PlacedLabel {
@@ -179,7 +193,7 @@ export function drawLabels(
   context.textBaseline = above ? "bottom" : "top";
   context.lineWidth = LABEL_OUTLINE_PX;
   context.lineJoin = "round";
-  context.strokeStyle = "rgba(0, 0, 0, 0.75)";
+  context.strokeStyle = labelHalo(themeName());
   context.fillStyle = color;
   for (const { text, x, y } of tile) {
     context.strokeText(text, x - originX, y - originY);

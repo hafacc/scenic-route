@@ -1,3 +1,4 @@
+import { STATION_LABEL_COLOR } from "../overlays/colors";
 import {
   decodeSubway,
   mergeStations,
@@ -18,6 +19,7 @@ import {
 import type { SubwayParams, TileCoords } from "./protocol";
 import type { TileRenderer } from "./renderer";
 import { splinePath } from "./spline";
+import { themeName } from "./theme";
 
 // The ferry layer's machinery, but subway trunks are narrower and more shared, so lanes count over 40 m.
 
@@ -38,7 +40,6 @@ const STATION_MIN_ZOOM = 13;
 const STATION_LABEL_ZOOM = 15;
 const STATION_BASE_RADIUS_PX = 2.5;
 const STATION_OUTLINE_PX = 1.5; // the dot's ring; a bullet's 1 px outline is thinner
-const STATION_LABEL_COLOR = "#ffffff"; // legible on either theme over the outline ./labels strokes
 // Rings a station whose routes differ in color, and colors a line whose route the file doesn't name.
 const NEUTRAL_COLOR = "#334155"; // slate-700
 
@@ -517,7 +518,7 @@ function draw(
       context,
       labelsAt(context, subway, zoom),
       coords,
-      STATION_LABEL_COLOR,
+      STATION_LABEL_COLOR[themeName()],
       false,
     );
   }

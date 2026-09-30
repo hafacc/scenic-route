@@ -188,7 +188,13 @@ function draw(
   }
 
   if (zoom >= LABEL_MIN_ZOOM) {
-    drawTileLabels(context, points, coords, fill, params.labelAnchor);
+    drawTileLabels(
+      context,
+      points,
+      coords,
+      (params.labelColor ?? params.color)[themeName()],
+      params.labelAnchor,
+    );
   }
 }
 
