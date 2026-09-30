@@ -90,26 +90,26 @@ void main() {
   vec3 s1 = has(1) ? texelFetch(data1, at, 0).rgb : vec3(0.0);
   vec3 s2 = has(2) ? texelFetch(data2, at, 0).rgb : vec3(0.0);
   vec3 s3 = has(3) ? texelFetch(data3, at, 0).rgb : vec3(0.0);
-  float root[12] = float[12](s0.r, s0.g, s0.b, s1.r, s1.g, s1.b, s2.r, s2.g, s2.b, s3.r, s3.g, s3.b);
-
-  float amount[12];
+  // Matrices, not float[12]: ANGLE fills a local array with a bare float[12](...), which Mali rejects.
+  mat3x4 root = mat3x4(vec4(s0, s1.r), vec4(s1.gb, s2.rg), vec4(s2.b, s3));
+  mat3x4 amount = mat3x4(0.0);
   float named = 0.0;
   for (int id = 0; id < 12; id++) {
-    amount[id] = root[id] * root[id] / GENUS_FULL; // baked square-rooted
-    named += amount[id];
+    amount[id / 4][id % 4] = root[id / 4][id % 4] * root[id / 4][id % 4] / GENUS_FULL; // baked square-rooted
+    named += amount[id / 4][id % 4];
   }
-  amount[${OTHER_GENUS_ID}] += max(THIN - named, 0.0);
+  amount[${OTHER_GENUS_ID >> 2}][${OTHER_GENUS_ID & 3}] += max(THIN - named, 0.0);
 
   float present = 0.0;
   float shown = 0.0;
   float weight = 0.0;
   vec3 mixed = vec3(0.0);
   for (int id = 0; id < 12; id++) {
-    present += amount[id];
+    present += amount[id / 4][id % 4];
     if (!enabled(id)) { continue; }
-    shown += amount[id];
+    shown += amount[id / 4][id % 4];
     // The fourth power, so an area takes its leading genus's clean hue and blends only at a border.
-    float squared = amount[id] * amount[id];
+    float squared = amount[id / 4][id % 4] * amount[id / 4][id % 4];
     float share = squared * squared;
     mixed += linearPalette[id] * share;
     weight += share;
@@ -152,6 +152,13 @@ const UNIFORMS = [
   "roadOpacity",
 ] as const;
 
+// Thrown for the layers menu to report, and logged, since a tile error reaches no console.
+function failed(log: string | null): Error {
+  const error = new Error(`genus shader failed: ${log || "no log"}`);
+  console.error(error.message);
+  return error;
+}
+
 function compile(gl: WebGL2RenderingContext): WebGLProgram {
   const program = gl.createProgram();
   for (const [type, source] of [
@@ -164,13 +171,16 @@ function compile(gl: WebGL2RenderingContext): WebGLProgram {
     }
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      throw failed(gl.getShaderInfoLog(shader));
+    }
     gl.attachShader(program, shader);
     gl.deleteShader(shader);
   }
   gl.bindAttribLocation(program, 0, "point");
   gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    throw new Error(gl.getProgramInfoLog(program) ?? "genus shader failed");
+    throw failed(gl.getProgramInfoLog(program));
   }
   return program;
 }
