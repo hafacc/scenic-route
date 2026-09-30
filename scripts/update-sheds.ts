@@ -188,6 +188,15 @@ export function reconcileSheds(
   return [...artifact.closed, ...rebuilt];
 }
 
+// Unread, the blob pipe dies of SIGPIPE upstream, which pipefail turns into a failed daily job.
+async function drainStdin(): Promise<void> {
+  if (process.stdin.isTTY === true) {
+    return;
+  }
+  for await (const _ of process.stdin) {
+  }
+}
+
 export async function updateSheds(): Promise<void> {
   const [openBytes, closedBytes] = await Promise.all([
     readArtifact("open.bin"),
@@ -204,6 +213,7 @@ export async function updateSheds(): Promise<void> {
   // since the daily job's timetable steps run after this.
   const graph = await loadDeployedGraph();
   if (graph === null) {
+    await drainStdin();
     return;
   }
   const mismatch = shedGraphMismatch(artifact, graph.keyHash);
@@ -213,6 +223,7 @@ export async function updateSheds(): Promise<void> {
         " bun run build-sheds against the new graph, commit, then deploy. This run will pick the" +
         " day up once the site serves the graph the artifact names.",
     );
+    await drainStdin();
     return;
   }
 
