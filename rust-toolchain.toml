@@ -5,5 +5,5 @@
 # Bumping is a deliberate change: raise the channel, run `bun run lint`, fix what the new lints find.
 # .github/workflows/build.yml pins the same version; move both together.
 [toolchain]
-channel = "1.98.0"
+channel = "1.98.1"
 components = ["clippy", "rustfmt"]
