@@ -43,6 +43,7 @@ export interface PoiParams {
   url: string;
   magic: string;
   color: Record<ThemeName, string>; // dot fill
+  labelColor?: Record<ThemeName, string>; // label fill when the dot's is too faint for text, else `color`
   labelAnchor: "top" | "bottom";
 }
 

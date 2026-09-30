@@ -8,10 +8,22 @@ export const LANDMARK_COLOR: Record<ThemeName, string> = {
   dark: "#d7b16d",
 };
 
+// Label text; the light ochre is under 4.5:1 on the basemap's off-white.
+export const LANDMARK_TEXT_COLOR: Record<ThemeName, string> = {
+  light: "#8e6704",
+  dark: LANDMARK_COLOR.dark,
+};
+
 // Dusty rose, shared by Historic and Street life.
 export const LEGACY_COLOR: Record<ThemeName, string> = {
   light: "#c46e83",
   dark: "#e5a2b0",
+};
+
+// Label text; the light rose is under 4.5:1 on the basemap's off-white.
+export const LEGACY_TEXT_COLOR: Record<ThemeName, string> = {
+  light: "#a14a60",
+  dark: LEGACY_COLOR.dark,
 };
 
 // Ultramarine ink, the one cool dot beside Historic's warm layers.
@@ -58,6 +70,12 @@ export const SHED_COLOR: Record<ThemeName, string> = {
 export const SUBWAY_COLOR: Record<ThemeName, string> = {
   light: "#0062cf",
   dark: "#4d94ff",
+};
+
+// Station names over the basemap-coloured label halo: ink by day, white by night.
+export const STATION_LABEL_COLOR: Record<ThemeName, string> = {
+  light: "#334155", // slate-700
+  dark: "#ffffff",
 };
 
 // The app's destination green, since the directions control turns a found place into a destination.

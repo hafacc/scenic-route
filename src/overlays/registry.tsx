@@ -39,7 +39,9 @@ import {
   HISTORIC_COLOR,
   INDUSTRIAL_COLOR,
   LANDMARK_COLOR,
+  LANDMARK_TEXT_COLOR,
   LEGACY_COLOR,
+  LEGACY_TEXT_COLOR,
   SHED_COLOR,
   SUBWAY_COLOR,
 } from "./colors";
@@ -219,6 +221,7 @@ export const OVERLAYS: readonly OverlayDef[] = [
         dir="legacy"
         magic="LGCY"
         color={LEGACY_COLOR}
+        labelColor={LEGACY_TEXT_COLOR}
         labelAnchor="top"
       />
     ),
@@ -234,6 +237,7 @@ export const OVERLAYS: readonly OverlayDef[] = [
         dir="landmarks"
         magic="LMRK"
         color={LANDMARK_COLOR}
+        labelColor={LANDMARK_TEXT_COLOR}
         labelAnchor="top"
       />
     ),
