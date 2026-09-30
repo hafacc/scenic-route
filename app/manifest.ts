@@ -9,7 +9,8 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "Scenic Route",
     // iOS lists the app under this in Location Services, which the location banner must match.
     short_name: "Scenic Route",
-    description: "Walking directions that pick shade, trees and water over the shortest line",
+    description:
+      "Walking directions that pick shade, trees and water over the shortest line",
     start_url: ".",
     scope: ".",
     // Required for the browser to offer an install at all.
@@ -24,8 +25,18 @@ export default function manifest(): MetadataRoute.Manifest {
       params: SHARE_PARAMS,
     },
     icons: [
-      { src: "./icons/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
-      { src: "./icons/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+      {
+        src: "./icons/icon-192.png",
+        sizes: "192x192",
+        type: "image/png",
+        purpose: "any",
+      },
+      {
+        src: "./icons/icon-512.png",
+        sizes: "512x512",
+        type: "image/png",
+        purpose: "any",
+      },
       // Full-bleed: Android crops to the launcher's shape and puts a white plate behind an "any" icon.
       {
         src: "./icons/icon-maskable-512.png",

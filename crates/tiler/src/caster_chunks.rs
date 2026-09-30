@@ -799,7 +799,6 @@ pub fn run(args: &Args) -> Fallible<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::METERS_PER_DEGREE_LAT;
 
     fn coord(lng: f64, lat: f64) -> Coord {
         Coord { lng, lat }
@@ -836,8 +835,8 @@ mod tests {
                 }
             }
         };
-        let mut position = (0i64, 0i64);
-        let mut read_ring = |offset: &mut usize, position: &mut (i64, i64)| -> Ring {
+        let mut position: (i64, i64);
+        let read_ring = |offset: &mut usize, position: &mut (i64, i64)| -> Ring {
             let vertices = varint(offset) as usize;
             let mut ring = Vec::with_capacity(vertices);
             for _ in 0..vertices {

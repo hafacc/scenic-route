@@ -709,7 +709,8 @@ mod tests {
     /// Duplicated in src/tiles/sweep.test.ts so either side drifting fails.
     #[test]
     fn cuts_the_bands_the_client_cuts() {
-        let cases: [(f64, f64, f64, &[(usize, f64, f64)]); 3] = [
+        type Case = (f64, f64, f64, &'static [(usize, f64, f64)]);
+        let cases: [Case; 3] = [
             (
                 10.0,
                 5.0,

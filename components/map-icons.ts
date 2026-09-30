@@ -1,6 +1,5 @@
 "use client";
 
-
 import L from "leaflet";
 import { SEARCH_PIN_COLOR } from "../src/overlays/colors";
 import { hexToRgb, type ThemeName } from "../src/theme/palette";
@@ -49,11 +48,18 @@ function shaded(hex: string, scale: number): string {
 }
 
 // Built per theme, since the green is a light/dark pair.
-export function searchIcon(theme: ThemeName, accent?: string | null): L.DivIcon {
+export function searchIcon(
+  theme: ThemeName,
+  accent?: string | null,
+): L.DivIcon {
   const green = accent ?? SEARCH_PIN_COLOR[theme];
   return L.divIcon({
     className: "scenic-search-pin",
-    html: teardropSvg(`scenicSearchPinGrad-${green.slice(1)}`, green, shaded(green, 0.8)),
+    html: teardropSvg(
+      `scenicSearchPinGrad-${green.slice(1)}`,
+      green,
+      shaded(green, 0.8),
+    ),
     iconSize: [30, 40],
     iconAnchor: [15, 39],
   });
@@ -65,7 +71,11 @@ export function destIcon(accent: string | null): L.DivIcon {
   } else {
     return L.divIcon({
       className: "scenic-saved-pin",
-      html: teardropSvg(`scenicDestGrad-${accent.slice(1)}`, accent, shaded(accent, 0.8)),
+      html: teardropSvg(
+        `scenicDestGrad-${accent.slice(1)}`,
+        accent,
+        shaded(accent, 0.8),
+      ),
       iconSize: [30, 40],
       iconAnchor: [15, 39],
       popupAnchor: [0, -34],

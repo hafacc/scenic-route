@@ -2262,8 +2262,7 @@ mod tests {
     fn a_city_the_manifest_does_not_carry_is_rejected() {
         let error = only(&["graph:bosotn"])
             .check(&manifest())
-            .err()
-            .expect("a city the manifest has never heard of");
+            .expect_err("a city the manifest has never heard of");
 
         assert!(error.to_string().contains("bosotn"), "{error}");
     }
@@ -2326,9 +2325,7 @@ mod tests {
         let cities = plan.pair(&manifest).expect("a pairing");
         let partial = only(&["graph"]);
 
-        let error = handoffs(&plan, &cities, &partial)
-            .err()
-            .expect("lines no pass has written");
+        let error = handoffs(&plan, &cities, &partial).expect_err("lines no pass has written");
         assert!(error.to_string().contains("commercial"), "{error}");
 
         fs::create_dir_all(&plan.commercial_lines).expect("the lines");
@@ -2343,9 +2340,8 @@ mod tests {
         let partial = only(&["chunks-stranded"]);
         fs::create_dir_all(&plan.chunks).expect("the chunks");
 
-        let error = handoffs(&plan, &cities, &partial)
-            .err()
-            .expect("a stranded set no graph has written");
+        let error =
+            handoffs(&plan, &cities, &partial).expect_err("a stranded set no graph has written");
 
         assert!(error.to_string().contains("nyc.stranded.bin"), "{error}");
         assert!(error.to_string().contains("--only graph"), "{error}");
@@ -2395,8 +2391,7 @@ mod tests {
             .expect("new york's stranded set");
 
         let error = handoffs(&plan, &cities, &only(&["chunks-stranded", "graph:nyc"]))
-            .err()
-            .expect("san francisco's stranded set");
+            .expect_err("san francisco's stranded set");
 
         assert!(error.to_string().contains("sf.stranded.bin"), "{error}");
     }
@@ -3431,8 +3426,7 @@ mod tests {
         let plan = key_space_plan(&data, KEY_SPACE);
         let error = plan
             .key_space_stamp(&plan.pair(&manifest).expect("a pairing"))
-            .err()
-            .expect("a source that is not there");
+            .expect_err("a source that is not there");
 
         assert!(error.to_string().contains("paths/nyc.bin"), "{error}");
     }

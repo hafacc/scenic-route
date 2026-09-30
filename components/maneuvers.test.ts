@@ -1,4 +1,3 @@
-
 import { expect, test } from "bun:test";
 import { MdElevator, MdLogout, MdStairs } from "react-icons/md";
 import type { Maneuver } from "../src/routing/directions";
@@ -33,7 +32,10 @@ test("a lift wears the lift icon and every other door the stair", () => {
   ).toBe(MdLogout);
 });
 
-function progressAt(currentManeuver: number, nextManeuver: number): NavProgress {
+function progressAt(
+  currentManeuver: number,
+  nextManeuver: number,
+): NavProgress {
   return {
     alongMeters: 100,
     remainingMeters: 400,
@@ -65,18 +67,13 @@ test("the arrive row is highlighted and not also dimmed", () => {
   // At the end of the route nextManeuver is clamped onto currentManeuver.
   const progress = progressAt(5, 5);
   expect(maneuverState(progress, 5)).toBe("next");
-  expect([0, 1, 2, 3, 4].map((index) => maneuverState(progress, index))).toEqual(
-    ["passed", "passed", "passed", "passed", "passed"],
-  );
+  expect(
+    [0, 1, 2, 3, 4].map((index) => maneuverState(progress, index)),
+  ).toEqual(["passed", "passed", "passed", "passed", "passed"]);
 });
 
 test("without a live position every maneuver is still ahead", () => {
-  expect([0, 1, 2, 3, 4, 5].map((index) => maneuverState(null, index))).toEqual([
-    "ahead",
-    "ahead",
-    "ahead",
-    "ahead",
-    "ahead",
-    "ahead",
-  ]);
+  expect([0, 1, 2, 3, 4, 5].map((index) => maneuverState(null, index))).toEqual(
+    ["ahead", "ahead", "ahead", "ahead", "ahead", "ahead"],
+  );
 });
