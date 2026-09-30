@@ -1,6 +1,10 @@
 "use client";
 
-import { type PointerEvent as ReactPointerEvent, useRef, useState } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  useRef,
+  useState,
+} from "react";
 
 // Offsets are in rows, with the row height measured since the two lists differ.
 
@@ -28,10 +32,7 @@ export function useRowDrag(
   const rows = useRef(count);
   rows.current = count;
 
-  const start = (
-    event: ReactPointerEvent<HTMLElement>,
-    from: number,
-  ): void => {
+  const start = (event: ReactPointerEvent<HTMLElement>, from: number): void => {
     const handle = event.currentTarget;
     const row = handle.closest("li");
     const height = row?.getBoundingClientRect().height ?? 0;

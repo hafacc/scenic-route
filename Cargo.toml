@@ -7,6 +7,12 @@ edition = "2024"
 license = "MIT"
 authors = ["Erik Brinkman <erik.brinkman@gmail.com>"]
 
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
 [profile.release]
 opt-level = 3
 lto = true

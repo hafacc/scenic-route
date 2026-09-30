@@ -6890,7 +6890,7 @@ mod tests {
         bytes.extend_from_slice(&0u32.to_le_bytes());
         bytes.extend_from_slice(&6u32.to_le_bytes());
         bytes.extend_from_slice(b"W 4 St");
-        while bytes.len() % 4 != 0 {
+        while !bytes.len().is_multiple_of(4) {
             bytes.push(0);
         }
         let section = bytes.len() as u32;
@@ -7217,10 +7217,10 @@ mod tests {
 
     // The STRT flags byte of an offsetted record, from the four per-side bits.
     fn record(osm_left: bool, osm_right: bool, surveyed_left: bool, surveyed_right: bool) -> u8 {
-        u8::from(osm_left) * FLAG_OSM_LEFT
-            | u8::from(osm_right) * FLAG_OSM_RIGHT
-            | u8::from(surveyed_left) * FLAG_SURVEYED_LEFT
-            | u8::from(surveyed_right) * FLAG_SURVEYED_RIGHT
+        (u8::from(osm_left) * FLAG_OSM_LEFT)
+            | (u8::from(osm_right) * FLAG_OSM_RIGHT)
+            | (u8::from(surveyed_left) * FLAG_SURVEYED_LEFT)
+            | (u8::from(surveyed_right) * FLAG_SURVEYED_RIGHT)
     }
 
     #[test]
@@ -7516,7 +7516,7 @@ mod tests {
             island_edge(0, 1, false, KIND_SIDEWALK, 1),
             island_edge(1, 3, true, KIND_PATH, 30),
         ];
-        let ways = stranded_osm_paths(&parts, &contracted, &vec![true, true], 4);
+        let ways = stranded_osm_paths(&parts, &contracted, &[true, true], 4);
         assert!(ways.is_empty(), "{ways:?}");
     }
 
@@ -7533,7 +7533,7 @@ mod tests {
             cover_left: 0,
             cover_right: 0,
             offset: 40, // a 4 m half-offset, so the corners land 4 m out
-            flags: u8::from(pathlike) * GRPH_PATHLIKE | u8::from(structure) * GRPH_STRUCTURE,
+            flags: (u8::from(pathlike) * GRPH_PATHLIKE) | (u8::from(structure) * GRPH_STRUCTURE),
             name_id: UNNAMED,
             osm: pathlike,
             source_id: NO_SOURCE_ID,

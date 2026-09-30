@@ -270,7 +270,7 @@ mod tests {
             rectangle(-100.0, -100.0, 200.0, 100.0),
         ];
 
-        assert_eq!(walk_fraction(&[doughnut.clone()]), 0.0);
+        assert_eq!(walk_fraction(std::slice::from_ref(&doughnut)), 0.0);
         // The same lot walked through its solid part, between the hole and the outer ring.
         assert_eq!(
             fraction_of(&[at(0.0, 150.0), at(100.0, 150.0)], &[doughnut], false),

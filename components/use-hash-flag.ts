@@ -29,7 +29,9 @@ export function useHashFlag(name: string): [boolean, (open: boolean) => void] {
         window.history.replaceState(
           null,
           "",
-          window.location.pathname + window.location.search + formatHash(params),
+          window.location.pathname +
+            window.location.search +
+            formatHash(params),
         );
         setOpen(false);
       }
@@ -62,7 +64,9 @@ export function useHashSection(
         window.history.replaceState(
           null,
           "",
-          window.location.pathname + window.location.search + formatHash(params),
+          window.location.pathname +
+            window.location.search +
+            formatHash(params),
         );
         setSection(null);
       } else {
