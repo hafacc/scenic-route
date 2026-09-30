@@ -105,12 +105,12 @@ export const MODES: readonly Mode[] = [
   {
     id: "historic",
     name: "Historic",
-    color: "#4338ca", // indigo-700, the historic overlay's color
+    color: HISTORIC_COLOR.light, // brick, the historic-district wash
     palette: [
-      HISTORIC_COLOR.light, // indigo-700, the historic-district wash
-      LANDMARK_COLOR.light, // amber-500, the landmark dots
-      ART_COLOR.light, // fuchsia-500, the public-art dots
-      LEGACY_COLOR.light, // yellow-600, the old-business dots
+      HISTORIC_COLOR.light,
+      LANDMARK_COLOR.light,
+      ART_COLOR.light,
+      LEGACY_COLOR.light,
     ],
     overlays: ["historic", "legacy", "landmarks", "art"],
     weights: {
@@ -128,12 +128,12 @@ export const MODES: readonly Mode[] = [
   {
     id: "streetlife",
     name: "Street life",
-    color: "#7c3aed", // violet-600, the commercial slider's family
+    color: "#7e1f97", // deep violet, a step darker than the commercial band
     palette: [
-      "#7c3aed", // violet-600, the commercial wash's family (COMMERCIAL_COLOR)
-      LEGACY_COLOR.light, // yellow-600, the old-business dots
-      LANDMARK_COLOR.light, // amber-500, the landmark dots
-      ART_COLOR.light, // fuchsia-500, the public-art dots
+      "#7e1f97",
+      LEGACY_COLOR.light,
+      LANDMARK_COLOR.light,
+      ART_COLOR.light,
     ],
     overlays: ["commercial", "legacy"],
     weights: {

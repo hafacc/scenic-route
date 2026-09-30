@@ -25,8 +25,8 @@ export const metadata: Metadata = pageMetadata({
 const MODE_COPY: Record<ModeId, { name: string; color: string }> = {
   naturalist: { name: "Naturalist", color: "#0d9488" },
   rain: { name: "Rain", color: "#0284c7" },
-  historic: { name: "Historic", color: "#4338ca" },
-  streetlife: { name: "Street life", color: "#7c3aed" },
+  historic: { name: "Historic", color: "#9c3a11" },
+  streetlife: { name: "Street life", color: "#7e1f97" },
 };
 
 // Switcher order, as MODES has it.

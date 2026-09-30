@@ -180,9 +180,12 @@ export function cardColors(mode: Mode, cards: readonly CardRank[]): string[] {
   const byScore = [...cards.keys()].sort(
     (left, right) => cards[right].scenicScore - cards[left].scenicScore,
   );
-  const standouts = cards.map((card) =>
-    card.colorFactor === null ? null : factorColor(card.colorFactor),
-  );
+  // A standout in the accent's own color would pass for the top card, so it falls back to the palette.
+  const standouts = cards.map((card) => {
+    const color =
+      card.colorFactor === null ? null : factorColor(card.colorFactor);
+    return color === mode.color ? null : color;
+  });
   const used = new Set<string>([mode.color]);
   for (const standout of standouts) {
     if (standout !== null) {

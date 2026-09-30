@@ -1,22 +1,23 @@
 import type { ThemeName } from "../theme/palette";
 
-// Night halves lift a step for contrast; the 0.45 area washes are hand-mixed to stay distinct.
+// One color per layer in every mode; night halves lift for contrast, day halves hold 3:1 on white.
 
-// Matches the route panel's scenery sliders.
+// Ochre, apart from the sun slider's amber.
 export const LANDMARK_COLOR: Record<ThemeName, string> = {
-  light: "#f59e0b", // amber-500
-  dark: "#fbbf24", // amber-400
+  light: "#bd8c1d",
+  dark: "#d7b16d",
 };
 
-// Darker than landmark amber by day; paler at night, since labels sit on a black halo.
+// Dusty rose, shared by Historic and Street life.
 export const LEGACY_COLOR: Record<ThemeName, string> = {
-  light: "#ca8a04", // yellow-600
-  dark: "#fde047", // yellow-300
+  light: "#c46e83",
+  dark: "#e5a2b0",
 };
 
+// Ultramarine ink, the one cool dot beside Historic's warm layers.
 export const ART_COLOR: Record<ThemeName, string> = {
-  light: "#d946ef", // fuchsia-500
-  dark: "#e879f9", // fuchsia-400
+  light: "#2552aa",
+  dark: "#92b8fd",
 };
 
 // Also the route layer's ferry-leg color.
@@ -30,16 +31,16 @@ export const HIGHWAY_COLOR: Record<ThemeName, string> = {
   dark: "#f87171", // red-400
 };
 
-// Binary, no intensity grading; the night violet is hand-mixed to stay apart from historic at 0.45.
+// Binary, no intensity grading; dusk violet, Street life's family.
 export const COMMERCIAL_COLOR: Record<ThemeName, string> = {
-  light: "#6d28d9", // violet-700
-  dark: "#ac89e6",
+  light: "#8e3eae",
+  dark: "#c28bdb",
 };
 
-// The deepest wash day and night, which keeps it apart from commercial after compositing.
+// Brick, Historic's accent; warm against commercial's violet after compositing.
 export const HISTORIC_COLOR: Record<ThemeName, string> = {
-  light: "#4338ca", // indigo-700
-  dark: "#6c7eda",
+  light: "#9c3a11",
+  dark: "#d98f75",
 };
 
 // Muted at night so the full-strength key swatch doesn't shout beside the other washes.

@@ -24,7 +24,13 @@ import {
 import ElevationLegend from "../../components/elevation-legend";
 import TreeLegend from "../../components/tree-legend";
 import { useMapTheme } from "../../components/use-map-theme";
-import { PALETTES, rgbCss, type ThemeName } from "../theme/palette";
+import {
+  CANOPY_HEX,
+  ELEVATION_SUMMIT_HEX,
+  PALETTES,
+  rgbCss,
+  type ThemeName,
+} from "../theme/palette";
 import {
   ART_COLOR,
   COMMERCIAL_COLOR,
@@ -113,6 +119,12 @@ function LayerIcon({
   );
 }
 
+// The canopy ramp's mid stop, the tree slider's color too.
+const CANOPY_ICON: Record<ThemeName, string> = {
+  light: CANOPY_HEX.light[5],
+  dark: CANOPY_HEX.dark[5],
+};
+
 export function overlayLabel(overlay: OverlayDef, city: City): string {
   return typeof overlay.label === "string" ? overlay.label : overlay.label(city);
 }
@@ -151,7 +163,7 @@ export const OVERLAYS: readonly OverlayDef[] = [
     id: "canopy",
     label: "Tree canopy",
 // Tinted with what the layer paints, unlike the other overlays' plain icons.
-    icon: <PiTreeFill className="h-4 w-4 text-teal-600" aria-hidden="true" />,
+    icon: <LayerIcon Icon={PiTreeFill} color={CANOPY_ICON} />,
 // The stop a leafy street lands on; the faint end is bare ground and the full end rare.
     swatch: (theme) => rgbCss(PALETTES[theme].canopy.stops[4]),
     render: () => (
@@ -178,7 +190,7 @@ export const OVERLAYS: readonly OverlayDef[] = [
   {
     id: "elevation",
     label: "Elevation",
-    icon: <MdTerrain className="h-4 w-4 text-amber-700" aria-hidden="true" />,
+    icon: <LayerIcon Icon={MdTerrain} color={ELEVATION_SUMMIT_HEX} />,
 // The summit end, since the valley green would be mistaken for canopy.
     swatch: (theme) => {
       const { stops } = PALETTES[theme].elevation;

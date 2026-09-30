@@ -70,6 +70,12 @@ const CANOPY_STOPS: Record<ThemeName, readonly Rgb[]> = {
   dark: stops(...CANOPY_HEX.dark),
 };
 
+// The elevation ramp's top stop, which the hill slider and layer icon wear.
+export const ELEVATION_SUMMIT_HEX: Record<ThemeName, string> = {
+  light: "#966c5c",
+  dark: "#a2705f",
+};
+
 // Hypsometric, interpolated not banded; the dark set stays mid-light so relief can darken it further.
 const ELEVATION_STOPS: Record<ThemeName, readonly Rgb[]> = {
   light: stops(
@@ -78,7 +84,7 @@ const ELEVATION_STOPS: Record<ThemeName, readonly Rgb[]> = {
     "#c4be82", // tan
     "#d6b07a", // ochre
     "#ba8a68", // brown
-    "#966c5c", // summit
+    ELEVATION_SUMMIT_HEX.light,
   ),
   dark: stops(
     "#4a6152", // valley green
@@ -86,7 +92,7 @@ const ELEVATION_STOPS: Record<ThemeName, readonly Rgb[]> = {
     "#7a7654", // olive
     "#8f7452", // tan
     "#9c6f56", // ochre
-    "#a2705f", // summit
+    ELEVATION_SUMMIT_HEX.dark,
   ),
 };
 
