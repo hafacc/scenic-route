@@ -38,12 +38,12 @@ const SUN_FACES: Readonly<Record<Toggles["sun"], ToggleFace>> = {
 const HILL_FACES: Readonly<Record<Toggles["hills"], ToggleFace>> = {
   any: {
     Icon: MdTerrain,
-    tint: "text-amber-700 dark:text-amber-500",
+    tint: "text-[#966c5c] dark:text-[#c29684]",
     label: "Hills are fine",
   },
   some: {
     Icon: MdLandscape,
-    tint: "text-amber-700 dark:text-amber-500",
+    tint: "text-[#966c5c] dark:text-[#c29684]",
     label: "Fewer hills",
   },
   none: { Icon: MdHorizontalRule, tint: GRAY, label: "Avoid hills" },

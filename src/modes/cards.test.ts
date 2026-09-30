@@ -272,7 +272,7 @@ describe("cardColors", () => {
   });
 
   test("a third card takes the first palette color the mode has not used", () => {
-    // The historic palette leads with the mode's own indigo, so the middle card takes the next.
+    // The historic palette leads with the mode's own brick, so the middle card takes the next.
     expect(cardColors(HISTORIC, [plain(3), plain(2), plain(1)])).toEqual([
       HISTORIC.color,
       HISTORIC.palette[1],
@@ -298,11 +298,11 @@ describe("cardColors", () => {
       plain(2),
       plain(1),
     ]);
-    expect(colors[1]).toBe("#d946ef");
-    expect(colors[2]).not.toBe("#d946ef");
+    expect(colors[1]).toBe("#2552aa");
+    expect(colors[2]).not.toBe("#2552aa");
     expect(colors).toEqual([
       HISTORIC.color,
-      "#d946ef",
+      "#2552aa",
       HISTORIC.palette[1],
       DIRECT_COLOR,
     ]);
@@ -323,6 +323,23 @@ describe("cardColors", () => {
       NATURALIST.palette[0],
       DIRECT_COLOR,
     ]);
+  });
+
+  test("a standout in the accent's own color takes the palette instead", () => {
+    expect(
+      cardColors(NATURALIST, [
+        plain(3),
+        { scenicScore: 2, colorFactor: "tree" },
+        plain(1),
+      ]),
+    ).toEqual([NATURALIST.color, NATURALIST.palette[0], DIRECT_COLOR]);
+    expect(
+      cardColors(HISTORIC, [
+        plain(3),
+        { scenicScore: 2, colorFactor: "historic" },
+        plain(1),
+      ]),
+    ).toEqual([HISTORIC.color, HISTORIC.palette[1], DIRECT_COLOR]);
   });
 });
 

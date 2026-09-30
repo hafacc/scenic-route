@@ -21,7 +21,17 @@ import {
   PiTrainSimpleFill,
   PiTreeEvergreenFill,
 } from "react-icons/pi";
+import {
+  ART_COLOR,
+  COMMERCIAL_COLOR,
+  FERRY_COLOR,
+  HIGHWAY_COLOR,
+  HISTORIC_COLOR,
+  INDUSTRIAL_COLOR,
+  LANDMARK_COLOR,
+} from "../overlays/colors";
 import type { OverlayId } from "../overlays/registry";
+import { CANOPY_HEX, ELEVATION_SUMMIT_HEX } from "../theme/palette";
 import {
   MAX_ART_WEIGHT,
   MAX_BRIDGE_WEIGHT,
@@ -53,7 +63,7 @@ export interface Factor {
   Icon: ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
   max: number;
   tint: string; // text color for the icon and chip
-  color: string; // the slider's fill/thumb color (a CSS hex; matches the map overlay)
+  color: string; // the slider's fill/thumb color, and a standout route card's; the map layer's day color
   signed?: boolean; // a bipolar −max..max slider (sun ↔ shade) rather than one-sided 0..max
   // For the settings page, which has no graph to say what a city can answer; absent means every city.
   overlay?: OverlayId;
@@ -102,8 +112,8 @@ export const FACTORS: readonly Factor[] = [
     label: "Prefer tree cover",
     Icon: PiTreeEvergreenFill,
     max: MAX_TREE_WEIGHT,
-    tint: "text-brand-600 dark:text-brand-400",
-    color: "#059669",
+    tint: "text-teal-600 dark:text-teal-400",
+    color: CANOPY_HEX.light[5], // the canopy ramp's mid stop
   },
   {
     key: "shade",
@@ -129,8 +139,8 @@ export const FACTORS: readonly Factor[] = [
     label: "Pass landmarks",
     Icon: MdAccountBalance,
     max: MAX_LANDMARK_WEIGHT,
-    tint: "text-amber-600 dark:text-amber-400",
-    color: "#f59e0b",
+    tint: "text-[#8e6704] dark:text-[#d7b16d]", // a darker ochre, since the layer's is 3:1 on white
+    color: LANDMARK_COLOR.light,
     overlay: "landmarks",
   },
   {
@@ -138,18 +148,18 @@ export const FACTORS: readonly Factor[] = [
     label: "Pass public art",
     Icon: MdPalette,
     max: MAX_ART_WEIGHT,
-    tint: "text-fuchsia-600 dark:text-fuchsia-400",
-    color: "#d946ef",
+    tint: "text-[#2552aa] dark:text-[#92b8fd]",
+    color: ART_COLOR.light,
     overlay: "art",
   },
   {
     key: "historic",
     label: "Prefer historic areas",
-    // Not the landmarks amber, which prices passing one building rather than walking inside a district.
+    // Not the landmarks ochre, which prices passing one building rather than walking inside a district.
     Icon: MdMapsHomeWork,
     max: MAX_HISTORIC_WEIGHT,
-    tint: "text-indigo-600 dark:text-indigo-400",
-    color: "#4338ca",
+    tint: "text-[#9c3a11] dark:text-[#d98f75]",
+    color: HISTORIC_COLOR.light,
     overlay: "historic",
   },
   {
@@ -158,7 +168,7 @@ export const FACTORS: readonly Factor[] = [
     Icon: MdDirectionsCar,
     max: MAX_HIGHWAY_WEIGHT,
     tint: "text-rose-600 dark:text-rose-400",
-    color: "#ef4444",
+    color: HIGHWAY_COLOR.light,
   },
   {
     key: "industrial",
@@ -166,7 +176,7 @@ export const FACTORS: readonly Factor[] = [
     Icon: MdFactory,
     max: MAX_INDUSTRIAL_WEIGHT,
     tint: "text-pink-600 dark:text-pink-400",
-    color: "#db2777",
+    color: INDUSTRIAL_COLOR.light,
     overlay: "industrial",
   },
   {
@@ -174,8 +184,9 @@ export const FACTORS: readonly Factor[] = [
     label: "Avoid hills",
     Icon: MdTerrain,
     max: MAX_HILL_WEIGHT,
-    tint: "text-amber-700 dark:text-amber-500",
-    color: "#b45309",
+    // A lighter night tint, since the summit stop is too dim for text on the dark panel.
+    tint: "text-[#966c5c] dark:text-[#c29684]",
+    color: ELEVATION_SUMMIT_HEX.light,
     overlay: "elevation",
   },
   {
@@ -183,8 +194,8 @@ export const FACTORS: readonly Factor[] = [
     label: "Prefer commercial streets",
     Icon: MdStorefront,
     max: MAX_COMMERCIAL_WEIGHT,
-    tint: "text-violet-600 dark:text-violet-400",
-    color: "#6d28d9",
+    tint: "text-[#8e3eae] dark:text-[#c28bdb]",
+    color: COMMERCIAL_COLOR.light,
     overlay: "commercial",
   },
   {
@@ -212,7 +223,7 @@ export const FACTORS: readonly Factor[] = [
     Icon: PiBoatFill,
     max: MAX_FERRY_WEIGHT,
     tint: "text-blue-600 dark:text-blue-400",
-    color: "#2563eb",
+    color: FERRY_COLOR.light,
     overlay: "ferries",
   },
 ];

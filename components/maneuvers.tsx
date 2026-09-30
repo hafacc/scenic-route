@@ -123,15 +123,15 @@ export function ManeuverList({
         const isPassed = state === "passed";
         const bubbleClass =
           maneuver.kind === "landmark"
-            ? "bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300"
+            ? "bg-[#bd8c1d]/10 text-[#8e6704] dark:bg-[#d7b16d]/15 dark:text-[#d7b16d]"
             : maneuver.kind === "art"
-              ? "bg-fuchsia-50 text-fuchsia-600 dark:bg-fuchsia-500/15 dark:text-fuchsia-300"
+              ? "bg-[#2552aa]/10 text-[#2552aa] dark:bg-[#92b8fd]/15 dark:text-[#92b8fd]"
               : "bg-brand-50 text-brand-600 dark:bg-brand-500/15 dark:text-brand-300";
         const textClass =
           maneuver.kind === "landmark"
-            ? "text-amber-700 dark:text-amber-300"
+            ? "text-[#8e6704] dark:text-[#d7b16d]"
             : maneuver.kind === "art"
-              ? "text-fuchsia-700 dark:text-fuchsia-300"
+              ? "text-[#2552aa] dark:text-[#92b8fd]"
               : "text-slate-700 dark:text-slate-200";
         return (
           <li
