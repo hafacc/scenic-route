@@ -329,7 +329,7 @@ interface MapShellProps {
   onHoverLine?: (index: number | null) => void;
   // Only for a reset the shell makes on its own (leaving the city), not the deck's close button.
   onRoutingReset?: () => void;
-  // On a phone Modes' card fills the bottom, so its overlay keys go under the follow button.
+  // Where the keys sit from `md` up; on a phone always under the toolbar, and above Modes' card.
   legends?: "bottom-left" | "top-left" | "top-left-on-phone";
   // A deck that puts the box in its own card takes the machinery off `ShellDeck`.
   ownSearch?: boolean;
@@ -1654,20 +1654,34 @@ export default function MapShell({
         />
         {controls}
         <FollowToggle active={followLive} onToggle={handleToggleFollow} />
-        {/* Modes puts the keys top-left on a phone, where its card fills the bottom. */}
+        {/* One column under the toolbar, so the keys sit right below the banner whatever its height. */}
         <div
-          className={`pointer-events-none absolute max-w-[70vw] ${
-            legends === "bottom-left"
-              ? "z-[1000] bottom-3 left-3"
-              : // banner is top-16, two lines on a phone
-                `z-[900] left-3 ${banner ? "top-36" : "top-16"} ${
-                  legends === "top-left-on-phone"
-                    ? "md:top-auto md:bottom-3 md:z-[1000]"
-                    : ""
-                }`
+          className={`pointer-events-none absolute inset-x-3 top-16 flex flex-col items-start gap-2 ${
+            legends === "top-left-on-phone"
+              ? "bottom-[calc(50dvh+0.5rem)] md:bottom-[max(0.75rem,env(safe-area-inset-bottom))]"
+              : "bottom-[max(0.75rem,env(safe-area-inset-bottom))]"
           }`}
         >
-          <div className="pointer-events-auto space-y-2">
+          {/* Under the dialogs' 1100, over the map's own chrome. */}
+          {banner ? (
+            <div className="pointer-events-auto relative z-[1050] flex max-w-full shrink-0 items-center gap-3 self-center rounded-2xl bg-slate-900/90 px-4 py-2.5 text-sm font-medium text-white shadow-xl backdrop-blur-md dark:bg-slate-100/95 dark:text-slate-900">
+              <span>{banner}</span>
+              <button
+                type="button"
+                onClick={() => setBanner(null)}
+                aria-label="Dismiss"
+                className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-white/70 hover:bg-white/10 hover:text-white dark:text-slate-500 dark:hover:bg-slate-900/10 dark:hover:text-slate-900"
+              >
+                <FiX />
+              </button>
+            </div>
+          ) : null}
+          {/* Scrolls once the column runs out; the padding keeps the cards' shadows unclipped. */}
+          <div
+            className={`pointer-events-auto relative z-[900] -m-2 min-h-0 max-w-[70vw] space-y-2 overflow-y-auto overscroll-contain p-2 ${
+              legends === "top-left" ? "" : "md:z-[1000] md:mt-auto"
+            }`}
+          >
             {legend ? (
               legend({ city, available })
             ) : (
@@ -1681,20 +1695,6 @@ export default function MapShell({
             )}
           </div>
         </div>
-        {/* Under the dialogs' 1100, over the map's own chrome. */}
-        {banner ? (
-          <div className="absolute inset-x-3 top-16 z-[1050] mx-auto flex w-fit items-center gap-3 rounded-2xl bg-slate-900/90 px-4 py-2.5 text-sm font-medium text-white shadow-xl backdrop-blur-md dark:bg-slate-100/95 dark:text-slate-900">
-            <span>{banner}</span>
-            <button
-              type="button"
-              onClick={() => setBanner(null)}
-              aria-label="Dismiss"
-              className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-white/70 hover:bg-white/10 hover:text-white dark:text-slate-500 dark:hover:bg-slate-900/10 dark:hover:text-slate-900"
-            >
-              <FiX />
-            </button>
-          </div>
-        ) : null}
         {ownSearch ? (
           <SearchControl
             city={city}
