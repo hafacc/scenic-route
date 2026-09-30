@@ -159,12 +159,16 @@ scope.addEventListener("message", (event) => {
   const message = event.data as
     | { type: "overlay-cap"; bytes: number | null }
     | { type: "clear-overlays" }
+    | { type: "release" }
     | { type: "skip-waiting" }
     | undefined;
   if (message?.type === "overlay-cap") {
     event.waitUntil(setOverlayCap(message.bytes));
   } else if (message?.type === "clear-overlays") {
     event.waitUntil(clearOverlays());
+  } else if (message?.type === "release") {
+    // Pages from before #272 offer a reload only when a parked worker answers above their 1.
+    event.ports[0]?.postMessage({ release: 2 });
   } else if (message?.type === "skip-waiting") {
     // Every open page must reload on the hand-over, since activation deletes the shell they import.
     event.waitUntil(scope.skipWaiting());
