@@ -18,6 +18,7 @@ import { ALAMEDA_PLACES } from "./alameda";
 import { featurePages } from "./arcgis";
 import { cachedFile } from "./cache";
 import { writeVarint, zigzag } from "./geometry";
+import { fetchBytes, type HttpRequest } from "./http";
 import { parseWktPoint } from "./socrata";
 
 const PUBLIC_DIR = join(import.meta.dirname, "..", "public");
@@ -27,6 +28,20 @@ const ADDRESS_DIR = join(PUBLIC_DIR, "addresses");
 const MAX_VARINT_BYTES = 5;
 const MAX_ADDRESS_BYTES = 4 * MAX_VARINT_BYTES;
 const REQUEST_TIMEOUT_MS = 300_000;
+const MAX_ATTEMPTS = 4;
+
+// One dropped connection in a minutes-long download shouldn't fail the monthly job.
+function download(name: string): HttpRequest {
+  return {
+    timeoutMs: REQUEST_TIMEOUT_MS,
+    attempts: MAX_ATTEMPTS,
+    onFailedAttempt: ({ error, attemptNumber }) => {
+      console.error(
+        `addresses: ${name}: attempt ${attemptNumber}/${MAX_ATTEMPTS} failed: ${error}`,
+      );
+    },
+  };
+}
 
 export interface AddressRow {
   street: string; // upper case, as the source writes it
@@ -412,7 +427,7 @@ const ALAMEDA_ADDRESS_POINTS: Feed = {
       pageUrl: alamedaPageUrl,
       pageSize: ALAMEDA_PAGE_SIZE,
       cacheName: "addresses.alameda",
-      timeoutMs: REQUEST_TIMEOUT_MS,
+      ...download(ALAMEDA_ADDRESS_POINTS.name),
     });
     for await (const page of pages) {
       for (const feature of page) {
@@ -448,15 +463,9 @@ const CITIES: readonly CityAddresses[] = [
 ];
 
 async function fetchCsv(feed: CsvFeed): Promise<string> {
-  const path = await cachedFile(`addresses.${feed.id}`, feed.url, async () => {
-    const response = await fetch(feed.url, {
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      throw new Error(`${response.status} ${response.statusText}`);
-    }
-    return new Uint8Array(await response.arrayBuffer());
-  });
+  const path = await cachedFile(`addresses.${feed.id}`, feed.url, () =>
+    fetchBytes(feed.url, download(feed.name)),
+  );
   return await readFile(path, "utf-8");
 }
 

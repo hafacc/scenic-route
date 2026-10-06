@@ -1,4 +1,4 @@
-import pRetry, { type RetryContext } from "p-retry";
+import pRetry, { AbortError, type RetryContext } from "p-retry";
 
 // Required: an Overpass mirror 429s an anonymous client on sight.
 export const USER_AGENT =
@@ -60,9 +60,30 @@ async function send(
     signal: timeoutMs === undefined ? null : AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
-    throw new Error(`${url}: ${response.status} ${response.statusText}`);
+    const { status } = response;
+    const error = new Error(`${url}: ${status} ${response.statusText}`);
+    // Only a 408 or a 429 among the 4xx can answer differently next time.
+    const final =
+      status >= 400 && status < 500 && status !== 408 && status !== 429;
+    throw final ? new AbortError(error) : error;
   }
   return response;
+}
+
+// Bun's dropped connection is a TypeError p-retry takes for a bug and won't retry.
+async function receive<Value>(
+  url: string,
+  request: HttpRequest,
+  read: (response: Response) => Promise<Value>,
+): Promise<Value> {
+  try {
+    return await read(await send(url, request));
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(`${url}: ${error.message}`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 export async function fetchJson<Value>(
@@ -72,7 +93,11 @@ export async function fetchJson<Value>(
   const { attempts = 1, check, minTimeoutMs, onFailedAttempt } = request;
   return await pRetry(
     async () => {
-      const value = (await (await send(url, request)).json()) as Value;
+      const value = await receive(
+        url,
+        request,
+        async (response) => (await response.json()) as Value,
+      );
       check?.(value);
       return value;
     },
@@ -86,7 +111,12 @@ export async function fetchBytes(
 ): Promise<Uint8Array> {
   const { attempts = 1, minTimeoutMs, onFailedAttempt } = request;
   return await pRetry(
-    async () => new Uint8Array(await (await send(url, request)).arrayBuffer()),
+    () =>
+      receive(
+        url,
+        request,
+        async (response) => new Uint8Array(await response.arrayBuffer()),
+      ),
     retryLadder(attempts, { minTimeoutMs, onFailedAttempt }),
   );
 }
