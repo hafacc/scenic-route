@@ -19,7 +19,7 @@ const NEIGHBORHOOD_SUFFIX = "-neighborhoods.jsonl";
 const ADDRESS_DIR = join(import.meta.dirname, "..", "public", "addresses");
 
 // Pinned for local runs; the monthly job overrides it, since Overture keeps only two releases.
-const PINNED_RELEASE = "2026-08-19.0";
+const PINNED_RELEASE = "2026-09-23.1";
 const OVERTURE_RELEASE = process.env.OVERTURE_RELEASE || PINNED_RELEASE;
 const OVERTURE_BUCKET = "s3://overturemaps-us-west-2/release";
 const PLACES_PARQUET = `${OVERTURE_BUCKET}/${OVERTURE_RELEASE}/theme=places/type=place/*.parquet`;
@@ -317,7 +317,7 @@ function placesSql(source: Source): string {
   return `WITH outline AS (${outlineSql(source)})
     SELECT
       place.names.primary AS name,
-      place.categories.primary AS category,
+      place.taxonomy.primary AS category,
       ST_Y(place.geometry) AS lat,
       ST_X(place.geometry) AS lng,
       place.addresses[1].freeform AS address,

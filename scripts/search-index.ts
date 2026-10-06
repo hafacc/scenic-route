@@ -79,12 +79,12 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
       "train_station",
       "metro_station",
       "bus_station",
-      "light_rail_and_subway_stations",
+      "light_rail_and_subway_station",
       "airport",
       "airport_terminal",
-      "heliports",
+      "heliport",
       "ferry_service",
-      "public_transportation",
+      "public_transit_facility_or_service",
     ),
   },
   // Named individually: `^park` also matches `parking`, `^garden` matches `gardener`.
@@ -99,7 +99,7 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
       "forest",
       "nature_reserve",
       "botanical_garden",
-      "community_gardens",
+      "community_garden",
       "memorial_park",
       "pier",
     ),
@@ -118,8 +118,8 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
   {
     prominence: 195,
     slug: slugs(
-      "theatre",
-      "theaters_and_performance_venues",
+      "theatre_venue",
+      "performing_arts_venue",
       "playground",
       "dog_park",
       "skate_park",
@@ -127,7 +127,7 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
       "amusement_park",
       "campground",
       "hiking_trail",
-      "mountain_bike_trails",
+      "mountain_bike_trail",
     ),
   },
   // Exact: `school` as a word includes driving schools, and `medical_center` is a walk-in clinic.
@@ -138,8 +138,8 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
       "childrens_hospital",
       "library",
       "post_office",
-      "police_department",
-      "fire_department",
+      "police_station",
+      "fire_station",
       "college_university",
       "university",
       "school",
@@ -156,11 +156,12 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
       "community_center",
     ),
   },
+  // Every faith is now `<faith>_place_of_worship`.
   {
     prominence: 170,
-    slug: slugWords("church", "cathedral", "synagogue", "mosque", "temple"),
+    slug: slugWords("worship"),
   },
-  // Offices. Ahead of the shops because `wholesale_store` would otherwise match `store`.
+  // Offices. Ahead of the shops because `warehouse_club_store` would otherwise match `store`.
   {
     prominence: 40,
     slug: slugWords(
@@ -168,7 +169,6 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
       "contractor",
       "contractors",
       "lawyer",
-      "lawyers",
       "attorney",
       "attorneys",
       "accountant",
@@ -182,7 +182,7 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
       "staffing",
       "wholesale",
       "wholesaler",
-      "wholesalers",
+      "warehouse_club",
       "estate",
       "corporate",
       "courier",
@@ -218,7 +218,6 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
       "barber",
       "gym",
       "spa",
-      "spas",
     ),
   },
 ];
@@ -226,7 +225,7 @@ const PROMINENCE_RULES: readonly { prominence: number; slug: RegExp }[] = [
 // Open-space tiers, which a house number demotes: it means a shop named after the park.
 const AREA_PROMINENCE: readonly number[] = [235, 195];
 
-// Includes `landmark_and_historical_building` on purpose: in NYC it's mostly apartment blocks.
+// Includes `historic_site` on purpose: in NYC it's mostly apartment blocks.
 const DEFAULT_PROMINENCE = 80;
 const STREET_PROMINENCE = 170;
 

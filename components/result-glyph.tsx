@@ -29,7 +29,7 @@ export default function ResultGlyph({ type }: { type: string }) {
   } else if (type === STREET_RESULT_TYPE) {
     return <MdSignpost className={GLYPH} aria-hidden="true" />;
   } else if (type === INDEX_RESULT_TYPE) {
-    // One pin for every place; a glyph per category would be 1,639 of them.
+    // One pin for every place; a glyph per category would be 1,758 of them.
     return <MdOutlinePlace className={GLYPH} aria-hidden="true" />;
   } else {
     return null;
