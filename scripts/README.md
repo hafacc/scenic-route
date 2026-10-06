@@ -3106,6 +3106,7 @@ sheds job pushes its own. `build.yml`'s push trigger ignores both paths, so that
 lint+test run, and the push is never forced: a rejected one re-reads `main`, re-stages the same four
 files on the new tip and commits again. `data/places/` is not in it — that file is the intermediate
 the index is built from, gitignored and re-read rather than stored.
+No run follows that commit, so the job runs `bun test src/search` on the new files before making it.
 
 Monthly rather than daily, and what sets the cadence is **git history, not build time**. Overture has
 published monthly since October 2023, mid-to-late in the month, and the two cities' address files
