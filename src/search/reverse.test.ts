@@ -82,9 +82,9 @@ const NYC_NAMED: readonly Named[] = [
     why: "the lawn you are standing on, not a house number on Fifth Avenue",
   },
   {
-    at: { lat: 40.6602, lng: -73.969 },
-    what: "the middle of Prospect Park",
-    name: "Prospect Park",
+    at: { lat: 40.8547, lng: -73.8158 },
+    what: "deep in Pelham Bay Park",
+    name: "Pelham Bay Park",
     kind: "place",
     why: "and the park itself where nothing smaller is nearer",
   },
