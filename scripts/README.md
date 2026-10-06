@@ -2844,7 +2844,7 @@ has one.
 
 Everything a destination box gets typed at that is not an address: the shops, restaurants, parks,
 schools, stations and landmarks. `bun run update-places` (`scripts/places.ts`) reads them out of
-**Overture Maps**, release **`2026-08-19.0`**, pinned in the script — bumping it is a deliberate act,
+**Overture Maps**, release **`2026-09-23.1`**, pinned in the script — bumping it is a deliberate act,
 because every count below was measured against that release and has to be re-measured with the next.
 The monthly job described under the search index leaves this constant alone and passes it the newest
 release the bucket holds instead, naming that release in the commit it writes: Overture drops a
@@ -2858,7 +2858,7 @@ the index costs seconds rather than another read of the planet. One JSON object 
 | field | |
 | --- | --- |
 | `name` | Overture's `names.primary`, the name on the sign |
-| `category` | Overture's `categories.primary`, or null — 1,639 distinct in New York, 1,297 in San Francisco |
+| `category` | Overture's `taxonomy.primary`, or null — 1,758 distinct in New York, 1,396 in San Francisco |
 | `lat`, `lng` | always present, joined or not |
 | `street` | the **address file's** spelling of the street, or null |
 | `houseNumber` | `{ major, minor, suffix }`, the shape `parseHouseNumber` answers, or null |
@@ -2868,15 +2868,15 @@ struct and the files are spatially ordered, so a DuckDB predicate on it prunes a
 only the ranges holding a city are ever fetched: **both cities read in about twenty-five seconds**, over
 the open internet, with no account. The box is only a prefilter — the outline that decides what is
 in the city is Overture's own `divisions` theme, the `New York` **locality** and the `San Francisco`
-**county** land polygon, read the same way. That is the difference between 533,628 rows in New York's
-box (which holds Newark, Jersey City and Yonkers) and **389,043** in New York. San Francisco's county
+**county** land polygon, read the same way. That is the difference between 627,452 rows in New York's
+box (which holds Newark, Jersey City and Yonkers) and **464,742** in New York. San Francisco's county
 polygon reaches out to the Farallon Islands, so the division is prefiltered by *intersection* with
 the city box rather than containment, or its own box would fail the test.
 
 Places are kept where `confidence >= 0.5` and Overture does not say `permanently_closed`. Below that
 the names stop being things anyone would type — a phone number where the name goes, a half-read
 shopfront — and the cut is the visible choice `MIN_CONFIDENCE` is there to make: it takes New York
-from 389,043 to **309,968** and San Francisco from 57,783 to **49,520**.
+from 464,742 to **362,262** and San Francisco from 73,145 to **61,530**.
 
 ### `data/places/<city>-neighborhoods.jsonl` — the parts of a city (derived, gitignored)
 
@@ -2891,7 +2891,7 @@ the city loses the names most likely to be typed. Two filters run: a name readin
 or `Community District 17` is an administrative unit nobody walks to, and a name filed twice within
 **2 km** is one district written down twice (Herald Square, Union Square, Hayes Valley and Fresh
 Meadows are the four; the next-nearest pair sharing a name is Chelsea against Chelsea, ten kilometers
-apart, and both of those are real). That leaves **368** in New York and **95** in San Francisco.
+apart, and both of those are real). That leaves **368** in New York and **94** in San Francisco.
 
 The join is against `public/addresses/<city>.bin.gz` **as it shipped**, read back and decoded rather
 than re-fetched from the city, so a place joins to the spelling the client will look up or it does
@@ -2917,15 +2917,15 @@ The place's own coordinates settle it: the nearest house of that number wins, an
 `MAX_JOIN_METERS` (1,000 m) away is thrown back. There is no gap in the distances to cut at — 96% of
 matches are within 100 m and the rest tails off — so the number is not tuned to the data; it is the
 distance past which a place and its own front door cannot be the same thing, left wide enough to keep
-a hospital or a campus whose point is a centroid and whose address is a gate. It throws back 3,282
-New York matches and 340 San Francisco ones, the worst of them 50 km out.
+a hospital or a campus whose point is a centroid and whose address is a gate. It throws back 3,839
+New York matches and 396 San Francisco ones, the worst of them 50 km out.
 
-What comes out, on release `2026-08-19.0`:
+What comes out, on release `2026-09-23.1`:
 
 | | in the city | kept | joined | | coordinates only |
 | --- | --- | --- | --- | --- | --- |
-| New York | 389,043 | 309,968 | 256,461 | **82.7%** | 53,507 |
-| San Francisco | 57,783 | 49,520 | 42,781 | **86.4%** | 6,739 |
+| New York | 464,742 | 362,262 | 304,129 | **84.0%** | 58,133 |
+| San Francisco | 73,145 | 61,530 | 53,577 | **87.1%** | 7,953 |
 
 The unjoined are not a failure to fix: parks, beaches and landmarks have no street address and never
 will — Golden Gate Park and the Ferry Building come through with no address line at all — which is
@@ -2952,12 +2952,12 @@ list per token and a table of names and coordinates:
 
 | source | what it contributes |
 | --- | --- |
-| `data/places/<city>.jsonl` | the Overture places, 309,968 in New York and 49,520 in San Francisco |
+| `data/places/<city>.jsonl` | the Overture places, 362,262 in New York and 61,530 in San Francisco |
 | `public/addresses/<city>.bin.gz` | a **street** per ADDR `(name, place)` pair, carrying its ordinal |
 | `public/routing/<city>.bin` | the street names ADDR has none: 2,551 alleys, footbridges and park paths in New York, 701 in San Francisco |
 | `public/subway/<city>.bin` | the stations, merged per complex as the overlay merges them, with the routes they serve |
 | `public/landmarks`, `public/art`, `public/legacy`, `public/dining` | the curated points — designated landmarks, public art, fifty-year-old businesses, outdoor dining |
-| `data/places/<city>-neighborhoods.jsonl` | the parts of the city a reader names instead of a door: 368 in New York, 95 in San Francisco |
+| `data/places/<city>-neighborhoods.jsonl` | the parts of the city a reader names instead of a door: 368 in New York, 94 in San Francisco |
 
 It also reads New York's **borough boundaries** (Socrata `gthc-hcne`, the same rows the land mask is
 built from, through `scripts/land.ts`) to name the borough of the 53,507 places that never joined an
@@ -3078,7 +3078,7 @@ the DISPLAY name's word count — or the coverage term would dock a street for b
 `prominence` is baked so that tuning the ranking is a rebuild rather than a redesign: transit 240,
 parks and plazas 235, museums and attractions 220, theaters and playgrounds 195, designated landmarks
 210, legacy businesses 180, streets and civic buildings 170, public art, neighborhoods and curbside
-transit stops 150, food and retail 120, generic services 80, and the `professional_services` /
+transit stops 150, food and retail 120, generic services 80, and the `professional_service` /
 contractor / LLC tier 40. A place's tier is matched off its Overture slug; a curated point takes its set's. Two rules
 read more than the slug: an open space carrying a **house number** is a storefront named after the
 park rather than the park, and drops to 80; and a station named after the corner it stands on —

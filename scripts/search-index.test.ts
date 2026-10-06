@@ -188,14 +188,12 @@ test("the categories that matter outrank the ones that do not", () => {
     prominenceOf("pizza_restaurant", false),
   );
   expect(prominenceOf("pizza_restaurant", false)).toBeGreaterThan(
-    prominenceOf("health_and_medical", false),
+    prominenceOf("health_care", false),
   );
-  expect(prominenceOf("health_and_medical", false)).toBeGreaterThan(
-    prominenceOf("professional_services", false),
+  expect(prominenceOf("health_care", false)).toBeGreaterThan(
+    prominenceOf("professional_service", false),
   );
-  expect(prominenceOf(null, false)).toBe(
-    prominenceOf("health_and_medical", false),
-  );
+  expect(prominenceOf(null, false)).toBe(prominenceOf("health_care", false));
 });
 
 test("a category is read as words, not as a substring of one", () => {
@@ -208,9 +206,35 @@ test("a category is read as words, not as a substring of one", () => {
   expect(prominenceOf("marketing_agency", false)).toBeLessThan(
     prominenceOf("grocery_store", false),
   );
-  expect(prominenceOf("landmark_and_historical_building", false)).toBe(
-    prominenceOf(null, false),
+  expect(prominenceOf("historic_site", false)).toBe(prominenceOf(null, false));
+});
+
+test("a slug the taxonomy renamed keeps the tier its old name had", () => {
+  const civic = prominenceOf("high_school", false);
+  expect(prominenceOf("christian_place_of_worship", false)).toBe(civic);
+  expect(prominenceOf("jewish_place_of_worship", false)).toBe(civic);
+  expect(prominenceOf("fire_station", false)).toBe(civic);
+  expect(prominenceOf("police_station", false)).toBe(civic);
+  const stage = prominenceOf("playground", false);
+  expect(prominenceOf("theatre_venue", false)).toBe(stage);
+  expect(prominenceOf("performing_arts_venue", false)).toBe(stage);
+  expect(prominenceOf("mountain_bike_trail", false)).toBe(stage);
+  const transit = prominenceOf("train_station", false);
+  expect(prominenceOf("public_transit_facility_or_service", false)).toBe(
+    transit,
   );
+  expect(prominenceOf("light_rail_and_subway_station", false)).toBe(transit);
+  expect(prominenceOf("heliport", false)).toBe(transit);
+  expect(prominenceOf("community_garden", false)).toBe(
+    prominenceOf("park", false),
+  );
+  const office = prominenceOf("professional_service", false);
+  expect(prominenceOf("attorney_or_law_firm", false)).toBe(office);
+  expect(prominenceOf("corporate_or_business_office", false)).toBe(office);
+  expect(prominenceOf("warehouse_club_store", false)).toBe(office);
+  // A plain warehouse was never an office.
+  expect(prominenceOf("warehouse", false)).toBe(prominenceOf(null, false));
+  expect(prominenceOf("spa", false)).toBe(prominenceOf("hotel", false));
 });
 
 test("a park with a house number on it is a business", () => {
@@ -297,7 +321,7 @@ test("one place two sources name is one document, and the curated one is what st
     [
       placeRow({
         name: "Borough Hall",
-        category: "landmark_and_historical_building",
+        category: "historic_site",
         street: "COURT ST",
         houseNumber: parseHouseNumber("312"),
       }),
