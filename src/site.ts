@@ -1,5 +1,4 @@
-// Metadata URLs must be absolute, though every in-app href is relative to the injected basePath.
-import type { Metadata } from "next";
+// Metadata URLs must be absolute, though every in-app href is relative.
 
 export const SITE_URL = "https://scenic.hafa.cc"; // no trailing slash
 export const SITE_NAME = "Scenic Route";
@@ -15,7 +14,29 @@ export function pageUrl(path: string): string {
   return path === "" ? `${SITE_URL}/` : `${SITE_URL}/${path}`;
 }
 
-// Next doesn't deep-merge `openGraph`, `twitter` or `alternates`, so pages must set the whole set.
+// What a page's <head> says about it; every page sets the whole set.
+export interface PageMeta {
+  title: string; // the document's own <title>, which never gains the site name
+  description: string;
+  alternates: { canonical: string };
+  robots?: string; // unset leaves the page indexable
+  openGraph: {
+    type: "website";
+    siteName: string;
+    locale: string;
+    url: string;
+    title: string;
+    description: string;
+    images: { url: string; width: number; height: number; alt: string }[];
+  };
+  twitter: {
+    card: "summary_large_image";
+    title: string;
+    description: string;
+    images: string[];
+  };
+}
+
 export function pageMetadata({
   path,
   title,
@@ -26,11 +47,11 @@ export function pageMetadata({
   title: string;
   description: string;
   absoluteTitle?: boolean;
-}): Metadata {
+}): PageMeta {
   const url = pageUrl(path);
   const fullTitle = absoluteTitle ? title : `${title} · ${SITE_NAME}`;
   return {
-    title: absoluteTitle ? { absolute: title } : title,
+    title,
     description,
     alternates: { canonical: url },
     openGraph: {
@@ -57,6 +78,14 @@ export function pageMetadata({
     },
   };
 }
+
+// The root page's, and what the not-found page inherits all but its title from.
+export const HOME_META: PageMeta = pageMetadata({
+  path: "",
+  title: SITE_TITLE,
+  description: SITE_DESCRIPTION,
+  absoluteTitle: true,
+});
 
 export const SITE_JSON_LD = {
   "@context": "https://schema.org",

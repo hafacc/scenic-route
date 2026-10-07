@@ -119,8 +119,7 @@ export const DEFAULT_MODE_STATE: ModeUrlState = {
   toggles: DEFAULT_TOGGLES,
 };
 
-// An instruction, not state: stripped on arrival (`withoutDestQuery`) so it can't refire;
-// the hash writer can't strip it because it writes nothing until a route exists.
+// An instruction, not state: stripped on arrival (`withoutDestQuery`) so it can't refire or be passed on.
 const DEST_QUERY_KEY = "q";
 
 const COORD_DIGITS = 6; // ~0.1 m
@@ -192,6 +191,10 @@ const MODE_KEYS: readonly string[] = [
   "ferries", // Explorer's gate key, same encoding
 ];
 const VIEW_KEYS: readonly string[] = ["at", "layers", "city"];
+// What a link can say beyond where to look; the hash keeps these current.
+const STATE_KEYS: readonly string[] = [
+  ...new Set([...ROUTE_KEYS, ...MODE_KEYS]),
+];
 
 function round(value: number, digits: number): number {
   return Number(value.toFixed(digits));
@@ -214,8 +217,8 @@ function parsePoint(text: string | null): LatLng | null {
   if (rest.length > 0) {
     return null;
   }
-  const lat = Number(latText);
-  const lng = Number(lngText);
+  const lat = readNumber(latText);
+  const lng = readNumber(lngText);
   if (
     !Number.isFinite(lat) ||
     !Number.isFinite(lng) ||
@@ -227,18 +230,32 @@ function parsePoint(text: string | null): LatLng | null {
   return { lat, lng };
 }
 
+// NaN for a blank, which `Number` would read as zero.
+function readNumber(text: string | null | undefined): number {
+  return text == null || text.trim() === "" ? Number.NaN : Number(text);
+}
+
 // A number within bounds, or the default when the key is absent or unreadable.
-function parseNumber(
+function parseNumber<Fallback extends number | null>(
   text: string | null,
   min: number,
   max: number,
-  fallback: number,
-): number {
-  if (text === null) {
-    return fallback;
-  }
-  const value = Number(text);
+  fallback: Fallback,
+): number | Fallback {
+  const value = readNumber(text);
   return Number.isFinite(value) ? clamp(value, min, max) : fallback;
+}
+
+// A day the calendar has, since the pattern alone lets "2026-13-45" roll over into next year.
+function parseDay(text: string | null): string | null {
+  if (text === null || !DAY_PATTERN.test(text)) {
+    return null;
+  }
+  const [year, month, day] = text.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+    ? text
+    : null;
 }
 
 function parseChoice<Value extends string>(
@@ -253,15 +270,13 @@ function decodePlace(
   params: URLSearchParams,
   defaults: PlaceUrlState,
 ): PlaceUrlState {
-  const hour = params.get("time");
-  const day = params.get("date");
   return {
     start: parsePoint(params.get("from")) ?? defaults.start,
     dest: parsePoint(params.get("to")) ?? defaults.dest,
     pin: parsePoint(params.get("pin")) ?? defaults.pin,
-    customHour:
-      hour === null ? defaults.customHour : parseNumber(hour, 0, 24, 12),
-    customDay: day !== null && DAY_PATTERN.test(day) ? day : defaults.customDay,
+    // An unreadable time or day pins nothing, as an absent one does.
+    customHour: parseNumber(params.get("time"), 0, 24, defaults.customHour),
+    customDay: parseDay(params.get("date")) ?? defaults.customDay,
   };
 }
 
@@ -294,7 +309,7 @@ function parseIndex(
   if (text === null) {
     return fallback;
   } else {
-    const index = Number(text);
+    const index = readNumber(text);
     return Number.isInteger(index) && index >= 0 ? index : fallback;
   }
 }
@@ -319,8 +334,7 @@ export function decodeRoute(
   weights.allowSheds = params.has("sheds")
     ? params.get("sheds") !== "0"
     : defaults.weights.allowSheds;
-  // Presence is the signal: `crossings=0` (before the flag was inverted) and `crossings=1` both
-  // mean free; the value only rejects strings neither encoder wrote.
+  // Presence is the signal: `crossings=0` (written before the flag was inverted) and `crossings=1` both mean free.
   const crossings = params.get("crossings");
   weights.allowCrossings =
     crossings === "0" || crossings === "1"
@@ -456,7 +470,7 @@ export function formatHash(params: URLSearchParams): string {
 // Keeps foreign keys like the About flag or a future version's.
 export function replaceOwnKeys(hash: string, next: URLSearchParams): string {
   const params = hashParams(hash);
-  for (const key of [...ROUTE_KEYS, ...MODE_KEYS, ...VIEW_KEYS]) {
+  for (const key of [...STATE_KEYS, ...VIEW_KEYS]) {
     params.delete(key);
   }
   for (const [key, value] of next) {
@@ -465,7 +479,25 @@ export function replaceOwnKeys(hash: string, next: URLSearchParams): string {
   return formatHash(params);
 }
 
-// The page's own path keeps the basePath the Pages deploy injects.
+// The keys the link reader understands, in one order, so two hashes compare whatever else they carry.
+export function linkState(hash: string): string {
+  const params = hashParams(hash);
+  const own = new URLSearchParams();
+  for (const key of [...STATE_KEYS, ...VIEW_KEYS]) {
+    for (const value of params.getAll(key)) {
+      own.append(key, value);
+    }
+  }
+  return own.toString();
+}
+
+// Whether a hash says more than where to look.
+export function carriesState(hash: string): boolean {
+  const params = hashParams(hash);
+  return STATE_KEYS.some((key) => params.has(key));
+}
+
+// Built on the page's own path, so a link shared from /explorer opens there.
 export function shareUrl(
   page: { origin: string; pathname: string; search: string },
   params: URLSearchParams,

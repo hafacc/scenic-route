@@ -1,5 +1,3 @@
-"use client";
-
 import {
   DEFAULT_MODE,
   DEFAULT_TOGGLES,
@@ -31,7 +29,7 @@ export interface Settings {
   allowFerries: boolean;
   allowSheds: boolean;
   allowCrossings: boolean;
-  // Empty is the table's order in src/routing/factors.tsx.
+  // Empty is the table's order in src/routing/factors.ts.
   factorOrder: readonly FactorKey[];
   // Hidden factors still price the route.
   hiddenFactors: readonly FactorKey[];

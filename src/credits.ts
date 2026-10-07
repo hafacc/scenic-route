@@ -164,4 +164,11 @@ export const SHARED_SOURCES: readonly DataSource[] = [
     label: "Map rendering",
     detail: "Leaflet (BSD-2-Clause) and protomaps-leaflet",
   },
+  // Game Icons' CC BY names its author; the MIT and Apache sets ask that their texts be carried.
+  {
+    label: "Icons",
+    detail:
+      "Feather, Phosphor, Bootstrap and Flat Color Icons (MIT), Material Design icons (Apache-2.0), Simple Icons (CC0), and Game Icons by Delapouite (CC BY 3.0) — NOTICE",
+    license: "licenses/icons-NOTICE.txt",
+  },
 ];

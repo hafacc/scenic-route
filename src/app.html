@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f172a" />
+    <link rel="icon" href="%sveltekit.assets%/icon.svg" sizes="any" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="%sveltekit.assets%/apple-icon.png" sizes="180x180" type="image/png" />
+    %sveltekit.head%
+  </head>
+  <!-- data-sveltekit-reload: the links between pages are plain <a href> and stay full page loads. -->
+  <body
+    data-sveltekit-reload
+    class="h-full bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100"
+  >
+    <!-- Before paint, and kept in step with src/theme/choice.ts by hand. -->
+    <script>
+      {
+        let stored = null;
+        // Storage can be blocked, which leaves the system preference, as it does there.
+        try {
+          stored = localStorage.getItem("theme");
+        } catch {}
+        const theme =
+          stored === "light" || stored === "dark"
+            ? stored
+            : matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+        const root = document.documentElement;
+        root.classList.remove("light", "dark");
+        root.classList.add(theme);
+        root.style.colorScheme = theme;
+      }
+    </script>
+    <!-- Its own element, so what a browser extension adds to the body is not mistaken for the app. -->
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

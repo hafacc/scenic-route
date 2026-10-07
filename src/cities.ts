@@ -118,7 +118,7 @@ export function cityById(id: string | null): City | null {
   return CITIES.find((city) => city.id === id) ?? null;
 }
 
-// For non-React modules; exactly one city is live at a time, so a global beats threading a parameter.
+// For modules outside the components; exactly one city is live at a time, so a global beats threading a parameter.
 let active: City = DEFAULT_CITY;
 
 export function setActiveCity(city: City): void {

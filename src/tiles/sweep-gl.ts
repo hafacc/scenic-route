@@ -1,5 +1,3 @@
-// biome-ignore-all lint/correctness/useHookAtTopLevel: gl.useProgram is WebGL, not a React hook
-
 import type { ShadeParams, TileCoords } from "./protocol";
 import {
   castBases,

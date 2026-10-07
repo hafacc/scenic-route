@@ -1,4 +1,4 @@
-// Runs after `next build`, since the precache needs the export's hashed chunk names.
+// Runs after `vite build`, since the precache needs the export's hashed chunk names.
 // Overwrites the committed no-cache stub public/sw.js, which lets dev register a worker safely.
 
 import { execFileSync } from "node:child_process";
@@ -12,9 +12,9 @@ import manifest from "../src/tree-cover/manifest.json";
 const ROOT = join(import.meta.dirname, "..");
 const OUT = join(ROOT, "out");
 
-// `_next/static/` is taken whole: filtering it risks missing a chunk a cold offline start needs.
+// `_app/` is taken whole: filtering it risks missing a chunk a cold offline start needs.
 const SHELL_FILES = [...APP_PAGES.map((page) => page.file), ...SHELL_EXTRAS];
-const SHELL_DIRS = ["_next/static", "icons"];
+const SHELL_DIRS = ["_app", "icons"];
 
 function exists(path: string): Promise<boolean> {
   return access(path).then(
@@ -36,18 +36,18 @@ async function precacheList(): Promise<string[]> {
   for (const file of SHELL_FILES) {
     const path = join(OUT, file);
     if (!(await exists(path))) {
-      throw new Error(`out/${file} is missing — did \`next build\` finish?`);
+      throw new Error(`out/${file} is missing — did \`vite build\` finish?`);
     }
     found.push(path);
   }
   for (const dir of SHELL_DIRS) {
     const under = await filesUnder(join(OUT, dir));
     if (under.length === 0) {
-      throw new Error(`out/${dir} is empty — did \`next build\` finish?`);
+      throw new Error(`out/${dir} is empty — did \`vite build\` finish?`);
     }
     found.push(...under);
   }
-  // Relative to the worker's scope, so the deploy's basePath need not be known here.
+  // Relative to the worker's scope, which is the site root.
   return found.map((file) => relative(OUT, file).split("\\").join("/")).sort();
 }
 

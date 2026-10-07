@@ -1,5 +1,3 @@
-"use client";
-
 import { watchSettings, writeSettings } from "../firebase";
 import {
   adoptSettings,

@@ -1,5 +1,3 @@
-"use client";
-
 // Measured: NYC at every zoom is ~400 MB of overlay and SF far less. Routing is capped separately.
 
 export interface CoverageOption {

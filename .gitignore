@@ -6,11 +6,11 @@
 # testing
 /coverage
 
-# next.js
-/.next/
+# sveltekit
+/.svelte-kit/
 /out/
 
-# agent notes `next dev` writes, and local agent worktrees
+# local agent notes and agent worktrees
 /AGENTS.md
 /CLAUDE.md
 /.claude/
@@ -84,7 +84,6 @@ firebase.json
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
 
 # throwaway analysis harnesses (belong in the session scratchpad, never the repo)
 /scratchpad/

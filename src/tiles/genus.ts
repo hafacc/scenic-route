@@ -1,4 +1,3 @@
-// biome-ignore-all lint/correctness/useHookAtTopLevel: gl.useProgram is WebGL, not a React hook
 import type { StreetSegment } from "../streets/chunk";
 import { ROAD_OPACITY } from "../theme/palette";
 import { GENUS_COLORS, OTHER_GENUS_ID } from "../tree-cover/genus";

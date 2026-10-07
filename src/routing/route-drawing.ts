@@ -1,4 +1,4 @@
-// Pure geometry, so it's testable away from Leaflet; components/route-layer.tsx paints it.
+// Pure geometry, so it's testable away from Leaflet; components/route-layer.svelte paints it.
 
 import { SUBWAY_COLOR } from "../overlays/colors";
 import type { Subway } from "../subway/format";

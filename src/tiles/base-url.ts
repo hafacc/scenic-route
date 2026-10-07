@@ -1,4 +1,4 @@
-// In a worker a relative URL resolves against the worker script, losing the deploy's basePath.
+// In a worker a relative URL resolves against the worker script, not the page.
 
 let documentBase = "";
 

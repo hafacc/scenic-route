@@ -1,7 +1,7 @@
 export interface AppPage {
-  file: string; // what `next build` writes into out/
+  file: string; // what `vite build` writes into out/
   path: string; // where a link to it lands, relative to the deploy root
-  // Relative: the deploy sits under a basePath the app is never told about.
+  // Relative to the page; every page sits at the site root.
   href: string;
   label: string; // the menu row's words
 }

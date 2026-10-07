@@ -1,0 +1,305 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+/* src/theme/choice.ts sets class="dark" on <html>, not the prefers-color-scheme Tailwind expects. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-brand-50: #ecfdf5;
+  --color-brand-100: #d1fae5;
+  --color-brand-400: #34d399;
+  --color-brand-500: #10b981;
+  --color-brand-600: #059669;
+  --color-brand-700: #047857;
+}
+
+/* In @layer base so an element's own Tailwind focus ring still wins. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-brand-500);
+    outline-offset: 2px;
+  }
+}
+
+/* No transition: Leaflet moves a marker via its transform, so an animated pin slides across the map. */
+.scenic-saved-pin,
+.scenic-search-pin {
+  filter: drop-shadow(0 4px 6px rgb(0 0 0 / 0.25));
+}
+/* Not the search pin: clicking it does nothing, so it must not lift as though it would. */
+.scenic-saved-pin:hover {
+  transform: translateY(-2px) scale(1.05);
+}
+
+.scenic-draft-pin {
+  position: relative;
+  width: 28px;
+  height: 28px;
+}
+.scenic-draft-pin-dot {
+  position: absolute;
+  inset: 8px;
+  border-radius: 9999px;
+  background-color: var(--color-brand-500);
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+}
+.scenic-draft-pin-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background-color: color-mix(
+    in oklab,
+    var(--color-brand-500) 45%,
+    transparent
+  );
+  animation: scenic-pulse 1.8s ease-out infinite;
+}
+@keyframes scenic-pulse {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+.scenic-user-pin {
+  position: relative;
+  width: 28px;
+  height: 28px;
+}
+.scenic-user-pin-dot {
+  position: absolute;
+  inset: 8px;
+  border-radius: 9999px;
+  background-color: #334155; /* slate-700, the route path color */
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+}
+.scenic-user-pin-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background-color: rgb(51 65 85 / 0.45); /* slate-700 */
+  animation: scenic-pulse 1.8s ease-out infinite;
+}
+
+/* Leaflet's default gray shows in the gaps a zoom opens and flashes on a dark map. */
+.leaflet-container {
+  background: transparent;
+}
+
+/* Never darken the map with a filter: inverting a style makes its key lines the least visible. */
+
+/* Blocks pinch-zoom off the map; the viewport meta would make iOS swallow Leaflet's pinch too.
+   `touch-action` intersects up the tree, so the map's own `none` still lets Leaflet handle it. */
+html {
+  touch-action: pan-x pan-y;
+}
+
+/* Viewport-anchored surfaces cap their outer box at 100dvh less offsets; one child list scrolls.
+   `dvh`, not `vh`: mobile `100vh` assumes the URL bar is retracted, so it overflows when shown. */
+.toolbar-menu,
+.toolbar-menu-shell {
+  max-height: calc(100dvh - 60px - env(safe-area-inset-bottom) - 0.75rem);
+}
+.toolbar-menu {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* The shell keeps its own overflow hidden for the corners; whichever child is marked scrolls. */
+.toolbar-menu-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Scrolls sideways rather than wrapping, since a second line would push the map controls around. */
+.chip-row {
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.chip-row::-webkit-scrollbar {
+  display: none;
+}
+.chip-row > * {
+  flex-shrink: 0;
+}
+
+/* Indeterminate: the route search has no measurable progress. */
+.scenic-progress {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 9999px;
+}
+.scenic-progress::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  width: 40%;
+  border-radius: 9999px;
+  background-color: var(--color-brand-600);
+  animation: scenic-progress 1.2s ease-in-out infinite;
+}
+@keyframes scenic-progress {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+.scenic-route-badge {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  border: 2px solid #ffffff;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+}
+
+/* The marker's inline style supplies the line's ring color. */
+.scenic-station-dot {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  border: 2px solid #334155;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+}
+
+/* A change between two stations of a complex, midway along the connector. */
+.scenic-change-dot {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  border: 2px solid #ffffff;
+  background: #334155;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+}
+
+.leaflet-container.scenic-picking,
+.leaflet-container.scenic-picking .leaflet-grab,
+.leaflet-container.scenic-picking .leaflet-interactive {
+  cursor: crosshair;
+}
+
+.scenic-tooltip.leaflet-tooltip {
+  background: rgb(15 23 42 / 0.92);
+  color: #f8fafc;
+  border: none;
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+  max-width: 220px;
+  white-space: normal;
+}
+.scenic-tooltip.leaflet-tooltip::before {
+  border-top-color: rgb(15 23 42 / 0.92);
+}
+
+.scenic-aurora {
+  background:
+    radial-gradient(at 20% 10%, rgb(16 185 129 / 0.18) 0px, transparent 50%),
+    radial-gradient(at 80% 0%, rgb(59 130 246 / 0.15) 0px, transparent 50%),
+    radial-gradient(at 50% 90%, rgb(20 184 166 / 0.18) 0px, transparent 50%),
+    linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+}
+.dark .scenic-aurora,
+:is(.dark) .scenic-aurora {
+  background:
+    radial-gradient(at 20% 10%, rgb(16 185 129 / 0.22) 0px, transparent 50%),
+    radial-gradient(at 80% 0%, rgb(59 130 246 / 0.18) 0px, transparent 50%),
+    radial-gradient(at 50% 90%, rgb(20 184 166 / 0.2) 0px, transparent 50%),
+    linear-gradient(180deg, #0b1220 0%, #0f172a 100%);
+}
+
+.scenic-logo-pin {
+  animation: scenic-logo-bob 2.4s ease-in-out infinite;
+}
+@keyframes scenic-logo-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+/* Not `accent-color`: Chrome turns the unfilled track near-black for a light accent like amber. */
+.scenery-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+.scenery-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--fill) var(--pct),
+    rgb(203 213 225 / 0.7) var(--pct)
+  );
+}
+:is(.dark) .scenery-slider::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    to right,
+    var(--fill) var(--pct),
+    rgb(71 85 105 / 0.7) var(--pct)
+  );
+}
+.scenery-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  width: 16px;
+  margin-top: -5px;
+  border-radius: 9999px;
+  background: var(--fill);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+}
+.scenery-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: rgb(203 213 225 / 0.7);
+}
+:is(.dark) .scenery-slider::-moz-range-track {
+  background: rgb(71 85 105 / 0.7);
+}
+.scenery-slider::-moz-range-progress {
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--fill);
+}
+.scenery-slider::-moz-range-thumb {
+  height: 16px;
+  width: 16px;
+  border: none;
+  border-radius: 9999px;
+  background: var(--fill);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+}

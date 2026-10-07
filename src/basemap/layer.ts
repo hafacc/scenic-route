@@ -1,5 +1,3 @@
-"use client";
-
 import type L from "leaflet";
 import { leafletLayer } from "protomaps-leaflet";
 import { KEEP_BUFFER, tileRatio } from "../tiles/raster";
@@ -28,7 +26,7 @@ let statusChecked = false;
 // protomaps-leaflet ignores the status and decodes the error page, so a 403 surfaces as
 // `Unimplemented type: 7`; wrapping fetch is the only seam, and aborts must still reject as aborts.
 function checkTileStatus(): void {
-  // Next.js evaluates this module on the server too, where there is no map and no fetch to wrap.
+  // Prerendering evaluates this module on the server too, where there is no map and no fetch to wrap.
   if (statusChecked || typeof window === "undefined") {
     return;
   }

@@ -1,5 +1,3 @@
-"use client";
-
 import L from "leaflet";
 import { currentTheme, subscribeTheme } from "../theme/current";
 import type {

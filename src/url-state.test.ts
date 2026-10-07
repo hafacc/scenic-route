@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { DEFAULT_MODE, MODES } from "./modes/modes";
 import { DEFAULT_TREE_WEIGHT, type RouteWeights } from "./routing/cost";
 import {
+  carriesState,
   DEFAULT_MODE_STATE,
   DEFAULT_ROUTE_STATE,
   DEFAULT_WEIGHTS,
@@ -13,6 +14,7 @@ import {
   encodeView,
   formatHash,
   hashParams,
+  linkState,
   type ModeUrlState,
   type RouteUrlState,
   replaceOwnKeys,
@@ -112,7 +114,7 @@ test("a malformed value falls back rather than poisoning the state", () => {
   const decoded = decodeRoute(hashParams("#to=nowhere&tree=lots&time=x"));
   expect(decoded.dest).toBeNull();
   expect(decoded.weights.tree).toBe(DEFAULT_TREE_WEIGHT);
-  expect(decoded.customHour).toBe(12); // "time" was present, so an hour is pinned
+  expect(decoded.customHour).toBeNull(); // an unreadable time pins none
 });
 
 test("out-of-range weights clamp instead of breaking the search", () => {
@@ -306,4 +308,64 @@ test("the bridge weight rides on its own key", () => {
 
   expect(hash).toBe("#bridge=0.75");
   expect(decodeRoute(hashParams(hash)).weights.bridge).toBe(0.75);
+});
+
+test("a blank or unreadable coordinate is no point, not the equator", () => {
+  for (const hash of ["#to=,", "#to=", "#to=,-73.9", "#to=40.7,", "#to= , "]) {
+    expect(decodeRoute(hashParams(hash)).dest).toBeNull();
+  }
+  expect(decodeRoute(hashParams("#from=,&pin=,")).start).toBeNull();
+  expect(decodeRoute(hashParams("#from=,&pin=,")).pin).toBeNull();
+  expect(decodeRoute(hashParams("#to=abc,def")).dest).toBeNull();
+  expect(decodeRoute(hashParams("#to=91,0")).dest).toBeNull();
+  expect(decodeRoute(hashParams("#to=0,181")).dest).toBeNull();
+  // A real point on the equator still reads.
+  expect(decodeRoute(hashParams("#to=0,0")).dest).toEqual({ lat: 0, lng: 0 });
+  // The camera is a point and a zoom, and a blank is neither.
+  expect(decodeView(hashParams("#at=,,14")).camera).toBeNull();
+  expect(decodeView(hashParams("#at=40.7,-73.9,")).camera).toBeNull();
+});
+
+test("a blank weight or card keeps the reader's own, not zero", () => {
+  expect(decodeRoute(hashParams("#tree=")).weights.tree).toBe(
+    DEFAULT_TREE_WEIGHT,
+  );
+  expect(decodeModes(hashParams("#alt=")).alt).toBeNull();
+});
+
+test("an unreadable time pins no time", () => {
+  expect(decodeRoute(hashParams("#time=abc")).customHour).toBeNull();
+  expect(decodeRoute(hashParams("#time=")).customHour).toBeNull();
+  expect(decodeRoute(hashParams("#time=9.5")).customHour).toBe(9.5);
+  // Out of range is still a time, held to the day.
+  expect(decodeRoute(hashParams("#time=30")).customHour).toBe(24);
+});
+
+test("a date the calendar lacks pins no day", () => {
+  expect(decodeRoute(hashParams("#date=2026-13-45")).customDay).toBeNull();
+  expect(decodeRoute(hashParams("#date=2026-02-30")).customDay).toBeNull();
+  expect(decodeRoute(hashParams("#date=2027-02-29")).customDay).toBeNull();
+  expect(decodeRoute(hashParams("#date=2028-02-29")).customDay).toBe(
+    "2028-02-29",
+  );
+  expect(decodeRoute(hashParams("#date=tomorrow")).customDay).toBeNull();
+});
+
+test("link state compares the reader's keys and nothing else", () => {
+  const link = "#from=40.758,-73.9855&to=40.7308,-73.9973&mode=quiet";
+  // A dialog flag, key order and comma escaping change nothing.
+  expect(linkState(`${link}&about`)).toBe(linkState(link));
+  expect(
+    linkState("#mode=quiet&to=40.7308%2C-73.9973&from=40.758,-73.9855"),
+  ).toBe(linkState(link));
+  expect(linkState("#about&settings=offline")).toBe("");
+  expect(linkState("#to=40.73,-73.99")).not.toBe(linkState(link));
+  expect(linkState("#city=sf")).not.toBe("");
+});
+
+test("a hash that only says where to look carries no state", () => {
+  expect(carriesState("#at=40.7,-73.9,14&layers=canopy&city=nyc")).toBe(false);
+  expect(carriesState("#about")).toBe(false);
+  expect(carriesState("#tree=0.5")).toBe(true);
+  expect(carriesState("#mode=quiet&about")).toBe(true);
 });

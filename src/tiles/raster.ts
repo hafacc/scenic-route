@@ -1,5 +1,3 @@
-"use client";
-
 // Tile canvas pixels are what gets the tab killed on iOS; capping ratio 3 at 2 saves 56% of bytes.
 const MAX_RATIO = 2;
 

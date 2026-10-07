@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
   "vcs": {
     "enabled": false,
     "clientKind": "git",
@@ -7,14 +7,13 @@
   },
   "files": {
     "includes": [
-      "app/**/*.ts",
-      "app/**/*.tsx",
-      "app/**/*.css",
+      "**/*.svelte",
       "components/**/*.ts",
-      "components/**/*.tsx",
       "scripts/**/*.ts",
       "src/**/*.ts",
-      "tests/**/*.ts"
+      "src/app.css",
+      "tests/**/*.ts",
+      "vite.config.ts"
     ],
     "ignoreUnknown": false
   },
@@ -37,6 +36,15 @@
   "javascript": {
     "formatter": {
       "quoteStyle": "double"
+    }
+  },
+  "html": {
+    "experimentalFullSupportEnabled": true,
+    "formatter": {
+      "enabled": true
+    },
+    "linter": {
+      "enabled": true
     }
   },
   "css": {

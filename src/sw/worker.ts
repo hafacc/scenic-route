@@ -12,6 +12,7 @@ import {
   dropsMost,
   type Filed,
   fileRequest,
+  freshThenStored,
   isGraph,
   missRequest,
   outdated,
@@ -22,10 +23,9 @@ import {
   shadeKey,
 } from "./policy";
 
-// Owns storage policy only; an offline cache miss rejects rather than answering 404.
-// Built by scripts/build-sw.ts into out/sw.js; the committed public/sw.js is a no-cache dev stub.
+// Storage policy only: an offline miss rejects rather than answering 404; public/sw.js is the no-cache dev stub.
 
-// Replaced at build time; the version is the deploy's git sha, so every deploy gets a new shell.
+// Replaced by scripts/build-sw.ts as it builds out/sw.js; the version is the deploy's git sha, so every deploy gets a new shell.
 declare const SW_VERSION: string;
 declare const SW_PRECACHE: readonly string[];
 declare const SW_STAMPS: Stamps;
@@ -72,8 +72,7 @@ const scope = globalThis as unknown as {
   skipWaiting(): Promise<void>;
 };
 
-// Sized so one city fits (NYC at every zoom is ~400 MB of overlay; routing for both is ~71 MB).
-// The shell is uncapped since losing any of it stops the app opening; OVERLAY_CAP overrides overlay.
+// One city fits (NYC's overlay is ~400 MB, both graphs ~71 MB); the shell is uncapped, and OVERLAY_CAP overrides overlay.
 const CAPS: Partial<Record<Store, number>> = {
   routing: 128 * 1024 * 1024,
   overlay: 1024 * 1024 * 1024,
@@ -286,25 +285,11 @@ scope.addEventListener("fetch", (event) => {
   }
 });
 
-// Turbopack passes worker config in the URL fragment, which a stored Response's URL drops; rewrap it.
 async function serveWorkerScript(event: FetchEventLike): Promise<Response> {
-  const { request } = event;
   const cache = await caches.open(STORES.shell);
-  try {
-    const response = await fetch(request);
-    if (response.ok) {
-      event.waitUntil(cache.put(request, response.clone()));
-    }
-    return response;
-  } catch (error) {
-    const stored = await cache.match(request);
-    if (!stored) {
-      throw error;
-    }
-    return new Response(await stored.blob(), {
-      headers: stored.headers,
-    });
-  }
+  return await freshThenStored(event.request, fetch, cache, (stored) =>
+    event.waitUntil(stored),
+  );
 }
 
 async function serve(event: FetchEventLike, filed: Filed): Promise<Response> {
