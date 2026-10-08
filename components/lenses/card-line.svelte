@@ -4,7 +4,7 @@ import {
   type SummaryOrder,
   summaryNumbers,
   summaryParts,
-} from "../../src/modes/cards";
+} from "../../src/lenses/cards";
 import LegParts from "./leg-parts.svelte";
 
 interface Props {

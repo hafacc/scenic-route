@@ -5,10 +5,10 @@ import {
   PiTreeFill,
 } from "../icons/glyphs";
 import type { IconSpec } from "../icons/types";
-import type { ModeId } from "./modes";
+import type { LensId } from "./lenses";
 
-// Apart from ./modes.ts so the routing worker can read the modes without pulling the glyphs in.
-export const MODE_ICONS: Readonly<Record<ModeId, IconSpec>> = {
+// Apart from ./lenses.ts so the routing worker can read the lenses without pulling the glyphs in.
+export const LENS_ICONS: Readonly<Record<LensId, IconSpec>> = {
   naturalist: { glyph: PiTreeFill },
   rain: { glyph: MdUmbrella },
   historic: { glyph: MdMapsHomeWork },

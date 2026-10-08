@@ -7,29 +7,29 @@ import {
   ferrySummaries,
   rideSummaries,
   visibleChips,
-} from "../../src/modes/cards";
+} from "../../src/lenses/cards";
 import {
-  DEFAULT_MODE,
+  DEFAULT_LENS,
   DEFAULT_TOGGLES,
   effectiveWeights,
   graphFactors,
-  type Mode,
-  type ModeId,
-  modeForCity,
+  type Lens,
+  type LensId,
+  lensForCity,
   type Toggles,
-} from "../../src/modes/modes";
+} from "../../src/lenses/lenses";
 import {
   NO_PLAN,
   type PlanAction,
   type PlanState,
   planClock,
   planReducer,
-} from "../../src/modes/plan-state";
+} from "../../src/lenses/plan-state";
 import {
   clampSelection,
   type EndpointsKey,
   endpointsMoved,
-} from "../../src/modes/selection";
+} from "../../src/lenses/selection";
 import type { OverlayId } from "../../src/overlays/registry";
 import { getResolvedDate } from "../../src/route-time/store";
 import type { PlannedRoute } from "../../src/routing/alternatives";
@@ -41,7 +41,7 @@ import {
   settings as storedSettings,
   updateSettings,
 } from "../../src/settings/store";
-import { decodeModes, type PlaceUrlState } from "../../src/url-state";
+import { decodeLenses, type PlaceUrlState } from "../../src/url-state";
 import GoogleMapsButton from "../google-maps-button.svelte";
 import MapShell from "../map-shell.svelte";
 import type { RouteLine } from "../map-types";
@@ -51,10 +51,10 @@ import type {
   SolveReply,
   SolveRequest,
 } from "../shell-types";
-import ModeLayers from "./layer-list.svelte";
-import ModesControls from "./modes-controls.svelte";
-import ModesPanels from "./modes-panels.svelte";
-import type { ModesState } from "./modes-state";
+import LensLayers from "./layer-list.svelte";
+import LensesControls from "./lenses-controls.svelte";
+import LensesPanels from "./lenses-panels.svelte";
+import type { LensesState } from "./lenses-state";
 import type { CardView } from "./route-cards";
 
 // One shared array before a plan lands, so what derives from it keeps its identity.
@@ -72,7 +72,7 @@ function summaryOf(result: RouteResult): CardSummary {
   };
 }
 
-let modeId = $state.raw<ModeId>(DEFAULT_MODE.id);
+let lensId = $state.raw<LensId>(DEFAULT_LENS.id);
 let toggles = $state.raw<Toggles>(DEFAULT_TOGGLES);
 // By index; null is browsing them all.
 let alt = $state.raw<number | null>(null);
@@ -85,7 +85,7 @@ const landed = $derived(plan.landed);
 const pending = $derived(plan.pending);
 const capturedAt = $derived(plan.capturedAt);
 // Read when the link is, not at first render, since the server render has no settings.
-let hiddenLayers = $state.raw<Partial<Record<ModeId, readonly OverlayId[]>>>(
+let hiddenLayers = $state.raw<Partial<Record<LensId, readonly OverlayId[]>>>(
   {},
 );
 // Only the close takes it away, so emptying a field asks again.
@@ -99,41 +99,41 @@ function recapture(): void {
   });
 }
 
-// Called inside the shell's own deriveds, which is what follows the mode, the switches and the city.
+// Called inside the shell's own deriveds, which is what follows the lens, the switches and the city.
 function weights({ city, available }: RoutingContext): RouteWeights {
-  return effectiveWeights(modeForCity(city, modeId), toggles, available);
+  return effectiveWeights(lensForCity(city, lensId), toggles, available);
 }
 // Each switch replaces the set outright, so the genus overlay's exclusivity holds by construction.
 function activeOverlays({ city }: RoutingContext): ReadonlySet<OverlayId> {
-  const mode = modeForCity(city, modeId);
-  const hidden = hiddenLayers[mode.id] ?? [];
+  const lens = lensForCity(city, lensId);
+  const hidden = hiddenLayers[lens.id] ?? [];
   return new Set<OverlayId>(
-    mode.overlays.filter((overlay) => !hidden.includes(overlay)),
+    lens.overlays.filter((overlay) => !hidden.includes(overlay)),
   );
 }
 function accent({ city }: RoutingContext): string {
-  return modeForCity(city, modeId).color;
+  return lensForCity(city, lensId).color;
 }
 
-// Keyed on the resolved mode, not the stored id, which may name a mode this city doesn't show.
-function handleToggleLayer(mode: Mode, id: OverlayId): void {
-  const hidden = hiddenLayers[mode.id] ?? [];
+// Keyed on the resolved lens, not the stored id, which may name a lens this city doesn't show.
+function handleToggleLayer(lens: Lens, id: OverlayId): void {
+  const hidden = hiddenLayers[lens.id] ?? [];
   const next = hidden.includes(id)
     ? hidden.filter((entry) => entry !== id)
     : [...hidden, id];
-  const layers = { ...hiddenLayers, [mode.id]: next };
+  const layers = { ...hiddenLayers, [lens.id]: next };
   hiddenLayers = layers;
-  updateSettings({ modeLayers: layers });
+  updateSettings({ lensLayers: layers });
 }
 
-function hiddenIn(mode: Mode): ReadonlySet<OverlayId> {
-  return new Set(hiddenLayers[mode.id] ?? []);
+function hiddenIn(lens: Lens): ReadonlySet<OverlayId> {
+  return new Set(hiddenLayers[lens.id] ?? []);
 }
 
 // The cards wait for the whole sweep, since their colors and bold chips depend on the set.
 async function solve(request: SolveRequest): Promise<SolveReply | null> {
   // Held from the ask, since the reader may switch before the sweep lands.
-  const asked = modeId;
+  const asked = lensId;
   const id = ++planId;
   dispatch({ kind: "started", id, graph: request.graph });
   const started = performance.now();
@@ -167,7 +167,7 @@ async function solve(request: SolveRequest): Promise<SolveReply | null> {
     landed: {
       id,
       graph: request.graph,
-      mode: modeForCity(request.city, asked),
+      lens: lensForCity(request.city, asked),
       available: graphFactors(request.graph),
       plan: swept,
     },
@@ -181,14 +181,14 @@ const routes = $derived(landed?.plan.routes ?? NO_ROUTES);
 // Cards run most scenic first (`CARD_ORDER`), so the first is the route already on the map.
 const highlighted = $derived(hovered ?? alt ?? 0);
 
-const colors = $derived(landed ? cardColors(landed.mode, routes) : []);
+const colors = $derived(landed ? cardColors(landed.lens, routes) : []);
 
 const cards = $derived.by((): CardView[] => {
   if (!landed) {
     return [];
   }
   const chips = visibleChips(
-    chipFactors(landed.mode, landed.available),
+    chipFactors(landed.lens, landed.available),
     routes.map((route) => route.result.factors),
   );
   return routes.map((route, index) => ({
@@ -238,11 +238,11 @@ const chosen = $derived.by(
   },
 );
 
-function handleMode(id: ModeId): void {
-  modeId = id;
+function handleLens(id: LensId): void {
+  lensId = id;
   alt = null;
   recapture();
-  updateSettings({ mode: id });
+  updateSettings({ lens: id });
 }
 
 function handleToggles(next: Toggles): void {
@@ -286,31 +286,31 @@ function handleEndpoints(key: EndpointsKey | null): boolean {
 // A key in the link wins; a missing one keeps what the reader last chose.
 function handleLink(params: URLSearchParams): PlaceUrlState {
   const {
-    mode: storedMode,
+    lens: storedLens,
     toggles: storedToggles,
-    modeLayers,
+    lensLayers,
   } = storedSettings();
-  const linked = decodeModes(params, {
+  const linked = decodeLenses(params, {
     start: null,
     dest: null,
     pin: null,
     customHour: null,
     customDay: null,
-    mode: storedMode,
+    lens: storedLens,
     alt: null,
     toggles: storedToggles,
   });
-  modeId = linked.mode;
+  lensId = linked.lens;
   toggles = linked.toggles;
   alt = linked.alt;
-  hiddenLayers = modeLayers;
+  hiddenLayers = lensLayers;
   return linked;
 }
 
 // Getters, so both slots follow the fields.
-const deck: ModesState = {
-  get modeId() {
-    return modeId;
+const deck: LensesState = {
+  get lensId() {
+    return lensId;
   },
   get toggles() {
     return toggles;
@@ -332,7 +332,7 @@ const deck: ModesState = {
   get directionsOpen() {
     return directionsOpen;
   },
-  onMode: handleMode,
+  onLens: handleLens,
   onToggles: handleToggles,
   onSelect: handleSelect,
   onHover: handleHover,
@@ -349,7 +349,7 @@ function exportable(shell: ShellDeck): boolean {
 {#snippet controls(
   shell: ShellDeck,
 )}
-  <ModesControls {shell} {deck} />
+  <LensesControls {shell} {deck} />
 {/snippet}
 
 {#snippet panels(
@@ -366,7 +366,7 @@ function exportable(shell: ShellDeck): boolean {
       />
     {/if}
   {/snippet}
-  <ModesPanels
+  <LensesPanels
     {shell}
     {deck}
     exportAction={exportable(shell) ? exportButton : null}
@@ -376,11 +376,11 @@ function exportable(shell: ShellDeck): boolean {
 {#snippet legend(
   context: RoutingContext,
 )}
-  <ModeLayers
+  <LensLayers
     city={context.city}
-    overlays={modeForCity(context.city, modeId).overlays}
-    hidden={hiddenIn(modeForCity(context.city, modeId))}
-    onToggle={(id) => handleToggleLayer(modeForCity(context.city, modeId), id)}
+    overlays={lensForCity(context.city, lensId).overlays}
+    hidden={hiddenIn(lensForCity(context.city, lensId))}
+    onToggle={(id) => handleToggleLayer(lensForCity(context.city, lensId), id)}
   />
 {/snippet}
 

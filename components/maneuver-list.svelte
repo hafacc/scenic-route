@@ -6,8 +6,8 @@ import {
 } from "../src/routing/directions";
 import type { NavProgress } from "../src/routing/nav-progress";
 import Icon from "./icon.svelte";
+import LinePill from "./lenses/line-pill.svelte";
 import { maneuverIcon, maneuverState } from "./maneuvers";
-import LinePill from "./modes/line-pill.svelte";
 
 interface Props {
   directions: Maneuver[];

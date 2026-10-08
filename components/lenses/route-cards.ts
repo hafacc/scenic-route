@@ -1,5 +1,5 @@
 // What the route cards share that is not a component.
-import type { CardSummary, ChipView } from "../../src/modes/cards";
+import type { CardSummary, ChipView } from "../../src/lenses/cards";
 
 export interface CardView {
   summary: CardSummary;

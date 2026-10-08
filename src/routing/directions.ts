@@ -1,4 +1,4 @@
-import type { RideSummary } from "../modes/cards";
+import type { RideSummary } from "../lenses/cards";
 import {
   doorStreet,
   edgeName,

@@ -184,7 +184,7 @@ export interface RouteWeights {
   shelter: number; // preference for cover overhead in the rain: decks and canopy
   transit: number;
   allowFerries: boolean;
-  // Not a reader's switch: the planner turns it off so a no-ride mode still offers the walk.
+  // Not a reader's switch: the planner turns it off so a no-ride lens still offers the walk.
   allowTransit: boolean;
   allowSheds: boolean; // false routes around scaffolding, at a large per-meter penalty
   // False prices every crossing far above its time, which stops a route zigzagging for the shady side.

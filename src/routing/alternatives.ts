@@ -33,7 +33,7 @@ export interface PlannedRoute {
   result: RouteResult;
   // Absolute, not a share, so a trip spent mostly getting there earns only what it walks.
   scenicScore: number;
-  // Null where nothing stands out, or where the mode asks for one factor: the UI ramps instead.
+  // Null where nothing stands out, or where the lens asks for one factor: the UI ramps instead.
   colorFactor: FactorKey | null;
 }
 
@@ -544,7 +544,7 @@ export async function planRoutes(input: PlanInput): Promise<Plan> {
   // The baseline's transit penalty can leave it walking from a station, so also ask with nothing priced.
   await run({ ...scaled(0), transit: 0 });
 
-  // A mode of penalties alone moves the bound not at all, so the weight scale is stepped instead.
+  // A lens of penalties alone moves the bound not at all, so the weight scale is stepped instead.
   const openBound = minMultiplier(scaled(0));
   const fullBound = minMultiplier(weights);
   const boundAt = (scale: number): number => minMultiplier(scaled(scale));
@@ -594,7 +594,7 @@ export async function planRoutes(input: PlanInput): Promise<Plan> {
   if (!weights.allowSheds) {
     await run({ ...weights, allowSheds: true });
   }
-  // A mode pricing no ride (Rain) never backs off into walking, so ask for the walk outright.
+  // A lens pricing no ride (Rain) never backs off into walking, so ask for the walk outright.
   if (
     weights.transit === 0 &&
     weights.allowTransit &&

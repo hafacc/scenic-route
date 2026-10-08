@@ -9,13 +9,13 @@ import {
   FiSearch,
   MdOutlineDirectionsWalk,
 } from "../../src/icons/glyphs";
-import { cardLine, summaryLegs } from "../../src/modes/cards";
+import { cardLine, summaryLegs } from "../../src/lenses/cards";
 import type {
   FactorAvailability,
-  Mode,
-  ModeId,
+  Lens,
+  LensId,
   Toggles,
-} from "../../src/modes/modes";
+} from "../../src/lenses/lenses";
 import type { Maneuver } from "../../src/routing/directions";
 import type { NavProgress } from "../../src/routing/nav-progress";
 import EndpointFields from "../endpoint-fields.svelte";
@@ -31,24 +31,24 @@ import CardLine from "./card-line.svelte";
 import CardNumber from "./card-number.svelte";
 import CloseButton from "./close-button.svelte";
 import GhostCard from "./ghost-card.svelte";
-import ModeBar from "./mode-bar.svelte";
+import LensBar from "./lens-bar.svelte";
 import type { CardView } from "./route-cards";
 import RouteCards from "./route-cards.svelte";
 
 const HEADER_BUTTON =
   "grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-slate-100 disabled:pointer-events-none disabled:opacity-40 dark:hover:bg-slate-700";
 
-const MODES_CARD = `${PANEL_CARD} relative gap-2 p-3`;
+const LENSES_CARD = `${PANEL_CARD} relative gap-2 p-3`;
 
 // Half the screen, since a taller card hides the lines its rows describe.
 const PHONE_HALF =
   "max-md:max-h-[calc(50dvh-max(0.75rem,env(safe-area-inset-bottom)))]!";
 
-interface ModesPanelProps {
+interface LensesPanelProps {
   city: City;
-  modes: readonly Mode[];
-  mode: Mode;
-  onMode: (id: ModeId) => void;
+  lenses: readonly Lens[];
+  lens: Lens;
+  onLens: (id: LensId) => void;
   toggles: Toggles;
   available: FactorAvailability;
   onToggles: (toggles: Toggles) => void;
@@ -93,9 +93,9 @@ interface ModesPanelProps {
 // Nothing else may live in this row, or the header would start lower than the other states.
 const {
   city,
-  modes,
-  mode,
-  onMode,
+  lenses,
+  lens,
+  onLens,
   toggles,
   available,
   onToggles,
@@ -134,7 +134,7 @@ const {
   onArmStart,
   onArmDest,
   onToggleMinimize,
-}: ModesPanelProps = $props();
+}: LensesPanelProps = $props();
 
 const next = $derived(
   status === "ready" && progress && directions
@@ -179,12 +179,12 @@ const liveText = $derived(
 );
 </script>
 
-{#snippet modeBar()}
-  <ModeBar {modes} mode={mode.id} {toggles} {available} {onMode} {onToggles} />
+{#snippet lensBar()}
+  <LensBar {lenses} lens={lens.id} {toggles} {available} {onLens} {onToggles} />
 {/snippet}
 
 {#snippet header()}
-  <div class="flex shrink-0 items-center md:hidden">{@render modeBar()}</div>
+  <div class="flex shrink-0 items-center md:hidden">{@render lensBar()}</div>
 {/snippet}
 
 {#snippet corner()}
@@ -204,19 +204,19 @@ const liveText = $derived(
     {next}
     {fallback}
     {header}
-    cardClassName={MODES_CARD}
+    cardClassName={LENSES_CARD}
     {corner}
     onExpand={onToggleMinimize}
   />
 {:else}
   <div class={PANEL_WRAPPER}>
-    <div class={`${MODES_CARD} ${routing ? PHONE_HALF : ""}`}>
+    <div class={`${LENSES_CARD} ${routing ? PHONE_HALF : ""}`}>
       {#if routing}
         <CloseButton {onClose} />
       {/if}
       <!-- The switches don't scroll: hiding them hides the state the routes were found under. -->
       <div class="flex shrink-0 items-center md:hidden">
-        {@render modeBar()}
+        {@render lensBar()}
       </div>
 
       {#if chosen}
@@ -339,7 +339,7 @@ const liveText = $derived(
             <span class="scenic-progress"></span>
           {/if}
           {#if ghost}
-            <GhostCard line={planningLine} color={mode.color} />
+            <GhostCard line={planningLine} color={lens.color} />
           {:else}
             <RouteCards
               {cards}

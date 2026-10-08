@@ -1,5 +1,5 @@
 <script lang="ts">
-import { type CardSummary, summaryLegs } from "../../src/modes/cards";
+import { type CardSummary, summaryLegs } from "../../src/lenses/cards";
 import LegParts from "./leg-parts.svelte";
 
 interface Props {

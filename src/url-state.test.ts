@@ -1,21 +1,21 @@
 import { expect, test } from "bun:test";
-import { DEFAULT_MODE, MODES } from "./modes/modes";
+import { DEFAULT_LENS, LENSES } from "./lenses/lenses";
 import { DEFAULT_TREE_WEIGHT, type RouteWeights } from "./routing/cost";
 import {
   carriesState,
-  DEFAULT_MODE_STATE,
+  DEFAULT_LENS_STATE,
   DEFAULT_ROUTE_STATE,
   DEFAULT_WEIGHTS,
-  decodeModes,
+  decodeLenses,
   decodeRoute,
   decodeView,
-  encodeModes,
+  encodeLenses,
   encodeRoute,
   encodeView,
   formatHash,
   hashParams,
+  type LensUrlState,
   linkState,
-  type ModeUrlState,
   type RouteUrlState,
   replaceOwnKeys,
   shareUrl,
@@ -161,125 +161,128 @@ test("both spellings of the crossings key mean crossings are free", () => {
   expect(decode("#at=40.7,-74,15")).toBe(false); // absent: the default, priced
 });
 
-const modeRoundTrip = (state: ModeUrlState): ModeUrlState =>
-  decodeModes(hashParams(formatHash(encodeModes(state))));
+const lensRoundTrip = (state: LensUrlState): LensUrlState =>
+  decodeLenses(hashParams(formatHash(encodeLenses(state))));
 
-test("a fresh Modes session writes no keys either", () => {
-  expect(formatHash(encodeModes(DEFAULT_MODE_STATE))).toBe("");
+test("a fresh Lenses session writes no keys either", () => {
+  expect(formatHash(encodeLenses(DEFAULT_LENS_STATE))).toBe("");
 });
 
-test("every Modes field survives a round trip", () => {
-  const state: ModeUrlState = {
+test("every Lenses field survives a round trip", () => {
+  const state: LensUrlState = {
     start: { lat: 40.712776, lng: -74.005974 },
     dest: { lat: 40.785091, lng: -73.968285 },
     pin: { lat: 40.741895, lng: -73.989308 },
-    mode: "historic",
+    lens: "historic",
     alt: 2,
     toggles: { sun: "shade", hills: "some", ferries: false },
     customHour: null,
     customDay: null,
   };
-  expect(modeRoundTrip(state)).toEqual(state);
+  expect(lensRoundTrip(state)).toEqual(state);
 });
 
-test("a pinned clock is neither written nor read by Modes", () => {
+test("a pinned clock is neither written nor read by Lenses", () => {
   const pinned = formatHash(
-    encodeModes({
-      ...DEFAULT_MODE_STATE,
+    encodeLenses({
+      ...DEFAULT_LENS_STATE,
       customHour: 14.25,
       customDay: "2026-12-21",
     }),
   );
   expect(pinned).toBe("");
-  const decoded = decodeModes(
+  const decoded = decodeLenses(
     hashParams("#to=40.75,-73.98&time=14&date=2026-12-21"),
   );
   expect(decoded.customHour).toBeNull();
   expect(decoded.customDay).toBeNull();
 });
 
-test("only the Modes fields off their defaults are written", () => {
+test("only the Lenses fields off their defaults are written", () => {
   const hash = formatHash(
-    encodeModes({
-      ...DEFAULT_MODE_STATE,
-      mode: "rain",
-      toggles: { ...DEFAULT_MODE_STATE.toggles, sun: "sun" },
+    encodeLenses({
+      ...DEFAULT_LENS_STATE,
+      lens: "rain",
+      toggles: { ...DEFAULT_LENS_STATE.toggles, sun: "sun" },
     }),
   );
-  expect(hash).toBe("#mode=rain&sun=sun");
+  expect(hash).toBe("#lens=rain&sun=sun");
 });
 
 // The recipient's settings fill the gaps, so a link pinning a card must pin every key of its plan.
 test("a link that pins a card pins the plan it is a card of", () => {
-  const sent: ModeUrlState = {
-    ...DEFAULT_MODE_STATE,
+  const sent: LensUrlState = {
+    ...DEFAULT_LENS_STATE,
     dest: { lat: 40.785091, lng: -73.968285 },
     alt: 2,
   };
-  const theirs: ModeUrlState = {
-    ...DEFAULT_MODE_STATE,
-    mode: "rain",
+  const theirs: LensUrlState = {
+    ...DEFAULT_LENS_STATE,
+    lens: "rain",
     toggles: { sun: "sun", hills: "some", ferries: false },
   };
-  const opened = decodeModes(hashParams(formatHash(encodeModes(sent))), theirs);
-  expect(opened.mode).toBe(sent.mode);
+  const opened = decodeLenses(
+    hashParams(formatHash(encodeLenses(sent))),
+    theirs,
+  );
+  expect(opened.lens).toBe(sent.lens);
   expect(opened.toggles).toEqual(sent.toggles);
   expect(opened.alt).toBe(2);
 });
 
 test("the ferry gate is spelled the way Explorer spells it", () => {
   const barred = formatHash(
-    encodeModes({
-      ...DEFAULT_MODE_STATE,
-      toggles: { ...DEFAULT_MODE_STATE.toggles, ferries: false },
+    encodeLenses({
+      ...DEFAULT_LENS_STATE,
+      toggles: { ...DEFAULT_LENS_STATE.toggles, ferries: false },
     }),
   );
   expect(barred).toBe("#ferries=0");
-  expect(decodeModes(hashParams(barred)).toggles.ferries).toBe(false);
+  expect(decodeLenses(hashParams(barred)).toggles.ferries).toBe(false);
   expect(decodeRoute(hashParams(barred)).weights.allowFerries).toBe(false);
 });
 
-test("a link written before Modes existed opens the default mode where it points", () => {
-  const decoded = decodeModes(
+test("a link written before Lenses existed opens the default lens where it points", () => {
+  const decoded = decodeLenses(
     hashParams("#from=40.7,-74&to=40.75,-73.98&tree=0.9&shade=-1&crossings=1"),
   );
-  expect(decoded.mode).toBe(DEFAULT_MODE.id);
-  expect(decoded.toggles).toEqual(DEFAULT_MODE_STATE.toggles);
+  expect(decoded.lens).toBe(DEFAULT_LENS.id);
+  expect(decoded.toggles).toEqual(DEFAULT_LENS_STATE.toggles);
   expect(decoded.dest).toEqual({ lat: 40.75, lng: -73.98 });
 });
 
-test("a mode or a switch this build does not know falls back rather than breaking", () => {
-  const decoded = decodeModes(
-    hashParams("#mode=cartographer&sun=moonlight&hills=lots&alt=third"),
+test("a lens or a switch this build does not know falls back rather than breaking", () => {
+  const decoded = decodeLenses(
+    hashParams("#lens=cartographer&sun=moonlight&hills=lots&alt=third"),
   );
-  expect(decoded.mode).toBe(DEFAULT_MODE.id);
-  expect(decoded.toggles).toEqual(DEFAULT_MODE_STATE.toggles);
+  expect(decoded.lens).toBe(DEFAULT_LENS.id);
+  expect(decoded.toggles).toEqual(DEFAULT_LENS_STATE.toggles);
   expect(decoded.alt).toBeNull();
 });
 
-test("a missing Modes key takes the reader's own default", () => {
-  const stored: ModeUrlState = {
-    ...DEFAULT_MODE_STATE,
-    mode: "streetlife",
+test("a missing Lenses key takes the reader's own default", () => {
+  const stored: LensUrlState = {
+    ...DEFAULT_LENS_STATE,
+    lens: "streetlife",
     toggles: { sun: "shade", hills: "none", ferries: false },
   };
-  const decoded = decodeModes(hashParams("#to=40.75,-73.98"), stored);
-  expect(decoded.mode).toBe("streetlife");
+  const decoded = decodeLenses(hashParams("#to=40.75,-73.98"), stored);
+  expect(decoded.lens).toBe("streetlife");
   expect(decoded.toggles).toEqual(stored.toggles);
 });
 
-test("every mode's id survives its own link", () => {
-  for (const mode of MODES) {
+test("every lens's id survives its own link", () => {
+  for (const lens of LENSES) {
     const hash = formatHash(
-      encodeModes({ ...DEFAULT_MODE_STATE, mode: mode.id }),
+      encodeLenses({ ...DEFAULT_LENS_STATE, lens: lens.id }),
     );
-    expect(decodeModes(hashParams(hash)).mode, mode.id).toBe(mode.id);
+    expect(decodeLenses(hashParams(hash)).lens, lens.id).toBe(lens.id);
   }
 });
 
-test("a rewrite clears the Modes keys as well as the route's", () => {
+test("a rewrite clears the Lenses keys as well as the route's", () => {
   const hash = replaceOwnKeys(
-    "#mode=rain&sun=sun&hills=none&alt=1&about",
+    "#lens=rain&sun=sun&hills=none&alt=1&about",
     encodeRoute(DEFAULT_ROUTE_STATE),
   );
   expect(hash).toBe("#about");
@@ -297,9 +300,9 @@ test("a share link is the page it was made on, plus the hash", () => {
   expect(
     shareUrl(
       { ...page, pathname: "/" },
-      encodeModes({ ...DEFAULT_MODE_STATE, mode: "rain" }),
+      encodeLenses({ ...DEFAULT_LENS_STATE, lens: "rain" }),
     ),
-  ).toBe("https://scenic.hafa.cc/#mode=rain");
+  ).toBe("https://scenic.hafa.cc/#lens=rain");
 });
 
 test("the bridge weight rides on its own key", () => {
@@ -330,7 +333,7 @@ test("a blank weight or card keeps the reader's own, not zero", () => {
   expect(decodeRoute(hashParams("#tree=")).weights.tree).toBe(
     DEFAULT_TREE_WEIGHT,
   );
-  expect(decodeModes(hashParams("#alt=")).alt).toBeNull();
+  expect(decodeLenses(hashParams("#alt=")).alt).toBeNull();
 });
 
 test("an unreadable time pins no time", () => {
@@ -352,11 +355,11 @@ test("a date the calendar lacks pins no day", () => {
 });
 
 test("link state compares the reader's keys and nothing else", () => {
-  const link = "#from=40.758,-73.9855&to=40.7308,-73.9973&mode=quiet";
+  const link = "#from=40.758,-73.9855&to=40.7308,-73.9973&lens=quiet";
   // A dialog flag, key order and comma escaping change nothing.
   expect(linkState(`${link}&about`)).toBe(linkState(link));
   expect(
-    linkState("#mode=quiet&to=40.7308%2C-73.9973&from=40.758,-73.9855"),
+    linkState("#lens=quiet&to=40.7308%2C-73.9973&from=40.758,-73.9855"),
   ).toBe(linkState(link));
   expect(linkState("#about&settings=offline")).toBe("");
   expect(linkState("#to=40.73,-73.99")).not.toBe(linkState(link));
@@ -367,5 +370,5 @@ test("a hash that only says where to look carries no state", () => {
   expect(carriesState("#at=40.7,-73.9,14&layers=canopy&city=nyc")).toBe(false);
   expect(carriesState("#about")).toBe(false);
   expect(carriesState("#tree=0.5")).toBe(true);
-  expect(carriesState("#mode=quiet&about")).toBe(true);
+  expect(carriesState("#lens=quiet&about")).toBe(true);
 });

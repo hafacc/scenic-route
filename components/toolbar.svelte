@@ -35,7 +35,7 @@ interface ToolbarProps {
   city: City;
   refreshingClaims: boolean;
   controls: Snippet | null;
-  // Modes routes at now, so it has no clock.
+  // Lenses routes at now, so it has no clock.
   clock: boolean;
   // The other deck, as a menu row; neither page knows the other's URL.
   otherPage: AppPage;

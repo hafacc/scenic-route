@@ -15,7 +15,7 @@ interface Props {
   onToggle: (id: OverlayId) => void;
 }
 
-// Modes has no layers menu, so this key is where a layer is hidden; hiding never changes routing.
+// Lenses has no layers menu, so this key is where a layer is hidden; hiding never changes routing.
 const { city, overlays, hidden, onToggle }: Props = $props();
 
 const theme = useMapTheme();

@@ -16,13 +16,13 @@ import { FACTORS, type FactorKey } from "../routing/factors";
 import type { RoutingGraph } from "../routing/graph";
 import { CANOPY_HEX } from "../theme/palette";
 
-export type ModeId = "naturalist" | "rain" | "historic" | "streetlife";
+export type LensId = "naturalist" | "rain" | "historic" | "streetlife";
 
-export interface Mode {
-  id: ModeId;
+export interface Lens {
+  id: LensId;
   name: string;
   color: string; // chip fill and route color, as a CSS hex
-  // The colors the mode's overlays draw in, which its alternative routes take; day hues.
+  // The colors the lens's overlays draw in, which its alternative routes take; day hues.
   palette: readonly string[];
   overlays: readonly OverlayId[];
   weights: Partial<Record<FactorKey, number>>; // fraction of the factor's max, 0..1
@@ -73,8 +73,8 @@ const SHADE_WEIGHTS: Readonly<Record<Toggles["sun"], number>> = {
   neutral: 0,
 };
 
-// Every mode asks for `bridge: 1`; a city with no span over water bakes it at 0, gating it off.
-export const MODES: readonly Mode[] = [
+// Every lens asks for `bridge: 1`; a city with no span over water bakes it at 0, gating it off.
+export const LENSES: readonly Lens[] = [
   {
     id: "naturalist",
     name: "Naturalist",
@@ -150,14 +150,14 @@ export const MODES: readonly Mode[] = [
   },
 ];
 
-export const DEFAULT_MODE: Mode = MODES[0];
+export const DEFAULT_LENS: Lens = LENSES[0];
 
-export function modeById(id: string): Mode | null {
-  return MODES.find((mode) => mode.id === id) ?? null;
+export function lensById(id: string): Lens | null {
+  return LENSES.find((lens) => lens.id === id) ?? null;
 }
 
-export function isModeId(value: string): value is ModeId {
-  return modeById(value) !== null;
+export function isLensId(value: string): value is LensId {
+  return lensById(value) !== null;
 }
 
 export type FactorAvailability = Readonly<Record<FactorKey, boolean>>;
@@ -219,9 +219,9 @@ const ZERO_FACTORS: Readonly<Record<FactorKey, number>> = Object.fromEntries(
   FACTORS.map(({ key }) => [key, 0]),
 ) as Record<FactorKey, number>;
 
-// A factor the mode is silent about is zero, not its Explorer default.
+// A factor the lens is silent about is zero, not its Explorer default.
 export function effectiveWeights(
-  mode: Mode,
+  lens: Lens,
   toggles: Toggles,
   available: FactorAvailability,
 ): RouteWeights {
@@ -230,15 +230,15 @@ export function effectiveWeights(
     allowFerries: toggles.ferries,
     // The planner alone shuts the rail off, for the walking card it offers beside a ride.
     allowTransit: true,
-    allowSheds: mode.allowSheds,
+    allowSheds: lens.allowSheds,
     allowCrossings: false, // never: see DEFAULT_WEIGHTS
   };
   for (const { key, max } of FACTORS) {
     if (available[key]) {
-      weights[key] = (mode.weights[key] ?? 0) * max;
+      weights[key] = (lens.weights[key] ?? 0) * max;
     }
   }
-  // The two toggles own their factors outright; no mode names either.
+  // The two toggles own their factors outright; no lens names either.
   if (available.shade) {
     weights.shade = SHADE_WEIGHTS[toggles.sun];
   }
@@ -249,18 +249,18 @@ export function effectiveWeights(
 }
 
 // The reader's choice isn't rewritten, so a city that offers it again restores it.
-export function modeForCity(city: City, id: ModeId): Mode {
-  const offered = modesForCity(city);
-  return offered.find((mode) => mode.id === id) ?? offered[0] ?? DEFAULT_MODE;
+export function lensForCity(city: City, id: LensId): Lens {
+  const offered = lensesForCity(city);
+  return offered.find((lens) => lens.id === id) ?? offered[0] ?? DEFAULT_LENS;
 }
 
-export function modesForCity(city: City): Mode[] {
+export function lensesForCity(city: City): Lens[] {
   const available = cityFactors(city);
   const offered = new Set<OverlayId>(city.overlays);
-  return MODES.filter((mode) => mode.needs.every((key) => available[key])).map(
-    (mode) => ({
-      ...mode,
-      overlays: mode.overlays.filter((id) => offered.has(id)),
+  return LENSES.filter((lens) => lens.needs.every((key) => available[key])).map(
+    (lens) => ({
+      ...lens,
+      overlays: lens.overlays.filter((id) => offered.has(id)),
     }),
   );
 }

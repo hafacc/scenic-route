@@ -1,12 +1,12 @@
 import {
-  DEFAULT_MODE,
+  DEFAULT_LENS,
   DEFAULT_TOGGLES,
   HILLS_VALUES,
-  isModeId,
-  type ModeId,
+  isLensId,
+  type LensId,
   SUN_VALUES,
   type Toggles,
-} from "../modes/modes";
+} from "../lenses/lenses";
 import { OVERLAYS, type OverlayId } from "../overlays/registry";
 import {
   FACTORS,
@@ -33,10 +33,10 @@ export interface Settings {
   factorOrder: readonly FactorKey[];
   // Hidden factors still price the route.
   hiddenFactors: readonly FactorKey[];
-  mode: ModeId;
+  lens: LensId;
   toggles: Toggles;
-  // Overlays switched off per mode; the mode still walks by its own weights.
-  modeLayers: Partial<Record<ModeId, readonly OverlayId[]>>;
+  // Overlays switched off per lens; the lens still walks by its own weights.
+  lensLayers: Partial<Record<LensId, readonly OverlayId[]>>;
   // Hidden gates keep gating.
   hiddenGates: readonly GateKey[];
   // A ./offline.ts coverage id; the service worker holds and enforces its own copy.
@@ -55,9 +55,9 @@ export const DEFAULT_SETTINGS: Settings = {
   factorOrder: [],
   hiddenFactors: [],
   hiddenGates: [],
-  mode: DEFAULT_MODE.id,
+  lens: DEFAULT_LENS.id,
   toggles: DEFAULT_TOGGLES,
-  modeLayers: {},
+  lensLayers: {},
   coverage: DEFAULT_COVERAGE,
   updatedAt: {},
 };
@@ -138,8 +138,31 @@ function allowCrossingsIn(stored: Partial<Settings>): boolean {
   }
 }
 
-function storedMode(value: unknown): ModeId {
-  return typeof value === "string" && isModeId(value) ? value : DEFAULT_MODE.id;
+// What `lens` and `lensLayers` were stored as before the rename; still read, never written here.
+interface LegacyLensFields {
+  mode?: unknown;
+  modeLayers?: unknown;
+}
+const LEGACY_LENS_STAMP = "mode";
+const LEGACY_LAYERS_STAMP = "modeLayers.";
+
+// The current name wins where a document carries both.
+function lensStamps(marks: Record<string, number>): Record<string, number> {
+  const renamed: Record<string, number> = {};
+  for (const [path, at] of Object.entries(marks)) {
+    if (path === LEGACY_LENS_STAMP) {
+      renamed.lens ??= at;
+    } else if (path.startsWith(LEGACY_LAYERS_STAMP)) {
+      renamed[`lensLayers.${path.slice(LEGACY_LAYERS_STAMP.length)}`] ??= at;
+    } else {
+      renamed[path] = at;
+    }
+  }
+  return renamed;
+}
+
+function storedLens(value: unknown): LensId {
+  return typeof value === "string" && isLensId(value) ? value : DEFAULT_LENS.id;
 }
 
 // Per switch, so an unreadable one costs only its own position.
@@ -157,15 +180,15 @@ function storedToggles(value: unknown): Toggles {
   }
 }
 
-function storedModeLayers(
+function storedLensLayers(
   value: unknown,
-): Partial<Record<ModeId, readonly OverlayId[]>> {
+): Partial<Record<LensId, readonly OverlayId[]>> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return {};
   } else {
-    const layers: Partial<Record<ModeId, readonly OverlayId[]>> = {};
+    const layers: Partial<Record<LensId, readonly OverlayId[]>> = {};
     for (const [id, hidden] of Object.entries(value)) {
-      if (isModeId(id)) {
+      if (isLensId(id)) {
         layers[id] = overlayIds(hidden);
       }
     }
@@ -232,6 +255,7 @@ export function settingsFrom(
   const { layerOrder, hiddenLayers, weights, hiddenFactors } = stored;
   // Only an absent weights field means pre-document; unreadable weights mean a newer build, not a fold.
   const folded = weights === undefined ? legacyPrefs(legacy) : null;
+  const renamed = stored as LegacyLensFields;
   return {
     settings: {
       layerOrder: overlayIds(layerOrder),
@@ -246,13 +270,13 @@ export function settingsFrom(
       factorOrder: factorKeys(stored.factorOrder),
       hiddenFactors: factorKeys(hiddenFactors),
       hiddenGates: gateKeys(stored.hiddenGates),
-      mode: storedMode(stored.mode),
+      lens: storedLens(stored.lens ?? renamed.mode),
       toggles: storedToggles(stored.toggles),
-      modeLayers: storedModeLayers(stored.modeLayers),
+      lensLayers: storedLensLayers(stored.lensLayers ?? renamed.modeLayers),
       coverage: COVERAGE.some(({ id }) => id === stored.coverage)
         ? (stored.coverage as string)
         : DEFAULT_COVERAGE,
-      updatedAt: stamps(stored.updatedAt),
+      updatedAt: lensStamps(stamps(stored.updatedAt)),
     },
     migrated: folded?.found ?? false,
   };
@@ -349,12 +373,12 @@ function stamped(patch: Partial<Settings>, at: number): Record<string, number> {
           marks[`toggles.${key}`] = at;
         }
       }
-    } else if (field === "modeLayers") {
+    } else if (field === "lensLayers") {
       // Compared by contents, since every list in the rewritten map is a fresh array.
       for (const [id, hidden] of Object.entries(value as object)) {
-        const before = current.modeLayers[id as ModeId] ?? [];
+        const before = current.lensLayers[id as LensId] ?? [];
         if ((hidden as readonly OverlayId[]).join() !== before.join()) {
-          marks[`modeLayers.${id}`] = at;
+          marks[`lensLayers.${id}`] = at;
         }
       }
     } else {

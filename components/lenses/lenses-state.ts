@@ -1,12 +1,12 @@
 // The deck's state, typed here so the page and its two slots share it.
-import type { ModeId, Toggles } from "../../src/modes/modes";
-import type { EndpointsKey } from "../../src/modes/selection";
+import type { LensId, Toggles } from "../../src/lenses/lenses";
+import type { EndpointsKey } from "../../src/lenses/selection";
 import type { ShellDeck } from "../shell-types";
 import type { CardView } from "./route-cards";
 
-export interface ModesState {
-  // What the reader picked; a city that doesn't offer it substitutes its own first mode.
-  modeId: ModeId;
+export interface LensesState {
+  // What the reader picked; a city that doesn't offer it substitutes its own first lens.
+  lensId: LensId;
   toggles: Toggles;
   alt: number | null;
   cards: readonly CardView[];
@@ -15,7 +15,7 @@ export interface ModesState {
   planningLine: string | null;
   // A destination field just emptied on the directions screen; a question, not a way back.
   directionsOpen: boolean;
-  onMode: (id: ModeId) => void;
+  onLens: (id: LensId) => void;
   onToggles: (toggles: Toggles) => void;
   onSelect: (index: number) => void;
   onHover: (index: number | null) => void;

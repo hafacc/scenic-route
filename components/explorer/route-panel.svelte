@@ -17,9 +17,9 @@ import type {
   CardSummary,
   FerrySummary,
   RideSummary,
-} from "../../src/modes/cards";
-import { cardLine } from "../../src/modes/cards";
-import type { FactorAvailability } from "../../src/modes/modes";
+} from "../../src/lenses/cards";
+import { cardLine } from "../../src/lenses/cards";
+import type { FactorAvailability } from "../../src/lenses/lenses";
 import type { Maneuver } from "../../src/routing/directions";
 import {
   FACTORS,
@@ -36,9 +36,9 @@ import { factorRunOrder } from "../../src/settings/store";
 import EndpointFields from "../endpoint-fields.svelte";
 import FactorSlider from "../factor-slider.svelte";
 import Icon from "../icon.svelte";
+import CardLine from "../lenses/card-line.svelte";
 import ManeuverList from "../maneuver-list.svelte";
 import MinimizedPanel from "../minimized-panel.svelte";
-import CardLine from "../modes/card-line.svelte";
 import { PANEL_CARD, PANEL_WRAPPER } from "../panel-shell";
 import type { DestPrefill } from "../shell-types";
 import { useSettings } from "../use-settings.svelte";

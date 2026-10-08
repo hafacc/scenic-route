@@ -1,23 +1,23 @@
 <script lang="ts">
 import { untrack } from "svelte";
-import { modeIconHref } from "../../src/modes/favicon";
+import { lensIconHref } from "../../src/lenses/favicon";
 import {
-  type ModeId,
-  modeForCity,
-  modesForCity,
+  type LensId,
+  lensesForCity,
+  lensForCity,
   type Toggles,
-} from "../../src/modes/modes";
+} from "../../src/lenses/lenses";
 import { EXPLORER_PAGE } from "../../src/pages";
-import { encodeModes, encodeView, shareUrl } from "../../src/url-state";
+import { encodeLenses, encodeView, shareUrl } from "../../src/url-state";
 import ShellToolbar from "../shell-toolbar.svelte";
 import type { ShellDeck } from "../shell-types";
 import UrlSync from "../url-sync.svelte";
-import ModeBar from "./mode-bar.svelte";
-import { expand, type ModesState } from "./modes-state";
+import LensBar from "./lens-bar.svelte";
+import { expand, type LensesState } from "./lenses-state";
 
 interface Props {
   shell: ShellDeck;
-  deck: ModesState;
+  deck: LensesState;
 }
 
 const FLOATING_BAR =
@@ -26,10 +26,10 @@ const FLOATING_BAR =
 const { shell, deck }: Props = $props();
 
 const city = $derived(shell.city);
-const modes = $derived(modesForCity(city));
-const mode = $derived(modeForCity(city, deck.modeId));
+const lenses = $derived(lensesForCity(city));
+const lens = $derived(lensForCity(city, deck.lensId));
 
-const color = $derived(mode.color);
+const color = $derived(lens.color);
 // Both are restored on unmount, so Explorer and the installed app keep the app's green.
 $effect(() => {
   const tint = color;
@@ -40,7 +40,7 @@ $effect(() => {
   );
   const iconWas = icon?.getAttribute("href") ?? null;
   const themeWas = themeColor?.getAttribute("content") ?? null;
-  icon?.setAttribute("href", modeIconHref(tint));
+  icon?.setAttribute("href", lensIconHref(tint));
   themeColor?.setAttribute("content", tint);
   return () => {
     if (iconWas !== null) {
@@ -71,8 +71,8 @@ $effect(() => {
   });
 });
 
-function handleMode(id: ModeId): void {
-  deck.onMode(id);
+function handleLens(id: LensId): void {
+  deck.onLens(id);
   expand(shell);
 }
 function handleToggles(next: Toggles): void {
@@ -80,13 +80,13 @@ function handleToggles(next: Toggles): void {
   expand(shell);
 }
 
-// The clock is in neither: Modes routes at now, and `encodeModes` writes no hour.
+// The clock is in neither: Lenses routes at now, and `encodeLenses` writes no hour.
 function encode(): URLSearchParams {
-  return encodeModes({
+  return encodeLenses({
     start: shell.manualStart,
     dest: shell.dest,
     pin: shell.searchPin,
-    mode: mode.id,
+    lens: lens.id,
     alt: deck.alt,
     toggles: deck.toggles,
     customHour: null,
@@ -98,7 +98,7 @@ function composeShareUrl(): string {
   const params = encode();
   const camera = shell.camera();
   if (camera) {
-    // The layers are the mode's, so the link names the mode rather than listing them.
+    // The layers are the lens's, so the link names the lens rather than listing them.
     for (const [key, value] of encodeView(camera, [], city.id)) {
       if (key !== "layers") {
         params.append(key, value);
@@ -119,12 +119,12 @@ function composeShareUrl(): string {
 <div
   class={`absolute top-3 left-1/2 z-[1000] hidden max-w-[56vw] -translate-x-1/2 md:flex ${FLOATING_BAR}`}
 >
-  <ModeBar
-    {modes}
-    mode={mode.id}
+  <LensBar
+    {lenses}
+    lens={lens.id}
     toggles={deck.toggles}
     available={shell.available}
-    onMode={handleMode}
+    onLens={handleLens}
     onToggles={handleToggles}
   />
 </div>

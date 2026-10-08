@@ -39,7 +39,7 @@ function coalescing(request: RouterRequest): request is Coalescing {
   return coalesced(request) !== null;
 }
 
-// Few enough per plan, short enough that a flipped mode doesn't wait out the replaced plan.
+// Few enough per plan, short enough that a flipped lens doesn't wait out the replaced plan.
 const BREATH_MILLIS = 25;
 
 // A task, not a microtask: microtasks drain before any message event, so nothing would get in.

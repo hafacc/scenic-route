@@ -1,5 +1,5 @@
 <script lang="ts">
-import { cardLine } from "../../src/modes/cards";
+import { cardLine } from "../../src/lenses/cards";
 import CardChips from "./card-chips.svelte";
 import CardLine from "./card-line.svelte";
 import CardNumber from "./card-number.svelte";
