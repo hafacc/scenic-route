@@ -4,6 +4,10 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
+    ignore:
+      # svelte-check needs TypeScript 6's JS API; 7.0 is the native compiler.
+      - dependency-name: "typescript"
+        versions: ["7.0.x"]
   - package-ecosystem: cargo
     directory: "/"
     schedule:
