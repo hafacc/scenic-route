@@ -1,5 +1,6 @@
 // What the maneuver list shares that is not a component.
 import {
+  MdAccessTime,
   MdAccountBalance,
   MdArrowUpward,
   MdDirectionsBoat,
@@ -37,6 +38,9 @@ export function maneuverIcon(maneuver: Maneuver): IconData {
   }
   if (maneuver.kind === "ferry") {
     return MdDirectionsBoat;
+  }
+  if (maneuver.kind === "wait") {
+    return MdAccessTime;
   }
   if (maneuver.kind === "station") {
     if (maneuver.station === "alight") {
@@ -81,7 +85,8 @@ export function maneuverState(
     return "ahead";
   } else if (index === progress.nextManeuver) {
     return "next";
-  } else if (index < progress.nextManeuver) {
+  } else if (index <= progress.currentManeuver) {
+    // Not `< nextManeuver`, which would dim a wait row while its ride is still the next thing.
     return "passed";
   } else {
     return "ahead";

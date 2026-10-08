@@ -108,8 +108,11 @@ export interface TransitLeg {
 export interface FerryLeg {
   route: string | null;
   waitSeconds: number;
-  crossingSeconds: number;
+  crossingSeconds: number; // with no timetable, the baked figure, which fuses in an average wait
   ridesBefore: number;
+  hops: number; // the ferry steps this boat covers, so the directions split the trip exactly as this does
+  // Null with no timetable, where no one sailing was costed.
+  departureSeconds: number | null;
 }
 
 export interface RouteResult {
@@ -170,8 +173,8 @@ function makeStep(
   };
 }
 
-// Consecutive hops of one line with no wait are one boat, matching the maneuvers.
-function ferryLegs(
+// Consecutive hops of one line with no wait are one boat, and the maneuvers follow `hops`.
+export function ferryLegs(
   graph: RoutingGraph,
   steps: readonly RouteStep[],
   rides: readonly TransitLeg[],
@@ -192,17 +195,20 @@ function ferryLegs(
         from,
         elapsedSeconds,
       );
-      const route =
-        graph.ferries?.board(step.edge, from, elapsedSeconds)?.route ??
-        edgeName(graph, step.edge);
+      const sailing =
+        graph.ferries?.board(step.edge, from, elapsedSeconds) ?? null;
+      const route = sailing?.route ?? edgeName(graph, step.edge);
       if (boat && wait === 0 && boat.route === route) {
         boat.crossingSeconds += crossing;
+        boat.hops += 1;
       } else {
         boat = {
           route,
           waitSeconds: wait,
           crossingSeconds: crossing,
           ridesBefore: boarded,
+          hops: 1,
+          departureSeconds: sailing?.departure ?? null,
         };
         legs.push(boat);
       }

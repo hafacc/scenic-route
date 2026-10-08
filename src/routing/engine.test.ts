@@ -101,6 +101,45 @@ test("a drag frame answers the moved endpoint", async () => {
   );
 });
 
+// The backward solve boards the boat from the far pier; flipped, the trip needs one that never sails.
+test("a start drag over a boat that does not sail that way answers no route, not an endless one", async () => {
+  const oneWay = buildGraph(
+    [
+      { lat: 40.7, lng: -74.02 }, // 0 start
+      { lat: 40.7, lng: -74.01 }, // 1 near pier
+      { lat: 40.65, lng: -74.07 }, // 2 far pier
+      { lat: 40.65, lng: -74.08 }, // 3 dest
+    ],
+    [
+      { a: 0, b: 1, ferry: false, cover: 0, durationSeconds: 0 },
+      { a: 1, b: 2, ferry: true, cover: 0, durationSeconds: 1500 },
+      { a: 2, b: 3, ferry: false, cover: 0, durationSeconds: 0 },
+    ],
+  );
+  const sailing = { departure: 0, wait: 0, crossing: 1500, route: "Ferry" };
+  const drag = async (sailsFrom: number): Promise<RouteResult | null> => {
+    const engine = new RoutingEngine();
+    engine.load(CITY, oneWay);
+    await engine.prepare(CITY, CLOCK, weights(0, 0, true));
+    oneWay.ferries = {
+      covers: () => true,
+      board: (_edge, fromNode) => (fromNode === sailsFrom ? sailing : null),
+      minRideSeconds: () => 1500,
+    };
+    engine.dragStart("start");
+    return engine.dragMove(
+      snapAtNode(oneWay, 3, 2),
+      snapAtNode(oneWay, 0, 0),
+      weights(0, 0, true),
+      3600,
+    );
+  };
+  // Sailing only from the far pier, the backward solve finds a trip the walker could never make.
+  expect(await drag(2)).toBeNull();
+  // Sailing from the near pier, nothing sails the solver's way, which was already no route.
+  expect(await drag(1)).toBeNull();
+});
+
 function fakeWorker(): {
   receive: (request: RouterRequest) => Promise<void>;
   sent: RouterResponse[];

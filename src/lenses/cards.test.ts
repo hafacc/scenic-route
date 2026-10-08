@@ -156,8 +156,21 @@ describe("cardLine", () => {
   });
 });
 
+describe("ride segments", () => {
+  test("a run of trains reads as the sum of each ride's own rounded minutes", () => {
+    expect(
+      cardLine({
+        travelSeconds: 20 * 60,
+        walkMeters: MILE,
+        ferries: [],
+        rides: [ride("A", 90), ride("L", 90)],
+      }),
+    ).toBe("20 min · 1.0 mi walk · 4 min on the A then L");
+  });
+});
+
 describe("rideSummaries", () => {
-  test("the minutes a card reports are the wait plus the ride", () => {
+  test("the minutes a card reports are the ride alone, as its step shows them", () => {
     expect(
       rideSummaries([
         {
@@ -177,7 +190,7 @@ describe("rideSummaries", () => {
         },
       ]),
     ).toEqual([
-      { shortName: "Q", color: "#fccc0a", textColor: "#000000", seconds: 720 },
+      { shortName: "Q", color: "#fccc0a", textColor: "#000000", seconds: 540 },
     ]);
   });
 
@@ -194,7 +207,7 @@ describe("rideSummaries", () => {
       },
     ]);
     expect(only.shortName).toBe("");
-    expect(only.seconds).toBe(180);
+    expect(only.seconds).toBe(120);
     expect(
       cardLine({
         travelSeconds: 600,
@@ -202,12 +215,12 @@ describe("rideSummaries", () => {
         ferries: [],
         rides: [only],
       }),
-    ).toBe("10 min · 0.2 mi walk · 3 min on the train");
+    ).toBe("10 min · 0.2 mi walk · 2 min on the train");
   });
 });
 
 describe("ferrySummaries", () => {
-  test("the minutes a card reports are the wait on the pier plus the crossing", () => {
+  test("the minutes a card reports are the crossing alone, the pier wait left to the total", () => {
     expect(
       ferrySummaries([
         {
@@ -215,9 +228,32 @@ describe("ferrySummaries", () => {
           waitSeconds: 9 * 60,
           crossingSeconds: 25 * 60,
           ridesBefore: 0,
+          hops: 1,
+          departureSeconds: 8 * 3600,
         },
       ]),
-    ).toEqual([{ seconds: 34 * 60, ridesBefore: 0 }]);
+    ).toEqual([{ seconds: 25 * 60, ridesBefore: 0 }]);
+  });
+
+  test("the total is the whole trip, waits included, whatever the parts say", () => {
+    const [ferry] = ferrySummaries([
+      {
+        route: "Staten Island Ferry",
+        waitSeconds: 14 * 60,
+        crossingSeconds: 25 * 60,
+        ridesBefore: 0,
+        hops: 1,
+        departureSeconds: 8 * 3600,
+      },
+    ]);
+    expect(
+      cardLine({
+        travelSeconds: 45 * 60,
+        walkMeters: 400,
+        ferries: [ferry],
+        rides: [],
+      }),
+    ).toBe("45 min · 0.2 mi walk · 25 min by ferry");
   });
 });
 

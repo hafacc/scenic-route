@@ -172,8 +172,11 @@ export class RoutingEngine {
             -1,
           ));
     const solved = solver.solveApprox(moving);
-    return this.dragWhich === "start" && solved
-      ? reverseResult(graph, solved)
-      : solved;
+    if (this.dragWhich !== "start" || !solved) {
+      return solved;
+    }
+    const reversed = reverseResult(graph, solved);
+    // Re-timed forward, a boat may not sail this way at all, and a trip with no finite time is no route.
+    return Number.isFinite(reversed.travelSeconds) ? reversed : null;
   }
 }
