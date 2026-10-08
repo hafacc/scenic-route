@@ -303,19 +303,16 @@ async function serve(event: FetchEventLike, filed: Filed): Promise<Response> {
   const cache = await caches.open(STORES[filed.store]);
   if (filed.fresh) {
     // Daily feeds: network first, since a stale permit or timetable is worse than a slow one.
-    try {
-      const response = await fetch(request);
-      if (response.ok) {
-        event.waitUntil(store(filed.store, request.url, response.clone()));
-      }
-      return response;
-    } catch (error) {
-      const stale = await cache.match(request);
-      if (stale) {
-        return stale;
-      }
-      throw error;
-    }
+    return await freshThenStored(
+      request,
+      fetch,
+      {
+        match: (asked) => cache.match(asked),
+        put: (asked, response) => store(filed.store, asked.url, response),
+      },
+      (stored) => event.waitUntil(stored),
+      { notOkStands: true },
+    );
   }
   const key = filed.cacheKey ?? request.url;
   const hit = await cache.match(key);
