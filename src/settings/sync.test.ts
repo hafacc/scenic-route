@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import type { OverlayId } from "../overlays/registry";
 import { GATE_KEYS } from "../routing/cost";
-import { DEFAULT_SETTINGS, type Settings } from "./store";
-import { mergeSettings } from "./sync";
+import { DEFAULT_SETTINGS, type Settings, settingsFromDocument } from "./store";
+import { mergeSettings, remoteDocument, settingsFromRemote } from "./sync";
 
 // Signing in merges per field rather than picking a winning device.
 
@@ -89,35 +89,55 @@ test("every gate reaches the other device, not just the two the list was born wi
   }
 });
 
-test("the mode and the toggles reach the other device", () => {
+test("the lens and the toggles reach the other device", () => {
   const local = settings({
-    mode: "rain",
+    lens: "rain",
     toggles: { sun: "sun", hills: "any", ferries: true },
-    updatedAt: { mode: 100, "toggles.sun": 900 },
+    updatedAt: { lens: 100, "toggles.sun": 900 },
   });
   const remote = settings({
-    mode: "historic",
+    lens: "historic",
     toggles: { sun: "shade", hills: "none", ferries: false },
-    updatedAt: { mode: 400, "toggles.sun": 200 },
+    updatedAt: { lens: 400, "toggles.sun": 200 },
   });
   const merged = mergeSettings(local, remote);
-  expect(merged.mode).toBe("historic"); // the other device chose it later
+  expect(merged.lens).toBe("historic"); // the other device chose it later
   expect(merged.toggles.sun).toBe("sun"); // this one set that switch later
 });
 
-test("two devices hiding a layer in two modes both keep theirs", () => {
+test("two devices hiding a layer in two lenses both keep theirs", () => {
   const local = settings({
-    modeLayers: { historic: ["legacy"] },
-    updatedAt: { "modeLayers.historic": 500 },
+    lensLayers: { historic: ["legacy"] },
+    updatedAt: { "lensLayers.historic": 500 },
   });
   const remote = settings({
-    modeLayers: { historic: [], naturalist: ["canopy"] },
-    updatedAt: { "modeLayers.naturalist": 700 },
+    lensLayers: { historic: [], naturalist: ["canopy"] },
+    updatedAt: { "lensLayers.naturalist": 700 },
   });
-  expect(mergeSettings(local, remote).modeLayers).toEqual({
+  expect(mergeSettings(local, remote).lensLayers).toEqual({
     historic: ["legacy"],
     naturalist: ["canopy"],
   });
+});
+
+// Older builds on a reader's other devices still read and write the `mode` names.
+test("the cloud copy keeps the old `mode` names and reads back the same", () => {
+  const local = settings({
+    lens: "rain",
+    lensLayers: { historic: ["legacy"] as OverlayId[] },
+    updatedAt: { lens: 100, "lensLayers.historic": 200, coverage: 300 },
+  });
+  const sent = remoteDocument(local) as Record<string, unknown>;
+  expect(sent.mode).toBe("rain");
+  expect(sent.modeLayers).toEqual({ historic: ["legacy"] });
+  expect(sent.updatedAt).toEqual({
+    mode: 100,
+    "modeLayers.historic": 200,
+    coverage: 300,
+  });
+  expect("lens" in sent).toBe(false);
+  expect("lensLayers" in sent).toBe(false);
+  expect(settingsFromRemote(sent, settingsFromDocument)).toEqual(local);
 });
 
 // Stamping all three switches together made two devices' different switches last-writer-wins.

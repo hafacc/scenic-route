@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { OverlayId } from "../../src/overlays/registry";
-import { MODES_PAGE } from "../../src/pages";
+import { LENSES_PAGE } from "../../src/pages";
 import { getPinnedTime } from "../../src/route-time/store";
 import type { RouteWeights } from "../../src/routing/cost";
 import { encodeRoute, encodeView, shareUrl } from "../../src/url-state";
@@ -63,7 +63,7 @@ function encodeHash(clock: {
 
 <ShellToolbar
   {shell}
-  otherPage={MODES_PAGE}
+  otherPage={LENSES_PAGE}
   clock
   {controls}
   {composeShareUrl}

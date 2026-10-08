@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Plan } from "../routing/alternatives";
 import type { RoutingGraph } from "../routing/graph";
 import type { RouteResult } from "../routing/search";
-import { ALL_FACTORS, type Mode, modeById } from "./modes";
+import { ALL_FACTORS, type Lens, lensById } from "./lenses";
 import {
   type LandedPlan,
   NO_PLAN,
@@ -11,16 +11,16 @@ import {
   planReducer,
 } from "./plan-state";
 
-function modeOrThrow(id: string): Mode {
-  const mode = modeById(id);
-  if (mode === null) {
-    throw new Error("the mode this test is about is gone");
+function lensOrThrow(id: string): Lens {
+  const lens = lensById(id);
+  if (lens === null) {
+    throw new Error("the lens this test is about is gone");
   } else {
-    return mode;
+    return lens;
   }
 }
 
-const MODE = modeOrThrow("naturalist");
+const LENS = lensOrThrow("naturalist");
 
 // The reducer never reads these, only moves them.
 const GRAPH = {} as RoutingGraph;
@@ -34,7 +34,7 @@ const PLAN: Plan = {
 };
 
 function landedPlan(id: number): LandedPlan {
-  return { id, graph: GRAPH, mode: MODE, available: ALL_FACTORS, plan: PLAN };
+  return { id, graph: GRAPH, lens: LENS, available: ALL_FACTORS, plan: PLAN };
 }
 
 function started(id: number): PlanState {

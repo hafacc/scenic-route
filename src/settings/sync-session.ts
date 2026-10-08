@@ -5,7 +5,7 @@ import {
   settingsFromDocument,
   subscribeSettings,
 } from "./store";
-import { mergeSettings, settingsFromRemote } from "./sync";
+import { mergeSettings, remoteDocument, settingsFromRemote } from "./sync";
 
 // Signing in merges both sides per field (./sync.ts) and writes the result to both.
 
@@ -19,7 +19,7 @@ let pending: ReturnType<typeof setTimeout> | null = null;
 const SETTLE_MS = 800;
 
 function push(uid: string): void {
-  const encoded = JSON.stringify(settings());
+  const encoded = JSON.stringify(remoteDocument(settings()));
   if (encoded === mirrored) {
     return;
   }

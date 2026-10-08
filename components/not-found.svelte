@@ -1,5 +1,5 @@
 <script lang="ts">
-import { ABOUT_PAGE, MODES_PAGE } from "../src/pages";
+import { ABOUT_PAGE, LENSES_PAGE } from "../src/pages";
 import { HOME_META, type PageMeta } from "../src/site";
 import PageHead from "./page-head.svelte";
 
@@ -25,7 +25,7 @@ const meta: PageMeta = $derived({ ...HOME_META, title, robots: "noindex" });
   <!-- Relative, so they're only right for a miss one level down. -->
   <div class="flex flex-wrap gap-x-5 gap-y-2 text-sm font-medium">
     <a
-      href={MODES_PAGE.href}
+      href={LENSES_PAGE.href}
       class="text-brand-600 hover:underline dark:text-brand-400"
     >
       Open the map

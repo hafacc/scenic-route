@@ -33,7 +33,7 @@ import {
   cityFactors,
   type FactorAvailability,
   graphFactors,
-} from "../src/modes/modes";
+} from "../src/lenses/lenses";
 import { OVERLAYS, type OverlayId } from "../src/overlays/registry";
 import type { Pin } from "../src/pin";
 import {

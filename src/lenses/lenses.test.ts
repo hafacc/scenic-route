@@ -3,22 +3,22 @@ import { type City, cityById } from "../cities";
 import { isOverlayId } from "../overlays/registry";
 import type { RouteWeights } from "../routing/cost";
 import { FACTORS, type FactorKey } from "../routing/factors";
-import { MODE_ICONS } from "./icons";
+import { LENS_ICONS } from "./icons";
 import {
   ALL_FACTORS,
-  DEFAULT_MODE,
+  DEFAULT_LENS,
   DEFAULT_TOGGLES,
   effectiveWeights,
   type FactorAvailability,
   graphFactors,
-  MODES,
-  type Mode,
-  modeById,
-  modesForCity,
+  LENSES,
+  type Lens,
+  lensById,
+  lensesForCity,
   type Toggles,
-} from "./modes";
+} from "./lenses";
 
-// These walk the table, so a new mode is held to the same rules.
+// These walk the table, so a new lens is held to the same rules.
 
 const FACTOR_KEYS = new Set<string>(FACTORS.map(({ key }) => key));
 
@@ -39,48 +39,48 @@ function spent(weights: RouteWeights): Partial<Record<FactorKey, number>> {
   );
 }
 
-const neutral = (mode = DEFAULT_MODE): RouteWeights =>
-  effectiveWeights(mode, DEFAULT_TOGGLES, ALL_FACTORS);
+const neutral = (lens = DEFAULT_LENS): RouteWeights =>
+  effectiveWeights(lens, DEFAULT_TOGGLES, ALL_FACTORS);
 
-test("every mode names factors this build has, at a fraction of their maxima", () => {
+test("every lens names factors this build has, at a fraction of their maxima", () => {
   const ids = new Set<string>();
-  for (const mode of MODES) {
-    expect(ids.has(mode.id), `${mode.id} is listed twice`).toBe(false);
-    ids.add(mode.id);
-    expect(mode.name.length).toBeGreaterThan(0);
-    for (const [key, fraction] of Object.entries(mode.weights)) {
-      expect(FACTOR_KEYS.has(key), `${mode.id} weights ${key}`).toBe(true);
-      expect(fraction, `${mode.id} weights ${key}`).toBeGreaterThan(0);
-      expect(fraction, `${mode.id} weights ${key}`).toBeLessThanOrEqual(1);
+  for (const lens of LENSES) {
+    expect(ids.has(lens.id), `${lens.id} is listed twice`).toBe(false);
+    ids.add(lens.id);
+    expect(lens.name.length).toBeGreaterThan(0);
+    for (const [key, fraction] of Object.entries(lens.weights)) {
+      expect(FACTOR_KEYS.has(key), `${lens.id} weights ${key}`).toBe(true);
+      expect(fraction, `${lens.id} weights ${key}`).toBeGreaterThan(0);
+      expect(fraction, `${lens.id} weights ${key}`).toBeLessThanOrEqual(1);
     }
-    for (const key of mode.needs) {
-      expect(FACTOR_KEYS.has(key), `${mode.id} needs ${key}`).toBe(true);
+    for (const key of lens.needs) {
+      expect(FACTOR_KEYS.has(key), `${lens.id} needs ${key}`).toBe(true);
     }
-    for (const overlay of mode.overlays) {
-      expect(isOverlayId(overlay), `${mode.id} draws ${overlay}`).toBe(true);
+    for (const overlay of lens.overlays) {
+      expect(isOverlayId(overlay), `${lens.id} draws ${overlay}`).toBe(true);
     }
   }
 });
 
-// A mode that named one would be silently overruled by its toggle.
-test("no mode names the sun or the hill factor", () => {
-  for (const mode of MODES) {
-    expect(mode.weights.shade, `${mode.id}`).toBeUndefined();
-    expect(mode.weights.hill, `${mode.id}`).toBeUndefined();
+// A lens that named one would be silently overruled by its toggle.
+test("no lens names the sun or the hill factor", () => {
+  for (const lens of LENSES) {
+    expect(lens.weights.shade, `${lens.id}`).toBeUndefined();
+    expect(lens.weights.hill, `${lens.id}`).toBeUndefined();
   }
 });
 
-test("the default mode is the first chip", () => {
-  expect(DEFAULT_MODE).toBe(MODES[0]);
-  expect(DEFAULT_MODE.id).toBe("naturalist");
-  expect(modeById("naturalist")).toBe(DEFAULT_MODE);
-  expect(modeById("cartographer")).toBeNull();
+test("the default lens is the first chip", () => {
+  expect(DEFAULT_LENS).toBe(LENSES[0]);
+  expect(DEFAULT_LENS.id).toBe("naturalist");
+  expect(lensById("naturalist")).toBe(DEFAULT_LENS);
+  expect(lensById("cartographer")).toBeNull();
 });
 
 // Effective weights: industrial's max is 5, highway's and transit's 3, every other factor's 1.
-test("each mode spends what the table says it spends", () => {
+test("each lens spends what the table says it spends", () => {
   const weights = Object.fromEntries(
-    MODES.map((mode) => [mode.id, spent(neutral(mode))]),
+    LENSES.map((lens) => [lens.id, spent(neutral(lens))]),
   );
   expect(weights.naturalist).toEqual({
     tree: 1,
@@ -110,19 +110,19 @@ test("each mode spends what the table says it spends", () => {
   });
 });
 
-test("scaffolding is the mode's stance, and crossings are never free", () => {
-  for (const mode of MODES) {
-    const weights = neutral(mode);
-    expect(weights.allowSheds, `${mode.id}`).toBe(mode.allowSheds);
-    expect(weights.allowCrossings, `${mode.id}`).toBe(false);
+test("scaffolding is the lens's stance, and crossings are never free", () => {
+  for (const lens of LENSES) {
+    const weights = neutral(lens);
+    expect(weights.allowSheds, `${lens.id}`).toBe(lens.allowSheds);
+    expect(weights.allowCrossings, `${lens.id}`).toBe(false);
   }
-  expect(modeById("rain")?.allowSheds).toBe(true);
-  expect(modeById("naturalist")?.allowSheds).toBe(false);
+  expect(lensById("rain")?.allowSheds).toBe(true);
+  expect(lensById("naturalist")?.allowSheds).toBe(false);
 });
 
 test("the sun toggle is the whole of the signed shade weight", () => {
   const shade = (sun: Toggles["sun"]): number =>
-    effectiveWeights(DEFAULT_MODE, { ...DEFAULT_TOGGLES, sun }, ALL_FACTORS)
+    effectiveWeights(DEFAULT_LENS, { ...DEFAULT_TOGGLES, sun }, ALL_FACTORS)
       .shade;
   expect(shade("sun")).toBe(1);
   expect(shade("shade")).toBe(-1);
@@ -131,33 +131,33 @@ test("the sun toggle is the whole of the signed shade weight", () => {
 
 test("the hills toggle steps from free to the top of the slider", () => {
   const hill = (hills: Toggles["hills"]): number =>
-    effectiveWeights(DEFAULT_MODE, { ...DEFAULT_TOGGLES, hills }, ALL_FACTORS)
+    effectiveWeights(DEFAULT_LENS, { ...DEFAULT_TOGGLES, hills }, ALL_FACTORS)
       .hill;
   expect(hill("any")).toBe(0);
   expect(hill("some")).toBe(2);
   expect(hill("none")).toBe(5);
 });
 
-test("every mode leaves the rail reachable and prices it with a weight", () => {
-  for (const mode of MODES) {
-    const weights = effectiveWeights(mode, DEFAULT_TOGGLES, ALL_FACTORS);
-    expect(weights.allowTransit, mode.id).toBe(true);
+test("every lens leaves the rail reachable and prices it with a weight", () => {
+  for (const lens of LENSES) {
+    const weights = effectiveWeights(lens, DEFAULT_TOGGLES, ALL_FACTORS);
+    expect(weights.allowTransit, lens.id).toBe(true);
   }
   expect(
-    effectiveWeights(DEFAULT_MODE, DEFAULT_TOGGLES, ALL_FACTORS).transit,
+    effectiveWeights(DEFAULT_LENS, DEFAULT_TOGGLES, ALL_FACTORS).transit,
   ).toBe(3);
   expect(
-    effectiveWeights(modeById("rain") as Mode, DEFAULT_TOGGLES, ALL_FACTORS)
+    effectiveWeights(lensById("rain") as Lens, DEFAULT_TOGGLES, ALL_FACTORS)
       .transit,
   ).toBe(0);
 });
 
 test("the ferry toggle is the gate, not a preference for boats", () => {
-  const allowed = effectiveWeights(DEFAULT_MODE, DEFAULT_TOGGLES, ALL_FACTORS);
+  const allowed = effectiveWeights(DEFAULT_LENS, DEFAULT_TOGGLES, ALL_FACTORS);
   expect(allowed.allowFerries).toBe(true);
   expect(allowed.ferry).toBe(0);
   const barred = effectiveWeights(
-    DEFAULT_MODE,
+    DEFAULT_LENS,
     { ...DEFAULT_TOGGLES, ferries: false },
     ALL_FACTORS,
   );
@@ -171,7 +171,7 @@ test("a factor this place cannot answer is dropped, and the rest are not", () =>
     hill: false,
   };
   const weights = effectiveWeights(
-    DEFAULT_MODE,
+    DEFAULT_LENS,
     { ...DEFAULT_TOGGLES, hills: "none" },
     withoutIndustry,
   );
@@ -181,7 +181,7 @@ test("a factor this place cannot answer is dropped, and the rest are not", () =>
     highway: 3,
     transit: 3,
   });
-  expect(weights.hill).toBe(0); // the toggle is off the table too, not just the mode's weights
+  expect(weights.hill).toBe(0); // the toggle is off the table too, not just the lens's weights
 });
 
 test("a graph with nothing baked answers only the factors every city bakes", () => {
@@ -221,13 +221,13 @@ test("a graph with nothing baked answers only the factors every city bakes", () 
   expect(loaded.transit).toBe(true);
 });
 
-test("a city offers the modes its layers can answer, with the layers it has", () => {
-  const nyc = modesForCity(cityNamed("nyc"));
-  expect(nyc.map((mode) => mode.id)).toEqual(MODES.map((mode) => mode.id));
+test("a city offers the lenses its layers can answer, with the layers it has", () => {
+  const nyc = lensesForCity(cityNamed("nyc"));
+  expect(nyc.map((lens) => lens.id)).toEqual(LENSES.map((lens) => lens.id));
 
   // No commercial or scaffolding data outside New York; Rain still routes on the canopy.
-  const bay = modesForCity(cityNamed("sf"));
-  expect(bay.map((mode) => mode.id)).toEqual([
+  const bay = lensesForCity(cityNamed("sf"));
+  expect(bay.map((lens) => lens.id)).toEqual([
     "naturalist",
     "rain",
     "historic",
@@ -236,11 +236,11 @@ test("a city offers the modes its layers can answer, with the layers it has", ()
   expect(nyc[1].overlays).toEqual(["scaffolding"]);
 });
 
-test("every mode has a glyph to draw its chip with", () => {
-  for (const mode of MODES) {
-    expect(MODE_ICONS[mode.id], mode.id).toBeDefined();
+test("every lens has a glyph to draw its chip with", () => {
+  for (const lens of LENSES) {
+    expect(LENS_ICONS[lens.id], lens.id).toBeDefined();
   }
-  expect(Object.keys(MODE_ICONS).sort()).toEqual(
-    MODES.map((mode) => mode.id).sort(),
+  expect(Object.keys(LENS_ICONS).sort()).toEqual(
+    LENSES.map((lens) => lens.id).sort(),
   );
 });

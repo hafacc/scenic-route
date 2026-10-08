@@ -1,5 +1,5 @@
 <script lang="ts">
-import { ferrySummaries, rideSummaries } from "../../src/modes/cards";
+import { ferrySummaries, rideSummaries } from "../../src/lenses/cards";
 import type { RouteWeights } from "../../src/routing/cost";
 import type { FactorKey, GateKey } from "../../src/routing/factors";
 import GoogleMapsButton from "../google-maps-button.svelte";

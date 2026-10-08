@@ -1,4 +1,9 @@
-import { MODES, type ModeId, TOGGLE_KEYS, type Toggles } from "../modes/modes";
+import {
+  LENSES,
+  type LensId,
+  TOGGLE_KEYS,
+  type Toggles,
+} from "../lenses/lenses";
 import type { OverlayId } from "../overlays/registry";
 import { GATE_KEYS } from "../routing/cost";
 import { FACTORS, type FactorKey } from "../routing/factors";
@@ -15,7 +20,7 @@ const FIELDS = [
   "hiddenFactors",
   "hiddenGates",
   ...GATE_KEYS,
-  "mode",
+  "lens",
   "coverage",
 ] as const;
 
@@ -23,7 +28,7 @@ type SyncedField = (typeof FIELDS)[number];
 
 const weightPath = (key: FactorKey): string => `weights.${key}`;
 const togglePath = (key: keyof Toggles): string => `toggles.${key}`;
-const modeLayersPath = (id: ModeId): string => `modeLayers.${id}`;
+const lensLayersPath = (id: LensId): string => `lensLayers.${id}`;
 
 // Local wins ties, so signing in never moves anything the reader hasn't touched elsewhere.
 function later(
@@ -72,26 +77,42 @@ export function mergeSettings(local: Settings, remote: Settings): Settings {
   }
   merged.toggles = toggles;
 
-  // Per mode, since hiding a layer in one mode says nothing about another.
-  const modeLayers: Partial<Record<ModeId, readonly OverlayId[]>> = {
-    ...local.modeLayers,
+  // Per lens, since hiding a layer in one lens says nothing about another.
+  const lensLayers: Partial<Record<LensId, readonly OverlayId[]>> = {
+    ...local.lensLayers,
   };
-  for (const { id } of MODES) {
-    const path = modeLayersPath(id);
+  for (const { id } of LENSES) {
+    const path = lensLayersPath(id);
     if (later(local.updatedAt, remote.updatedAt, path) === "remote") {
-      const hidden = remote.modeLayers[id];
+      const hidden = remote.lensLayers[id];
       if (hidden === undefined) {
-        delete modeLayers[id];
+        delete lensLayers[id];
       } else {
-        modeLayers[id] = hidden;
+        lensLayers[id] = hidden;
       }
       stamps[path] = remote.updatedAt[path];
     }
   }
-  merged.modeLayers = modeLayers;
+  merged.lensLayers = lensLayers;
 
   merged.updatedAt = stamps;
   return merged;
+}
+
+// Firestore keeps the pre-rename `mode` names, which builds from before it still read and write.
+export function remoteDocument(local: Settings): object {
+  const { lens, lensLayers, updatedAt, ...rest } = local;
+  const stamps: Record<string, number> = {};
+  for (const [path, at] of Object.entries(updatedAt)) {
+    if (path === "lens") {
+      stamps.mode = at;
+    } else if (path.startsWith("lensLayers.")) {
+      stamps[`modeLayers.${path.slice("lensLayers.".length)}`] = at;
+    } else {
+      stamps[path] = at;
+    }
+  }
+  return { ...rest, mode: lens, modeLayers: lensLayers, updatedAt: stamps };
 }
 
 // Possibly written by a newer build, so unrecognized fields are dropped as in ./store.ts.

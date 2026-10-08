@@ -13,7 +13,7 @@ import Sheet from "./sheet.svelte";
 import { SHEET_SCROLL } from "./sheet-shell";
 
 interface SettingsDialogProps {
-  // Only with the routing group: Modes has no sliders.
+  // Only with the routing group: Lenses has no sliders.
   weights?: RouteWeights;
   onWeight?: (key: FactorKey, weight: number) => void;
   onGate?: (key: GateKey, on: boolean) => void;

@@ -2,14 +2,14 @@ import type { Plan } from "../routing/alternatives";
 import type { RouteClock } from "../routing/contexts";
 import type { RoutingGraph } from "../routing/graph";
 import type { RouteResult } from "../routing/search";
-import type { FactorAvailability, Mode } from "./modes";
+import type { FactorAvailability, Lens } from "./lenses";
 
 // Held until the next sweep lands, since clearing the list to wait is what the reader would see.
 export interface LandedPlan {
   id: number;
   graph: RoutingGraph;
-  // The sweep's own mode, since the reader may have switched by the time it lands.
-  mode: Mode;
+  // The sweep's own lens, since the reader may have switched by the time it lands.
+  lens: Lens;
   available: FactorAvailability;
   plan: Plan;
 }

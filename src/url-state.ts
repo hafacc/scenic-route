@@ -1,14 +1,14 @@
 // Query parameters so old links survive new factors: defaults omitted, unknown keys left alone.
 
 import {
-  DEFAULT_MODE,
+  DEFAULT_LENS,
   DEFAULT_TOGGLES,
   HILLS_VALUES,
-  isModeId,
-  type ModeId,
+  isLensId,
+  type LensId,
   SUN_VALUES,
   type Toggles,
-} from "./modes/modes";
+} from "./lenses/lenses";
 import {
   DEFAULT_ART_WEIGHT,
   DEFAULT_BRIDGE_WEIGHT,
@@ -58,8 +58,8 @@ export interface RouteUrlState extends PlaceUrlState {
   weights: RouteWeights;
 }
 
-export interface ModeUrlState extends PlaceUrlState {
-  mode: ModeId; // an unknown one reads as the default
+export interface LensUrlState extends PlaceUrlState {
+  lens: LensId; // an unknown one reads as the default
   alt: number | null; // the chosen route card, by index; null while none is
   toggles: Toggles;
 }
@@ -112,9 +112,9 @@ export const DEFAULT_ROUTE_STATE: RouteUrlState = {
   weights: DEFAULT_WEIGHTS,
 };
 
-export const DEFAULT_MODE_STATE: ModeUrlState = {
+export const DEFAULT_LENS_STATE: LensUrlState = {
   ...DEFAULT_PLACE_STATE,
-  mode: DEFAULT_MODE.id,
+  lens: DEFAULT_LENS.id,
   alt: null,
   toggles: DEFAULT_TOGGLES,
 };
@@ -166,7 +166,7 @@ const WEIGHT_PARAMS: readonly WeightParam[] = [
   { key: "transit", field: "transit", min: 0, max: MAX_TRANSIT_WEIGHT },
 ];
 
-// Both shells' keys are cleared together, or a stale `mode=` rides along on an Explorer link.
+// Both shells' keys are cleared together, or a stale `lens=` rides along on an Explorer link.
 const PLACE_KEYS: readonly string[] = [
   "from",
   "to",
@@ -182,9 +182,9 @@ const ROUTE_KEYS: readonly string[] = [
   "sheds",
   "crossings",
 ];
-const MODE_KEYS: readonly string[] = [
+const LENS_KEYS: readonly string[] = [
   ...PLACE_KEYS,
-  "mode",
+  "lens",
   "alt",
   "sun",
   "hills",
@@ -193,7 +193,7 @@ const MODE_KEYS: readonly string[] = [
 const VIEW_KEYS: readonly string[] = ["at", "layers", "city"];
 // What a link can say beyond where to look; the hash keeps these current.
 const STATE_KEYS: readonly string[] = [
-  ...new Set([...ROUTE_KEYS, ...MODE_KEYS]),
+  ...new Set([...ROUTE_KEYS, ...LENS_KEYS]),
 ];
 
 function round(value: number, digits: number): number {
@@ -365,17 +365,17 @@ export function encodeRoute(state: RouteUrlState): URLSearchParams {
   return params;
 }
 
-export function decodeModes(
+export function decodeLenses(
   params: URLSearchParams,
-  defaults: ModeUrlState = DEFAULT_MODE_STATE,
-): ModeUrlState {
-  const mode = params.get("mode");
+  defaults: LensUrlState = DEFAULT_LENS_STATE,
+): LensUrlState {
+  const lens = params.get("lens");
   return {
     ...decodePlace(params, defaults),
-    // Modes always routes at now, so a link carrying Explorer's clock is ignored.
+    // Lenses always routes at now, so a link carrying Explorer's clock is ignored.
     customHour: null,
     customDay: null,
-    mode: mode !== null && isModeId(mode) ? mode : defaults.mode,
+    lens: lens !== null && isLensId(lens) ? lens : defaults.lens,
     alt: parseIndex(params.get("alt"), defaults.alt),
     toggles: {
       sun: parseChoice(params.get("sun"), SUN_VALUES, defaults.toggles.sun),
@@ -391,13 +391,13 @@ export function decodeModes(
   };
 }
 
-export function encodeModes(state: ModeUrlState): URLSearchParams {
+export function encodeLenses(state: LensUrlState): URLSearchParams {
   const params = new URLSearchParams();
   encodePoints(params, state);
   // The recipient fills missing keys from their own settings, so a pinned card pins the whole plan.
   const pinned = state.alt !== null;
-  if (pinned || state.mode !== DEFAULT_MODE.id) {
-    params.set("mode", state.mode);
+  if (pinned || state.lens !== DEFAULT_LENS.id) {
+    params.set("lens", state.lens);
   }
   if (state.alt !== null) {
     params.set("alt", String(state.alt));

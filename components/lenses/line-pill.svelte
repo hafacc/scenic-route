@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { RideSummary } from "../../src/modes/cards";
+import type { RideSummary } from "../../src/lenses/cards";
 import { PILL } from "./route-cards";
 
 interface Props {

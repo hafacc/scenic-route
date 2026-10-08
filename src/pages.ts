@@ -6,11 +6,11 @@ export interface AppPage {
   label: string; // the menu row's words
 }
 
-export const MODES_PAGE: AppPage = {
+export const LENSES_PAGE: AppPage = {
   file: "index.html",
   path: "",
   href: "./",
-  label: "Modes",
+  label: "Lenses",
 };
 
 // A file, not a directory index: artifact paths resolve against the document.
@@ -29,7 +29,7 @@ export const ABOUT_PAGE: AppPage = {
 };
 
 export const APP_PAGES: readonly AppPage[] = [
-  MODES_PAGE,
+  LENSES_PAGE,
   EXPLORER_PAGE,
   ABOUT_PAGE,
 ];

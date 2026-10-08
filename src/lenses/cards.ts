@@ -4,7 +4,7 @@ import { SCENIC_KEYS, type ScenicKey } from "../routing/cost";
 import { formatDistance, formatDuration } from "../routing/directions";
 import { FACTORS, type FactorKey } from "../routing/factors";
 import type { FerryLeg, TransitLeg } from "../routing/search";
-import type { FactorAvailability, Mode } from "./modes";
+import type { FactorAvailability, Lens } from "./lenses";
 
 // The single-route color, worn by the least scenic card.
 export const DIRECT_COLOR = "#334155";
@@ -158,11 +158,11 @@ export function chipReading(key: FactorKey, percent: number): ChipReading {
 
 // Penalties aren't reported, nor factors this city can't answer.
 export function chipFactors(
-  mode: Mode,
+  lens: Lens,
   available: FactorAvailability,
 ): ScenicKey[] {
   return SCENIC_KEYS.filter(
-    (key) => (mode.weights[key] ?? 0) > 0 && available[key],
+    (key) => (lens.weights[key] ?? 0) > 0 && available[key],
   );
 }
 
@@ -175,8 +175,8 @@ function factorColor(key: FactorKey): string | null {
   return FACTORS.find((factor) => factor.key === key)?.color ?? null;
 }
 
-// Ends wear the mode's color and the lone-route slate; standouts their factor's color, else palette.
-export function cardColors(mode: Mode, cards: readonly CardRank[]): string[] {
+// Ends wear the lens's color and the lone-route slate; standouts their factor's color, else palette.
+export function cardColors(lens: Lens, cards: readonly CardRank[]): string[] {
   const byScore = [...cards.keys()].sort(
     (left, right) => cards[right].scenicScore - cards[left].scenicScore,
   );
@@ -184,9 +184,9 @@ export function cardColors(mode: Mode, cards: readonly CardRank[]): string[] {
   const standouts = cards.map((card) => {
     const color =
       card.colorFactor === null ? null : factorColor(card.colorFactor);
-    return color === mode.color ? null : color;
+    return color === lens.color ? null : color;
   });
-  const used = new Set<string>([mode.color]);
+  const used = new Set<string>([lens.color]);
   for (const standout of standouts) {
     if (standout !== null) {
       used.add(standout);
@@ -196,16 +196,16 @@ export function cardColors(mode: Mode, cards: readonly CardRank[]): string[] {
   return [...cards.keys()].map((index) => {
     const standout = standouts[index];
     if (index === byScore[0]) {
-      return mode.color;
+      return lens.color;
     } else if (index === byScore[byScore.length - 1]) {
       return DIRECT_COLOR;
     } else if (standout !== null) {
       return standout;
     } else {
-      while (next < mode.palette.length && used.has(mode.palette[next])) {
+      while (next < lens.palette.length && used.has(lens.palette[next])) {
         next++;
       }
-      const picked = mode.palette[next] ?? mode.color;
+      const picked = lens.palette[next] ?? lens.color;
       used.add(picked);
       return picked;
     }

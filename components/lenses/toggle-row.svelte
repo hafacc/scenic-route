@@ -9,8 +9,12 @@ import {
   MdWbTwilight,
 } from "../../src/icons/glyphs";
 import type { IconData } from "../../src/icons/types";
-import type { FactorAvailability } from "../../src/modes/modes";
-import { HILLS_VALUES, SUN_VALUES, type Toggles } from "../../src/modes/modes";
+import type { FactorAvailability } from "../../src/lenses/lenses";
+import {
+  HILLS_VALUES,
+  SUN_VALUES,
+  type Toggles,
+} from "../../src/lenses/lenses";
 import Icon from "../icon.svelte";
 
 const GRAY = "text-slate-400 dark:text-slate-500";

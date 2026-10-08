@@ -6,8 +6,8 @@ import PageHead from "../../../components/page-head.svelte";
 import { CITIES } from "../../cities";
 import { CITY_SOURCES, type DataSource, SHARED_SOURCES } from "../../credits";
 import { FiExternalLink, FiMapPin, SiGithub } from "../../icons/glyphs";
-import type { ModeId } from "../../modes/modes";
-import { EXPLORER_PAGE, MODES_PAGE } from "../../pages";
+import type { LensId } from "../../lenses/lenses";
+import { EXPLORER_PAGE, LENSES_PAGE } from "../../pages";
 import { pageMetadata, REPO_URL } from "../../site";
 
 // Whole strings, since a line break inside markup text would reach the DOM.
@@ -15,8 +15,8 @@ const INTRO =
   "Scenic Route finds nicer ways to walk across New York City and the San Francisco Bay Area. Use Directions to plan a path — weighting it toward tree cover, sun or shade, shelter from the rain, landmarks, public art, historic districts, nice commercial streets and ferries, and away from highways, industrial areas and scaffolding — or switch between the map overlays to explore what's around you. Which of those a region offers depends on what its cities publish; the sliders say so when one is missing.";
 const HOW_TO =
   "To use it, tap the layers button to toggle overlays like tree canopy or building shade, and drag the clock to see how shade shifts through the day. Open Directions to set a start and destination, then open the sliders to bias the route toward what you care about — the summary shows how much of each the route picks up. Drag either endpoint on the map to nudge the route, and drop it to lock the new point in.";
-const MODES_INTRO =
-  "A mode is a set of routing weights and the map layers that explain them. Each one also takes the same three switches: sun or shade, how many hills you will accept, and whether a ferry counts as walking.";
+const LENSES_INTRO =
+  "A lens is a set of routing weights and the map layers that explain them. Each one also takes the same three switches: sun or shade, how many hills you will accept, and whether a ferry counts as walking.";
 const SOURCE = "Source code";
 const DATA_INTRO =
   "Every layer is public data. Several of the licenses ask to be carried rather than cited; those are linked below.";
@@ -26,19 +26,19 @@ const meta = pageMetadata({
   title: "About Scenic Route",
   absoluteTitle: true,
   description:
-    "What Scenic Route optimizes for, its four walking modes, where it works, and the open data behind every layer.",
+    "What Scenic Route optimizes for, its four walking lenses, where it works, and the open data behind every layer.",
 });
 
-// Not read off MODES, which would pull the whole mode table into this page's bundle.
-const MODE_COPY: Record<ModeId, { name: string; color: string }> = {
+// Not read off LENSES, which would pull the whole lens table into this page's bundle.
+const LENS_COPY: Record<LensId, { name: string; color: string }> = {
   naturalist: { name: "Naturalist", color: "#0d9488" },
   rain: { name: "Rain", color: "#0284c7" },
   historic: { name: "Historic", color: "#9c3a11" },
   streetlife: { name: "Street life", color: "#7e1f97" },
 };
 
-// Switcher order, as MODES has it.
-const MODE_ORDER: readonly ModeId[] = [
+// Switcher order, as LENSES has it.
+const LENS_ORDER: readonly LensId[] = [
   "naturalist",
   "rain",
   "historic",
@@ -108,20 +108,20 @@ const CITY_CREDITS = CITIES.flatMap((city) => {
   </div>
 
   <section class="mt-10">
-    <h2 class="text-lg font-semibold tracking-tight">The four modes</h2>
+    <h2 class="text-lg font-semibold tracking-tight">The four lenses</h2>
     <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
-      {MODES_INTRO}
+      {LENSES_INTRO}
     </p>
     <ul class="mt-4 flex flex-wrap gap-x-5 gap-y-2">
-      {#each MODE_ORDER as id (id)}
+      {#each LENS_ORDER as id (id)}
         <li
           class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200"
         >
           <span
             aria-hidden="true"
             class="h-2.5 w-2.5 shrink-0 rounded-full"
-            style="background-color:{MODE_COPY[id].color}"
-          ></span>{MODE_COPY[id].name}
+            style="background-color:{LENS_COPY[id].color}"
+          ></span>{LENS_COPY[id].name}
         </li>
       {/each}
     </ul>
@@ -166,7 +166,7 @@ const CITY_CREDITS = CITIES.flatMap((city) => {
     class="mt-10 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-slate-200/60 pt-5 text-sm font-medium dark:border-slate-700/60"
   >
     <a
-      href={MODES_PAGE.href}
+      href={LENSES_PAGE.href}
       class="text-brand-600 hover:underline dark:text-brand-400"
     >
       Open the map

@@ -3,7 +3,7 @@ import type { Snippet } from "svelte";
 import type { City } from "../src/cities";
 import type { AuthInfo } from "../src/firebase";
 import type { GeocodeResult } from "../src/geocode";
-import type { FactorAvailability } from "../src/modes/modes";
+import type { FactorAvailability } from "../src/lenses/lenses";
 import type { OverlayId } from "../src/overlays/registry";
 import type { Pin, PinDraft } from "../src/pin";
 import type { RouteClock } from "../src/routing/contexts";
@@ -149,7 +149,7 @@ export interface MapShellProps {
   onHoverLine?: (index: number | null) => void;
   // Only for a reset the shell makes on its own (leaving the city), not the deck's close button.
   onRoutingReset?: () => void;
-  // Where the keys sit from `md` up; on a phone always under the toolbar, and above Modes' card.
+  // Where the keys sit from `md` up; on a phone always under the toolbar, and above Lenses' card.
   legends?: "bottom-left" | "top-left" | "top-left-on-phone";
   // A deck that puts the box in its own card takes the machinery off `ShellDeck`.
   ownSearch?: boolean;

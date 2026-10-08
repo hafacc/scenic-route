@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
 import { MdWaterDrop } from "../../src/icons/glyphs";
-import { chipReading } from "../../src/modes/cards";
+import { chipReading } from "../../src/lenses/cards";
 import { FACTORS } from "../../src/routing/factors";
 import Icon from "../icon.svelte";
 import type { CardView } from "./route-cards";

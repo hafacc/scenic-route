@@ -1,27 +1,27 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
 import {
-  type ModeId,
-  modeForCity,
-  modesForCity,
+  type LensId,
+  lensesForCity,
+  lensForCity,
   type Toggles,
-} from "../../src/modes/modes";
+} from "../../src/lenses/lenses";
 import SettingsDialog from "../settings-dialog.svelte";
 import type { ShellDeck } from "../shell-types";
-import { expand, type ModesState } from "./modes-state";
-import ModesPanel from "./panel.svelte";
+import { expand, type LensesState } from "./lenses-state";
+import LensesPanel from "./panel.svelte";
 
 interface Props {
   shell: ShellDeck;
-  deck: ModesState;
+  deck: LensesState;
   exportAction: Snippet | null;
 }
 
 const { shell, deck, exportAction }: Props = $props();
 
 const city = $derived(shell.city);
-const modes = $derived(modesForCity(city));
-const mode = $derived(modeForCity(city, deck.modeId));
+const lenses = $derived(lensesForCity(city));
+const lens = $derived(lensForCity(city, deck.lensId));
 
 // Unresolved link text counts as a destination, since the box it is typed into is the answer.
 const routing = $derived(
@@ -31,8 +31,8 @@ function close(): void {
   shell.onToggleRouting();
   deck.onClose();
 }
-function handleMode(id: ModeId): void {
-  deck.onMode(id);
+function handleLens(id: LensId): void {
+  deck.onLens(id);
   expand(shell);
 }
 function handleToggles(next: Toggles): void {
@@ -52,11 +52,11 @@ const errorMessage = $derived(
 );
 </script>
 
-<ModesPanel
+<LensesPanel
   {city}
-  {modes}
-  {mode}
-  onMode={handleMode}
+  {lenses}
+  {lens}
+  onLens={handleLens}
   toggles={deck.toggles}
   available={shell.available}
   onToggles={handleToggles}

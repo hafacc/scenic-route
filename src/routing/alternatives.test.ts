@@ -230,7 +230,7 @@ function weightsOf(over: Partial<RouteWeights> = {}): RouteWeights {
   };
 }
 
-const MODE_WEIGHTS = weightsOf({
+const LENS_WEIGHTS = weightsOf({
   tree: MAX_TREE_WEIGHT,
   commercial: MAX_COMMERCIAL_WEIGHT,
   industrial: MAX_INDUSTRIAL_WEIGHT,
@@ -262,7 +262,7 @@ test("the fixture's corridors win where they were designed to", async () => {
       findRoute(fixture.graph, fixture.start, fixture.dest, weights)!,
     );
   expect(route(weightsOf())).toBe("direct");
-  expect(route(MODE_WEIGHTS)).toBe("deep");
+  expect(route(LENS_WEIGHTS)).toBe("deep");
   const scaled = (scale: number): RouteWeights =>
     weightsOf({
       tree: MAX_TREE_WEIGHT * scale,
@@ -295,7 +295,7 @@ test("two routes are as far apart as the ground between them", async () => {
     fixture.graph,
     fixture.start,
     fixture.dest,
-    MODE_WEIGHTS,
+    LENS_WEIGHTS,
   )!;
   expect(routeDistanceMeters(direct, direct)).toBeCloseTo(0, 9);
   expect(routeDistanceMeters(direct, deep)).toBeGreaterThan(DIFFERENT_METERS);
@@ -321,7 +321,7 @@ test("the sweep finds the corridor that is cheapest only in a band", async () =>
   const fixture = buildFixture();
   const found: string[] = [];
   await planRoutes({
-    weights: MODE_WEIGHTS,
+    weights: LENS_WEIGHTS,
     search: (candidate) =>
       findRoute(fixture.graph, fixture.start, fixture.dest, candidate),
     minMultiplier: (candidate) => minMultiplier(fixture.graph, candidate),
@@ -335,7 +335,7 @@ test("the sweep finds the corridor that is cheapest only in a band", async () =>
 test("the first breakpoint above the fastest route is the shallow corridor", async () => {
   const fixture = buildFixture();
   const seen: RouteWeights[] = [];
-  const plan = await planOn(fixture, MODE_WEIGHTS, seen);
+  const plan = await planOn(fixture, LENS_WEIGHTS, seen);
   const corridors = plan.routes.map((route) =>
     fixture.corridorOf(route.result),
   );
@@ -351,7 +351,7 @@ test("the first breakpoint above the fastest route is the shallow corridor", asy
 
 test("dropping a factor finds the route only that factor was hiding", async () => {
   const fixture = buildFixture();
-  const plan = await planOn(fixture, MODE_WEIGHTS);
+  const plan = await planOn(fixture, LENS_WEIGHTS);
   const corridors = plan.routes.map((route) =>
     fixture.corridorOf(route.result),
   );
@@ -364,7 +364,7 @@ test("dropping a factor finds the route only that factor was hiding", async () =
 test("a plan stays inside its search budget and repeats no weight vector", async () => {
   const fixture = buildFixture();
   const seen: RouteWeights[] = [];
-  const plan = await planOn(fixture, MODE_WEIGHTS, seen);
+  const plan = await planOn(fixture, LENS_WEIGHTS, seen);
   // 1 max + 1 fastest + 4 sweep + 4 bisection + 3 drops; four routes, so no per-factor bisection.
   expect(plan.searches).toBe(13);
   expect(seen.length).toBe(plan.searches);
@@ -374,7 +374,7 @@ test("a plan stays inside its search budget and repeats no weight vector", async
 
 test("cards are the max-scenic route, the direct one and what differs from both", async () => {
   const fixture = buildFixture();
-  const plan = await planOn(fixture, MODE_WEIGHTS);
+  const plan = await planOn(fixture, LENS_WEIGHTS);
   expect(plan.routes.length).toBe(4);
   const deep = plan.routes.find(
     (route) => fixture.corridorOf(route.result) === "deep",
@@ -422,7 +422,7 @@ test("selection stops rather than offering a route that is not different", async
 
 test("the scenic score and the color factor say what a card has", async () => {
   const fixture = buildFixture();
-  const plan = await planOn(fixture, MODE_WEIGHTS);
+  const plan = await planOn(fixture, LENS_WEIGHTS);
   const scoreOf = (corridor: string): number =>
     plan.routes.find((route) => fixture.corridorOf(route.result) === corridor)!
       .scenicScore;
@@ -467,7 +467,7 @@ test("a factor whose drop changed nothing is never asked for in between", async 
 
 test("a search that finds nothing plans nothing", async () => {
   const plan = await planRoutes({
-    weights: MODE_WEIGHTS,
+    weights: LENS_WEIGHTS,
     search: () => null,
     minMultiplier: () => 1,
   });
@@ -480,7 +480,7 @@ test("the sweep's baseline is the fastest walk, not the ride", async () => {
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
   const start = snapAtNode(graph, 0, WEST_SIDEWALK);
   const dest = snapAtNode(graph, 2, EAST_SIDEWALK);
-  const mode = transitWeights({
+  const lens = transitWeights({
     tree: MAX_TREE_WEIGHT,
     transit: MAX_TRANSIT_WEIGHT,
   });
@@ -492,7 +492,7 @@ test("the sweep's baseline is the fastest walk, not the ride", async () => {
   );
   const asked: RouteWeights[] = [];
   const plan = await planRoutes({
-    weights: mode,
+    weights: lens,
     search: (candidate) => {
       asked.push(candidate);
       return findRoute(graph, start, dest, candidate);
@@ -514,7 +514,7 @@ test("the sweep's baseline is the fastest walk, not the ride", async () => {
   ).toBeCloseTo((onFoot as RouteResult).travelSeconds, 6);
 });
 
-test("the fastest trip is asked for even where the mode charges a ride", async () => {
+test("the fastest trip is asked for even where the lens charges a ride", async () => {
   const graph = transitGraph(undefined, { detours: true });
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
   const start = snapAtNode(graph, 0, WEST_SIDEWALK);
@@ -581,8 +581,8 @@ test("dropping the transit penalty is what offers the ride", async () => {
   ).toBe(true);
 });
 
-// Here the ride is quicker and the mode prices nothing the walk has, so the walk earns no card.
-test("a mode that prices no ride is still offered the walk", async () => {
+// Here the ride is quicker and the lens prices nothing the walk has, so the walk earns no card.
+test("a lens that prices no ride is still offered the walk", async () => {
   const graph = transitGraph();
   graph.transit = fixtureTimetable(departureReaching(ACCESS_SECONDS));
   const start = snapAtNode(graph, 0, WEST_SIDEWALK);

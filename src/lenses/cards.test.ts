@@ -9,12 +9,12 @@ import {
   rideSummaries,
   visibleChips,
 } from "./cards";
-import { ALL_FACTORS, type FactorAvailability, modeById } from "./modes";
+import { ALL_FACTORS, type FactorAvailability, lensById } from "./lenses";
 
-const NATURALIST = modeById("naturalist");
-const HISTORIC = modeById("historic");
+const NATURALIST = lensById("naturalist");
+const HISTORIC = lensById("historic");
 if (NATURALIST === null || HISTORIC === null) {
-  throw new Error("the two modes these tests are about are gone");
+  throw new Error("the two lenses these tests are about are gone");
 }
 
 const MILE = 1609.344;
@@ -222,7 +222,7 @@ describe("ferrySummaries", () => {
 });
 
 describe("chips", () => {
-  test("only the mode's own discounts, never its penalties", () => {
+  test("only the lens's own discounts, never its penalties", () => {
     expect(chipFactors(NATURALIST, ALL_FACTORS)).toEqual(["tree", "bridge"]);
     expect(chipFactors(HISTORIC, ALL_FACTORS)).toEqual([
       "landmark",
@@ -260,19 +260,19 @@ describe("chips", () => {
 describe("cardColors", () => {
   const plain = (scenicScore: number) => ({ scenicScore, colorFactor: null });
 
-  test("a lone card is the mode's own color", () => {
+  test("a lone card is the lens's own color", () => {
     expect(cardColors(HISTORIC, [plain(3)])).toEqual([HISTORIC.color]);
   });
 
-  test("two cards are the mode's color and slate", () => {
+  test("two cards are the lens's color and slate", () => {
     expect(cardColors(HISTORIC, [plain(1), plain(3)])).toEqual([
       DIRECT_COLOR,
       HISTORIC.color,
     ]);
   });
 
-  test("a third card takes the first palette color the mode has not used", () => {
-    // The historic palette leads with the mode's own brick, so the middle card takes the next.
+  test("a third card takes the first palette color the lens has not used", () => {
+    // The historic palette leads with the lens's own brick, so the middle card takes the next.
     expect(cardColors(HISTORIC, [plain(3), plain(2), plain(1)])).toEqual([
       HISTORIC.color,
       HISTORIC.palette[1],

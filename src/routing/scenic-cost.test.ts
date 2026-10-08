@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import {
   ALL_FACTORS,
-  DEFAULT_MODE,
+  DEFAULT_LENS,
   DEFAULT_TOGGLES,
   effectiveWeights,
-} from "../modes/modes";
+} from "../lenses/lenses";
 import {
   DEFAULT_HIGHWAY_WEIGHT,
   edgeMultiplier,
@@ -519,17 +519,17 @@ test("a highway weight steers the route away from a shorter nuisance path", () =
 });
 
 test("Naturalist spends the top of the highway slider", () => {
-  const mode = effectiveWeights(DEFAULT_MODE, DEFAULT_TOGGLES, ALL_FACTORS);
-  expect(mode.highway).toBe(MAX_HIGHWAY_WEIGHT);
-  expect(mode.industrial).toBe(MAX_INDUSTRIAL_WEIGHT);
+  const lens = effectiveWeights(DEFAULT_LENS, DEFAULT_TOGGLES, ALL_FACTORS);
+  expect(lens.highway).toBe(MAX_HIGHWAY_WEIGHT);
+  expect(lens.industrial).toBe(MAX_INDUSTRIAL_WEIGHT);
 
   // The lower detour is long enough that only the top of the highway slider pays for it.
   const { graph, start, dest } = diamond({ highway: 0.9 }, {}, 0.0002, 0.003);
   const naturalist = (highway: number): RouteWeights =>
     noScenic({
-      tree: mode.tree,
-      bridge: mode.bridge,
-      industrial: mode.industrial,
+      tree: lens.tree,
+      bridge: lens.bridge,
+      industrial: lens.industrial,
       highway,
     });
 
@@ -541,7 +541,7 @@ test("Naturalist spends the top of the highway slider", () => {
   ).toBe(true);
   expect(upperTaken(findRoute(graph, start, dest, naturalist(1)))).toBe(true);
   expect(
-    upperTaken(findRoute(graph, start, dest, naturalist(mode.highway))),
+    upperTaken(findRoute(graph, start, dest, naturalist(lens.highway))),
   ).toBe(false);
 });
 

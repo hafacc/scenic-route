@@ -1,6 +1,6 @@
 // Pure URL rules for the service worker; it caches what the page asks for and never fetches itself.
 
-import { APP_PAGES, MODES_PAGE, SHELL_EXTRAS } from "../pages";
+import { APP_PAGES, LENSES_PAGE, SHELL_EXTRAS } from "../pages";
 
 // Routing is its own store so a long clock scrub filling the overlay store can't evict the graph.
 export type Store = "shell" | "routing" | "overlay";
@@ -66,7 +66,7 @@ export function pageFor(path: string): string {
   const page = APP_PAGES.find(
     (entry) => entry.path === path || entry.file === path,
   );
-  return page ? page.file : MODES_PAGE.file;
+  return page ? page.file : LENSES_PAGE.file;
 }
 
 // Null leaves the request alone, with no `respondWith`.

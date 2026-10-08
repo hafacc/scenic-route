@@ -1,6 +1,6 @@
 import type { ThemeName } from "../theme/palette";
 
-// One color per layer in every mode; night halves lift for contrast, day halves hold 3:1 on white.
+// One color per layer in every lens; night halves lift for contrast, day halves hold 3:1 on white.
 
 // Ochre, apart from the sun slider's amber.
 export const LANDMARK_COLOR: Record<ThemeName, string> = {

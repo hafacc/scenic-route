@@ -7,8 +7,8 @@ import {
   DEFAULT_TOGGLES,
   effectiveWeights,
   graphFactors,
-  MODES,
-} from "../modes/modes";
+  LENSES,
+} from "../lenses/lenses";
 import {
   planRoutes,
   routeDistanceMeters,
@@ -104,10 +104,10 @@ function ridden(result: RouteResult): string {
     : `${lines.join("+")} ${minutes(result.transitSeconds)}`;
 }
 
-for (const mode of MODES) {
+for (const lens of LENSES) {
   for (const transitOn of [true, false]) {
     const weights = {
-      ...effectiveWeights(mode, DEFAULT_TOGGLES, available),
+      ...effectiveWeights(lens, DEFAULT_TOGGLES, available),
       allowTransit: transitOn,
     };
     await engine.prepare(CITY, CLOCK, weights);
@@ -121,7 +121,7 @@ for (const mode of MODES) {
       `transit ${weights.transit}`,
     ].join(", ");
     console.log(
-      `## ${mode.name}, subway ${transitOn ? "on" : "off"} (${fields})`,
+      `## ${lens.name}, subway ${transitOn ? "on" : "off"} (${fields})`,
     );
     console.log(
       "trip                            | searches | ms    | sets seen/all | dropped | cards | card times (min) | km per card       | scenic scores     | closest (m) | rides",
@@ -189,7 +189,7 @@ for (const mode of MODES) {
   }
 }
 
-// Scenic weights are zero, since a mode that flattens the estimate would hide the transit credit's cost.
+// Scenic weights are zero, since a lens that flattens the estimate would hide the transit credit's cost.
 const longest = TRIPS[2]; // Union Sq - Prospect Park, the longest of them
 const snapped = snapPair(graph, index, longest.from, longest.to);
 if (snapped.ok) {
@@ -199,7 +199,7 @@ if (snapped.ok) {
     for (const transit of [0, MAX_TRANSIT_WEIGHT]) {
       const weights: RouteWeights = {
         ...effectiveWeights(
-          MODES[0],
+          LENSES[0],
           DEFAULT_TOGGLES,
           Object.fromEntries(
             Object.keys(available).map((key) => [key, false]),

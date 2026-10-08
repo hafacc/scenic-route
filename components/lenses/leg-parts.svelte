@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { LinePart, RideSummary } from "../../src/modes/cards";
+import type { LinePart, RideSummary } from "../../src/lenses/cards";
 import FerryPill from "./ferry-pill.svelte";
 import LinePill from "./line-pill.svelte";
 

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { DEFAULT_MODE, DEFAULT_TOGGLES } from "../modes/modes";
+import { DEFAULT_LENS, DEFAULT_TOGGLES } from "../lenses/lenses";
 import type { OverlayId } from "../overlays/registry";
 import {
   mergeOrder,
@@ -100,7 +100,7 @@ test("a reader with neither gets the defaults, and nothing is written", () => {
   expect(settings.allowFerries).toBe(true);
   expect(settings.allowSheds).toBe(true);
   expect(settings.hiddenFactors).toEqual([]);
-  expect(settings.mode).toBe(DEFAULT_MODE.id);
+  expect(settings.lens).toBe(DEFAULT_LENS.id);
   expect(settings.toggles).toEqual(DEFAULT_TOGGLES);
   expect(migrated).toBe(false);
 });
@@ -194,14 +194,53 @@ test("a gate hidden under its old name stays hidden after the rename", () => {
   expect(both.settings.hiddenGates).toEqual(["allowCrossings", "allowFerries"]);
 });
 
-test("a mode this build does not offer opens the default one", () => {
-  const stored = (mode: unknown): string =>
-    settingsFrom({ weights: {}, mode } as Partial<Settings>, () => null)
-      .settings.mode;
+test("a lens this build does not offer opens the default one", () => {
+  const stored = (lens: unknown): string =>
+    settingsFrom({ weights: {}, lens } as Partial<Settings>, () => null)
+      .settings.lens;
   expect(stored("rain")).toBe("rain");
-  expect(stored("cartographer")).toBe(DEFAULT_MODE.id);
-  expect(stored(7)).toBe(DEFAULT_MODE.id);
-  expect(stored(undefined)).toBe(DEFAULT_MODE.id);
+  expect(stored("cartographer")).toBe(DEFAULT_LENS.id);
+  expect(stored(7)).toBe(DEFAULT_LENS.id);
+  expect(stored(undefined)).toBe(DEFAULT_LENS.id);
+});
+
+// Documents saved before the rename say `mode` and `modeLayers`, in the fields and the stamps.
+test("a choice stored under the old `mode` names is kept", () => {
+  const { settings } = settingsFrom(
+    {
+      weights: {},
+      mode: "rain",
+      modeLayers: { historic: ["legacy"] },
+      updatedAt: { mode: 100, "modeLayers.historic": 200, coverage: 300 },
+    } as unknown as Partial<Settings>,
+    () => null,
+  );
+  expect(settings.lens).toBe("rain");
+  expect(settings.lensLayers).toEqual({ historic: ["legacy"] });
+  expect(settings.updatedAt).toEqual({
+    lens: 100,
+    "lensLayers.historic": 200,
+    coverage: 300,
+  });
+  expect("mode" in settings).toBe(false);
+  expect("modeLayers" in settings).toBe(false);
+});
+
+test("the current names win over the old ones beside them", () => {
+  const { settings } = settingsFrom(
+    {
+      weights: {},
+      mode: "rain",
+      lens: "historic",
+      modeLayers: { rain: ["canopy"] },
+      lensLayers: { historic: ["legacy"] },
+      updatedAt: { mode: 100, lens: 400 },
+    } as unknown as Partial<Settings>,
+    () => null,
+  );
+  expect(settings.lens).toBe("historic");
+  expect(settings.lensLayers).toEqual({ historic: ["legacy"] });
+  expect(settings.updatedAt).toEqual({ lens: 400 });
 });
 
 test("a switch a newer build wrote costs its own position, not the other two", () => {
@@ -227,26 +266,26 @@ test("toggles that are not an object at all read as the defaults", () => {
   expect(settings.toggles).toEqual(DEFAULT_TOGGLES);
 });
 
-test("a layer list drops an overlay and a mode this build cannot name", () => {
+test("a layer list drops an overlay and a lens this build cannot name", () => {
   const { settings } = settingsFrom(
     {
       weights: {},
-      modeLayers: {
+      lensLayers: {
         historic: ["legacy", "zeppelins"],
         cartographer: ["canopy"],
       },
     } as unknown as Partial<Settings>,
     () => null,
   );
-  expect(settings.modeLayers).toEqual({ historic: ["legacy"] });
+  expect(settings.lensLayers).toEqual({ historic: ["legacy"] });
 });
 
-test("a mode's layer list is stamped on its own, not with the other modes'", () => {
-  updateSettings({ modeLayers: { historic: ["legacy"] } }, 2345);
+test("a lens's layer list is stamped on its own, not with the other lenses'", () => {
+  updateSettings({ lensLayers: { historic: ["legacy"] } }, 2345);
   const { updatedAt } = settings();
-  expect(updatedAt["modeLayers.historic"]).toBe(2345);
-  expect(updatedAt["modeLayers.naturalist"]).toBeUndefined();
-  expect(updatedAt.modeLayers).toBeUndefined();
+  expect(updatedAt["lensLayers.historic"]).toBe(2345);
+  expect(updatedAt["lensLayers.naturalist"]).toBeUndefined();
+  expect(updatedAt.lensLayers).toBeUndefined();
 });
 
 test("a switch is stamped on its own, not with the other two", () => {
