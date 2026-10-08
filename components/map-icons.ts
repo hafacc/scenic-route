@@ -1,5 +1,3 @@
-"use client";
-
 import L from "leaflet";
 import { SEARCH_PIN_COLOR } from "../src/overlays/colors";
 import { hexToRgb, type ThemeName } from "../src/theme/palette";

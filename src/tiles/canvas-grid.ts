@@ -1,5 +1,3 @@
-"use client";
-
 import L from "leaflet";
 import { subscribeTheme } from "../theme/current";
 import { repaintOnRestore } from "./repaint";

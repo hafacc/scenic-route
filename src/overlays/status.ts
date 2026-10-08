@@ -1,7 +1,4 @@
-"use client";
-
 import type L from "leaflet";
-import { useSyncExternalStore } from "react";
 import type { OverlayId } from "./registry";
 
 // Renderers turn a 404 into an empty tile, so an error means unreachable rather than empty.
@@ -47,7 +44,7 @@ function reportLayerStatus(
   republish();
 }
 
-function subscribe(listener: () => void): () => void {
+export function subscribeUnreachableLayers(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
@@ -65,10 +62,6 @@ export function reportLayerData(
 
 export function unreachableLayers(): ReadonlySet<OverlayId> {
   return unreachable;
-}
-
-export function useUnreachableLayers(): ReadonlySet<OverlayId> {
-  return useSyncExternalStore(subscribe, unreachableLayers, () => EMPTY);
 }
 
 // Judged once per Leaflet `loading`/`load` cycle, so one failing tile doesn't flap the badge.

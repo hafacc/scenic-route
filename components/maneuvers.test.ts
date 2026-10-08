@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { MdElevator, MdLogout, MdStairs } from "react-icons/md";
+import { MdElevator, MdLogout, MdStairs } from "../src/icons/glyphs";
 import type { Maneuver } from "../src/routing/directions";
 import type { NavProgress } from "../src/routing/nav-progress";
 import { maneuverIcon, maneuverState } from "./maneuvers";
@@ -21,14 +21,12 @@ function stationManeuver(overrides: Partial<Maneuver>): Maneuver {
 }
 
 test("a lift wears the lift icon and every other door the stair", () => {
-  expect(maneuverIcon(stationManeuver({ door: "elevator" })).type).toBe(
-    MdElevator,
-  );
-  expect(maneuverIcon(stationManeuver({ door: "stair" })).type).toBe(MdStairs);
+  expect(maneuverIcon(stationManeuver({ door: "elevator" }))).toBe(MdElevator);
+  expect(maneuverIcon(stationManeuver({ door: "stair" }))).toBe(MdStairs);
   // A curbside stop carries no door at all, and still reads as a way in.
-  expect(maneuverIcon(stationManeuver({})).type).toBe(MdStairs);
+  expect(maneuverIcon(stationManeuver({}))).toBe(MdStairs);
   expect(
-    maneuverIcon(stationManeuver({ station: "alight", door: undefined })).type,
+    maneuverIcon(stationManeuver({ station: "alight", door: undefined })),
   ).toBe(MdLogout);
 });
 

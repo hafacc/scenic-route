@@ -6,7 +6,7 @@ import type { TileRenderer } from "./renderer";
 import { type Cursor, readVarint } from "./varint";
 
 // Live dots over the genus wash (crates/tiler/src/genus_field.rs) from z15, each at its crown size.
-const TREE_URL = "trees/{file}"; // relative, picks up the deploy basePath; layout: scripts/README.md
+const TREE_URL = "trees/{file}"; // relative to the page; layout: scripts/README.md
 const TREE_FORMAT = 3;
 
 const TILE_SIZE = 256;

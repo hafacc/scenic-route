@@ -59,7 +59,7 @@ const SHELL_FILES = [
   ...APP_PAGES.flatMap((page) => [page.path, page.file]),
   ...SHELL_EXTRAS,
 ];
-const SHELL_DIRS = ["_next/", "icons/"];
+const SHELL_DIRS = ["_app/", "icons/"];
 
 // Everything unknown, 404 included, gets the root document, which is the app's not-found page.
 export function pageFor(path: string): string {
@@ -228,4 +228,37 @@ export function chunked<Item>(items: readonly Item[], size: number): Item[][] {
     chunks.push(items.slice(start, start + size));
   }
   return chunks;
+}
+
+interface ScriptCache {
+  match(request: Request): Promise<Response | undefined>;
+  put(request: Request, response: Response): Promise<void>;
+}
+
+// Network first, keeping a copy; the copy answers offline or once a deploy has taken the hashed file away.
+export async function freshThenStored(
+  request: Request,
+  load: (request: Request) => Promise<Response>,
+  cache: ScriptCache,
+  keep: (stored: Promise<void>) => void,
+): Promise<Response> {
+  let response: Response | null = null;
+  let failure: unknown;
+  try {
+    response = await load(request);
+  } catch (error) {
+    failure = error;
+  }
+  if (response?.ok) {
+    keep(cache.put(request, response.clone()));
+    return response;
+  }
+  const stored = await cache.match(request);
+  if (stored) {
+    return stored;
+  } else if (response) {
+    return response;
+  } else {
+    throw failure;
+  }
 }

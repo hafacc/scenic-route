@@ -1,12 +1,12 @@
 // Every genus is on by default, so the overlay opens on the all-genera view.
 import { GENUS_COUNT } from "./genus";
 
-// A stable reference, so re-selecting all hands useSyncExternalStore its starting snapshot.
+// A stable reference, so re-selecting all hands a subscriber the starting set.
 const ALL_GENERA: ReadonlySet<number> = new Set(
   Array.from({ length: GENUS_COUNT }, (_, id) => id),
 );
 
-// Toggles swap in a new Set, so useSyncExternalStore sees a fresh reference exactly on change.
+// Toggles swap in a new Set, so a subscriber sees a fresh reference exactly on change.
 let enabled: ReadonlySet<number> = ALL_GENERA;
 const listeners = new Set<() => void>();
 

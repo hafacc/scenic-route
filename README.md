@@ -23,7 +23,7 @@ and attach freeform notes.
 ```sh
 bun install
 bun run dev      # http://localhost:3000
-bun run lint     # tsc + biome
+bun run lint     # svelte-check + biome
 bun run export   # static export to ./out
 ```
 

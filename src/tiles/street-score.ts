@@ -16,7 +16,7 @@ import type { TileRenderer } from "./renderer";
 import { tileMetersPerPixel } from "./soft-edge";
 import { themeName } from "./theme";
 
-// One chunk per z12 tile (layout: scripts/README.md); relative, so it picks up the deploy's basePath.
+// One chunk per z12 tile (layout: scripts/README.md); relative to the page.
 const CHUNK_URL = "streets/{x}/{y}.bin";
 const CHUNK_ZOOM = 12;
 const SIDES = 2;

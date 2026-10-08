@@ -1,0 +1,54 @@
+Scenic Route icon credits
+
+The interface icons are drawn from the open icon sets below, by way of react-icons 5.7.0
+(https://github.com/react-icons/react-icons); the glyphs used are in src/icons/glyphs.ts.
+
+--------------------------------------------------------------------------------
+Game Icons (https://game-icons.net) - CC BY 3.0, https://creativecommons.org/licenses/by/3.0/
+
+Icons made by Delapouite (http://delapouite.com): "Suspension bridge" and "Torch". Used without
+their black background square; otherwise unchanged.
+
+--------------------------------------------------------------------------------
+Material Design icons (https://github.com/google/material-design-icons) - Apache License 2.0
+
+Published by Google under the Apache License, Version 2.0; a copy of the License is at
+Apache-2.0.txt beside this file. The set ships no NOTICE file and states no copyright line.
+
+--------------------------------------------------------------------------------
+Simple Icons (https://simpleicons.org) - CC0 1.0 Universal
+
+The GitHub mark. Simple Icons dedicates its work to the public domain; the mark itself remains a
+trademark of GitHub, Inc.
+
+--------------------------------------------------------------------------------
+Flat Color Icons (https://github.com/icons8/flat-color-icons) - MIT or the Good Boy License
+
+The Google "G", from Icons8's set, which states both licenses and no copyright line. The logo
+itself remains a trademark of Google LLC.
+
+--------------------------------------------------------------------------------
+Feather, Phosphor Icons, Bootstrap Icons and react-icons - MIT
+
+Feather (https://feathericons.com): Copyright (c) 2013-2023 Cole Bemis
+Phosphor Icons (https://github.com/phosphor-icons/core): Copyright (c) 2023 Phosphor Icons
+Bootstrap Icons (https://github.com/twbs/icons): Copyright (c) 2019-2024 The Bootstrap Authors
+react-icons: Copyright 2018 kamijin_fanta <kamijin@live.jp>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

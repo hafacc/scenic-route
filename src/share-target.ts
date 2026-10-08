@@ -1,4 +1,4 @@
-// Named in app/manifest.ts's `share_target`; GET, since a static export has no server.
+// Named in the manifest route's `share_target`; GET, since a static export has no server.
 export const SHARE_PARAMS = {
   title: "title",
   text: "text",

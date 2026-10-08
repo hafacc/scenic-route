@@ -1,5 +1,3 @@
-// biome-ignore-all lint/correctness/useHookAtTopLevel: gl.useProgram is WebGL, not a React hook
-
 import { type Channel, type Ramp, STOPS_LIMIT } from "../theme/palette";
 import { type Patch, draw as resample } from "./magnify";
 

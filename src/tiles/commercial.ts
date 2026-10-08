@@ -14,7 +14,7 @@ import { themeName } from "./theme";
 const TILE_SIZE = 256;
 const CHUNK_ZOOM = 12; // the street chunks' zoom
 
-// Relative, so it picks up the deploy's basePath.
+// Relative to the page, which sits at the site root.
 const COMMERCIAL_URL = "commercial/{x}/{y}.bin";
 const COMMERCIAL_MAGIC = "CMRC";
 const COMMERCIAL_FORMAT = 1;

@@ -5,6 +5,7 @@ import {
   coversACity,
   dropsMost,
   fileRequest,
+  freshThenStored,
   isGraph,
   missRequest,
   outdated,
@@ -23,9 +24,9 @@ test("the exported app goes in the shell store", () => {
     "manifest.webmanifest",
     "explorer",
     "explorer.html",
-    "_next/static/chunks/main-abc123.js",
+    "_app/immutable/entry/start.abc123.js",
     // The routing worker is a content-hashed chunk too.
-    "_next/static/chunks/7kq3ldz9wcvbt.js",
+    "_app/immutable/workers/worker-7kq3ldz9.js",
     "icons/icon-512.png",
   ]) {
     expect(fileRequest(`${SCOPE}${path}`, SCOPE)).toEqual({
@@ -312,4 +313,90 @@ test("a sweep drops the whole cache only when it loses most of it", () => {
 test("deletes are batched in order, with a short last batch", () => {
   expect(chunked([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
   expect(chunked([], 64)).toEqual([]);
+});
+
+const SCRIPT = new Request(`${SCOPE}_app/immutable/workers/tiles-abc123.js`);
+
+// Keyed by URL and holding `SCRIPT`'s copy, so a read or write under another key finds nothing.
+function scriptCache(stored: Response | undefined) {
+  const puts: Promise<void>[] = [];
+  const held = new Map<string, Response>();
+  if (stored) {
+    held.set(SCRIPT.url, stored);
+  }
+  return {
+    puts,
+    cache: {
+      match: async (request: Request) => held.get(request.url),
+      put: async (request: Request, response: Response) => {
+        held.set(request.url, response);
+      },
+    },
+    keep: (put: Promise<void>) => {
+      puts.push(put);
+    },
+    held: () => held.get(SCRIPT.url),
+  };
+}
+
+test("a worker script the network has is served from it and stored", async () => {
+  const { cache, keep, puts, held } = scriptCache(new Response("old"));
+  const served = await freshThenStored(
+    SCRIPT,
+    async () => new Response("new"),
+    cache,
+    keep,
+  );
+  expect(await served.text()).toBe("new");
+  expect(puts).toHaveLength(1);
+  await puts[0];
+  expect(await held()?.text()).toBe("new");
+});
+
+test("a worker script a deploy took away is served from the stored copy", async () => {
+  const { cache, keep, puts } = scriptCache(new Response("old"));
+  const served = await freshThenStored(
+    SCRIPT,
+    async () => new Response("gone", { status: 404 }),
+    cache,
+    keep,
+  );
+  expect(await served.text()).toBe("old");
+  // The 404 is not kept over the working copy.
+  expect(puts).toHaveLength(0);
+});
+
+test("a worker script asked for offline is served from the stored copy", async () => {
+  const { cache, keep } = scriptCache(new Response("old"));
+  const served = await freshThenStored(
+    SCRIPT,
+    async () => {
+      throw new TypeError("offline");
+    },
+    cache,
+    keep,
+  );
+  expect(await served.text()).toBe("old");
+});
+
+test("with no stored copy the network's own answer or failure stands", async () => {
+  const missing = scriptCache(undefined);
+  const served = await freshThenStored(
+    SCRIPT,
+    async () => new Response("gone", { status: 404 }),
+    missing.cache,
+    missing.keep,
+  );
+  expect(served.status).toBe(404);
+  const offline = scriptCache(undefined);
+  await expect(
+    freshThenStored(
+      SCRIPT,
+      async () => {
+        throw new TypeError("offline");
+      },
+      offline.cache,
+      offline.keep,
+    ),
+  ).rejects.toThrow("offline");
 });

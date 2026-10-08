@@ -1,5 +1,4 @@
-"use client";
-
+import { afterControl } from "../sw/control";
 import type {
   FromSearchWorker,
   IndexHit,
@@ -23,11 +22,8 @@ let asked: {
   resolve: (hits: IndexHit[] | null) => void;
 } | null = null;
 
-// Superseded the same way: a dragged endpoint asks several times a second.
-let named: {
-  id: number;
-  resolve: (hit: ReverseHit | null) => void;
-} | null = null;
+// Each lookup answers its own caller, so two pins named together both get theirs.
+const named = new Map<number, (hit: ReverseHit | null) => void>();
 
 let waiting: (() => void)[] = [];
 
@@ -40,9 +36,13 @@ function settle(hits: IndexHit[] | null): void {
   asked = null;
 }
 
-function settleName(hit: ReverseHit | null): void {
-  named?.resolve(hit);
-  named = null;
+// Null for every lookup still out, since the index they asked is gone.
+function dropNames(): void {
+  const dropped = [...named.values()];
+  named.clear();
+  for (const resolve of dropped) {
+    resolve(null);
+  }
 }
 
 function stopWaiting(): void {
@@ -55,10 +55,18 @@ function stopWaiting(): void {
 
 function searchWorker(): Worker {
   if (!worker) {
-    worker = new Worker(new URL("./worker.ts", import.meta.url), {
+    const created = new Worker(new URL("./worker.ts", import.meta.url), {
       type: "module",
     });
-    worker.addEventListener(
+    worker = created;
+    // A script that fails to load answers nothing, so whatever waits on it is let go.
+    created.addEventListener("error", () => {
+      if (worker === created) {
+        console.error("search worker failed");
+        releaseNameIndex();
+      }
+    });
+    created.addEventListener(
       "message",
       ({ data }: MessageEvent<FromSearchWorker>) => {
         if (data.type === "ready") {
@@ -71,9 +79,9 @@ function searchWorker(): Worker {
           console.error(`search index for ${data.city}:`, data.message);
           stopWaiting();
         } else if (data.type === "reverse") {
-          if (named?.id === data.id) {
-            settleName(data.hit);
-          }
+          const resolve = named.get(data.id);
+          named.delete(data.id);
+          resolve?.(data.hit);
         } else if (asked?.id === data.id) {
           settle(data.hits);
         }
@@ -84,16 +92,16 @@ function searchWorker(): Worker {
 }
 
 function indexUrls(cityId: string): { searchUrl: string; addressUrl: string } {
-  // Against the document, for the deploy's basePath; inside the worker it would resolve to its chunk.
+  // Against the document; inside the worker it would resolve to its chunk.
   return {
     searchUrl: new URL(`search/${cityId}.bin.gz`, document.baseURI).href,
     addressUrl: new URL(`addresses/${cityId}.bin.gz`, document.baseURI).href,
   };
 }
 
-// Fetches both files for the service worker's cache for every visitor, without decoding them.
-// Read in chunks and dropped, as holding the whole body would cost most of what this avoids.
+// Fills the service worker's cache for every visitor: both files read in chunks and dropped, never decoded or held.
 export async function prefetchNameIndex(cityId: string): Promise<void> {
+  await new Promise<void>(afterControl);
   if (requested === cityId) {
     return; // the worker is already reading them; a second fetch would only race its own cache
   }
@@ -127,13 +135,18 @@ function warm(cityId: string, forNaming: boolean): void {
   requested = cityId;
   ready = null;
   settle(null); // whatever was outstanding belonged to the city being left
-  settleName(null);
+  dropNames();
   const message: InitMessage = {
     type: "init",
     city: cityId,
     ...indexUrls(cityId),
   };
-  searchWorker().postMessage(message);
+  // Started once the service worker can store what it fetches.
+  afterControl(() => {
+    if (requested === cityId) {
+      searchWorker().postMessage(message);
+    }
+  });
 }
 
 export function warmNameIndex(cityId: string): void {
@@ -142,16 +155,16 @@ export function warmNameIndex(cityId: string): void {
 
 // Decoded tables are ~40 MB; the files stay cached, so rewarming reads from disk.
 export function releaseNameIndex(): void {
-  if (!worker) {
+  if (!worker && requested === null) {
     return;
   }
-  worker.terminate();
+  worker?.terminate();
   worker = undefined;
   requested = null;
   ready = null;
   heldForNaming = false;
   settle(null);
-  settleName(null);
+  dropNames();
   stopWaiting();
 }
 
@@ -232,13 +245,12 @@ export async function reverseNameIndex(
     if (ready !== cityId) {
       return null; // the files never arrived, or the reader left for another city
     }
-    settleName(null); // an older pin has been superseded by this one
     const id = nextQuery;
     nextQuery += 1;
     const message: ReverseMessage = { type: "reverse", id, at };
     searchWorker().postMessage(message);
     return await new Promise<ReverseHit | null>((resolve) => {
-      named = { id, resolve };
+      named.set(id, resolve);
     });
   } finally {
     naming -= 1;

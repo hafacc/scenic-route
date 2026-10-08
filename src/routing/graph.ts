@@ -1,6 +1,7 @@
 // Layout in scripts/README.md (GRPH v13); columns are viewed in place, so decoding copies nothing.
 
 import { cityById } from "../cities";
+import { afterControl } from "../sw/control";
 import type { FerryTimetable } from "./ferry-schedule";
 import type { ShadeField } from "./shade";
 import type { ShedField } from "./sheds";
@@ -263,7 +264,7 @@ interface ColumnKind<Column> {
   readonly BYTES_PER_ELEMENT: number;
 }
 
-// Relative, to pick up the deploy basePath; named per city since one directory holds every city's.
+// Relative to the page; named per city since one directory holds every city's.
 const versionUrl = (cityId: string): string => `routing/${cityId}.version.json`;
 // Must hold one long route's edges, since the search and the stitching both read its geometry.
 const PATH_CACHE_LIMIT = 4096;
@@ -878,7 +879,9 @@ export function loadGraph(cityId: string): Promise<RoutingGraph> {
     return pending;
   }
   const url = `routing/${cityId}.bin`;
-  const request = Promise.all([fetch(url), fetchGraphIdentity(cityId)])
+  // Asked through the service worker even on a first visit, or the graph is not there offline.
+  const request = new Promise<void>(afterControl)
+    .then(() => Promise.all([fetch(url), fetchGraphIdentity(cityId)]))
     .then(async ([response, identity]) => {
       if (!response.ok) {
         throw new Error(`${url}: ${response.status} ${response.statusText}`);
