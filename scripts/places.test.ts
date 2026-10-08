@@ -138,6 +138,30 @@ test("picks the borough's own house out of the streets that share a name", () =>
   expect(far?.meters).toBeGreaterThan(7000);
 });
 
+// The Bronx files an "S ST", an "N ST" and Manhattan an "E RD", which fold to the same keys.
+test("answers with the matched house's own street where two spellings fold to one", () => {
+  const bronx = { lat: 40.81, lng: -73.84 };
+  const manhattan = { lat: 40.706, lng: -74.003 };
+  const statenIsland = { lat: 40.635, lng: -74.13 };
+  const queens = { lat: 40.6, lng: -73.82 };
+  const addresses = index({
+    "S ST": [house("89", bronx)],
+    "SOUTH ST": [house("89", manhattan)],
+    "N ST": [house("12", bronx)],
+    "NORTH ST": [house("12", statenIsland)],
+    "E RD": [house("5", manhattan)],
+    "EAST RD": [house("5", queens)],
+  });
+  expect(matchAddress("89 South St", manhattan, addresses)?.street).toBe(
+    "SOUTH ST",
+  );
+  expect(matchAddress("89 S St", bronx, addresses)?.street).toBe("S ST");
+  expect(matchAddress("12 North St", statenIsland, addresses)?.street).toBe(
+    "NORTH ST",
+  );
+  expect(matchAddress("5 East Rd", queens, addresses)?.street).toBe("EAST RD");
+});
+
 test("one district written down twice is one row, and a community board is none", () => {
   const kept = toNeighborhoods([
     { name: "Herald Square", lat: 40.7503, lng: -73.9878 },
