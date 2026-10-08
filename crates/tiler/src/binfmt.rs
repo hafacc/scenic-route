@@ -1085,7 +1085,8 @@ mod tests {
     }
 
     fn write_highway_fixture(name: &str, trailing: &[u8]) -> std::path::PathBuf {
-        let directory = std::env::temp_dir().join("tiler-hway-fixture");
+        let directory =
+            std::env::temp_dir().join(format!("tiler-hway-fixture-{}", std::process::id()));
         fs::create_dir_all(&directory).expect("a scratch directory");
         let path = directory.join(format!("{name}.bin"));
         fs::write(&path, highway_fixture(trailing)).expect("the fixture");
@@ -1250,7 +1251,8 @@ mod tests {
 
     #[test]
     fn a_transit_topology_reads_back_what_the_ingest_wrote() {
-        let directory = std::env::temp_dir().join("tiler-trns-fixture");
+        let directory =
+            std::env::temp_dir().join(format!("tiler-trns-fixture-{}", std::process::id()));
         fs::create_dir_all(&directory).expect("a scratch directory");
         let path = directory.join("fixture.bin");
         fs::write(&path, transit_fixture()).expect("the fixture");
@@ -1299,6 +1301,13 @@ mod tests {
             let path = data.join(format!("{city}.bin"));
             if !path.exists() {
                 continue; // a sparse checkout without the committed data
+            }
+            // An `lfs: false` checkout holds the pointer text, not the lines.
+            if fs::read(&path)
+                .expect("the committed file")
+                .starts_with(b"version https://git-lfs")
+            {
+                continue;
             }
             let Highways {
                 lines,
@@ -1428,7 +1437,8 @@ mod tests {
                     .collect()
             })
             .collect();
-        let directory = std::env::temp_dir().join("tiler-cnpy-fixture");
+        let directory =
+            std::env::temp_dir().join(format!("tiler-cnpy-fixture-{}", std::process::id()));
         fs::create_dir_all(&directory).expect("a scratch directory");
         let path = directory.join("batches.bin");
         fs::write(&path, canopy_fixture(&polygons)).expect("the fixture");
