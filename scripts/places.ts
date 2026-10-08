@@ -161,12 +161,16 @@ export interface PlacedAddress extends Coord {
   number: HouseNumber;
 }
 
+// Keeps its street's own spelling: "S ST" in the Bronx and Manhattan's "SOUTH ST" fold to one key.
+interface StreetHouse extends PlacedAddress {
+  street: string;
+}
+
 export interface StreetAddresses {
-  name: string;
   // A list per number, since boroughs merge and NYC has a 312 on more than one Court Street.
-  numbers: Map<string, PlacedAddress[]>;
+  numbers: Map<string, StreetHouse[]>;
   // Apart from `numbers`, so "12610" prefers a real 12610 over a 126-10.
-  runTogether: Map<string, PlacedAddress[]>;
+  runTogether: Map<string, StreetHouse[]>;
 }
 
 export type PlaceAddressIndex = Map<string, StreetAddresses>;
@@ -176,9 +180,9 @@ function numberKey({ major, minor, suffix }: HouseNumber): string {
 }
 
 function addHouse(
-  houses: Map<string, PlacedAddress[]>,
+  houses: Map<string, StreetHouse[]>,
   key: string,
-  address: PlacedAddress,
+  address: StreetHouse,
 ): void {
   const existing = houses.get(key);
   if (existing === undefined) {
@@ -211,14 +215,15 @@ export function buildAddressIndex(
     const key = normalizeStreet(name);
     let street = index.get(key);
     if (street === undefined) {
-      street = { name, numbers: new Map(), runTogether: new Map() };
+      street = { numbers: new Map(), runTogether: new Map() };
       index.set(key, street);
     }
     for (const address of addresses) {
-      addHouse(street.numbers, numberKey(address.number), address);
-      const alias = runTogetherKey(address.number);
+      const house = { ...address, street: name };
+      addHouse(street.numbers, numberKey(house.number), house);
+      const alias = runTogetherKey(house.number);
       if (alias !== null) {
-        addHouse(street.runTogether, alias, address);
+        addHouse(street.runTogether, alias, house);
       }
     }
   }
@@ -226,7 +231,7 @@ export function buildAddressIndex(
 }
 
 export interface JoinedAddress {
-  street: string;
+  street: string; // the matched house's own, as the address file spells it
   houseNumber: HouseNumber;
   meters: number; // judged against MAX_JOIN_METERS by the caller
 }
@@ -260,7 +265,7 @@ export function matchAddress(
         meters = distance;
       }
     }
-    return { street: street.name, houseNumber: nearest.number, meters };
+    return { street: nearest.street, houseNumber: nearest.number, meters };
   }
 }
 

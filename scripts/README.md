@@ -2962,7 +2962,14 @@ list per token and a table of names and coordinates:
 It also reads New York's **borough boundaries** (Socrata `gthc-hcne`, the same rows the land mask is
 built from, through `scripts/land.ts`) to name the borough of the 53,507 places that never joined an
 address, and of every curated point: a park has no front door, and nothing in the Overture row says
-which borough it is in. The format is frozen in `src/search/search-format.ts`, which the builder and
+which borough it is in. Each **part** of a borough's outline is asked on its own, because the file
+draws the Manhattan line along Brooklyn's old shoreline and the piers built past it — Brooklyn Bridge
+Park, the North Williamsburg waterfront — are small parts of Manhattan. What tells them from Randall's
+Island and Marble Hill, which are Manhattan and stay it, is that they hold **none of their borough's
+addresses**: a place on such a part takes the borough of the nearest address within **300 m** (the
+farthest any of those parts with a document on it reaches from one is 275 m), and keeps the outline's
+borough where no address is that near, as on Liberty Island. Nearest-address alone would not do: the
+Bronx's houses are nearer the north shore of Randall's Island than its own are. The format is frozen in `src/search/search-format.ts`, which the builder and
 `src/search/search-query.ts` share: they must tokenize identically, or a name is indexed one way and
 searched the other.
 
@@ -3062,11 +3069,14 @@ the posting lists, already dense, only reach ×0.92.
 
 A place is filed under the **borough its own doorway is in**: `data/places/<city>.jsonl` records the
 street *name* a place joined to, and New York has five Court Streets, so the builder asks which of
-them carries that house number nearest the place. 256,461 New York places and 42,781 San Francisco
-ones come out with a street ordinal and a number, which is what lets a result be labeled "7 Carmine
-St, Manhattan" without decoding a street run. A place that never joined has **no borough** — nothing
-in the Overture row says which one it is in — and its `placeIndex` nibble is 0, the same value San
-Francisco writes for every document because it is one place.
+them carries that house number nearest the place. The name recorded is the **matched house's own**,
+in the address file's spelling, not the first spelling met under the folded key: the Bronx files an
+`S ST` and Manhattan a `SOUTH ST`, both fold to `S ST`, and a name taken from the key filed the South
+Street Seaport under the Bronx (`N ST`/`NORTH ST` and `E RD`/`EAST RD` are the other two). 256,461
+New York places and 42,781 San Francisco ones come out with a street ordinal and a number, which is
+what lets a result be labeled "7 Carmine St, Manhattan" without decoding a street run. A place that
+never joined takes its borough from the boundaries, as above; one outside every boundary, and every
+unjoined Bay Area place, has **none**, and its `placeIndex` nibble is 0.
 
 A street is indexed under **both its spellings plus its ordinal words**: `5 AVE` as the file writes
 it, `5th Avenue` as the client shows it, and `fifth` from a baked table that spells a number up to

@@ -125,6 +125,62 @@ test("a place with no address takes its borough from the boundary it is inside",
   expect(summary.homeless).toBe(0);
 });
 
+// The Manhattan line is Brooklyn's old shoreline, so a pier built past it is a part of Manhattan.
+test("a boundary part with none of its borough's addresses takes the nearest address's borough", () => {
+  const addresses = addressFile([
+    address("FURMAN ST", "Brooklyn", "334", { lat: 40.6935, lng: -73.9995 }),
+    address("SOUTH ST", "Manhattan", "89", { lat: 40.7055, lng: -74.0025 }),
+  ]);
+  const areas: PlaceArea[] = [
+    { placeIndex: 1, contains: ({ lat }) => lat > 40.7 },
+    { placeIndex: 1, contains: ({ lat, lng }) => lat <= 40.7 && lng < -74 },
+    { placeIndex: 0, contains: ({ lat, lng }) => lat <= 40.7 && lng >= -74 },
+  ];
+  const { docs } = buildDocs(
+    [
+      placeRow({ name: "Pier 6", lat: 40.6931, lng: -74.0015 }),
+      // Liberty Island: the same part, and no address within reach of it.
+      placeRow({ name: "Crown Cafe", lat: 40.6898, lng: -74.0451 }),
+    ],
+    addresses,
+    {
+      areas,
+      sets: [
+        {
+          kind: "art",
+          source: "art",
+          prominence: 150,
+          priority: 0,
+          points: [{ name: "Turning Stone", lat: 40.6932, lng: -74.0012 }],
+        },
+      ],
+    },
+  );
+  const borough = (name: string) =>
+    docs.find((doc) => doc.name === name)?.placeIndex;
+  expect(borough("Pier 6")).toBe(0);
+  expect(borough("Turning Stone")).toBe(0);
+  expect(borough("Crown Cafe")).toBe(1);
+});
+
+// Randall's Island is Manhattan with the Bronx's houses nearer its north shore than its own.
+test("a boundary part with its borough's addresses on it keeps its borough", () => {
+  const addresses = addressFile([
+    address("E 132 ST", "Bronx", "700", { lat: 40.8, lng: -73.915 }),
+    address("RANDALLS ISLAND", "Manhattan", "20", { lat: 40.79, lng: -73.92 }),
+  ]);
+  const areas: PlaceArea[] = [
+    { placeIndex: 1, contains: ({ lat }) => lat < 40.799 },
+    { placeIndex: 0, contains: ({ lat }) => lat >= 40.799 },
+  ];
+  const { docs } = buildDocs(
+    [placeRow({ name: "Field 41", lat: 40.7985, lng: -73.915 })],
+    addresses,
+    { areas },
+  );
+  expect(docs.find((doc) => doc.name === "Field 41")?.placeIndex).toBe(1);
+});
+
 test("a street is one document per (name, place), placed among its own addresses", () => {
   const addresses = addressFile([
     address("COURT ST", "Brooklyn", "312", BROOKLYN),

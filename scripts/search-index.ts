@@ -730,6 +730,64 @@ export interface PlaceArea {
   contains: (at: { lat: number; lng: number }) => boolean;
 }
 
+// The farthest any boundary part with a document on it reaches from an address is 275 m.
+const OVERRULE_METERS = 300;
+
+// The Manhattan line is Brooklyn's old shoreline, so the piers built past it are parts of Manhattan.
+class AreaBoroughs {
+  private readonly lat: number[] = [];
+  private readonly lng: number[] = [];
+  private readonly place: number[] = [];
+  private readonly addressed = new Map<PlaceArea, boolean>();
+
+  constructor(addresses: AddressIndex) {
+    const streetCount = addresses.starts.length - 1;
+    for (let street = 0; street < streetCount; street += 1) {
+      for (const { lat, lng } of streetAddresses(addresses, street)) {
+        this.lat.push(lat);
+        this.lng.push(lng);
+        this.place.push(addresses.streetPlace[street]);
+      }
+    }
+  }
+
+  // Randall's Island and Marble Hill hold Manhattan addresses; a pier holds none.
+  private holdsItsOwn(area: PlaceArea): boolean {
+    let held = this.addressed.get(area);
+    if (held === undefined) {
+      held = this.place.some(
+        (place, house) =>
+          place === area.placeIndex &&
+          area.contains({ lat: this.lat[house], lng: this.lng[house] }),
+      );
+      this.addressed.set(area, held);
+    }
+    return held;
+  }
+
+  // A part with none of its borough's addresses takes the nearest address's borough.
+  of(area: PlaceArea, at: { lat: number; lng: number }): number {
+    if (this.holdsItsOwn(area)) {
+      return area.placeIndex;
+    }
+    const eastScale = Math.cos((at.lat * Math.PI) / 180);
+    let nearest = -1;
+    let best = Infinity;
+    for (let house = 0; house < this.place.length; house += 1) {
+      const north = this.lat[house] - at.lat;
+      const east = (this.lng[house] - at.lng) * eastScale;
+      const distance = north * north + east * east;
+      if (distance < best) {
+        best = distance;
+        nearest = house;
+      }
+    }
+    return Math.sqrt(best) * METERS_PER_DEGREE <= OVERRULE_METERS
+      ? this.place[nearest]
+      : area.placeIndex;
+  }
+}
+
 // Borough boundaries, for places with no address; Overture rows don't say which borough.
 export async function placeAreas(
   cityId: string,
@@ -747,7 +805,10 @@ export async function placeAreas(
         `${borough.name} is not a place of the ${cityId} addresses`,
       );
     }
-    areas.push({ placeIndex, contains: buildLandTest(borough.polygons) });
+    // A part each, so one that holds none of its borough's addresses can be told from the rest.
+    for (const polygon of borough.polygons) {
+      areas.push({ placeIndex, contains: buildLandTest([polygon]) });
+    }
   }
   return areas;
 }
@@ -1082,8 +1143,11 @@ export function buildDocs(
     untokenized: 0,
     longNames: 0,
   };
-  const boroughOf = (at: { lat: number; lng: number }): number =>
-    areas.find(({ contains }) => contains(at))?.placeIndex ?? -1;
+  const boroughs = areas.length === 0 ? null : new AreaBoroughs(addresses);
+  const boroughOf = (at: { lat: number; lng: number }): number => {
+    const area = areas.find(({ contains }) => contains(at));
+    return area === undefined || boroughs === null ? -1 : boroughs.of(area, at);
+  };
 
   for (const row of rows) {
     const street =
