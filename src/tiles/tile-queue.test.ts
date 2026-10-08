@@ -122,3 +122,21 @@ test("a dropped tile is not repainted", async () => {
   expect(loads).toHaveLength(1);
   expect(paints).toEqual([0.1]);
 });
+
+// A theme flip on tiles that each carry their own lines: nothing new to send, everything to redraw.
+test("a repaint with no params redraws each tile from the params it was sent with", async () => {
+  const { queue, loads, paints, done, draw } = harness();
+  draw(1, 0.1);
+  draw(2, 0.7);
+  loads[0].resolve();
+  loads[1].resolve();
+  await flush();
+
+  queue.repaint([1, 2, 9]);
+  loads[2].resolve();
+  loads[3].resolve();
+  await flush();
+
+  expect(paints).toEqual([0.1, 0.7, 0.1, 0.7]);
+  expect(done).toHaveLength(2);
+});

@@ -61,6 +61,12 @@ export const INDUSTRIAL_COLOR: Record<ThemeName, string> = {
   dark: "#e085b3",
 };
 
+// Sage, a grayer green than the canopy ramp's teal, which paints a different measure of the trees.
+export const TREE_COVER_COLOR: Record<ThemeName, string> = {
+  light: "#56705c",
+  dark: "#a9c7b0",
+};
+
 export const SHED_COLOR: Record<ThemeName, string> = {
   light: "#ea580c", // orange-600
   dark: "#fb923c", // orange-400

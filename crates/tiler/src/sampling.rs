@@ -7,6 +7,30 @@ use crate::manifest::Bounds;
 // One sample per meter: crowns are meters across, and a ~15 m crossing still gets a dozen samples.
 const SAMPLE_STEP_METERS: f64 = 1.0;
 
+/// A polyline's samples: how many it took, its length, and each maximal run of contained ones.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Runs {
+    pub samples: u32,
+    pub meters: f64,
+    /// `(first sample, how many)`, in order and never adjacent.
+    pub runs: Vec<(u32, u32)>,
+}
+
+impl Runs {
+    pub fn covered(&self) -> u32 {
+        self.runs.iter().map(|&(_, count)| count).sum()
+    }
+
+    /// The share of the samples inside the set; 0 for a polyline that took none.
+    pub fn fraction(&self) -> f64 {
+        if self.samples == 0 {
+            0.0
+        } else {
+            f64::from(self.covered()) / f64::from(self.samples)
+        }
+    }
+}
+
 /// The share of a polyline's length inside `set`, sampled at arc-length midpoints.
 pub fn contained_fraction(
     poly: &[Coord],
@@ -15,8 +39,19 @@ pub fn contained_fraction(
     meters_per_degree_lng: f64,
     candidates: &mut Vec<u32>,
 ) -> f64 {
+    contained_runs(poly, set, grid, meters_per_degree_lng, candidates).fraction()
+}
+
+/// Where along a polyline it is inside `set`: the same samples `contained_fraction` counts.
+pub fn contained_runs(
+    poly: &[Coord],
+    set: &PolygonSet,
+    grid: &PolygonGrid,
+    meters_per_degree_lng: f64,
+    candidates: &mut Vec<u32>,
+) -> Runs {
     if poly.len() < 2 {
-        return 0.0;
+        return Runs::default();
     }
 
     let mut spans: Vec<f64> = Vec::with_capacity(poly.len() - 1);
@@ -42,12 +77,13 @@ pub fn contained_fraction(
     }
     grid.candidates(&clip, candidates);
     if total <= 0.0 || candidates.is_empty() {
-        return 0.0;
+        return Runs::default();
     }
 
     let samples = (total / SAMPLE_STEP_METERS).ceil().max(1.0) as usize;
     let step = total / samples as f64;
-    let mut covered = 0usize;
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    let mut open: Option<u32> = None; // the first sample of the run still growing
     let mut segment = 0usize;
     let mut behind = 0.0; // meters of the segments before `segment`
     // The targets rise, so the segment cursor never walks back.
@@ -65,8 +101,17 @@ pub fn contained_fraction(
         let lng = poly[segment].lng + along * (poly[segment + 1].lng - poly[segment].lng);
         let lat = poly[segment].lat + along * (poly[segment + 1].lat - poly[segment].lat);
         if set.contains_point(candidates, lng, lat) {
-            covered += 1;
+            open.get_or_insert(sample as u32);
+        } else if let Some(first) = open.take() {
+            runs.push((first, sample as u32 - first));
         }
     }
-    covered as f64 / samples as f64
+    if let Some(first) = open {
+        runs.push((first, samples as u32 - first));
+    }
+    Runs {
+        samples: samples as u32,
+        meters: total,
+        runs,
+    }
 }

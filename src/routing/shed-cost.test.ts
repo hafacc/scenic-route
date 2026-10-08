@@ -1,4 +1,5 @@
 import { beforeEach, expect, test } from "bun:test";
+import { cityById, DEFAULT_CITY } from "../cities";
 import { rainTau } from "../shade/phenology";
 import {
   edgeMultiplier,
@@ -277,7 +278,7 @@ test("a sun preference walks around scaffolding, a shade preference under it", (
 
 test("shelter is the deck plus the canopy over what the deck does not cover", () => {
   const { graph } = diamond({ shed: 0.4, canopy: 0.5 }, { canopy: 1 });
-  const tau = rainTau(JULY);
+  const tau = rainTau(JULY, DEFAULT_CITY);
   const shed = shedOf(graph, 1);
   const canopy = graph.edgeDirectCanopy[1] / 255;
   const expected = shed + tau * canopy * (1 - shed);
@@ -302,7 +303,7 @@ test("a route reports the shelter it walked under", () => {
   const result = findRoute(graph, start, dest, noPref({ shelter: 1 }));
   expect(upperTaken(result)).toBe(true);
 
-  const tau = rainTau(JULY);
+  const tau = rainTau(JULY, DEFAULT_CITY);
   let sheltered = 0;
   for (const step of result?.steps ?? []) {
     const shed = shedOf(graph, step.edge);
@@ -329,7 +330,9 @@ test("the canopy half of shelter is seasonal and the deck half is not", () => {
     JANUARY,
   ).graph;
   const shelter = noPref({ shelter: 1 });
-  expect(rainTau(JULY)).toBeGreaterThan(rainTau(JANUARY));
+  expect(rainTau(JULY, DEFAULT_CITY)).toBeGreaterThan(
+    rainTau(JANUARY, DEFAULT_CITY),
+  );
   expect(edgeMultiplier(winter, 1, shelter)).toBeGreaterThan(
     edgeMultiplier(summer, 1, shelter),
   );
@@ -337,6 +340,21 @@ test("the canopy half of shelter is seasonal and the deck half is not", () => {
     edgeMultiplier(summer, 3, shelter),
     12,
   );
+});
+
+test("an evergreen city's canopy shelters the same in January as in July", () => {
+  const bay = cityById("sf");
+  if (!bay) {
+    throw new Error("the Bay Area is not a city");
+  }
+  const { graph } = diamond({ canopy: 1 }, { shed: 1 });
+  const shelter = noPref({ shelter: 1 });
+  const multipliers = [JULY, JANUARY].map((date) => {
+    graph.sheds = shedField(graph, new Map(), date, bay);
+    return edgeMultiplier(graph, 1, shelter);
+  });
+  expect(multipliers[1]).toBe(multipliers[0]);
+  expect(graph.sheds?.rainTau).toBe(rainTau(JULY, DEFAULT_CITY));
 });
 
 test("a shelter preference walks the sheltered way in either season", () => {

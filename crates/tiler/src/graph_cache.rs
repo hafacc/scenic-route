@@ -16,6 +16,8 @@ pub const COMMERCIAL: &str = "commercial";
 /// The ascent and descent rows, cached as one entry: they come out of one pass over the DEM field.
 pub const RELIEF: &str = "relief";
 pub const CANOPY: &str = "canopy";
+/// The CRUN artifact, under the canopy column's key: one sampling pass bakes both.
+pub const CANOPY_RUNS: &str = "canopy-runs";
 pub const INDUSTRIAL: &str = "industrial";
 pub const HISTORIC: &str = "historic";
 pub const BRIDGE: &str = "bridge";
@@ -81,8 +83,13 @@ impl Cache {
 
     /// The same, for the base, whose length nothing knows in advance.
     pub fn load_base(&mut self, key: &str) -> Fallible<Option<Vec<u8>>> {
-        self.claimed.insert(file_name(BASE, key));
-        match fs::read(entry(&self.dir, BASE, key)) {
+        self.load_whole(BASE, key)
+    }
+
+    /// An entry of no fixed length, which only the rename in `store` keeps whole.
+    pub fn load_whole(&mut self, name: &str, key: &str) -> Fallible<Option<Vec<u8>>> {
+        self.claimed.insert(file_name(name, key));
+        match fs::read(entry(&self.dir, name, key)) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),
@@ -278,6 +285,33 @@ mod tests {
 
         assert!(cache.load(INDUSTRIAL, "abc", 40).expect("a load").is_none());
         assert!(!holds(&dir, INDUSTRIAL, "abc"), "and it is taken away");
+    }
+
+    /// The runs have no length a caller could know, and a build that read them must not prune them.
+    #[test]
+    fn an_entry_of_no_fixed_length_comes_back_whole_and_survives_the_prune() {
+        let dir = scratch("whole");
+        let mut cache = Cache::new(&dir);
+        cache.store(CANOPY, "abc", b"column").expect("a store");
+        cache
+            .store(CANOPY_RUNS, "abc", b"runs of any length")
+            .expect("a store");
+
+        let mut next = Cache::new(&dir);
+        assert!(
+            next.load_whole(CANOPY_RUNS, "def")
+                .expect("a load")
+                .is_none()
+        );
+        assert_eq!(
+            next.load_whole(CANOPY_RUNS, "abc")
+                .expect("a load")
+                .as_deref(),
+            Some(&b"runs of any length"[..])
+        );
+        next.prune().expect("a prune");
+        assert!(holds(&dir, CANOPY_RUNS, "abc"));
+        assert!(!holds(&dir, CANOPY, "abc"), "nothing asked for the column");
     }
 
     #[test]

@@ -8,11 +8,13 @@ mod binfmt;
 mod bridge;
 mod build;
 mod canopy;
+mod canopy_runs;
 mod caster_chunks;
 mod chunks;
 mod commercial;
 mod conflate;
 mod corners;
+mod cover_tiles;
 mod crown;
 mod dem;
 mod densities;
@@ -307,6 +309,8 @@ fn run() -> Fallible<()> {
                 land: None,
                 out,
                 stranded_out: None,
+                canopy_runs_out: None,
+                cover_tiles_out: None,
                 buildings: None,
                 shade_params: None,
                 shade_dir: None,

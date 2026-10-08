@@ -404,7 +404,7 @@ export async function computeEdgeShade(
     order.map((bin) => loadShadeBin(bin.index, forCity.id)),
   );
   const intensities = Float64Array.from(order, intensityOf);
-  const tau = canopyTau(date);
+  const tau = canopyTau(date, forCity);
   const rowKeys = order.map((bin) => `${forCity.id}:${bin.index}:${tau}`);
   // Attributes can't exceed their bin's intensity, and some edge is sunlit in every bin.
   let maxAbs = 0;

@@ -1,5 +1,6 @@
 <script module lang="ts">
 import * as SunCalc from "suncalc";
+import { untrack } from "svelte";
 import { activeCity } from "../src/cities";
 import { reportLayerData, watchLayerStatus } from "../src/overlays/status";
 import {
@@ -145,6 +146,8 @@ const cityId = $derived(current().id);
 
 $effect(() => {
   const id = cityId;
+  // Whose trees these are decides whether the crowns thin in winter.
+  const city = untrack(current);
   // A pane of its own, so the wash sits above the canopy fill and below the commercial band.
   if (!map.getPane(PANE_NAME)) {
     const pane = map.createPane(PANE_NAME);
@@ -156,7 +159,7 @@ $effect(() => {
   let activeIndex = -1;
   // Held until the bin changes, or scrubbed tiles won't line up with their neighbors.
   let sweepSun = currentSun();
-  let drawnTau = canopyTau(getResolvedDate());
+  let drawnTau = canopyTau(getResolvedDate(), city);
   // Only the visible bin, plus the outgoing one until its fade ends.
   const layers = new Map<number, WorkerTileLayer>();
   const ready = new Set<number>();
@@ -179,7 +182,7 @@ $effect(() => {
         treeUrl: treeTileUrl(id),
         bin: index,
         maxNativeZoom: MAX_NATIVE_ZOOM,
-        tau: canopyTau(getResolvedDate()),
+        tau: canopyTau(getResolvedDate(), city),
         intensity: Math.max(0, Math.sin((elevation * Math.PI) / 180)),
         vectorZoom: VECTOR_ZOOM,
         binElevation: elevation,
@@ -339,7 +342,7 @@ $effect(() => {
     const bin =
       elevation > HORIZON_DEG ? pickBin(bins, elevation, azimuth) : null;
     const target = bin ? bin.index : -1;
-    const tau = canopyTau(getResolvedDate());
+    const tau = canopyTau(getResolvedDate(), city);
     if (target === activeIndex) {
       // Tau is baked into the pixels, and a date can cross half of leaf-fall within one bin.
       if (tau !== drawnTau) {

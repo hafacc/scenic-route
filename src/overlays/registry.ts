@@ -11,6 +11,7 @@ import {
   MdWbShade,
   PiBoatFill,
   PiTrainSimpleFill,
+  PiTreeEvergreenFill,
   PiTreeFill,
   PiTreeStructureFill,
 } from "../icons/glyphs";
@@ -33,7 +34,9 @@ import {
   LEGACY_COLOR,
   SHED_COLOR,
   SUBWAY_COLOR,
+  TREE_COVER_COLOR,
 } from "./colors";
+import { treeCoverOpacity } from "./shelter";
 
 export type OverlayId =
   | "canopy"
@@ -48,6 +51,7 @@ export type OverlayId =
   | "historic"
   | "legacy"
   | "shade"
+  | "treecover"
   | "scaffolding"
   | "elevation";
 
@@ -78,6 +82,15 @@ export function overlaySwatch(
   return overlay.swatch?.(theme) ?? null;
 }
 
+// What the layer is drawn at on `date`, for the key's swatch; 1 for a layer that never fades.
+export function overlayOpacity(
+  overlay: OverlayDef,
+  city: City,
+  date: Date,
+): number {
+  return overlay.opacity?.(city, date) ?? 1;
+}
+
 // A link or stored set can name genus with others; an exclusive layer named at all wins.
 export function applyExclusivity(ids: readonly OverlayId[]): OverlayId[] {
   const solo = ids.find(
@@ -93,6 +106,8 @@ export interface OverlayDef {
   icon: IconSpec; // menu glyph, drawn aria-hidden; a tinted one shows the layer's color code
   // Read off what the layer paints so the two can't drift; null for a layer with no single color.
   swatch: ((theme: ThemeName) => string) | null;
+  // Read off what the layer fades to on the day; absent for a layer drawn at one strength all year.
+  opacity?: (city: City, date: Date) => number;
   // When on, no other overlay is.
   exclusive?: boolean;
 }
@@ -178,6 +193,14 @@ export const OVERLAYS: readonly OverlayDef[] = [
     label: "Industrial",
     icon: layerIcon(MdFactory, INDUSTRIAL_COLOR),
     swatch: (theme) => INDUSTRIAL_COLOR[theme],
+  },
+  {
+    id: "treecover",
+    // Where a crown is overhead on the path itself, not the canopy layer's smoothed leafiness.
+    label: "Tree cover",
+    icon: layerIcon(PiTreeEvergreenFill, TREE_COVER_COLOR),
+    swatch: (theme) => TREE_COVER_COLOR[theme],
+    opacity: treeCoverOpacity,
   },
   {
     id: "scaffolding",

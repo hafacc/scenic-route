@@ -11,10 +11,12 @@ import {
   type ShedHistory,
   shedsOn,
 } from "../routing/sheds";
+import { type BoxGrid, buildGrid, EMPTY_GRID, forEachBoxIn } from "./box-grid";
+import { chainPaths } from "./chain";
 import { projectX, projectY } from "./mercator";
 import type { PolygonSink } from "./sweep";
 
-// Decks are polygons, not stroked lines, because a stroke has one width and depth varies per segment.
+// Decks as polygons at each span's own depth, for the shadow they cast; the map draws sheds as lines (./shed-strokes.ts).
 
 const EARTH_CIRCUMFERENCE_METERS = 40_075_016.686;
 const TILE_SIZE = 256;
@@ -31,18 +33,7 @@ export interface ShedDecks {
   points: Float64Array; // x/y interleaved, zoom-0 world pixels
   rings: Uint32Array; // one entry per deck plus the end
   boxes: Float64Array; // per deck, its ring's own box: minX, minY, maxX, maxY
-  grid: DeckGrid;
-}
-
-// Built per day rather than at build time, since which sheds stand depends on the picked date.
-export interface DeckGrid {
-  cellSize: number; // zoom-0 world pixels per cell
-  originX: number; // world position of column 0, so cell coordinates are never negative
-  originY: number;
-  columns: number;
-  rows: number;
-  starts: Uint32Array; // columns * rows + 1 offsets into `decks`
-  decks: Uint32Array; // deck ids grouped by cell; a deck sits in every cell its box touches
+  grid: BoxGrid; // built per day, since which sheds stand depends on the picked date
 }
 
 // Web Mercator's ground resolution at the city's latitude.
@@ -51,17 +42,12 @@ export function pixelsPerMeter(zoom: number): number {
   return (TILE_SIZE * 2 ** zoom) / (EARTH_CIRCUMFERENCE_METERS * cosLat);
 }
 
-const TARGET_CELL_METERS = 500;
+// Zoom-0 world pixels per grid cell; also the cell src/tiles/path-strokes.ts indexes strokes by.
+export function gridCellSize(): number {
+  return TARGET_CELL_METERS * pixelsPerMeter(0);
+}
 
-const EMPTY_GRID: DeckGrid = {
-  cellSize: 1,
-  originX: 0,
-  originY: 0,
-  columns: 0,
-  rows: 0,
-  starts: Uint32Array.of(0),
-  decks: new Uint32Array(0),
-};
+const TARGET_CELL_METERS = 500;
 
 export const NO_DECKS: ShedDecks = {
   points: new Float64Array(0),
@@ -70,67 +56,12 @@ export const NO_DECKS: ShedDecks = {
   grid: EMPTY_GRID,
 };
 
-function buildGrid(boxes: Float64Array): DeckGrid {
-  const count = boxes.length / 4;
-  if (count === 0) {
-    return EMPTY_GRID;
-  }
-  const cellSize = TARGET_CELL_METERS * pixelsPerMeter(0);
-  let minX = Number.POSITIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  let maxX = Number.NEGATIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
-  for (let deck = 0; deck < count; deck++) {
-    minX = Math.min(minX, boxes[deck * 4]);
-    minY = Math.min(minY, boxes[deck * 4 + 1]);
-    maxX = Math.max(maxX, boxes[deck * 4 + 2]);
-    maxY = Math.max(maxY, boxes[deck * 4 + 3]);
-  }
-  const originX = Math.floor(minX / cellSize) * cellSize;
-  const originY = Math.floor(minY / cellSize) * cellSize;
-  const columns = Math.floor((maxX - originX) / cellSize) + 1;
-  const rows = Math.floor((maxY - originY) / cellSize) + 1;
-
-  const starts = new Uint32Array(columns * rows + 1);
-  for (let deck = 0; deck < count; deck++) {
-    const fromX = Math.floor((boxes[deck * 4] - originX) / cellSize);
-    const fromY = Math.floor((boxes[deck * 4 + 1] - originY) / cellSize);
-    const toX = Math.floor((boxes[deck * 4 + 2] - originX) / cellSize);
-    const toY = Math.floor((boxes[deck * 4 + 3] - originY) / cellSize);
-    for (let cellY = fromY; cellY <= toY; cellY++) {
-      for (let cellX = fromX; cellX <= toX; cellX++) {
-        starts[cellY * columns + cellX + 1] += 1;
-      }
-    }
-  }
-  for (let cell = 0; cell < columns * rows; cell++) {
-    starts[cell + 1] += starts[cell];
-  }
-
-  const decks = new Uint32Array(starts[columns * rows]);
-  const cursors = starts.slice(0, columns * rows);
-  for (let deck = 0; deck < count; deck++) {
-    const fromX = Math.floor((boxes[deck * 4] - originX) / cellSize);
-    const fromY = Math.floor((boxes[deck * 4 + 1] - originY) / cellSize);
-    const toX = Math.floor((boxes[deck * 4 + 2] - originX) / cellSize);
-    const toY = Math.floor((boxes[deck * 4 + 3] - originY) / cellSize);
-    for (let cellY = fromY; cellY <= toY; cellY++) {
-      for (let cellX = fromX; cellX <= toX; cellX++) {
-        const cell = cellY * columns + cellX;
-        decks[cursors[cell]] = deck;
-        cursors[cell] += 1;
-      }
-    }
-  }
-  return { cellSize, originX, originY, columns, rows, starts, decks };
-}
-
 export function packDecks(
   points: Float64Array,
   rings: Uint32Array,
   boxes: Float64Array,
 ): ShedDecks {
-  return { points, rings, boxes, grid: buildGrid(boxes) };
+  return { points, rings, boxes, grid: buildGrid(boxes, gridCellSize()) };
 }
 
 // Boxes bound the ring, width included.
@@ -175,39 +106,7 @@ export function forEachDeckIn(
   maxY: number,
   visit: (deck: number) => void,
 ): void {
-  const { cellSize, originX, originY, columns, rows, starts, decks } = grid;
-  const fromX = Math.max(0, Math.floor((minX - originX) / cellSize));
-  const fromY = Math.max(0, Math.floor((minY - originY) / cellSize));
-  const toX = Math.min(columns - 1, Math.floor((maxX - originX) / cellSize));
-  const toY = Math.min(rows - 1, Math.floor((maxY - originY) / cellSize));
-  for (let cellY = fromY; cellY <= toY; cellY++) {
-    for (let cellX = fromX; cellX <= toX; cellX++) {
-      const cell = cellY * columns + cellX;
-      for (let at = starts[cell]; at < starts[cell + 1]; at++) {
-        const deck = decks[at];
-        // A deck sits in every cell it spans, so visit it only from the first one this window reaches.
-        const firstX = Math.max(
-          fromX,
-          Math.floor((boxes[deck * 4] - originX) / cellSize),
-        );
-        const firstY = Math.max(
-          fromY,
-          Math.floor((boxes[deck * 4 + 1] - originY) / cellSize),
-        );
-        if (cellX !== firstX || cellY !== firstY) {
-          continue;
-        }
-        if (
-          boxes[deck * 4 + 2] >= minX &&
-          boxes[deck * 4] <= maxX &&
-          boxes[deck * 4 + 3] >= minY &&
-          boxes[deck * 4 + 1] <= maxY
-        ) {
-          visit(deck);
-        }
-      }
-    }
-  }
+  forEachBoxIn(boxes, grid, minX, minY, maxX, maxY, visit);
 }
 
 // Zoom-0 world pixels; edge offsets are per segment, signed along its geometry-left normal.
@@ -228,11 +127,6 @@ interface SpanPath {
   right: boolean; // the sidewalk was baked to its street's geometry-right, so the building is too
   head: number; // the node the polyline starts at
   tail: number; // the node it ends at
-}
-
-interface Step {
-  span: number;
-  reversed: boolean;
 }
 
 // Meters from the baked sidewalk line to the building; depth was measured from wall to near the curb.
@@ -268,98 +162,17 @@ function spanPaths(graph: RoutingGraph, shed: Shed): SpanPath[] {
   return paths;
 }
 
-// Null unless exactly two spans end at `node`; three is a fork with no single path through it.
-function neighbor(
-  ends: Map<number, number[]>,
-  span: number,
-  node: number,
-): number | null {
-  const meeting = ends.get(node);
-  if (meeting?.length !== 2) {
-    return null;
-  } else {
-    const other = meeting[0] === span ? meeting[1] : meeting[0];
-    // A span whose two ends are the same node fills its own pair.
-    return other === span ? null : other;
-  }
-}
-
-interface Chain {
-  steps: Step[];
-  closed: boolean;
-}
-
-// The artifact stores spans longest first, not in walk order, so chains are walked out both ways.
-function chainSpans(paths: readonly SpanPath[]): Chain[] {
-  const ends = new Map<number, number[]>();
-  for (let span = 0; span < paths.length; span++) {
-    for (const node of [paths[span].head, paths[span].tail]) {
-      if (node >= 0) {
-        const meeting = ends.get(node);
-        if (meeting) {
-          meeting.push(span);
-        } else {
-          ends.set(node, [span]);
-        }
-      }
-    }
-  }
-
-  const taken = new Uint8Array(paths.length);
-  // Reaching a taken span can only mean the chain came back round on itself.
-  const follow = (span: number, node: number): Chain => {
-    const steps: Step[] = [];
-    let current = span;
-    let exit = node;
-    for (;;) {
-      const next = neighbor(ends, current, exit);
-      if (next === null) {
-        return { steps, closed: false };
-      } else if (taken[next] === 1) {
-        return { steps, closed: true };
-      }
-      taken[next] = 1;
-      const forward = paths[next].head === exit;
-      steps.push({ span: next, reversed: !forward });
-      exit = forward ? paths[next].tail : paths[next].head;
-      current = next;
-    }
-  };
-
-  const chains: Chain[] = [];
-  for (let span = 0; span < paths.length; span++) {
-    if (taken[span] === 1) {
-      continue;
-    }
-    taken[span] = 1;
-    const before = follow(span, paths[span].head);
-    const after = follow(span, paths[span].tail);
-    chains.push({
-      steps: [
-        ...before.steps.reverse().map(({ span: step, reversed }) => ({
-          span: step,
-          reversed: !reversed,
-        })),
-        { span, reversed: false },
-        ...after.steps,
-      ],
-      closed: before.closed || after.closed,
-    });
-  }
-  return chains;
-}
-
 export function shedRuns(graph: RoutingGraph, shed: Shed): DeckRun[] {
   const paths = spanPaths(graph, shed);
   const scale = pixelsPerMeter(0);
   const runs: DeckRun[] = [];
-  for (const { steps, closed } of chainSpans(paths)) {
+  for (const { steps, closed } of chainPaths(paths)) {
     // Spans meet on the node's own coordinate, so a corner is one vertex.
     const xs: number[] = [];
     const ys: number[] = [];
     const building: number[] = [];
     const curb: number[] = [];
-    for (const { span, reversed } of steps) {
+    for (const { path: span, reversed } of steps) {
       const path = paths[span];
       const side = (path.right ? -1 : 1) * (reversed ? -1 : 1);
       for (let step = 0; step < path.xs.length; step++) {

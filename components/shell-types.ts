@@ -84,6 +84,8 @@ export interface ShellDeck {
   graphAvailable: FactorAvailability;
   // Fetched apart from the graph, so it isn't one of the above.
   shedFeed: boolean;
+  // Cover of either kind, trees or decks; the shelter slider needs only one.
+  shelterHere: boolean;
   available: FactorAvailability;
   weights: RouteWeights;
   shadeDataLost: boolean;

@@ -4,7 +4,6 @@ import {
   HISTORIC_COLOR,
   LANDMARK_COLOR,
   LEGACY_COLOR,
-  SHED_COLOR,
 } from "../overlays/colors";
 import type { OverlayId } from "../overlays/registry";
 import {
@@ -90,13 +89,13 @@ export const LENSES: readonly Lens[] = [
     id: "rain",
     name: "Rain",
     color: "#0284c7", // sky-600, the shelter slider's color
-    // Shelter is overhead cover of both kinds, so both canopy green and deck orange belong.
+    // Routes lie over the cover, so none wears a cover color: blues and violets, clear of sage and orange.
     palette: [
-      CANOPY_HEX.light[5], // teal-600, the canopy ramp's mid stop
-      SHED_COLOR.light, // orange-600, the scaffolding decks
-      "#0284c7", // sky-600, the shelter slider (FACTORS shelter)
+      "#4f46e5", // indigo-600
+      "#7c3aed", // violet-600
+      "#1e40af", // blue-800
     ],
-    overlays: ["scaffolding"],
+    overlays: ["treecover", "scaffolding"],
     // Transit is unpriced, since a train is shelter, waiting included.
     weights: { shelter: 1, bridge: 1 },
     allowSheds: true,

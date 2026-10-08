@@ -12,8 +12,10 @@ use crate::Fallible;
 use crate::association;
 use crate::binfmt::{self, SIDES, write_varint, zigzag};
 use crate::bridge;
+use crate::canopy_runs;
 use crate::conflate::{self, ProtoEdge, SIDEWALK_LEFT, SIDEWALK_RIGHT, swap_sidewalks};
 use crate::corners::{self, EdgeEnd};
+use crate::cover_tiles;
 use crate::direct_canopy;
 use crate::geometry::{METERS_PER_DEGREE_LAT, round_half_up};
 use crate::graph_cache;
@@ -208,6 +210,10 @@ pub struct Args {
     pub out: PathBuf,
     /// Where to write this city's dropped ways as STRD; nothing reads it back.
     pub stranded_out: Option<PathBuf>,
+    /// Where to write where each edge is under canopy (CRUN); written only with a canopy.
+    pub canopy_runs_out: Option<PathBuf>,
+    /// Where to write the drawn stretches as a low-zoom pyramid; written only with a canopy.
+    pub cover_tiles_out: Option<PathBuf>,
     // The optional SHDE bake: footprints, sun grid and output directory, all three or none.
     pub buildings: Option<PathBuf>,
     pub shade_params: Option<shade::Params>,
@@ -4931,6 +4937,8 @@ struct Columns {
     ascent: Vec<u8>,
     descent: Vec<u8>,
     direct_canopy: Vec<u8>,
+    /// The finished CRUN file, from the sampling pass that baked `direct_canopy`.
+    canopy_runs: Option<Vec<u8>>,
     industrial: Vec<u8>,
     historic: Vec<u8>,
     bridge: Vec<u8>,
@@ -4938,37 +4946,40 @@ struct Columns {
     shade: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
-/// Every edge's polyline in degrees; a ferry has none, a geometry-less edge is its node-to-node line.
-fn edge_polylines(base: &Base) -> Vec<Vec<binfmt::Coord>> {
+/// One edge's polyline in degrees; a ferry has none, a geometry-less edge is its node-to-node line.
+fn edge_polyline(base: &Base, edge: &V2Edge) -> Vec<binfmt::Coord> {
     let to_coord = |quantized_x: i32, quantized_y: i32| binfmt::Coord {
         lng: base.origin_lng + f64::from(quantized_x) * base.scale,
         lat: base.origin_lat + f64::from(quantized_y) * base.scale,
     };
+    if timed_kind(edge.kind) {
+        Vec::new()
+    } else if edge.geom == NO_GEOMETRY {
+        vec![
+            to_coord(
+                base.node_lng[edge.a as usize],
+                base.node_lat[edge.a as usize],
+            ),
+            to_coord(
+                base.node_lng[edge.b as usize],
+                base.node_lat[edge.b as usize],
+            ),
+        ]
+    } else {
+        let (poly_x, poly_y) = &base.geometry_polys[edge.geom as usize];
+        poly_x
+            .iter()
+            .zip(poly_y)
+            .map(|(&quantized_x, &quantized_y)| to_coord(quantized_x, quantized_y))
+            .collect()
+    }
+}
+
+/// Every edge's polyline, in edge order.
+fn edge_polylines(base: &Base) -> Vec<Vec<binfmt::Coord>> {
     base.edges
         .iter()
-        .map(|edge| {
-            if timed_kind(edge.kind) {
-                Vec::new()
-            } else if edge.geom == NO_GEOMETRY {
-                vec![
-                    to_coord(
-                        base.node_lng[edge.a as usize],
-                        base.node_lat[edge.a as usize],
-                    ),
-                    to_coord(
-                        base.node_lng[edge.b as usize],
-                        base.node_lat[edge.b as usize],
-                    ),
-                ]
-            } else {
-                let (poly_x, poly_y) = &base.geometry_polys[edge.geom as usize];
-                poly_x
-                    .iter()
-                    .zip(poly_y)
-                    .map(|(&quantized_x, &quantized_y)| to_coord(quantized_x, quantized_y))
-                    .collect()
-            }
-        })
+        .map(|edge| edge_polyline(base, edge))
         .collect()
 }
 
@@ -5006,6 +5017,20 @@ fn column(
             Ok(bytes)
         }
     }
+}
+
+/// The cached canopy column and its runs: both whole and for this graph, or neither, and resampled.
+fn held_canopy(
+    cache: &mut graph_cache::Cache,
+    key: &str,
+    edges: &[canopy_runs::EdgeEnds],
+    key_hash: u64,
+) -> Fallible<Option<(Vec<u8>, Vec<u8>)>> {
+    let bytes = cache.load(graph_cache::CANOPY, key, edges.len())?;
+    let runs = cache
+        .load_whole(graph_cache::CANOPY_RUNS, key)?
+        .filter(|runs| canopy_runs::matches(runs, edges, key_hash));
+    Ok(bytes.zip(runs))
 }
 
 /// Attribute columns, each cached under a key folding the base's, so one source rebakes one column.
@@ -5175,22 +5200,62 @@ fn bake(
     };
 
     // The fraction of the edge under a crown, with no kernel (see direct_canopy.rs).
-    let direct_canopy = match &args.canopy {
-        Some(path) => column(
-            cache.as_deref_mut(),
-            graph_cache::CANOPY,
-            keys.map(|keys| keys.canopy.as_str()),
-            edge_count,
-            || {
-                let baked = direct_canopy::direct_canopy(polylines.get(), path, base.origin_lat)?;
-                eprintln!(
-                    "direct canopy: {} polygons, mean covered fraction {:.3}, max byte {}",
-                    baked.polygons, baked.mean, baked.max_byte
-                );
-                Ok(baked.bytes)
-            },
-        )?,
-        None => vec![0u8; edge_count],
+    let (direct_canopy, canopy_runs) = match &args.canopy {
+        Some(path) => {
+            let key = keys.map(|keys| keys.canopy.as_str());
+            let nodes: Vec<canopy_runs::EdgeEnds> = base
+                .edges
+                .iter()
+                .map(|edge| canopy_runs::edge_ends(edge.a, edge.b, &[], 0.0))
+                .collect();
+            let held = match (cache.as_deref_mut(), key) {
+                (Some(cache), Some(key)) => held_canopy(cache, key, &nodes, base.key_hash)?,
+                _ => None,
+            };
+            let (bytes, runs) = match held {
+                Some(pair) => pair,
+                None => {
+                    let baked =
+                        direct_canopy::direct_canopy(polylines.get(), path, base.origin_lat)?;
+                    eprintln!(
+                        "direct canopy: {} polygons, mean covered fraction {:.3}, max byte {}",
+                        baked.polygons, baked.mean, baked.max_byte
+                    );
+                    let meters_per_degree_lng =
+                        METERS_PER_DEGREE_LAT * base.origin_lat.to_radians().cos();
+                    let ends: Vec<canopy_runs::EdgeEnds> = base
+                        .edges
+                        .iter()
+                        .zip(polylines.get())
+                        .map(|(edge, poly)| {
+                            canopy_runs::edge_ends(edge.a, edge.b, poly, meters_per_degree_lng)
+                        })
+                        .collect();
+                    let (runs, stats) = canopy_runs::encode(&ends, &baked.runs, base.key_hash);
+                    eprintln!(
+                        "canopy runs: {} edges, {} runs over {:.1} km, {} stretches drawn over \
+                         {:.1} km, {} unbroken runs of cover undrawn over {:.1} km ({} of 10 m \
+                         or more), {} bytes",
+                        stats.edges,
+                        stats.runs,
+                        stats.covered_meters / 1000.0,
+                        stats.stretches,
+                        stats.drawn_meters / 1000.0,
+                        stats.undrawn.0,
+                        stats.undrawn.1 / 1000.0,
+                        stats.undrawn_long,
+                        runs.len()
+                    );
+                    if let (Some(cache), Some(key)) = (cache.as_deref_mut(), key) {
+                        cache.store(graph_cache::CANOPY, key, &baked.bytes)?;
+                        cache.store(graph_cache::CANOPY_RUNS, key, &runs)?;
+                    }
+                    (baked.bytes, runs)
+                }
+            };
+            (bytes, Some(runs))
+        }
+        None => (vec![0u8; edge_count], None),
     };
 
     // The structure flag is passed in since a deck over a yard fronts nothing.
@@ -5279,6 +5344,7 @@ fn bake(
         ascent,
         descent,
         direct_canopy,
+        canopy_runs,
         industrial,
         historic,
         bridge,
@@ -5746,6 +5812,27 @@ fn assemble(args: &Args, base: &Base, columns: &Columns) -> Fallible<()> {
     write_version(&args.out, &bytes, edge_count, key_hash)?;
     if let Some(path) = &args.stranded_out {
         write_stranded(path, stranded_ways)?;
+    }
+    if let (Some(path), Some(runs)) = (&args.canopy_runs_out, &columns.canopy_runs) {
+        fs::write(path, runs)?;
+    }
+    // The same stretches as a pyramid, for the zooms too coarse to stroke them at.
+    if let (Some(dir), Some(runs)) = (&args.cover_tiles_out, &columns.canopy_runs) {
+        let meters_per_degree_lng = METERS_PER_DEGREE_LAT * base.origin_lat.to_radians().cos();
+        let lines = cover_tiles::lines(
+            runs,
+            |edge| edge_polyline(base, &base.edges[edge as usize]),
+            meters_per_degree_lng,
+        )?;
+        let baked = cover_tiles::render(&lines, dir)?;
+        eprintln!(
+            "cover tiles: {} stretches into {} tiles, {} bytes, z{}-{}",
+            lines.len(),
+            baked.tiles,
+            baked.bytes,
+            crate::raster::MIN_ZOOM,
+            cover_tiles::MAX_ZOOM
+        );
     }
 
     // Per-edge per-bin occlusion, in the finalized GRPH edge order.
@@ -7416,6 +7503,90 @@ mod tests {
         let edges: Vec<V2Edge> = (0..=ORDINALS).map(|_| keyed(7, SIDE_NORTH)).collect();
         let message = assign_ordinals(&edges).expect_err("overflow").to_string();
         assert!(message.contains("source id 7"), "{message}");
+    }
+
+    fn canopy_cache(name: &str) -> (graph_cache::Cache, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("tiler-held-canopy-{name}-{}", std::process::id()));
+        fs::remove_dir_all(&dir).ok();
+        (graph_cache::Cache::new(&dir), dir)
+    }
+
+    fn two_edges() -> Vec<canopy_runs::EdgeEnds> {
+        vec![
+            canopy_runs::edge_ends(0, 1, &[], 0.0),
+            canopy_runs::edge_ends(1, 2, &[], 0.0),
+        ]
+    }
+
+    /// The byte and the runs come from one sampling, so a cache holding one of them holds neither.
+    #[test]
+    fn the_canopy_column_is_read_from_the_cache_only_with_its_runs() {
+        let edges = two_edges();
+        let (runs, _) = canopy_runs::encode(&edges, &[Default::default(), Default::default()], 7);
+
+        let (mut cache, dir) = canopy_cache("pair");
+        assert!(
+            held_canopy(&mut cache, "k", &edges, 7)
+                .expect("a read")
+                .is_none()
+        );
+        cache
+            .store(graph_cache::CANOPY, "k", &[1, 2])
+            .expect("a store");
+        assert!(
+            held_canopy(&mut cache, "k", &edges, 7)
+                .expect("a read")
+                .is_none(),
+            "the column alone"
+        );
+        cache
+            .store(graph_cache::CANOPY_RUNS, "k", &runs)
+            .expect("a store");
+        assert_eq!(
+            held_canopy(&mut cache, "k", &edges, 7).expect("a read"),
+            Some((vec![1, 2], runs.clone()))
+        );
+        fs::remove_file(dir.join("canopy-k.bin")).expect("a removal");
+        assert!(
+            held_canopy(&mut cache, "k", &edges, 7)
+                .expect("a read")
+                .is_none(),
+            "the runs alone"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_damaged_runs_entry_is_a_miss_for_the_pair() {
+        let edges = two_edges();
+        let (runs, _) = canopy_runs::encode(&edges, &[Default::default(), Default::default()], 7);
+        let (mut cache, dir) = canopy_cache("damaged");
+        cache
+            .store(graph_cache::CANOPY, "k", &[1, 2])
+            .expect("a store");
+
+        let mut wrong_graph = runs.clone();
+        wrong_graph[32] ^= 1;
+        let mut wrong_count = runs.clone();
+        wrong_count[8] = 3;
+        for damaged in [&runs[..10], b"CRUN", &wrong_graph, &wrong_count] {
+            cache
+                .store(graph_cache::CANOPY_RUNS, "k", damaged)
+                .expect("a store");
+            assert!(
+                held_canopy(&mut cache, "k", &edges, 7)
+                    .expect("a read")
+                    .is_none()
+            );
+        }
+        assert!(
+            held_canopy(&mut cache, "k", &edges, 8)
+                .expect("a read")
+                .is_none(),
+            "another key space's"
+        );
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

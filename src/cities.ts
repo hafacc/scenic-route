@@ -21,6 +21,8 @@ export interface City {
   overlays: readonly OverlayId[];
   // Curb to the baked sidewalk line.
   sidewalkInsetMeters: number;
+  // Whether the trees keep their leaves, so a crown keeps the same rain off in January as in July.
+  evergreen: boolean;
   // Longest pier wait before the ferry stops counting; absent means src/routing/cost.ts's default.
   maxFerryWaitSeconds?: number;
   // The same cap for a platform; absent means the default.
@@ -42,6 +44,7 @@ const OVERLAYS_BY_CITY: Record<string, readonly OverlayId[]> = {
     "legacy",
     "commercial",
     "shade",
+    "treecover",
     "scaffolding",
   ],
   // Its Muni and BART rail rides under the "subway" id: same artifact, same layer.
@@ -58,6 +61,7 @@ const OVERLAYS_BY_CITY: Record<string, readonly OverlayId[]> = {
     "historic",
     "legacy",
     "shade",
+    "treecover",
   ],
 };
 
@@ -81,6 +85,9 @@ const MAX_FERRY_WAIT_BY_CITY: Record<string, number> = {
   sf: 150 * 60,
 };
 
+// Treated as in leaf all year, for rain and for shade; every other city follows src/shade/phenology.ts's leaf curve.
+const EVERGREEN_CITIES: ReadonlySet<string> = new Set(["sf"]);
+
 // A coordinate carries no zone, and a wrong guess shows up as the wrong trains rather than an error.
 const TIME_ZONE_BY_CITY: Record<string, string> = {
   nyc: "America/New_York",
@@ -98,6 +105,7 @@ export const CITIES: readonly City[] = manifest.cities.map((city) => ({
   timeZone: TIME_ZONE_BY_CITY[city.id] ?? "America/New_York",
   overlays: OVERLAYS_BY_CITY[city.id] ?? [],
   sidewalkInsetMeters: city.streets.sidewalkInsetMeters,
+  evergreen: EVERGREEN_CITIES.has(city.id),
   maxFerryWaitSeconds: MAX_FERRY_WAIT_BY_CITY[city.id],
 }));
 

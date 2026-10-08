@@ -43,6 +43,12 @@ test("routing is its own store, so a shade binge cannot evict the graph", () => 
   expect(fileRequest(`${SCOPE}routing/shade/nyc/12.bin`, SCOPE)?.store).toBe(
     "routing",
   );
+  // The tree cover is cut from the graph's own edges, so it is kept where the graph is.
+  expect(fileRequest(`${SCOPE}routing/nyc.canopy.bin`, SCOPE)).toEqual({
+    path: "routing/nyc.canopy.bin",
+    store: "routing",
+    fresh: false,
+  });
 });
 
 test("the search files are kept with the graph, not with the evictable tiles", () => {
@@ -136,6 +142,7 @@ test("a city graph is recognizable, so eviction can leave it alone", () => {
   expect(isGraph("routing/nyc.bin")).toBe(true);
   expect(isGraph("routing/sf.bin")).toBe(true);
   expect(isGraph("routing/nyc.stranded.bin")).toBe(true); // tiny, so it shares the graph's fate
+  expect(isGraph("routing/nyc.canopy.bin")).toBe(true); // read once like the graph it is keyed to
   expect(isGraph("routing/shade/nyc/12.bin")).toBe(false);
   expect(isGraph("casters/5232/6162.bin")).toBe(false);
 });
@@ -208,6 +215,7 @@ test("a navigation to explorer is answered by explorer's own page", () => {
 
 test("one city's graph and one shade bin are stamped apart from the rest", () => {
   expect(contentUnit("routing/nyc.bin")).toBe("routing/nyc.bin");
+  expect(contentUnit("routing/nyc.canopy.bin")).toBe("routing/nyc.canopy.bin");
   expect(contentUnit("routing/shade/nyc/12.bin")).toBe(
     "routing/shade/nyc/12.bin",
   );
@@ -218,6 +226,13 @@ test("one city's graph and one shade bin are stamped apart from the rest", () =>
     "tiles/tree-shade/sf/7",
   );
   expect(contentUnit("tiles/shade/nyc/buckets.json")).toBe("tiles/shade/nyc");
+  // The low-zoom tree cover is a per-city pyramid like the rest: one unit a city, kept with the overlays.
+  expect(contentUnit("tiles/tree-cover/sf/12/655/1583.webp")).toBe(
+    "tiles/tree-cover/sf",
+  );
+  expect(
+    fileRequest(`${SCOPE}tiles/tree-cover/sf/12/655/1583.webp`, SCOPE)?.store,
+  ).toBe("overlay");
   expect(contentUnit("tiles/elevation/sf/11/327/791.webp")).toBe(
     "tiles/elevation/sf",
   );

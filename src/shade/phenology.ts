@@ -1,3 +1,5 @@
+import type { City } from "../cities";
+
 // Fraction of direct sunlight a crown blocks by date; unbaked because a January crown blocks ~half.
 // In leaf: i-Tree shade coefficients (Nowak 2024; McPherson et al. 2018) at our 22.9 cm median trunk.
 // Leaf-off: Heisler 1986 (Urban Ecology 9:337-359) leafless/in-leaf ratio ~0.49 × 0.814.
@@ -6,7 +8,7 @@ const LEAF_OFF = 0.4;
 
 // Rain kept off the sidewalk: Zabret & Sraj's urban birch, at the low end of a 0.20-0.55 bracket;
 // not the light tau, which would overvalue a tree 2x once a storm saturates the crown.
-const RAIN_IN_LEAF = 0.35;
+export const RAIN_IN_LEAF = 0.35;
 const RAIN_LEAF_OFF = 0.15;
 
 type Transition = [start: [number, number], end: [number, number]];
@@ -37,10 +39,15 @@ function leafed(date: Date): number {
   return ramp(day, year, LEAF_OUT) - ramp(day, year, LEAF_FALL);
 }
 
-export function canopyTau(date: Date): number {
-  return LEAF_OFF + (IN_LEAF - LEAF_OFF) * leafed(date);
+// The season is the city's: one whose trees keep their leaves has no winter, for light or for rain.
+function leafOn(date: Date, city: Pick<City, "evergreen">): number {
+  return city.evergreen ? 1 : leafed(date);
 }
 
-export function rainTau(date: Date): number {
-  return RAIN_LEAF_OFF + (RAIN_IN_LEAF - RAIN_LEAF_OFF) * leafed(date);
+export function canopyTau(date: Date, city: Pick<City, "evergreen">): number {
+  return LEAF_OFF + (IN_LEAF - LEAF_OFF) * leafOn(date, city);
+}
+
+export function rainTau(date: Date, city: Pick<City, "evergreen">): number {
+  return RAIN_LEAF_OFF + (RAIN_IN_LEAF - RAIN_LEAF_OFF) * leafOn(date, city);
 }

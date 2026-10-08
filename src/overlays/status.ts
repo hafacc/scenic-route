@@ -60,6 +60,56 @@ export function reportLayerData(
   reportLayerStatus(overlay, token, reachable);
 }
 
+// For a layer drawn from one file rather than tiles: says so when the file fails, and asks again once online.
+export function loadLayerData<Data>(
+  overlay: OverlayId,
+  load: () => Promise<Data>,
+  use: (data: Data) => void,
+  network: Pick<
+    EventTarget,
+    "addEventListener" | "removeEventListener"
+  > = globalThis,
+): () => void {
+  const token = Symbol(overlay);
+  let state: "pending" | "ok" | "failed" | "removed" = "pending";
+  // Only the newest attempt may settle the state: an older one arriving late is not news.
+  let generation = 0;
+  const attempt = (): void => {
+    generation += 1;
+    const mine = generation;
+    state = "pending";
+    load().then(
+      (data) => {
+        if (mine === generation && state === "pending") {
+          state = "ok";
+          use(data);
+          reportLayerStatus(overlay, token, true);
+        }
+      },
+      () => {
+        if (mine === generation && state === "pending") {
+          state = "failed";
+          reportLayerStatus(overlay, token, false);
+        }
+      },
+    );
+  };
+  // A phone regains signal many times a walk; data that loaded is not loaded again for it.
+  const online = (): void => {
+    if (state === "failed") {
+      attempt();
+    }
+  };
+  network.addEventListener("online", online);
+  attempt();
+  return () => {
+    state = "removed";
+    network.removeEventListener("online", online);
+    // Removal isn't evidence about reachability.
+    reportLayerStatus(overlay, token, true);
+  };
+}
+
 export function unreachableLayers(): ReadonlySet<OverlayId> {
   return unreachable;
 }
