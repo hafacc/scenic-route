@@ -12,3 +12,6 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
+    ignore:
+      # Its refs are Rust versions, pre-created ahead of release; rust-toolchain.toml owns the pin.
+      - dependency-name: "dtolnay/rust-toolchain"

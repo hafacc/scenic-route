@@ -33,6 +33,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
       - run: bun lint
+      # Before any LFS pull: the tiler's unit tests build their own fixtures.
+      - run: cargo test --locked
       # scripts holds the build-time invariants, so a broken city fails here rather than mid-ingest.
       - run: bun test src scripts components
       # Fails a graph-input change without `build-sheds`; it reads only LFS pointer text.
