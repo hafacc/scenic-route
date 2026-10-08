@@ -77,8 +77,8 @@ export function hillFractionOf(graph: RoutingGraph, edge: number): number {
   return Math.min(1, edgeGrade(graph, edge) / HILL_REFERENCE_GRADE);
 }
 
-// Moves 64% of seeded highway trips for 1.6% more walking.
-export const DEFAULT_HIGHWAY_WEIGHT = 0.5;
+// 15 on the slider's grid; 0.5 moved 64% of seeded highway trips for 1.6% more walking, so re-measure.
+export const DEFAULT_HIGHWAY_WEIGHT = 0.45;
 // Hill time is already charged by the grade-adjusted walking speed; this is only how much you mind one.
 export const DEFAULT_HILL_WEIGHT = 0;
 export const MAX_COMMERCIAL_WEIGHT = 1;

@@ -1,5 +1,10 @@
 <script lang="ts">
-import { type Factor, factorPercent, stepFor } from "../src/routing/factors";
+import {
+  type Factor,
+  factorPercent,
+  factorWeight,
+  stepFor,
+} from "../src/routing/factors";
 
 interface Props {
   id?: string;
@@ -25,7 +30,7 @@ function handleInput(
   event: Event & { currentTarget: EventTarget & HTMLInputElement },
 ): void {
   const input = event.currentTarget;
-  onChange((Number.parseInt(input.value, 10) / 100) * factor.max);
+  onChange(factorWeight(factor, Number.parseInt(input.value, 10)));
   // A value the parent did not take snaps back to the weight's.
   if (input.value !== `${value}`) {
     input.value = `${value}`;
