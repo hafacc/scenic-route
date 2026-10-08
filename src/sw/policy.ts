@@ -235,30 +235,68 @@ interface ScriptCache {
   put(request: Request, response: Response): Promise<void>;
 }
 
-// Network first, keeping a copy; the copy answers offline or once a deploy has taken the hashed file away.
+// Feeds and worker scripts are under 400 KB, so a working connection sends headers well inside this, and a false alarm costs one stale read.
+export const NETWORK_WAIT_MS = 3000;
+
+interface FreshOptions {
+  // A feed's 404 means "no such feed", so it is not papered over with the copy.
+  notOkStands?: boolean;
+  limitMs?: number;
+}
+
+// Network first, keeping a copy; the copy answers offline, on a stalled network, or once a deploy has taken the hashed file away.
 export async function freshThenStored(
   request: Request,
   load: (request: Request) => Promise<Response>,
   cache: ScriptCache,
   keep: (stored: Promise<void>) => void,
+  { notOkStands = false, limitMs = NETWORK_WAIT_MS }: FreshOptions = {},
 ): Promise<Response> {
-  let response: Response | null = null;
-  let failure: unknown;
-  try {
-    response = await load(request);
-  } catch (error) {
-    failure = error;
+  // Settled either way, so a rejection during the cache lookup is not unhandled.
+  const network = load(request).then(
+    (response) => ({ response, failure: undefined }),
+    (failure: unknown) => ({ response: null, failure }),
+  );
+  const stored = await cache.match(request).catch(() => undefined);
+  // With nothing stored there is nothing better to serve, so the network is waited on however long.
+  if (stored && (await stalls(network, limitMs))) {
+    // The fetch carries on, so a slow connection still refreshes the copy for next time.
+    keep(
+      network.then(({ response }) =>
+        response?.ok ? cache.put(request, response) : undefined,
+      ),
+    );
+    return stored;
   }
+  const { response, failure } = await network;
   if (response?.ok) {
     keep(cache.put(request, response.clone()));
     return response;
   }
-  const stored = await cache.match(request);
+  if (response && notOkStands) {
+    return response;
+  }
   if (stored) {
     return stored;
   } else if (response) {
     return response;
   } else {
     throw failure;
+  }
+}
+
+// Whether `limitMs` passes before the network settles; headers settle it, a body may still be arriving.
+async function stalls(
+  network: Promise<unknown>,
+  limitMs: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<true>((resolve) => {
+    timer = setTimeout(resolve, limitMs, true);
+  });
+  try {
+    return await Promise.race([network.then(() => false), limit]);
+  } finally {
+    clearTimeout(timer);
   }
 }

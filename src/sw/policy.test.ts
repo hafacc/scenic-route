@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, jest, test } from "bun:test";
 import {
   chunked,
   contentUnit,
@@ -8,6 +8,7 @@ import {
   freshThenStored,
   isGraph,
   missRequest,
+  NETWORK_WAIT_MS,
   outdated,
   pageFor,
   sameStamps,
@@ -399,4 +400,214 @@ test("with no stored copy the network's own answer or failure stands", async () 
       offline.keep,
     ),
   ).rejects.toThrow("offline");
+});
+
+afterEach(() => {
+  jest.useRealTimers();
+});
+
+// A network the test answers by hand, and a served response watched without awaiting it.
+function slowNetwork() {
+  let answer: (response: Response) => void = () => {};
+  let fail: (error: unknown) => void = () => {};
+  const pending = new Promise<Response>((resolve, reject) => {
+    answer = resolve;
+    fail = reject;
+  });
+  return { load: () => pending, answer, fail };
+}
+
+function watched(serving: Promise<Response>) {
+  const state: { served: Response | null } = { served: null };
+  void serving.then((response) => {
+    state.served = response;
+  });
+  return state;
+}
+
+// Past the cache lookup that precedes the timer, and past the race once a timer or the network fires.
+async function settle(): Promise<void> {
+  for (let turn = 0; turn < 10; turn += 1) {
+    await Promise.resolve();
+  }
+}
+
+test("a network answering inside the limit is served and stored over the copy", async () => {
+  jest.useFakeTimers();
+  const { cache, keep, puts, held } = scriptCache(new Response("old"));
+  const network = slowNetwork();
+  const serving = freshThenStored(SCRIPT, network.load, cache, keep);
+  const state = watched(serving);
+  await settle();
+  jest.advanceTimersByTime(NETWORK_WAIT_MS - 1);
+  await settle();
+  expect(state.served).toBeNull();
+  network.answer(new Response("new"));
+  expect(await (await serving).text()).toBe("new");
+  expect(puts).toHaveLength(1);
+  await puts[0];
+  expect(await held()?.text()).toBe("new");
+  // The limit passing afterwards changes nothing.
+  jest.advanceTimersByTime(NETWORK_WAIT_MS);
+  await settle();
+  expect(puts).toHaveLength(1);
+});
+
+test("a network slower than the limit is answered from the copy, and still refreshes it", async () => {
+  jest.useFakeTimers();
+  const { cache, keep, puts, held } = scriptCache(new Response("old"));
+  const network = slowNetwork();
+  const serving = freshThenStored(SCRIPT, network.load, cache, keep);
+  const state = watched(serving);
+  await settle();
+  jest.advanceTimersByTime(NETWORK_WAIT_MS - 1);
+  await settle();
+  expect(state.served).toBeNull();
+  jest.advanceTimersByTime(1);
+  expect(await (await serving).text()).toBe("old");
+  // Handed to `waitUntil` at the limit, so the worker outlives the late write.
+  expect(puts).toHaveLength(1);
+  network.answer(new Response("new"));
+  await puts[0];
+  expect(await held()?.text()).toBe("new");
+});
+
+test("a network that never answers is answered from the copy, and nothing fails later", async () => {
+  jest.useFakeTimers();
+  const { cache, keep, puts, held } = scriptCache(new Response("old"));
+  const serving = freshThenStored(
+    SCRIPT,
+    () => new Promise<Response>(() => {}),
+    cache,
+    keep,
+  );
+  await settle();
+  jest.advanceTimersByTime(NETWORK_WAIT_MS);
+  expect(await (await serving).text()).toBe("old");
+  jest.advanceTimersByTime(NETWORK_WAIT_MS * 100);
+  await settle();
+  expect(puts).toHaveLength(1);
+  expect(held()).toBeDefined();
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+test("a late failure or a late 404 leaves the copy alone and rejects nothing", async () => {
+  jest.useFakeTimers();
+  for (const late of ["fails", "gone"] as const) {
+    const old = new Response("old");
+    const { cache, keep, puts, held } = scriptCache(old);
+    const network = slowNetwork();
+    const serving = freshThenStored(SCRIPT, network.load, cache, keep);
+    await settle();
+    jest.advanceTimersByTime(NETWORK_WAIT_MS);
+    expect(await serving).toBe(old);
+    if (late === "fails") {
+      network.fail(new TypeError("reset"));
+    } else {
+      network.answer(new Response("gone", { status: 404 }));
+    }
+    await expect(puts[0]).resolves.toBeUndefined();
+    expect(held()).toBe(old);
+  }
+});
+
+test("with no stored copy the network is waited on however long", async () => {
+  jest.useFakeTimers();
+  const { cache, keep, puts, held } = scriptCache(undefined);
+  const network = slowNetwork();
+  const serving = freshThenStored(SCRIPT, network.load, cache, keep);
+  const state = watched(serving);
+  await settle();
+  // No timer is even set, since there is nothing to fall back to.
+  expect(jest.getTimerCount()).toBe(0);
+  jest.advanceTimersByTime(NETWORK_WAIT_MS * 100);
+  await settle();
+  expect(state.served).toBeNull();
+  network.answer(new Response("new"));
+  expect(await (await serving).text()).toBe("new");
+  await puts[0];
+  expect(await held()?.text()).toBe("new");
+});
+
+test("with no stored copy a stalled network that then fails still rejects", async () => {
+  jest.useFakeTimers();
+  const { cache, keep } = scriptCache(undefined);
+  const network = slowNetwork();
+  const serving = freshThenStored(SCRIPT, network.load, cache, keep);
+  await settle();
+  jest.advanceTimersByTime(NETWORK_WAIT_MS * 100);
+  network.fail(new TypeError("offline"));
+  await expect(serving).rejects.toThrow("offline");
+});
+
+test("a rejection or a 404 inside the limit falls back at once, not at the limit", async () => {
+  jest.useFakeTimers();
+  for (const early of ["fails", "gone"] as const) {
+    const { cache, keep, puts } = scriptCache(new Response("old"));
+    const network = slowNetwork();
+    const serving = freshThenStored(SCRIPT, network.load, cache, keep);
+    await settle();
+    if (early === "fails") {
+      network.fail(new TypeError("offline"));
+    } else {
+      network.answer(new Response("gone", { status: 404 }));
+    }
+    // No timer is advanced: the copy is served as soon as the network settles.
+    expect(await (await serving).text()).toBe("old");
+    expect(puts).toHaveLength(0);
+    expect(jest.getTimerCount()).toBe(0);
+  }
+});
+
+test("a feed's 404 stands over the copy, but a failure or a stall still falls back", async () => {
+  jest.useFakeTimers();
+  const feed = { notOkStands: true };
+  const gone = scriptCache(new Response("old"));
+  const served = await freshThenStored(
+    SCRIPT,
+    async () => new Response("gone", { status: 404 }),
+    gone.cache,
+    gone.keep,
+    feed,
+  );
+  expect(served.status).toBe(404);
+  expect(gone.puts).toHaveLength(0);
+  const offline = scriptCache(new Response("old"));
+  const fallen = await freshThenStored(
+    SCRIPT,
+    async () => {
+      throw new TypeError("offline");
+    },
+    offline.cache,
+    offline.keep,
+    feed,
+  );
+  expect(await fallen.text()).toBe("old");
+  const stalled = scriptCache(new Response("old"));
+  const serving = freshThenStored(
+    SCRIPT,
+    () => new Promise<Response>(() => {}),
+    stalled.cache,
+    stalled.keep,
+    feed,
+  );
+  await settle();
+  jest.advanceTimersByTime(NETWORK_WAIT_MS);
+  expect(await (await serving).text()).toBe("old");
+});
+
+test("a store that cannot be read does not cost the network's answer", async () => {
+  const { keep } = scriptCache(undefined);
+  const served = await freshThenStored(
+    SCRIPT,
+    async () => new Response("new"),
+    {
+      match: async () => {
+        throw new Error("no storage");
+      },
+      put: async () => {},
+    },
+    keep,
+  );
+  expect(await served.text()).toBe("new");
 });

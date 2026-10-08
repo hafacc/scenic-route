@@ -4544,7 +4544,7 @@ through the clock must not be able to evict it. Anything the worker does not fil
 Firestore, auth — goes without `respondWith` at all, which leaves it behaving exactly as it would
 with no worker installed.
 
-Four rules carry the weight:
+Five rules carry the weight:
 
 - **Only 200s are stored.** A 404 is a fact about the deploy — the shade pyramids are sparse on
   purpose, a caster chunk over water was never written — and storing one would freeze that fact past
@@ -4557,13 +4557,22 @@ Four rules carry the weight:
   overlay and routing caches. Crossing a season boundary costs a re-download of what you look at.
 - **The daily feeds are network-first.** `sheds/**`, `ferry-schedule/**` and `transit-schedule/**`
   are read from `raw.githubusercontent.com`, rewritten in place by a daily job rather than by a
-  deploy; a stale timetable is worse than a slow one, so the cache is only what an offline walk falls
-  back to.
+  deploy; a stale timetable is worse than a slow one, so the cache is only what a walk falls back to
+  when the network fails or stalls. A 404 is passed on as it is, since it means "no such feed".
 - **A worker script is network-first, with a stored copy behind it.** The scripts are hashed files
   under `_app/immutable/workers/`, so a deploy takes the old ones off the network while tabs from
   before it are still open. Every one the network answers is stored in the shell cache, and that
   copy is what starts a worker offline or in a tab that has not yet reloaded into the new deploy.
   Without it the tile rasterizer never starts, and with it goes every overlay on the map.
+- **Network-first waits three seconds, then answers from the copy.** A connected but stalled network
+  (a captive portal, a dead zone with bars) neither answers nor fails, and a route waits on the
+  routing worker's script and on the feeds. So when a copy is stored and the network has sent no
+  response headers within `NETWORK_WAIT_MS` (`freshThenStored` in `src/sw/policy.ts`), the copy is
+  served; the request carries on under `waitUntil` and is stored if it does answer, so a slow
+  connection still refreshes the feed for next time. Three seconds because these are tiny scripts
+  and feeds under 400 KB, whose headers a working connection sends well inside it, and a false alarm
+  costs one stale read. With no copy there is nothing better to serve, so the network is waited on
+  as before, and a body that stalls after its headers arrived is not caught.
 
 Two caps bound the rest, at **128 MB** for routing and **1 GB** for overlay; the precached shell has
 none, since losing a piece of it is the one thing that would stop the app opening at all. Both are
