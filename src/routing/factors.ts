@@ -227,6 +227,10 @@ export const FACTORS: readonly Factor[] = [
 export const factorPercent = (factor: Factor, weight: number): number =>
   Math.round((weight / factor.max) * 100);
 
+// The slider's own conversion, so a default can be checked against the grid it is drawn on.
+export const factorWeight = (factor: Factor, percent: number): number =>
+  (percent / 100) * factor.max;
+
 // No percent sign: these are read against each other, not as quantities.
 export function factorReading(factor: Factor, weight: number): string {
   const value = factorPercent(factor, weight);
