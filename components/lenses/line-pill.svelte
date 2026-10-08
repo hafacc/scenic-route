@@ -1,9 +1,9 @@
 <script lang="ts">
-import type { RideSummary } from "../../src/lenses/cards";
+import type { LineBullet } from "../../src/lenses/cards";
 import { PILL } from "./route-cards";
 
 interface Props {
-  ride: RideSummary;
+  ride: LineBullet;
   class?: string;
 }
 

@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { MdElevator, MdLogout, MdStairs } from "../src/icons/glyphs";
+import {
+  MdAccessTime,
+  MdElevator,
+  MdLogout,
+  MdStairs,
+} from "../src/icons/glyphs";
 import type { Maneuver } from "../src/routing/directions";
 import type { NavProgress } from "../src/routing/nav-progress";
 import { maneuverIcon, maneuverState } from "./maneuvers";
@@ -28,6 +33,14 @@ test("a lift wears the lift icon and every other door the stair", () => {
   expect(
     maneuverIcon(stationManeuver({ station: "alight", door: undefined })),
   ).toBe(MdLogout);
+});
+
+test("a wait wears the clock", () => {
+  expect(
+    maneuverIcon(
+      stationManeuver({ kind: "wait", station: undefined, lengthMeters: 0 }),
+    ),
+  ).toBe(MdAccessTime);
 });
 
 function progressAt(
@@ -59,6 +72,20 @@ test("the dimmed run reaches the highlighted row with no bright gap", () => {
   ]);
   // The row whose span the walker is inside: its turn is behind them, so it dims with the rest.
   expect(maneuverState(progress, 2)).toBe("passed");
+});
+
+// Rows: a walk, the wait, the ride it waits for, the walk off, arrive.
+test("a wait row is neither next nor dimmed on the way to its ride, and dims with it", () => {
+  // Walking up: navProgress steps past the wait, so the ride is next.
+  const approaching = progressAt(0, 2);
+  expect(
+    [0, 1, 2, 3, 4].map((index) => maneuverState(approaching, index)),
+  ).toEqual(["passed", "ahead", "next", "ahead", "ahead"]);
+  // On the pier or platform the ride is current, and the wait dims only now, with it.
+  const boarding = progressAt(2, 3);
+  expect(
+    [0, 1, 2, 3, 4].map((index) => maneuverState(boarding, index)),
+  ).toEqual(["passed", "passed", "passed", "next", "ahead"]);
 });
 
 test("the arrive row is highlighted and not also dimmed", () => {

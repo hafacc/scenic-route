@@ -169,3 +169,64 @@ test("the landmark is next until it is passed, then the turn is", () => {
   expect(before?.nextManeuver).toBe(1);
   expect(after?.nextManeuver).toBe(2);
 });
+
+// A walk up the north leg to a pier or platform at the corner, then the ride along the east leg.
+function rideTrip(ride: "ferry" | "transit", waited: boolean): Maneuver[] {
+  const corner = { lat: CORNER_LAT, lng: START_LNG };
+  return [
+    makeManeuver("start", 0, northLegMeters, {
+      lat: START_LAT,
+      lng: START_LNG,
+    }),
+    ...(waited ? [makeManeuver("wait", northLegMeters, 0, corner)] : []),
+    makeManeuver(ride, northLegMeters, eastLegMeters, corner),
+    makeManeuver("arrive", northLegMeters + eastLegMeters, 0, {
+      lat: CORNER_LAT,
+      lng: EAST_LNG,
+    }),
+  ];
+}
+
+function kindsAt(
+  trip: Maneuver[],
+  alongMeters: number,
+): { current: string; next: string; distance: number } {
+  const progress = navProgress(makeRoute(), trip, userAt(alongMeters));
+  if (!progress) {
+    throw new Error("expected progress");
+  }
+  return {
+    current: trip[progress.currentManeuver].kind,
+    next: trip[progress.nextManeuver].kind,
+    distance: Math.round(progress.distanceToNextMeters),
+  };
+}
+
+for (const ride of ["ferry", "transit"] as const) {
+  test(`walking up to a ${ride} with a wait row, the ride is what comes next`, () => {
+    const approach = kindsAt(rideTrip(ride, true), northLegMeters - 40);
+    expect(approach).toEqual({ current: "start", next: ride, distance: 40 });
+    // Exactly what a trip with no wait row says from the same spot.
+    expect(approach).toEqual(
+      kindsAt(rideTrip(ride, false), northLegMeters - 40),
+    );
+  });
+
+  test(`at the ${ride}'s board point the wait row changes nothing either`, () => {
+    for (const along of [northLegMeters, northLegMeters + 30]) {
+      const aboard = kindsAt(rideTrip(ride, true), along);
+      expect(aboard.current).toBe(ride);
+      expect(aboard.next).toBe("arrive");
+      expect(aboard).toEqual(kindsAt(rideTrip(ride, false), along));
+    }
+  });
+}
+
+test("a wait row is never the current maneuver, since its ride ties its start", () => {
+  const trip = rideTrip("transit", true);
+  for (let along = 0; along <= northLegMeters + eastLegMeters; along += 10) {
+    const { current, next } = kindsAt(trip, along);
+    expect(current).not.toBe("wait");
+    expect(next).not.toBe("wait");
+  }
+});

@@ -67,10 +67,10 @@ function textClass(maneuver: Maneuver): string {
       <span class={`min-w-0 flex-1 text-sm ${textClass(maneuver)}`}
         >{maneuver.text}</span
       >
-      {#if maneuver.kind === "ferry" || maneuver.kind === "transit"}
+      {#if maneuver.durationSeconds !== undefined}
         <span
           class="shrink-0 text-xs font-medium text-slate-400 dark:text-slate-500"
-          >{formatDuration(maneuver.durationSeconds ?? 0)}</span
+          >{formatDuration(maneuver.durationSeconds)}</span
         >
       {:else if maneuver.lengthMeters > 0}
         <span

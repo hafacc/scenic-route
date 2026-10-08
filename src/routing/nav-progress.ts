@@ -11,7 +11,7 @@ export interface NavProgress {
   remainingMeters: number; // along-route distance left to the destination
   offRouteMeters: number; // perpendicular distance from the route polyline
   currentManeuver: number; // index into maneuvers whose span the user is within
-  nextManeuver: number; // the upcoming maneuver to act on (>= currentManeuver + 1, clamped to last)
+  nextManeuver: number; // the upcoming maneuver to act on, past any wait row (clamped to last)
   distanceToNextMeters: number; // along-route distance from the user to nextManeuver's start
 }
 
@@ -88,7 +88,7 @@ export function navProgress(
 
   const lastIndex = maneuvers.length - 1;
 
-  // Starts are non-decreasing (a landmark can tie its host), so the scan stops at the first past the walker.
+  // Starts are non-decreasing (a landmark ties its host, a wait its ride), so the scan stops at the first past the walker.
   let currentManeuver = 0;
   for (let index = 0; index <= lastIndex; index++) {
     if (maneuvers[index].startMeters <= alongMeters) {
@@ -98,7 +98,12 @@ export function navProgress(
     }
   }
 
-  const nextManeuver = Math.min(currentManeuver + 1, lastIndex);
+  const following = Math.min(currentManeuver + 1, lastIndex);
+  // A wait is nothing to act on: the ride it stands before is what comes next.
+  const nextManeuver =
+    maneuvers[following].kind === "wait" && following < lastIndex
+      ? following + 1
+      : following;
   return {
     alongMeters,
     remainingMeters: Math.max(0, totalMeters - alongMeters),

@@ -1,7 +1,11 @@
 // A card says what a route is, never how the planner found it or what it avoided.
 
 import { SCENIC_KEYS, type ScenicKey } from "../routing/cost";
-import { formatDistance, formatDuration } from "../routing/directions";
+import {
+  durationMinutes,
+  formatDistance,
+  formatDuration,
+} from "../routing/directions";
 import { FACTORS, type FactorKey } from "../routing/factors";
 import type { FerryLeg, TransitLeg } from "../routing/search";
 import type { FactorAvailability, Lens } from "./lenses";
@@ -9,11 +13,14 @@ import type { FactorAvailability, Lens } from "./lenses";
 // The single-route color, worn by the least scenic card.
 export const DIRECT_COLOR = "#334155";
 
-// `seconds` includes the platform wait.
-export interface RideSummary {
+export interface LineBullet {
   shortName: string;
   color: string;
   textColor: string;
+}
+
+// `seconds` is the ride alone, as its step in the directions shows it; the wait is only in the total.
+export interface RideSummary extends LineBullet {
   seconds: number;
 }
 
@@ -25,11 +32,11 @@ export function rideSummaries(rides: readonly TransitLeg[]): RideSummary[] {
     shortName: ride.route?.shortName ?? "",
     color: ride.route?.color ?? UNNAMED_RIDE.color,
     textColor: ride.route?.textColor ?? UNNAMED_RIDE.textColor,
-    seconds: ride.waitSeconds + ride.rideSeconds,
+    seconds: ride.rideSeconds,
   }));
 }
 
-// `seconds` includes the pier wait; a boat has no line bullet, so its pill reuses the ferry glyph.
+// `seconds` is what the boat's step shows: its crossing, or with no timetable the baked figure.
 export interface FerrySummary {
   seconds: number;
   // Trains ridden before this boat, which orders the two kinds of leg.
@@ -38,7 +45,7 @@ export interface FerrySummary {
 
 export function ferrySummaries(ferries: readonly FerryLeg[]): FerrySummary[] {
   return ferries.map((ferry) => ({
-    seconds: ferry.waitSeconds + ferry.crossingSeconds,
+    seconds: ferry.crossingSeconds,
     ridesBefore: ferry.ridesBefore,
   }));
 }
@@ -71,8 +78,12 @@ function rideSegment(rides: readonly RideSummary[]): RideSegment | null {
   if (rides.length === 0) {
     return null;
   } else {
-    const seconds = rides.reduce((total, ride) => total + ride.seconds, 0);
-    return { kind: "rides", minutes: formatDuration(seconds), rides };
+    // Each ride rounded as its own step is, so the segment is exactly the sum of those steps.
+    const minutes = rides.reduce(
+      (total, ride) => total + durationMinutes(ride.seconds),
+      0,
+    );
+    return { kind: "rides", minutes: `${minutes} min`, rides };
   }
 }
 
