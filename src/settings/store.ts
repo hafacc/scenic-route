@@ -37,6 +37,8 @@ export interface Settings {
   toggles: Toggles;
   // Overlays switched off per lens; the lens still walks by its own weights.
   lensLayers: Partial<Record<LensId, readonly OverlayId[]>>;
+  // `LENS_EXTRAS` switched on, for every lens at once.
+  lensExtras: readonly OverlayId[];
   // Hidden gates keep gating.
   hiddenGates: readonly GateKey[];
   // A ./offline.ts coverage id; the service worker holds and enforces its own copy.
@@ -58,6 +60,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lens: DEFAULT_LENS.id,
   toggles: DEFAULT_TOGGLES,
   lensLayers: {},
+  lensExtras: [],
   coverage: DEFAULT_COVERAGE,
   updatedAt: {},
 };
@@ -273,6 +276,7 @@ export function settingsFrom(
       lens: storedLens(stored.lens ?? renamed.mode),
       toggles: storedToggles(stored.toggles),
       lensLayers: storedLensLayers(stored.lensLayers ?? renamed.modeLayers),
+      lensExtras: overlayIds(stored.lensExtras),
       coverage: COVERAGE.some(({ id }) => id === stored.coverage)
         ? (stored.coverage as string)
         : DEFAULT_COVERAGE,

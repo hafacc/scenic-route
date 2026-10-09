@@ -306,3 +306,15 @@ test("a weight with no legacy key of its own still survives the document", () =>
   expect(settings.weights.bridge).toBe(0.8);
   expect(migrated).toBe(false);
 });
+
+test("the lenses' extra layers are off until stored on, and old documents read as off", () => {
+  const read = (stored: object) =>
+    settingsFrom(stored as Partial<Settings>, () => null).settings;
+  const before = read({ weights: {}, lensLayers: { historic: ["legacy"] } });
+  expect(before.lensExtras).toEqual([]);
+  expect(before.lensLayers).toEqual({ historic: ["legacy"] });
+  expect(
+    read({ weights: {}, lensExtras: ["subway", "a-later-layer"] }).lensExtras,
+  ).toEqual(["subway"] as OverlayId[]);
+  expect(read({ weights: {}, lensExtras: "subway" }).lensExtras).toEqual([]);
+});

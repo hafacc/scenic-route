@@ -12,11 +12,16 @@ import {
   effectiveWeights,
   type FactorAvailability,
   graphFactors,
+  LENS_EXTRAS,
   LENSES,
   type Lens,
   lensById,
+  lensExtrasForCity,
   lensesForCity,
+  lensForCity,
+  shownLensOverlays,
   type Toggles,
+  toggledLayer,
 } from "./lenses";
 
 // These walk the table, so a new lens is held to the same rules.
@@ -268,4 +273,47 @@ test("no Rain route color is, or is near, a cover layer's color", () => {
     }
   }
   expect(new Set(routes).size).toBe(routes.length);
+});
+
+test("the transit layers follow every lens's own, in each city that has them", () => {
+  for (const id of ["nyc", "sf"]) {
+    expect(lensExtrasForCity(cityNamed(id))).toEqual(["ferries", "subway"]);
+  }
+  const inland = { ...cityNamed("nyc"), overlays: ["genus", "subway"] } as City;
+  expect(lensExtrasForCity(inland)).toEqual(["subway"]);
+  for (const lens of LENSES) {
+    for (const extra of LENS_EXTRAS) {
+      expect(lens.overlays).not.toContain(extra);
+    }
+  }
+});
+
+test("a lens draws its own layers until hidden, and the transit ones only once asked", () => {
+  const nyc = cityNamed("nyc");
+  for (const lens of lensesForCity(nyc)) {
+    expect(shownLensOverlays(nyc, lens, [], [])).toEqual([...lens.overlays]);
+    expect(shownLensOverlays(nyc, lens, [], ["subway"])).toEqual([
+      ...lens.overlays,
+      "subway",
+    ]);
+  }
+  const historic = lensForCity(nyc, "historic");
+  expect(
+    shownLensOverlays(nyc, historic, ["legacy"], ["subway", "ferries"]),
+  ).toEqual(["historic", "landmarks", "art", "ferries", "subway"]);
+  // Only the offered extras: a stored id that is some lens's own layer draws nothing here.
+  expect(shownLensOverlays(nyc, historic, [], ["canopy", "legacy"])).toEqual([
+    "historic",
+    "legacy",
+    "landmarks",
+    "art",
+  ]);
+});
+
+test("tapping a row flips it and nothing else", () => {
+  expect(toggledLayer([], "subway")).toEqual(["subway"]);
+  expect(toggledLayer(["ferries", "subway"], "ferries")).toEqual(["subway"]);
+  expect(toggledLayer(toggledLayer(["ferries"], "subway"), "subway")).toEqual([
+    "ferries",
+  ]);
 });
