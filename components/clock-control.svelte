@@ -176,7 +176,9 @@ function settleDay(
         <span
           class="text-xs font-medium tabular-nums text-slate-700 dark:text-slate-200"
         >
-          {pinnedDay ? `${formatDayLabel(day.current)}, ` : ""}{formatHour(shownHour())}
+          {pinnedDay ? `${formatDayLabel(day.current)}, ` : ""}{formatHour(
+            shownHour(),
+          )}
         </span>
       </div>
       <div class="flex items-center gap-2.5">
@@ -210,7 +212,8 @@ function settleDay(
           max={MAX_HOUR}
           step={STEP_HOUR}
           value={shownHour()}
-          oninput={(event) => setCustomHour(Number.parseFloat(event.currentTarget.value))}
+          oninput={(event) =>
+            setCustomHour(Number.parseFloat(event.currentTarget.value))}
           aria-label="Time of day"
           class="min-w-0 flex-1 accent-slate-600 dark:accent-slate-400"
         >

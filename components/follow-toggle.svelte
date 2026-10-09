@@ -21,8 +21,8 @@ const { active, onToggle }: FollowToggleProps = $props();
   <Icon
     icon={FiNavigation}
     class={active
-  ? "h-4 w-4 fill-current text-brand-600 dark:text-brand-400"
-  : "h-4 w-4 text-slate-500 dark:text-slate-400"}
+      ? "h-4 w-4 fill-current text-brand-600 dark:text-brand-400"
+      : "h-4 w-4 text-slate-500 dark:text-slate-400"}
     aria-hidden="true"
   />
 </button>

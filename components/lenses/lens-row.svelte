@@ -73,6 +73,6 @@ const handleKey = (event: KeyboardEvent): void => {
         >{lens.name}</span
       >
     </button>
-  <!-- biome-ignore-end lint/a11y/useSemanticElements: a radio input cannot be a filled chip -->
+    <!-- biome-ignore-end lint/a11y/useSemanticElements: a radio input cannot be a filled chip -->
   {/each}
 </div>

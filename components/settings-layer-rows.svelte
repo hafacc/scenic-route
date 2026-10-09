@@ -70,7 +70,9 @@ const rows = $derived(
         <Icon
           icon={overlay.icon.glyph}
           class={overlay.icon.class}
-          style={overlay.icon.color ? `color:${overlay.icon.color[mapTheme.current]}` : undefined}
+          style={overlay.icon.color
+            ? `color:${overlay.icon.color[mapTheme.current]}`
+            : undefined}
           aria-hidden="true"
         />
       </span>
