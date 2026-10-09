@@ -19,7 +19,11 @@ const { gate, on, hidden, onChange, onHide }: Props = $props();
 <!-- A hidden gate keeps gating, so it counts toward "hidden preferences still apply". -->
 <li class="flex items-center gap-3 rounded-xl px-2 py-2">
   <span
-    class={hidden ? "opacity-40" : on ? "text-slate-500 dark:text-slate-400" : "opacity-40"}
+    class={hidden
+      ? "opacity-40"
+      : on
+        ? "text-slate-500 dark:text-slate-400"
+        : "opacity-40"}
   >
     <Icon icon={gate.icon.glyph} class="h-4 w-4" aria-hidden="true" />
   </span>

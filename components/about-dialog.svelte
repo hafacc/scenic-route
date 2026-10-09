@@ -85,7 +85,10 @@ const dataHeading = $derived(`${active().name} data`);
         {dataHeading}
       </p>
       <ul class="mt-2 space-y-2 text-xs">
-        {#each [...(CITY_SOURCES[active().id] ?? []), ...SHARED_SOURCES] as { label, detail, license } (label)}
+        {#each [
+          ...(CITY_SOURCES[active().id] ?? []),
+          ...SHARED_SOURCES,
+        ] as { label, detail, license } (label)}
           <li class="flex flex-col">
             <span class="font-medium text-slate-700 dark:text-slate-200">
               {label}

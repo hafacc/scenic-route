@@ -55,8 +55,8 @@ const anyOn = $derived(enabled.current.size > 0);
             onclick={() => toggleGenus(row.id)}
             aria-pressed={enabled.current.has(row.id)}
             class={`flex w-full items-center gap-2 rounded-md px-1 py-0.5 text-left text-xs transition hover:bg-black/5 dark:hover:bg-white/10 ${
-  enabled.current.has(row.id) ? "" : "opacity-40"
-}`}
+              enabled.current.has(row.id) ? "" : "opacity-40"
+            }`}
           >
             <span
               class="h-3 w-3 shrink-0 rounded-sm ring-1 ring-black/10 dark:ring-white/10"

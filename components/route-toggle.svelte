@@ -23,8 +23,8 @@ const label = $derived(active ? "Close directions" : "Get walking directions");
   <Icon
     icon={MdDirectionsWalk}
     class={active
-  ? "h-5 w-5 text-brand-600 dark:text-brand-400"
-  : "h-5 w-5 text-slate-500 dark:text-slate-400"}
+      ? "h-5 w-5 text-brand-600 dark:text-brand-400"
+      : "h-5 w-5 text-slate-500 dark:text-slate-400"}
     aria-hidden="true"
   />
 </button>

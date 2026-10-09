@@ -43,8 +43,8 @@ const PEEK_CHROME =
         <span
           class="block text-xs font-medium text-slate-400 dark:text-slate-500"
           >{next.current?.kind === "transit"
-  ? `after ${next.current.stops ?? 0} stop${next.current.stops === 1 ? "" : "s"} · ${formatDuration(next.current.durationSeconds ?? 0)}`
-  : `in ${formatDistance(next.distanceMeters)}`}</span
+            ? `after ${next.current.stops ?? 0} stop${next.current.stops === 1 ? "" : "s"} · ${formatDuration(next.current.durationSeconds ?? 0)}`
+            : `in ${formatDistance(next.distanceMeters)}`}</span
         >
       </span>
     </span>

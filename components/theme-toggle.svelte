@@ -39,7 +39,7 @@ const meta = $derived(META[current]);
   aria-label={`${meta.label}. Click to switch to ${META[meta.next].label.toLowerCase()}.`}
   title={`${meta.label} — click for ${META[meta.next].label.toLowerCase()}`}
   class={className ??
-  "grid h-10 w-10 place-items-center rounded-full bg-white/85 text-slate-700 shadow-lg ring-1 ring-black/5 backdrop-blur-md transition hover:bg-white dark:bg-slate-800/80 dark:text-slate-100 dark:ring-white/10 dark:hover:bg-slate-800"}
+    "grid h-10 w-10 place-items-center rounded-full bg-white/85 text-slate-700 shadow-lg ring-1 ring-black/5 backdrop-blur-md transition hover:bg-white dark:bg-slate-800/80 dark:text-slate-100 dark:ring-white/10 dark:hover:bg-slate-800"}
 >
   <Icon icon={meta.icon} class="h-4 w-4" aria-hidden="true" />
 </button>

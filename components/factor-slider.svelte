@@ -50,5 +50,7 @@ function handleInput(
   oninput={handleInput}
   aria-label={factor.label}
   class={`scenery-slider ${className ?? ""}`}
-  style="--fill:{factor.color};--pct:{factor.signed ? `${(value + 100) / 2}%` : `${value}%`}"
+  style="--fill:{factor.color};--pct:{factor.signed
+    ? `${(value + 100) / 2}%`
+    : `${value}%`}"
 >

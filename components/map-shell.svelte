@@ -1428,7 +1428,9 @@ const keysClass = $derived(
       {:else}
         <LayerLegend active={activeOverlays} {city} />
       {/if}
-      {#each OVERLAYS.filter((overlay) => activeOverlays.has(overlay.id)) as overlay (overlay.id)}
+      {#each OVERLAYS.filter((overlay) =>
+        activeOverlays.has(overlay.id),
+      ) as overlay (overlay.id)}
         {@render overlayKey(OVERLAY_VIEWS[overlay.id].legend)}
       {/each}
     </div>

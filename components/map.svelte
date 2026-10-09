@@ -162,7 +162,9 @@ onMount(() => {
 <div class="h-dvh w-full" bind:this={container}></div>
 {#if map}
   <Basemap onLost={onBasemapLost} />
-  {#each OVERLAYS.filter((overlay) => activeOverlays.has(overlay.id)) as overlay (overlay.id)}
+  {#each OVERLAYS.filter((overlay) =>
+    activeOverlays.has(overlay.id),
+  ) as overlay (overlay.id)}
     {#each OVERLAY_VIEWS[overlay.id].layers as view}
       <LazyLayer overlay={overlay.id} {view} />
     {/each}
