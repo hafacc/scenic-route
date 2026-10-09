@@ -70,6 +70,45 @@ export function parseDay(day: string): Date {
   );
 }
 
+const DAY_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
+
+// A date field reports every keystroke: empty mid-entry, and year 0002 on the way to 2026.
+export function dayInRange(
+  day: string,
+  earliest: string,
+  latest: string,
+): string | null {
+  // The shape first: `parseDay` reads fixed columns, and "20260-01-15" orders inside the range as text.
+  if (!DAY_SHAPE.test(day)) {
+    return null;
+  }
+  const date = parseDay(day);
+  // A day the calendar lacks rolls over into the next month.
+  const real = formatDay(date) === day;
+  return real && day >= earliest && day <= latest ? day : null;
+}
+
+// What a date field's state asks for: a day to pin, today again, or nothing yet.
+export type DayPick =
+  | { kind: "day"; day: string }
+  | { kind: "today" }
+  | { kind: "wait" };
+
+// An empty value is a cleared field or one part-typed; the caller says which, by key press on input and `badInput` on blur.
+export function readDayPick(
+  value: string,
+  partial: boolean,
+  earliest: string,
+  latest: string,
+): DayPick {
+  if (value === "") {
+    return partial ? { kind: "wait" } : { kind: "today" };
+  }
+  const day = dayInRange(value, earliest, latest);
+  // Out of range or malformed is not a pick; the field is put back when it is left.
+  return day === null ? { kind: "wait" } : { kind: "day", day };
+}
+
 export function getDateMode(): DateMode {
   return dateMode;
 }

@@ -8,6 +8,7 @@ import {
   getResolvedHour,
   getTimeMode,
   parseDay,
+  readDayPick,
   setCustomDay,
   setCustomHour,
   setDateMode,
@@ -93,20 +94,61 @@ function shownHour(): number {
 const custom = $derived(timeMode.current === "custom");
 const pinnedDay = $derived(dateMode.current === "custom");
 
-function pickDay(event: Event & { currentTarget: HTMLInputElement }): void {
-  const picked = event.currentTarget.value;
-  if (picked) {
-    setCustomDay(picked);
-  } else {
+// True while a key press in the date field is handled: an empty value then is typing, not the picker's Clear.
+let keying = false;
+
+// A timer, not `keyup`, ends it: the edit lands within the press, and a key let go elsewhere is never heard.
+function markKeying(): void {
+  keying = true;
+  setTimeout(() => {
+    keying = false;
+  });
+}
+
+// What the field asks for is applied; only a cleared one is refilled, as the store's day may not have moved.
+function applyDay(field: HTMLInputElement, partial: boolean): void {
+  const pick = readDayPick(
+    field.value,
+    partial,
+    SHED_EPOCH_DAY,
+    dayFromNow(FUTURE_YEARS),
+  );
+  if (pick.kind === "day") {
+    setCustomDay(pick.day);
+  } else if (pick.kind === "today") {
     setDateMode("today");
+    field.value = getResolvedDay();
   }
-  // A pick the store ignores must not stay in the field, so it is put back to the store's day.
-  event.currentTarget.value = getResolvedDay();
+}
+
+// An empty field is today again unless a key press emptied it: that is typing, not the picker's Clear.
+function pickDay(event: Event & { currentTarget: HTMLInputElement }): void {
+  applyDay(event.currentTarget, keying);
+}
+
+// Set by `bind:this`; pressing either takes the field away.
+let menuToggle = $state.raw<HTMLButtonElement | null>(null);
+let dayToggle = $state.raw<HTMLButtonElement | null>(null);
+
+// Left fully empty the field is today again; left part-typed (`badInput`) or out of range it is put back.
+function settleDay(
+  event: FocusEvent & { currentTarget: HTMLInputElement },
+): void {
+  const field = event.currentTarget;
+  const target = event.relatedTarget;
+  // A blur from the menu closing, or from the press that toggles the field away, changes no pin.
+  const going =
+    !open || !dayOpen || target === menuToggle || target === dayToggle;
+  if (!going) {
+    applyDay(field, field.validity.badInput);
+  }
+  field.value = getResolvedDay();
 }
 </script>
 
 <div {@attach open && dismiss(() => setOpen(false))} class="relative">
   <button
+    bind:this={menuToggle}
     type="button"
     onclick={() => setOpen(!open)}
     aria-haspopup="dialog"
@@ -148,6 +190,7 @@ function pickDay(event: Event & { currentTarget: HTMLInputElement }): void {
           Now
         </button>
         <button
+          bind:this={dayToggle}
           type="button"
           onclick={() => (dayOpen = !dayOpen)}
           aria-expanded={dayOpen}
@@ -188,6 +231,8 @@ function pickDay(event: Event & { currentTarget: HTMLInputElement }): void {
             min={SHED_EPOCH_DAY}
             max={dayFromNow(FUTURE_YEARS)}
             oninput={pickDay}
+            onblur={settleDay}
+            onkeydown={markKeying}
             aria-label="Date"
             class="min-w-0 flex-1 rounded-lg bg-slate-100 px-2 py-1 text-xs tabular-nums text-slate-700 dark:bg-slate-700 dark:text-slate-200 dark:[color-scheme:dark]"
           >
