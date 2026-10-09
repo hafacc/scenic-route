@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { type City, cityById } from "../cities";
+import { SHED_COLOR, TREE_COVER_COLOR } from "../overlays/colors";
 import { isOverlayId } from "../overlays/registry";
 import type { RouteWeights } from "../routing/cost";
 import { FACTORS, type FactorKey } from "../routing/factors";
@@ -232,8 +233,8 @@ test("a city offers the lenses its layers can answer, with the layers it has", (
     "rain",
     "historic",
   ]);
-  expect(bay[1].overlays).toEqual([]);
-  expect(nyc[1].overlays).toEqual(["scaffolding"]);
+  expect(bay[1].overlays).toEqual(["treecover"]);
+  expect(nyc[1].overlays).toEqual(["treecover", "scaffolding"]);
 });
 
 test("every lens has a glyph to draw its chip with", () => {
@@ -243,4 +244,28 @@ test("every lens has a glyph to draw its chip with", () => {
   expect(Object.keys(LENS_ICONS).sort()).toEqual(
     LENSES.map((lens) => lens.id).sort(),
   );
+});
+
+// A route is drawn over the cover strips, so one in a strip's color would vanish into it.
+test("no Rain route color is, or is near, a cover layer's color", () => {
+  const channels = (hex: string): number[] =>
+    [1, 3, 5].map((at) => Number.parseInt(hex.slice(at, at + 2), 16));
+  const apart = (left: string, right: string): number =>
+    Math.hypot(
+      ...channels(left).map((value, at) => value - channels(right)[at]),
+    );
+  const rain = LENSES.find((lens) => lens.id === "rain");
+  const routes = [...(rain?.palette ?? []), rain?.color ?? ""];
+  expect(routes.length).toBeGreaterThan(3);
+  for (const cover of [TREE_COVER_COLOR, SHED_COLOR]) {
+    for (const theme of ["light", "dark"] as const) {
+      for (const route of routes) {
+        expect(
+          apart(route, cover[theme]),
+          `${route} on ${cover[theme]}`,
+        ).toBeGreaterThan(90);
+      }
+    }
+  }
+  expect(new Set(routes).size).toBe(routes.length);
 });

@@ -125,8 +125,7 @@ export const FACTORS: readonly Factor[] = [
     label: "Prefer shelter",
     icon: { glyph: MdWaterDrop },
     max: MAX_SHELTER_WEIGHT,
-    // A city with no shed feed and nothing underground has nothing to shelter under.
-    overlay: "scaffolding",
+    // No overlay: trees or decks either one make it answerable (src/overlays/shelter.ts).
     tint: "text-sky-600 dark:text-sky-400",
     color: "#0284c7",
   },

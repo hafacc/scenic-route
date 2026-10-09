@@ -91,6 +91,23 @@ export interface ShadeParams {
   sunAzimuth: number;
 }
 
+// Cut on the main thread, which holds the routing graph the lines run along (./path-strokes).
+export interface StrokesParams {
+  kind: "strokes";
+  color: Record<ThemeName, string>;
+  width: number; // px
+  lines: Float32Array;
+  ends: Float32Array;
+}
+
+// The tiler's low-zoom pyramid of the tree cover (./tree-cover): cover in alpha, tinted here.
+export interface TreeCoverParams {
+  kind: "tree-cover";
+  url: string; // a {z}/{x}/{y} template
+  maxNativeZoom: number;
+  color: Record<ThemeName, string>;
+}
+
 export type TileParams =
   | StreetScoreParams
   | CommercialParams
@@ -103,7 +120,9 @@ export type TileParams =
   | GenusParams
   | CanopyParams
   | ElevationParams
-  | ShadeParams;
+  | ShadeParams
+  | StrokesParams
+  | TreeCoverParams;
 
 // Sent once per worker, before any draw.
 export interface InitMessage {
@@ -151,7 +170,8 @@ export interface ShedDecksMessage {
 export interface RepaintMessage {
   type: "repaint";
   tileKeys: number[];
-  params: TileParams;
+  // Absent where each tile carries its own, and only the theme they are drawn in has moved.
+  params?: TileParams;
 }
 
 export type ToWorker =

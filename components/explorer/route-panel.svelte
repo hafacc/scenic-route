@@ -73,6 +73,7 @@ interface RoutePanelProps {
   // Read off the graph. Absent sliders gray out; absent gates hide, as a toggle implies both.
   graphAvailable: FactorAvailability;
   shedFeed: boolean;
+  shelterHere: boolean;
   commercialWeight: number;
   industrialWeight: number;
   historicWeight: number;
@@ -168,6 +169,7 @@ const {
   hillWeight,
   graphAvailable,
   shedFeed,
+  shelterHere,
   commercialWeight,
   industrialWeight,
   historicWeight,
@@ -258,7 +260,8 @@ const factorState: Record<FactorKey, FactorState> = $derived({
   shelter: {
     weight: shelterWeight,
     onChange: onShelterWeight,
-    available: shedFeed,
+    // Trees shelter where no shed stands; the scaffolding gate below still asks for the feed.
+    available: shelterHere,
   },
   landmark: {
     weight: landmarkWeight,

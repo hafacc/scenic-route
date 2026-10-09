@@ -71,6 +71,47 @@ export function sendShedDecks(decks: ShedDecks): void {
   tileWorker().postMessage(message);
 }
 
+// Hands a tile's canvas to the worker to paint with `params`; the key cancels it.
+export function drawInWorker(
+  tile: HTMLCanvasElement,
+  coords: L.Coords,
+  ratio: number,
+  params: TileParams,
+  done: L.DoneCallback,
+  transfer: Transferable[] = [],
+): number {
+  const tileKey = nextTileKey;
+  nextTileKey += 1;
+  pending.set(tileKey, { tile, done });
+  // One-way: this canvas can never yield a 2d context on the main thread again.
+  const canvas = tile.transferControlToOffscreen();
+  const message: ToWorker = {
+    type: "draw",
+    tileKey,
+    coords: { x: coords.x, y: coords.y, z: coords.z },
+    ratio, // the worker has no window to read a pixel ratio from
+    params,
+    canvas,
+  };
+  tileWorker().postMessage(message, [canvas, ...transfer]);
+  return tileKey;
+}
+
+// Draws live tiles again from the params each was sent with, keeping their pixels up until it lands.
+export function repaintInWorker(tileKeys: readonly number[]): void {
+  if (tileKeys.length > 0) {
+    const message: ToWorker = { type: "repaint", tileKeys: [...tileKeys] };
+    tileWorker().postMessage(message);
+  }
+}
+
+// Possibly before its data arrived, so the worker skips what's left of it.
+export function cancelInWorker(tileKey: number): void {
+  pending.delete(tileKey);
+  const message: ToWorker = { type: "cancel", tileKey };
+  tileWorker().postMessage(message);
+}
+
 export default class WorkerTileLayer extends L.GridLayer {
   // Weak, so a dropped tile stays collectable.
   private readonly tileKeys = new WeakMap<HTMLElement, number>();
@@ -101,22 +142,9 @@ export default class WorkerTileLayer extends L.GridLayer {
     tile.width = TILE_SIZE * ratio;
     tile.height = TILE_SIZE * ratio;
 
-    const tileKey = nextTileKey;
-    nextTileKey += 1;
+    const tileKey = drawInWorker(tile, coords, ratio, this.tileParams(), done);
     this.tileKeys.set(tile, tileKey);
     this.liveKeys.add(tileKey);
-    pending.set(tileKey, { tile, done });
-    // One-way: this canvas can never yield a 2d context on the main thread again.
-    const canvas = tile.transferControlToOffscreen();
-    const message: ToWorker = {
-      type: "draw",
-      tileKey,
-      coords: { x: coords.x, y: coords.y, z: coords.z },
-      ratio, // the worker has no window to read a pixel ratio from
-      params: this.tileParams(),
-      canvas,
-    };
-    tileWorker().postMessage(message, [canvas]);
     return tile;
   }
 
@@ -133,15 +161,12 @@ export default class WorkerTileLayer extends L.GridLayer {
     }
   }
 
-  // Possibly before its data arrived, so the worker skips what's left of it.
   private discard(tile: HTMLElement): void {
     const tileKey = this.tileKeys.get(tile);
     if (tileKey !== undefined) {
       this.tileKeys.delete(tile);
       this.liveKeys.delete(tileKey);
-      pending.delete(tileKey);
-      const message: ToWorker = { type: "cancel", tileKey };
-      tileWorker().postMessage(message);
+      cancelInWorker(tileKey);
     }
   }
 }

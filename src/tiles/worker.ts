@@ -12,10 +12,12 @@ import type { TileRenderer } from "./renderer";
 import { repaintOnRestore, repeatable } from "./repaint";
 import { shadeRenderer, warm as warmShade } from "./shade";
 import { streetScoreRenderer } from "./street-score";
+import { strokesRenderer } from "./strokes";
 import { subwayRenderer } from "./subway";
 import { setShedDecks } from "./sweep";
 import { setWorkerTheme } from "./theme";
 import { TileQueue } from "./tile-queue";
+import { treeCoverRenderer } from "./tree-cover";
 import { treeDotsRenderer } from "./tree-dots";
 
 // `self` types as a Window under the app's dom lib, and the webworker lib conflicts with it.
@@ -93,6 +95,10 @@ function rasterize(
       return run(elevationRenderer, params, message, current);
     case "shade":
       return run(shadeRenderer, params, message, current);
+    case "strokes":
+      return run(strokesRenderer, params, message, current);
+    case "tree-cover":
+      return run(treeCoverRenderer, params, message, current);
   }
 }
 

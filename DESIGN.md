@@ -958,6 +958,77 @@ there canopy directly overhead here", which is the raw indicator integrated alon
 kernel at all. One more baked byte, and the reason GRPH went to v6. `rainTau` is in the shade notes
 above.
 
+### Shelter is drawn on the path
+
+Scaffolding is a line on the sidewalk it covers, at a pixel width set by the zoom — the street-score
+lines' own curve, 2.6 px at z15 and 4.6 px at z17 — and no longer a band offset toward the building at
+the deck's depth. The band drew how deep a deck is; the line draws which stretch of the path is
+covered, which is what the router prices. Depth is still measured and still used, by the shadow a deck casts and by
+`shedShade`'s falloff: `src/tiles/shed-decks.ts` keeps building the polygons for the shade overlay,
+and only the display stopped reading them.
+
+A shed is **one polyline per chain**, with round joins, so a shed turning a corner is a line turning
+a corner. An end that stands on a node is rounded off and an end mid-block is cut square: the stroke
+stops where the cover stops.
+
+**Corner gaps are closed when drawing, not when placing.** A span stops 1–6 m short of its corner's
+node, because a shed may cover only its own lot's frontage and the lot ends before the sidewalks
+meet — that is the hard constraint above, and the spans, the artifact and the router's shed share
+are untouched by any of this. Drawn literally, a shed wrapping a corner was two bars with a notch
+between them. So `shedPieces` (`src/tiles/shed-strokes.ts`) treats a span end as reaching its node
+when it stops within **6 m** of it and the same shed has **exactly one** other end facing that node,
+also within 6 m, and draws both through the node's vertex. That closes 83% of the gapped corners
+citywide; past 6 m what is left is a real break. Three ends at a node are a fork with no one line
+through it, and ends of two different sheds are never joined, however close: two permits are two
+structures. Two cases stay open: ends on sidewalks that share no node at all, and ends with a short
+connector edge between them that the shed has no span on.
+
+**Tree cover is the same kind of line, in sage, under the sheds.** In the Rain lens the trees are not
+drawn as trees: no crowns, no canopy wash, no diffusion. What is drawn is where a path has a crown
+directly over it, from the samples the router's direct-canopy byte was already baked from
+(`public/routing/<city>.canopy.bin`; scripts/README.md has the layout). The tiler turns the raw runs
+into **stretches** — runs under 4 m apart are one, through a node as well as along an edge, a
+stretch under 3 m is dropped, and round a corner (more than 60° off straight) an edge's own piece
+under 3 m joins nothing unless it carries the stretch from node to node, or every crown over a
+corner would hook a barb up each arm — and the client draws each stretch as a stroke on its edge
+(`src/tiles/canopy-strokes.ts`), cut a grid cell at a time as tiles first reach it. The merge and the
+drop live in the tiler because both need the whole graph; the client holds no threshold. It is an
+overlay of its own, "Tree cover", beside "Tree canopy": in the Rain lens of both cities — the first
+layer Rain has in the Bay Area — and in Explorer's layers menu.
+
+**Opacity is the shelter weight.** A layer is drawn at exactly the number the router shelters by
+(`shelterAttrOf` in `src/routing/cost.ts`), with no scaling: `alpha = weight`
+(`src/overlays/shelter.ts`). A deck's weight is 1, so scaffolding is drawn at 100%; a crown's is
+`rainTau`, so tree cover is 35% in leaf and 15% bare (35% all year in the Bay Area) and
+follows the curve between, day by day, off the route-time store. The width and the geometry are the
+same all year: the crowns have not moved, they only keep less rain off. Each kind is painted opaque
+on its own layer and the layer is faded as a whole, so two strokes of one kind never add up, and the
+sheds' layer sits over the trees', so under a deck the deck is the cover shown. The key's Tree cover
+swatch is drawn at the layer's opacity and moves with the date; neither row names a season.
+
+**The season is the city's.** `rainTau(date, city)` and `canopyTau(date, city)` read `City.evergreen`
+(`src/cities.ts`): New York follows the leaf curve, and the Bay Area is treated as in leaf all year —
+for the router's rain shelter, for this layer, for the shade a crown casts on a route and for the
+shade overlay's compositing, because all four read the one rule. The shade pyramids and the per-edge
+shade bake are pure geometry, so the client's tau was the only seasonal term there was to move: a
+Bay Area walker in January now sees crowns block 0.814 of the light, not 0.40, in the overlay and in
+a shade-weighted route, and New York's numbers are what they were on every day of the year.
+
+**Below z14 the same layer is a pyramid.** The lenses open at z13 and a long trip frames at z12,
+where a block's stretches are a pixel or two apart and a screen holds tens of thousands of them, so
+there the layer is drawn the way the app's other dense fields are at a distance: a pyramid the tiler
+bakes (`public/tiles/tree-cover/<city>/`, z9–13; scripts/README.md), here from the very stretches the
+strokes are cut from. A pixel's alpha is how much of it the strokes would cover at the width they
+have at z14, held fixed on the ground, so a block carries the same ink on both sides of the switch
+and at every level out; z12 and z13 keep the lines and their gaps, and z9–11 are softened so a
+borough is a texture and not a block. One pane, one color, one opacity and one legend row carry both
+forms, and only one shows at a time: zooming in, the pyramid stays up, magnified, until the strokes
+have painted, and zooming out it takes over at once.
+
+**Scaffolding thins the same way.** Below z14 its strokes keep the ground they cover at z14 and
+halve in width with each level out, as the pyramid's do, and below z11 they are not drawn: at a fixed
+pixel width Manhattan's sheds were a solid orange block over the tree cover from z12 down.
+
 ### Known gaps
 
 - **32.0% of placed coverage sits on an edge whose street name does not match the permit**, and the

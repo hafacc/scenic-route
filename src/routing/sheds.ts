@@ -448,7 +448,7 @@ export function shedField(
     bearing,
     translate: new Float64Array(SCHEDULE_BUCKETS),
     sunAzimuth: new Float64Array(SCHEDULE_BUCKETS),
-    rainTau: rainTau(date),
+    rainTau: rainTau(date, forCity),
     maxCoverage: maxByte / 255,
   };
   setShedSun(field, date, forCity);

@@ -104,6 +104,7 @@ export const OVERLAY_VIEWS: Record<OverlayId, OverlayView> = {
     ],
   },
   industrial: { layers: [layer(() => import("./industrial-layer.svelte"))] },
+  treecover: { layers: [layer(() => import("./tree-cover-layer.svelte"))] },
   scaffolding: { layers: [layer(() => import("./shed-layer.svelte"))] },
   genus: {
     layers: [layer(() => import("./genus-layer.svelte"))],

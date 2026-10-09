@@ -534,7 +534,8 @@ pyramids for a tile and composites them per pixel,
 `alpha_b + tau*alpha_t - tau*alpha_b*alpha_t/(MAX_SHADE_ALPHA*intensity)` — which is
 `MAX*intensity*(1 - (1 - b)(1 - tau*t))`, the light that gets past a building AND past a crown, in
 baked-alpha terms — with tau from `src/shade/phenology.ts` (0.814 in leaf, 0.40 leaf-off, ramped
-across April and across October–November). Drawing them as two stacked Leaflet layers would
+across April and across October–November in a city that has a winter, and 0.814 all year in one whose
+`City.evergreen` is set, the Bay Area). Drawing them as two stacked Leaflet layers would
 source-over instead, which double-scales the cross term and comes out ~25% too dark where both fall.
 
 The same crowns cast the same shadows across the **routing** edges, in the SHDB artifact below, and
@@ -1412,10 +1413,10 @@ serves and report success.
   "casters": "public/casters",                // CSTR shadow-caster chunks
   "commercialSignals": "public/commercial",   // CMRC per-chunk signals (the pass clears this itself)
   "commercialLines": "public/commercial-lines", // CMLN qualifying-block lines, one per city
-  "tiles": "public/tiles",                    // the shade, tree-shade and elevation pyramids write <name>/<city> under it
+  "tiles": "public/tiles",                    // the shade, tree-shade, elevation and tree-cover pyramids write <name>/<city> under it
   "canopyTiles": "public/tiles/canopy",
   "genusFieldTiles": "public/tiles/genus-field",
-  "routing": "public/routing",                // <id>.bin, <id>.stranded.bin, and the per-edge bake under shade/<id>
+  "routing": "public/routing",                // <id>.bin, <id>.stranded.bin, <id>.canopy.bin, and the per-edge bake under shade/<id>
   "graphCache": ".build/graph-cache",         // the graph pass's own cache: <city>/<column>-<key>.bin
   "cities": [
     {
@@ -1459,8 +1460,8 @@ more: a pass clears its own directories immediately before it reruns, so a fresh
 survives a neighbor rebuilding — which is the whole point. `public/{streets,casters,tiles/canopy,
 tiles/genus-field}` are emptied and recreated by the pass that owns them, and
 `public/commercial{,-lines}` by the commercial pass, which has always cleared its own two.
-`public/tiles/elevation/<city>`,
-`public/routing/<city>.{bin,stranded.bin,version.json}` and `public/routing/shade/<city>` are
+`public/tiles/elevation/<city>`, `public/tiles/tree-cover/<city>`,
+`public/routing/<city>.{bin,stranded.bin,canopy.bin,version.json}` and `public/routing/shade/<city>` are
 removed and left for their pass to remake, since a city that renders nothing must leave no directory
 at all — a city that lost its buildings would otherwise keep serving the old bins. The two shade
 pyramids are the same rule one level down: `public/tiles/{shade,tree-shade}/<city>` go outright for a
@@ -3751,6 +3752,13 @@ walking network runs through the parks. The integration costs **139.8 s** and ~1
 1.08 M polygons and 628k edges, which is why it is a cached column of its own
 (`.build/graph-cache/<city>/canopy-<key>.bin`): nothing but a re-ingested canopy pays for it twice.
 
+The same pass keeps what the byte used to throw away — *which* samples were covered. Each edge's
+maximal runs of covered samples go out as `public/routing/<city>.canopy.bin` (`CRUN`, below), and the
+finished file is cached beside the column as `canopy-runs-<key>.bin` under the **same key**. The
+column is read from the cache only when both entries are there and the pair is sampled again
+otherwise, so the byte the router prices and the runs the map draws can never come from two
+different samplings.
+
 A **ferry edge** (kind 4) has no tree cover, so it carries a **u16 of crossing-plus-wait seconds**
 (`rawTimeSeconds`, ≤ ~2200) in the duration column instead. Its **name id** is its FERR primary-route
 display name, so `edgeName` labels the maneuver ("East River"),
@@ -3932,6 +3940,152 @@ only that *this* graph cannot route them, which is what the overlay must not con
 The North Forty is on the list on purpose (DESIGN.md, "The overlay may not offer a walk the router
 cannot give"): its footway, way 852053710, stops at node 7947936101 on the edge of the grass, and
 the nearest pedestrian way the graph carries, way 1330428046, is 36 m away across runway 12/30.
+
+### `public/routing/<city>.canopy.bin` — where each path is under canopy, magic `CRUN` (v2, derived, gitignored)
+
+The positions behind the direct-canopy byte: for every edge with a crown over it, the runs of
+consecutive covered samples along its baked polyline. It is the graph pass's own output
+(`crates/tiler/src/canopy_runs.rs`), written beside the graph by the one sampling pass that bakes
+`edgeDirectCanopy`, cleared and witnessed with the graph's other pieces, and absent for a city with
+no canopy layer. Like the graph it is built by the deploy and never committed.
+
+| offset | type | field |
+| --- | --- | --- |
+| 0 | u8[4] | `CRUN` |
+| 4 | u16 | format, 2 |
+| 6 | u16 | header size, 36 |
+| 8 | u32 | the graph's edge count |
+| 12 | u32 | records: the edges with at least one run |
+| 16 | u64 | the graph's **key-space hash**, as `version.json`'s `keyHash` and the SHED header's |
+| 24 | u32 | runs in the file |
+| 28 | u16 | the merge gap the flags were set by, decimeters (40) |
+| 30 | u16 | the shortest stretch drawn, decimeters (30) |
+| 32 | u32 | the graph's **edge-order hash**: FNV-1a 32 over each edge's two node ids as words, in edge order |
+
+Then one record per covered edge, ascending by edge id, all unsigned LEB128 varints:
+
+| field | meaning |
+| --- | --- |
+| edge delta | this edge's id less the previous record's (the first is the id itself) |
+| samples | how many samples the edge took: `ceil(length in meters)`, at least 1 |
+| `runs << 1 \| tail` | the run count, and whether the last run's stretch is drawn on to the edge's `b` node |
+| per run: gap | samples since the previous run's end (the first: since the edge's start) |
+| per run: `count << 2 \| joined << 1 \| drawn` | the run's length in samples and its two flags |
+
+**The unit is the sample, not a fraction or a meter.** A run is samples `[start, start + count)` of
+`samples`, so it lies between `start / samples` and `(start + count) / samples` of the edge's length,
+and `sum(count) / samples` is *exactly* the fraction the byte was rounded from: for every edge,
+`min(254, round(255 · covered / samples))` reproduces `edgeDirectCanopy`. The 1/255-of-an-edge
+convention the SHED spans use would not: a 300 m path has 300 samples and 255 steps, so its runs
+would move by up to 0.6 m and its share would no longer round to the baked byte. Sample counts are
+also the smaller encoding — a gap and a count are one byte each on all but the longest edges — and
+they lose nothing, since a meter is the resolution the pass measured at.
+
+**The two flags are the drawing rule, decided here so the client only draws.** The raw runs are what
+the router priced; the map draws *stretches* (DESIGN.md, "Shelter is drawn on the path"):
+
+- runs separated by a gap under **4 m** are one stretch — along an edge (`joined` on the later run),
+  and through a node when two edge ends' gaps to it sum under 4 m (`joined` on an edge's first run
+  means the stretch is drawn back to its `a` node, `tail` that it is drawn on to its `b` node). Every
+  pair of ends at a node is tested, so at a fork all three arms reach the node;
+- through a node, **straight on** always joins: two edges leaving it within **60°** of a straight line
+  are one path the graph happened to cut, so a row of 2 m edges under one crown is one stretch;
+- **round a corner** only a piece — one edge's runs with their bridged gaps — of 3 m or more joins,
+  or a shorter one that runs its edge from node to node and is held at both ends by two other edges.
+  A crown over a corner covers a meter or two of every arm, and drawn, each would be a barb on the
+  stretch it touches. An edge never joins itself, so a loop's two ends do not hold it, and two short
+  edges between the same two nodes do not hold each other. The headings are each edge's first and
+  last segment, taken where the polylines are sampled; they are not in the file;
+- a stretch shorter than **3 m**, measured along everything it was merged from, is not drawn
+  (`drawn` clear on each of its runs). A lone crown clipping a corner is noise at the zooms the layer
+  draws.
+
+Both need the whole graph — a stretch is a connected component over runs on many edges — which is
+why the tiler sets them: `edgeStretches` in `src/routing/canopy-runs.ts` turns a record into drawn
+`[t0, t1]` pieces with no threshold of its own, and a threshold changed here cannot disagree with
+one left behind there.
+
+| | New York | San Francisco |
+| --- | --- | --- |
+| file | 2,378,372 bytes | 704,632 bytes |
+| edges with a run | 290,125 of 659,394 | 78,422 of 200,330 |
+| runs | 715,893 over 6,967 km | 223,215 over 1,627 km |
+| stretches drawn | 312,045 over 7,183 km | 80,174 over 1,688 km |
+| cover of 3 m or more left undrawn | 1,908 runs, 9.1 km (7 of 10 m or more) | 854 runs, 4.1 km (1 of 10 m or more) |
+
+The drawn length is the longer of the two because the bridged gaps outweigh the dropped crowns. The
+last row is what the corner rule costs: short pieces that touch one another round corners and would
+together have made 3 m.
+
+**It is bound to the one graph it was written over.** A record names an edge by *index*, which the
+key-space hash does not protect: that hash is over the sorted durable keys, so it is blind to edge
+order and to the crossings, links and ferries that carry no key, and a re-ingest that adds a crossing
+renumbers edges under an unchanged `keyHash`. So the header also carries the edge count and a hash of
+the edge order — each edge's two node ids, in order, which both sides have from the graph itself and
+not from a second fetch — and the client draws only when all three match the graph it decoded
+(`sameGraph`, `edgeOrderHash`; tested in `src/routing/canopy-runs.test.ts` and, for the layer,
+`src/tiles/canopy-strokes.test.ts`). The sheds need none of this: their spans name edges by durable
+key and are resolved onto whatever order the graph has. One pass writes the graph and this file, so
+the gate is for a browser holding one deploy's graph and another's runs; the tiler applies the same
+test to its own cached copy and resamples on a miss. The reader checks every count against the bytes
+— a file cut short, padded, or naming an edge the graph lacks throws rather than draws — and the
+layer then reports itself unreachable like any other (`loadLayerData`, `src/overlays/status.ts`) and
+asks again when the browser comes back online. The service worker files it with the graph it is
+keyed to: the `routing` store, never evicted, stamped as a unit of its own (`src/sw/policy.ts`).
+
+`canopy_runs.rs` pins one small file byte for byte in its tests, and
+`src/routing/canopy-runs.fixture.ts` carries the same hex, so the Rust writer and the TypeScript
+reader answer for the same bytes.
+
+**Drawing it.** `components/tree-cover-layer.svelte` needs the graph for the geometry — a record is
+an edge id and fractions of it — so it runs on the main thread. In New York the shed layer already
+holds the graph there; in the Bay Area nothing does until a route is asked for, so showing Tree cover
+is what first loads and decodes that 13 MB graph on the main thread. It does not build the city: `src/tiles/canopy-strokes.ts` boxes each covered edge in the
+graph's own quantized units (no projection, 8,192 edges between pauses), bins the boxes on
+a ~500 m grid, and cuts a cell's stretches into strokes the first time a tile reaches it, keeping the
+1,024 cells read most recently. Cutting is held to a few milliseconds a frame
+(`src/tiles/stroke-grid.ts`), and the strokes themselves are painted in the tile worker like the
+sheds' — painting them on the main thread doubled the median frame of a phone-sized pan here, and
+in the worker the pan costs what it did before the layer existed.
+
+### `public/tiles/tree-cover/<city>/{z}/{x}/{y}.webp` — the tree cover from a distance (derived, gitignored)
+
+The `CRUN` stretches again, as a raster pyramid for the zooms too coarse to stroke them: **z9–13**,
+with the client stroking from z14 (`STROKE_MIN_ZOOM`, `src/tiles/path-strokes.ts`). It follows the
+canopy pyramid's conventions — 256 px WebP with the value in **alpha** and no color (the encoder's
+lossy setting touches only the RGB nothing reads; alpha is stored exactly), sparse (a tile with
+nothing in it is not written, and its 404 is empty ground), tinted by the tile worker — and the
+per-city pyramids' place on disk. Further out than z9 Leaflet scales the z9 tiles; further in than
+z13 the worker magnifies the z13 ones, which is what stands in while the strokes are being cut. The
+graph pass writes it (`crates/tiler/src/cover_tiles.rs`) straight after the `CRUN` file and from that
+file's own drawn stretches, so it is cleared, witnessed and stamped with the graph's other pieces
+(a tree with the runs and no pyramid is stale), costs no sampling, and is rendered whether the runs
+were sampled or read from the cache.
+
+A pixel's alpha is `length · width`: the pixels of stretch about it times the stroke's width, which
+is the share of it an antialiased stroke covers. `width` is **0.99 px at z13** — the 1.98 px a stroke
+is drawn at z14, halved — and halves again with each level out, so it is one width on the ground at
+every zoom and a block carries the same ink at z10 as at z14. How the length is laid down changes
+with the zoom:
+
+- **z12 and z13 are sharp.** Each quarter-pixel step is shared between the four pixels round it by
+  how near each is, which is a one-pixel antialiased line; alpha is capped at 1 and nothing else. The
+  gaps between stretches that the strokes show at z14 are still gaps at z13, and the two sides of the
+  switch differ in sharpness and not in weight.
+- **z9 to z11 are soft.** A step is spread over its pixel and the eight round it, and alpha is eased
+  past 0.5 toward a ceiling of 0.95, because there a pixel holds whole blocks and the honest sum
+  would be a solid fill.
+
+The layer's opacity — the shelter weight, by season and city — is applied to the whole layer on top,
+exactly as it is to the strokes.
+
+| | New York | San Francisco |
+| --- | --- | --- |
+| tiles | 143 (2, 5, 12, 30 and 94 from z9 to z13) | 80 (4, 4, 7, 16 and 49) |
+| size | 2.4 MB | 0.7 MB |
+
+The service worker needs no rule for it: it falls in the `overlay` store like every pyramid and is
+stamped per city as `tiles/tree-cover/<city>` (`contentUnit`).
 
 ### `public/routing/shade/<city>/` — the per-edge occlusion fractions, magic `SHDB` (v2, derived, gitignored)
 
@@ -4203,19 +4357,31 @@ walked, since it is in job order — plus the suffix of `closed.bin` from the fi
 the sum of `t1 - t0` over its spans, clamped to 1: concurrent permits overlap, and about a tenth of
 the touched edges are covered past their own length before the clamp.
 
-`components/shed-layer.svelte` draws the standing set: a span becomes the stretch of its edge's own
-baked polyline between `t0` and `t1`, and `src/tiles/shed-decks.ts` turns a chain of them into the
-POLYGON the deck covers — the band's two edges are that polyline offset to the curb, a fixed
-`sidewalkInsetMeters − 0.3` toward the roadway, and to the building, the span's own measured depth
-beyond that. A band centered on the polyline left a visible strip of sunlight between a shed and its
-building on every wide pavement in Midtown; a band drawn as a stroked line could carry only one width
-per path, so a chain had to break wherever the depth changed — at exactly the corners a shed turns.
-The ring walks out along the building edge and back along the curb edge, and a corner is where the
-two offset lines cross, which mitres it by construction and lets one deck narrow from an avenue onto
-a side street. Where two offset lines meet more than twice the deck's depth out, or are parallel at
-different offsets, the corner is cut square across both edges instead: a chamfer at a hairpin, and
-the step across a change of depth. The date comes from the route-time store, which is why the date
-picker now reaches back to the epoch rather than one year.
+`components/shed-layer.svelte` draws the standing set as **lines on the paths**: a span becomes the
+stretch of its edge's own baked polyline between `t0` and `t1`, `src/tiles/shed-strokes.ts` chains a
+shed's spans into one polyline per chain, and the line is stroked at a pixel width set by the zoom
+(the street-score lines' curve) with round joins — round too at an end standing on a node, and cut
+square at one that stops mid-block. A span end within 6 m of its corner's node is drawn on to the
+node when the same shed has exactly one other end facing it within 6 m, which closes the notch the
+frontage rule leaves at a wrapped corner without moving a span (DESIGN.md, "Shelter is drawn on the
+path"). Chains are packed per day into `PathStrokes` (`src/tiles/path-strokes.ts`) — float32 offsets
+from one origin, with the same grid index the decks use. The main thread, which holds the graph,
+only cuts: `src/tiles/stroke-grid.ts` flattens the lines reaching a tile into that tile's own pixels
+and hands them with the tile's canvas to the tile worker, which strokes them as one opaque path
+(`src/tiles/strokes.ts`), so the raster never costs the page a frame. Below z14 the width stops
+following the curve and holds the ground it covers at z14 instead, halving with each level out, and
+below z11 the layer is not drawn: a borough's sheds at a fixed pixel width are a solid block. The date comes from the
+route-time store, which is why the date picker now reaches back to the epoch rather than one year.
+
+`src/tiles/shed-decks.ts` still turns a chain of spans into the POLYGON the deck covers, now for the
+shade overlay alone, which casts each deck's shadow from it (`castSheds`). The band's two edges are
+the polyline offset to the curb, a fixed `sidewalkInsetMeters − 0.3` toward the roadway, and to the
+building, the span's own measured depth beyond that. The ring walks out along the building edge and
+back along the curb edge, and a corner is where the two offset lines cross, which mitres it by
+construction and lets one deck narrow from an avenue onto a side street. Where two offset lines meet
+more than twice the deck's depth out, or are parallel at different offsets, the corner is cut square
+across both edges instead: a chamfer at a hairpin, and the step across a change of depth. Its chains
+join only spans that end exactly on a node, as they always did, so the shadows are unchanged.
 
 `computeEdgeSheds` (`src/routing/sheds.ts`) turns the standing set into one per-edge byte on the same
 0-254 ceiling the graph's own attributes use — the share of the edge standing under a deck — which
@@ -4234,7 +4400,8 @@ a reason to steer clear of it rather than to discount it.
   meter of LENGTH.
 - **Shelter**, a slider of its own, for rain: `shed + rainTau*directCanopy*(1 - shed)`, with `rainTau`
   0.35 in leaf and 0.15 leaf-off (`src/shade/phenology.ts`, the light curve's shape and its own
-  endpoints). Both terms are length fractions, so this is a union of coverage, not a stack of
+  endpoints). The curve is the city's: one whose `City.evergreen` is set (`src/cities.ts`, the Bay
+  Area) holds 0.35 all year, and the Tree cover layer is drawn at that number as its opacity, unscaled. Both terms are length fractions, so this is a union of coverage, not a stack of
   opacities. Labeled a preference, and shown without a percentage: the deck half is solid, the tree
   half is extrapolated from about four studied trees.
 - **Avoid**, a toggle: the decked share is priced at an undiscounted meter plus `SHED_AVOID_PENALTY`
@@ -4429,7 +4596,7 @@ goes back in:
 | `data/industrial` | one scenic attribute byte | read after the last `v2_edges.push` like the three above, but probed per meter against the lot polygons in `industrial.rs` rather than through a `scenic::Network` |
 | `data/historic` | one scenic attribute byte | the same, sampled underfoot against the district polygons in `historic.rs` |
 | `data/landuse`, `data/buildings`, `data/openstreets`, `data/dining` → `public/commercial-lines` | the commercial attribute byte | one more such byte, read at `graph.rs:3542`. the chunks and commercial passes are on this branch and nowhere else |
-| `data/canopy` | the direct-canopy byte, and the crowns of the SHDE bake | integrated along edge polylines that are already final |
+| `data/canopy` | the direct-canopy byte and the `CRUN` runs it is the share of, and the crowns of the SHDE bake | integrated along edge polylines that are already final |
 | `data/buildings` + the shade params (`shade-schedule.ts`, `src/shade/sun.ts`) | the per-edge SHDE bake | it runs *after* `fs::write(&args.out)`; it cannot move a key in the file it is written beside |
 | the DEM mosaic (`elevation.tiles`) | the per-edge ascent and descent bytes | sampled at `graph.rs:3627`, over those same finished edges |
 | `data/land`, `data/trees` | the canopy and genus pyramids | nothing on the graph's chain reads either |

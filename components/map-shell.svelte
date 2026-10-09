@@ -35,6 +35,7 @@ import {
   graphFactors,
 } from "../src/lenses/lenses";
 import { OVERLAYS, type OverlayId } from "../src/overlays/registry";
+import { hasShelter } from "../src/overlays/shelter";
 import type { Pin } from "../src/pin";
 import {
   getResolvedDate,
@@ -509,6 +510,7 @@ const routeClock = $derived(clockProp ?? liveClock);
 const graphAvailable: FactorAvailability = $derived(graphFactors(routingGraph));
 // Sheds are fetched apart from the graph, so the scaffolding gate asks the city's overlay list.
 const shedFeed = $derived(city.overlays.includes("scaffolding"));
+const shelterHere = $derived(hasShelter(city));
 
 // rAF-coalesced, so a slider drag computes at most once per frame.
 $effect(() => {
@@ -1300,6 +1302,9 @@ const shell: ShellDeck = {
   },
   get shedFeed() {
     return shedFeed;
+  },
+  get shelterHere() {
+    return shelterHere;
   },
   get available() {
     return available;

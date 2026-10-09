@@ -79,6 +79,7 @@ const summary = $derived(
     hillWeight={weights.hill}
     graphAvailable={shell.graphAvailable}
     shedFeed={shell.shedFeed}
+    shelterHere={shell.shelterHere}
     commercialWeight={weights.commercial}
     industrialWeight={weights.industrial}
     historicWeight={weights.historic}

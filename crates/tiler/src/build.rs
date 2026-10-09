@@ -75,13 +75,15 @@ const SHADE_CODE: [&str; 6] = [
 ];
 
 /// The graph topology's modules: the transitive closure of graph.rs's imports; keys the base.
-const GRAPH_CODE: [&str; 22] = [
+const GRAPH_CODE: [&str; 24] = [
     "graph.rs",
     "association.rs",
     "binfmt.rs",
     "bridge.rs",
+    "canopy_runs.rs",
     "conflate.rs",
     "corners.rs",
+    "cover_tiles.rs",
     "crown.rs",
     "dem.rs",
     "direct_canopy.rs",
@@ -210,6 +212,48 @@ const GRAPH_REPORT: Option<&str> = None;
 /// The DEM resample bounds the graph pass gets: the city's, when it has terrain.
 fn graph_elevation_bounds(city: &City, planned: &PlanCity) -> Option<crate::manifest::Bounds> {
     (!planned.elevation.is_empty()).then_some(city.bounds)
+}
+
+/// Where the graph pass writes where a city's edges are under canopy, beside the graph it keys to.
+fn canopy_runs_file(plan: &Plan, city: &City) -> PathBuf {
+    plan.routing.join(format!("{}.canopy.bin", city.id))
+}
+
+/// Where the graph pass writes the same cover as a low-zoom pyramid, beside the other per-city ones.
+fn cover_tiles_dir(plan: &Plan, city: &City) -> PathBuf {
+    plan.tiles.join("tree-cover").join(&city.id)
+}
+
+/// One city's graph pass: what it clears before it reruns, and what must be there for its stamp to hold.
+fn graph_pass(plan: &Plan, city: &City, stamp: String, bake: Option<&PathBuf>) -> Pass {
+    let blob = plan.routing.join(format!("{}.bin", city.id));
+    let stranded = plan.routing.join(format!("{}.stranded.bin", city.id));
+    let canopy_runs = canopy_runs_file(plan, city);
+    let cover_tiles = cover_tiles_dir(plan, city);
+    Pass {
+        stamp,
+        stamp_file: plan.routing.join(format!(".stamp-{}", city.id)),
+        root: None,
+        pieces: vec![
+            blob.clone(),
+            plan.routing.join(format!("{}.version.json", city.id)),
+            stranded.clone(),
+            canopy_runs.clone(),
+            cover_tiles.clone(),
+            plan.routing.join("shade").join(&city.id),
+        ],
+        // The runs and their pyramid only where a canopy is measured: elsewhere the pass writes neither.
+        witnesses: [blob, stranded]
+            .into_iter()
+            .chain(
+                city.field
+                    .canopy
+                    .iter()
+                    .flat_map(|_| [canopy_runs.clone(), cover_tiles.clone()]),
+            )
+            .chain(bake.cloned())
+            .collect(),
+    }
 }
 
 /// The land mask the graph pass reads for the bridge column; every city carries one.
@@ -358,7 +402,7 @@ impl Plan {
         Ok(hex(&digest.finalize()))
     }
 
-    const PYRAMIDS: [&'static str; 3] = ["shade", "tree-shade", "elevation"];
+    const PYRAMIDS: [&'static str; 4] = ["shade", "tree-shade", "elevation", "tree-cover"];
 
     /// Removes output no pass claims, such as a dropped city's; unknown names are left alone.
     fn reconcile(&self, manifest: &Manifest) -> Fallible<()> {
@@ -386,7 +430,7 @@ impl Plan {
         }
         for entry in listing(&self.routing)? {
             let name = file_name(&entry);
-            // <id>.bin, <id>.stranded.bin, <id>.version.json, .stamp-<id>; the shade bake is swept above.
+            // <id>.bin, <id>.{stranded,canopy}.bin, <id>.version.json, .stamp-<id>; shade is swept above.
             let named = name
                 .strip_prefix(".stamp-")
                 .map(str::to_owned)
@@ -1411,20 +1455,12 @@ pub fn run(
         .zip(&baked)
         .enumerate()
         .map(|(index, ((city, _), bake))| {
-            let blob = plan.routing.join(format!("{}.bin", city.id));
-            let stranded = plan.routing.join(format!("{}.stranded.bin", city.id));
-            Ok(Pass {
-                stamp: stamps.graph(&graph_keys[index]),
-                stamp_file: plan.routing.join(format!(".stamp-{}", city.id)),
-                root: None,
-                pieces: vec![
-                    blob.clone(),
-                    plan.routing.join(format!("{}.version.json", city.id)),
-                    stranded.clone(),
-                    plan.routing.join("shade").join(&city.id),
-                ],
-                witnesses: [blob, stranded].into_iter().chain(bake.clone()).collect(),
-            })
+            Ok(graph_pass(
+                &plan,
+                city,
+                stamps.graph(&graph_keys[index]),
+                bake.as_ref(),
+            ))
         })
         .collect::<Fallible<Vec<Pass>>>()?;
 
@@ -1695,6 +1731,8 @@ pub fn run(
                 out: plan.routing.join(format!("{}.bin", city.id)),
                 // Written for the record; the re-chunk reads the same ids from memory.
                 stranded_out: Some(stranded_file),
+                canopy_runs_out: Some(canopy_runs_file(&plan, city)),
+                cover_tiles_out: Some(cover_tiles_dir(&plan, city)),
                 buildings,
                 shade_params,
                 shade_dir,
@@ -2108,6 +2146,34 @@ mod tests {
         assert!(!pass.is_fresh());
     }
 
+    /// A tree restored with its stamp and its runs and no pyramid would ship Rain with nothing at z13.
+    #[test]
+    fn a_graph_is_stale_without_its_canopy_runs_or_their_pyramid() {
+        let plan = planted("graph-witnesses");
+        let manifest = manifest();
+        let (leafy, bare) = (&manifest.cities[0], &manifest.cities[1]);
+        assert!(leafy.field.canopy.is_some() && bare.field.canopy.is_none());
+        for city in [leafy, bare] {
+            let pass = graph_pass(&plan, city, "5eaf00d".to_owned(), None);
+            fs::create_dir_all(&plan.routing).expect("the routing directory");
+            for suffix in ["bin", "stranded.bin"] {
+                fs::write(plan.routing.join(format!("{}.{suffix}", city.id)), b"x")
+                    .expect("an artifact");
+            }
+            pass.record().expect("the stamp");
+        }
+        let fresh = |city: &City| graph_pass(&plan, city, "5eaf00d".to_owned(), None).is_fresh();
+
+        assert!(fresh(bare), "a city with no canopy writes neither");
+        assert!(!fresh(leafy), "neither is there yet");
+        fs::write(canopy_runs_file(&plan, leafy), b"runs").expect("the runs");
+        assert!(!fresh(leafy), "the runs without the pyramid");
+        fs::create_dir_all(cover_tiles_dir(&plan, leafy)).expect("the pyramid");
+        assert!(fresh(leafy));
+        fs::remove_file(canopy_runs_file(&plan, leafy)).expect("a removal");
+        assert!(!fresh(leafy), "the pyramid without the runs");
+    }
+
     #[test]
     fn a_pass_that_reruns_clears_its_own_output_and_leaves_its_neighbors_alone() {
         let root = scratch("clearing");
@@ -2166,7 +2232,7 @@ mod tests {
         for city in ["nyc", "sf", "boston"] {
             fs::create_dir_all(plan.routing.join("shade").join(city)).expect("a per-edge bake");
             fs::create_dir_all(plan.graph_cache.join(city)).expect("a cache directory");
-            for suffix in ["bin", "stranded.bin", "version.json"] {
+            for suffix in ["bin", "stranded.bin", "canopy.bin", "version.json"] {
                 fs::write(plan.routing.join(format!("{city}.{suffix}")), b"stale")
                     .expect("a routing artifact");
             }
@@ -2185,6 +2251,7 @@ mod tests {
         for kept in [
             "nyc.bin",
             "nyc.stranded.bin",
+            "nyc.canopy.bin",
             "nyc.version.json",
             ".stamp-nyc",
         ] {
@@ -2193,6 +2260,7 @@ mod tests {
         for dropped in [
             "boston.bin",
             "boston.stranded.bin",
+            "boston.canopy.bin",
             "boston.version.json",
             ".stamp-boston",
         ] {

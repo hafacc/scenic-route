@@ -24,11 +24,15 @@ export class TileQueue {
     this.start(message.tileKey, true);
   }
 
-  repaint(tileKeys: readonly number[], params: TileParams): void {
+  // Without `params` each tile is drawn again from its own.
+  repaint(tileKeys: readonly number[], params?: TileParams): void {
     for (const tileKey of tileKeys) {
       const current = this.latest.get(tileKey);
       if (current) {
-        this.latest.set(tileKey, { ...current, params });
+        this.latest.set(tileKey, {
+          ...current,
+          params: params ?? current.params,
+        });
         // An in-flight tile picks the new params up in `settle`.
         if (!this.inFlight.has(tileKey)) {
           this.start(tileKey, false);
