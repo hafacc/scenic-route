@@ -156,3 +156,21 @@ test("two devices moving two different switches both keep theirs", () => {
     ferries: false,
   });
 });
+
+test("the extra layers follow the device that switched them last, apart from the hidden ones", () => {
+  const local = settings({
+    lensExtras: ["ferries"] as OverlayId[],
+    lensLayers: { historic: ["legacy"] },
+    updatedAt: { lensExtras: 100, "lensLayers.historic": 500 },
+  });
+  const remote = settings({
+    lensExtras: ["subway"] as OverlayId[],
+    updatedAt: { lensExtras: 300 },
+  });
+  const merged = mergeSettings(local, remote);
+  expect(merged.lensExtras).toEqual(["subway"] as OverlayId[]);
+  expect(merged.lensLayers).toEqual({ historic: ["legacy"] });
+  expect(
+    settingsFromRemote(remoteDocument(merged), settingsFromDocument),
+  ).toEqual(merged);
+});

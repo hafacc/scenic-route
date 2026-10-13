@@ -1,4 +1,5 @@
 <script lang="ts">
+import type { City } from "../../src/cities";
 import {
   type CardSummary,
   cardColors,
@@ -15,8 +16,11 @@ import {
   graphFactors,
   type Lens,
   type LensId,
+  lensExtrasForCity,
   lensForCity,
+  shownLensOverlays,
   type Toggles,
+  toggledLayer,
 } from "../../src/lenses/lenses";
 import {
   NO_PLAN,
@@ -88,6 +92,7 @@ const capturedAt = $derived(plan.capturedAt);
 let hiddenLayers = $state.raw<Partial<Record<LensId, readonly OverlayId[]>>>(
   {},
 );
+let shownExtras = $state.raw<readonly OverlayId[]>([]);
 // Only the close takes it away, so emptying a field asks again.
 let directionsOpen = $state.raw<boolean>(false);
 let planId = 0;
@@ -103,12 +108,11 @@ function recapture(): void {
 function weights({ city, available }: RoutingContext): RouteWeights {
   return effectiveWeights(lensForCity(city, lensId), toggles, available);
 }
-// Each switch replaces the set outright, so the genus overlay's exclusivity holds by construction.
+// Each switch replaces the lens's own set outright, so genus only ever shares the map with the extras.
 function activeOverlays({ city }: RoutingContext): ReadonlySet<OverlayId> {
   const lens = lensForCity(city, lensId);
-  const hidden = hiddenLayers[lens.id] ?? [];
   return new Set<OverlayId>(
-    lens.overlays.filter((overlay) => !hidden.includes(overlay)),
+    shownLensOverlays(city, lens, hiddenLayers[lens.id] ?? [], shownExtras),
   );
 }
 function accent({ city }: RoutingContext): string {
@@ -117,17 +121,25 @@ function accent({ city }: RoutingContext): string {
 
 // Keyed on the resolved lens, not the stored id, which may name a lens this city doesn't show.
 function handleToggleLayer(lens: Lens, id: OverlayId): void {
-  const hidden = hiddenLayers[lens.id] ?? [];
-  const next = hidden.includes(id)
-    ? hidden.filter((entry) => entry !== id)
-    : [...hidden, id];
-  const layers = { ...hiddenLayers, [lens.id]: next };
+  const layers = {
+    ...hiddenLayers,
+    [lens.id]: toggledLayer(hiddenLayers[lens.id] ?? [], id),
+  };
   hiddenLayers = layers;
   updateSettings({ lensLayers: layers });
 }
 
-function hiddenIn(lens: Lens): ReadonlySet<OverlayId> {
-  return new Set(hiddenLayers[lens.id] ?? []);
+// Shared by the lenses, so a line switched on stays on through a change of lens.
+function handleToggleExtra(id: OverlayId): void {
+  shownExtras = toggledLayer(shownExtras, id);
+  updateSettings({ lensExtras: shownExtras });
+}
+
+function hiddenIn(city: City, lens: Lens): ReadonlySet<OverlayId> {
+  return new Set([
+    ...(hiddenLayers[lens.id] ?? []),
+    ...lensExtrasForCity(city).filter((id) => !shownExtras.includes(id)),
+  ]);
 }
 
 // The cards wait for the whole sweep, since their colors and bold chips depend on the set.
@@ -289,6 +301,7 @@ function handleLink(params: URLSearchParams): PlaceUrlState {
     lens: storedLens,
     toggles: storedToggles,
     lensLayers,
+    lensExtras,
   } = storedSettings();
   const linked = decodeLenses(params, {
     start: null,
@@ -304,6 +317,7 @@ function handleLink(params: URLSearchParams): PlaceUrlState {
   toggles = linked.toggles;
   alt = linked.alt;
   hiddenLayers = lensLayers;
+  shownExtras = lensExtras;
   return linked;
 }
 
@@ -379,8 +393,10 @@ function exportable(shell: ShellDeck): boolean {
   <LensLayers
     city={context.city}
     overlays={lensForCity(context.city, lensId).overlays}
-    hidden={hiddenIn(lensForCity(context.city, lensId))}
+    extras={lensExtrasForCity(context.city)}
+    hidden={hiddenIn(context.city, lensForCity(context.city, lensId))}
     onToggle={(id) => handleToggleLayer(lensForCity(context.city, lensId), id)}
+    onToggleExtra={handleToggleExtra}
   />
 {/snippet}
 

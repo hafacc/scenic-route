@@ -21,6 +21,7 @@ const FIELDS = [
   "hiddenGates",
   ...GATE_KEYS,
   "lens",
+  "lensExtras",
   "coverage",
 ] as const;
 

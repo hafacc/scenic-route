@@ -151,6 +151,9 @@ export const LENSES: readonly Lens[] = [
 
 export const DEFAULT_LENS: Lens = LENSES[0];
 
+// Offered after every lens's own layers and off until asked for; display only, never routing.
+export const LENS_EXTRAS: readonly OverlayId[] = ["ferries", "subway"];
+
 export function lensById(id: string): Lens | null {
   return LENSES.find((lens) => lens.id === id) ?? null;
 }
@@ -262,4 +265,29 @@ export function lensesForCity(city: City): Lens[] {
       overlays: lens.overlays.filter((id) => offered.has(id)),
     }),
   );
+}
+
+export function lensExtrasForCity(city: City): OverlayId[] {
+  const offered = new Set<OverlayId>(city.overlays);
+  return LENS_EXTRAS.filter((id) => offered.has(id));
+}
+
+// The lens's own layers less the hidden ones, then the city's extras that were switched on.
+export function shownLensOverlays(
+  city: City,
+  lens: Lens,
+  hidden: readonly OverlayId[],
+  extras: readonly OverlayId[],
+): OverlayId[] {
+  return [
+    ...lens.overlays.filter((id) => !hidden.includes(id)),
+    ...lensExtrasForCity(city).filter((id) => extras.includes(id)),
+  ];
+}
+
+export function toggledLayer(
+  ids: readonly OverlayId[],
+  id: OverlayId,
+): OverlayId[] {
+  return ids.includes(id) ? ids.filter((entry) => entry !== id) : [...ids, id];
 }
