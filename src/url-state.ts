@@ -13,6 +13,7 @@ import {
   DEFAULT_ART_WEIGHT,
   DEFAULT_BRIDGE_WEIGHT,
   DEFAULT_COMMERCIAL_WEIGHT,
+  DEFAULT_FAMILIAR_WEIGHT,
   DEFAULT_FERRY_WEIGHT,
   DEFAULT_HIGHWAY_WEIGHT,
   DEFAULT_HILL_WEIGHT,
@@ -90,6 +91,8 @@ export const DEFAULT_WEIGHTS: RouteWeights = {
   bridge: DEFAULT_BRIDGE_WEIGHT,
   shade: DEFAULT_SHADE_WEIGHT,
   shelter: DEFAULT_SHELTER_WEIGHT,
+  // No key: it reads the reader's own walks, which a link's recipient doesn't share.
+  familiar: DEFAULT_FAMILIAR_WEIGHT,
   transit: DEFAULT_TRANSIT_WEIGHT,
   allowFerries: true,
   // No key: not reader-settable. See INTERNAL_FLAGS in routing/cost.ts.
@@ -387,6 +390,8 @@ export function decodeLenses(
       ferries: params.has("ferries")
         ? params.get("ferries") !== "0"
         : defaults.toggles.ferries,
+      // Never in a link, like Explorer's weight: it reads the reader's own walks.
+      familiar: defaults.toggles.familiar,
     },
   };
 }

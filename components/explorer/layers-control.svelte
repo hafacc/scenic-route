@@ -21,6 +21,8 @@ import { useUnreachableLayers } from "../use-unreachable-layers.svelte";
 
 interface LayersControlProps {
   city: City;
+  // The city's layers, plus this device's walks where there are some.
+  offered: readonly OverlayId[];
   active: ReadonlySet<OverlayId>;
   onToggle: (id: OverlayId) => void;
   onSettings: (section?: string) => void;
@@ -33,7 +35,13 @@ const ROW_IDLE = `${ROW_BASE} text-slate-700 hover:bg-slate-50 dark:text-slate-2
 // A short name for a whole string: a line break here or in the markup would reach the DOM.
 const SETTINGS = "Layer settings…";
 
-const { city, active, onToggle, onSettings }: LayersControlProps = $props();
+const {
+  city,
+  offered: offeredIds,
+  active,
+  onToggle,
+  onSettings,
+}: LayersControlProps = $props();
 
 let menuOpen = $state.raw<boolean>(false);
 const unreachable = useUnreachableLayers();
@@ -41,7 +49,7 @@ const settings = useSettings();
 const mapTheme = useMapTheme();
 
 const offered = $derived(
-  orderedOverlays(city.overlays, settings.current)
+  orderedOverlays(offeredIds, settings.current)
     .map((id) => OVERLAYS.find((overlay) => overlay.id === id))
     .filter((overlay) => overlay !== undefined),
 );

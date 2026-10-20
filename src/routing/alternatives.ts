@@ -14,8 +14,10 @@ export const DIFFERENT_METERS = 50;
 
 const MAX_CARDS = 4;
 // Shade: the bracket is exact only while the sun term is a path constant; transit: it's a penalty.
+// Familiar is signed like shade and a lens toggle, never a back-off axis.
 const FIXED_FACTORS: ReadonlySet<FactorKey> = new Set<FactorKey>([
   "shade",
+  "familiar",
   "hill",
   "transit",
 ]);

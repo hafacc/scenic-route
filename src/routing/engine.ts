@@ -4,6 +4,7 @@ import { cityById } from "../cities";
 import { type ContextSync, type RouteClock, RouteContexts } from "./contexts";
 import { DISCOUNT_KEYS, discountMax, type RouteWeights } from "./cost";
 import type { FactorKey } from "./factors";
+import type { FamiliarField } from "./familiar";
 import type { RoutingGraph } from "./graph";
 import { type CachedRoute, RouteCache } from "./route-cache";
 import {
@@ -54,6 +55,17 @@ export class RoutingEngine {
       // Only the searching thread bakes these; the page would spend 10 MB a city for a handful of reads.
       graph.walkSeconds = bakeWalkSeconds(graph);
       this.graphs.set(cityId, { graph, contexts: new RouteContexts() });
+    }
+  }
+
+  // Every cached route and solver priced the old history, so all of them go.
+  setFamiliar(cityId: string, field: FamiliarField | null): void {
+    const entry = this.graphs.get(cityId);
+    if (entry) {
+      entry.graph.familiar = field;
+      this.built.clear();
+      this.cache = this.newCache();
+      this.dragSolver = null;
     }
   }
 

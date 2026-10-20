@@ -291,6 +291,7 @@ export function transitWeights(
     bridge: 0,
     shade: 0,
     shelter: 0,
+    familiar: 0,
     transit: 0,
     allowFerries: true,
     allowTransit: true,

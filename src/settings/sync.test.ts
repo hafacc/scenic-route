@@ -92,12 +92,17 @@ test("every gate reaches the other device, not just the two the list was born wi
 test("the lens and the toggles reach the other device", () => {
   const local = settings({
     lens: "rain",
-    toggles: { sun: "sun", hills: "any", ferries: true },
+    toggles: { sun: "sun", hills: "any", ferries: true, familiar: "neutral" },
     updatedAt: { lens: 100, "toggles.sun": 900 },
   });
   const remote = settings({
     lens: "historic",
-    toggles: { sun: "shade", hills: "none", ferries: false },
+    toggles: {
+      sun: "shade",
+      hills: "none",
+      ferries: false,
+      familiar: "neutral",
+    },
     updatedAt: { lens: 400, "toggles.sun": 200 },
   });
   const merged = mergeSettings(local, remote);
@@ -143,17 +148,18 @@ test("the cloud copy keeps the old `mode` names and reads back the same", () => 
 // Stamping all three switches together made two devices' different switches last-writer-wins.
 test("two devices moving two different switches both keep theirs", () => {
   const local = settings({
-    toggles: { sun: "shade", hills: "any", ferries: true },
+    toggles: { sun: "shade", hills: "any", ferries: true, familiar: "neutral" },
     updatedAt: { "toggles.sun": 500 },
   });
   const remote = settings({
-    toggles: { sun: "sun", hills: "any", ferries: false },
+    toggles: { sun: "sun", hills: "any", ferries: false, familiar: "neutral" },
     updatedAt: { "toggles.ferries": 700 },
   });
   expect(mergeSettings(local, remote).toggles).toEqual({
     sun: "shade",
     hills: "any",
     ferries: false,
+    familiar: "neutral",
   });
 });
 
@@ -173,4 +179,19 @@ test("the extra layers follow the device that switched them last, apart from the
   expect(
     settingsFromRemote(remoteDocument(merged), settingsFromDocument),
   ).toEqual(merged);
+});
+
+test("watching your walks stays on this device: never uploaded, never adopted", () => {
+  const local = settings({
+    trackWalks: true,
+    updatedAt: { trackWalks: 900, coverage: 100 },
+  });
+  const sent = remoteDocument(local) as Record<string, unknown>;
+  expect("trackWalks" in sent).toBe(false);
+  expect(sent.updatedAt).toEqual({ coverage: 100 });
+  const remote = settings({
+    trackWalks: true,
+    updatedAt: { trackWalks: 2000 },
+  });
+  expect(mergeSettings(DEFAULT_SETTINGS, remote).trackWalks).toBe(false);
 });

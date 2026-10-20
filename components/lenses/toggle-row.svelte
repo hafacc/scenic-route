@@ -1,8 +1,11 @@
 <script lang="ts">
 import {
+  FiCompass,
   MdDirectionsBoat,
+  MdDirectionsWalk,
   MdHorizontalRule,
   MdLandscape,
+  MdOutlineDirectionsWalk,
   MdTerrain,
   MdWbShade,
   MdWbSunny,
@@ -11,6 +14,7 @@ import {
 import type { IconData } from "../../src/icons/types";
 import type { FactorAvailability } from "../../src/lenses/lenses";
 import {
+  FAMILIAR_VALUES,
   HILLS_VALUES,
   SUN_VALUES,
   type Toggles,
@@ -62,6 +66,24 @@ const FERRY_FACES: Readonly<Record<"on" | "off", ToggleFace>> = {
   off: { icon: MdDirectionsBoat, tint: GRAY, label: "Ferries barred" },
 };
 
+const FAMILIAR_FACES: Readonly<Record<Toggles["familiar"], ToggleFace>> = {
+  familiar: {
+    icon: MdDirectionsWalk,
+    tint: "text-indigo-600 dark:text-indigo-400",
+    label: "Prefer streets you've walked",
+  },
+  new: {
+    icon: FiCompass,
+    tint: "text-indigo-600 dark:text-indigo-400",
+    label: "Prefer streets you haven't walked",
+  },
+  neutral: {
+    icon: MdOutlineDirectionsWalk,
+    tint: GRAY,
+    label: "Walked streets ignored",
+  },
+};
+
 function next<Value extends string>(
   values: readonly Value[],
   current: Value,
@@ -86,6 +108,10 @@ function cycleSun(): void {
 
 function cycleHills(): void {
   onChange({ ...toggles, hills: next(HILLS_VALUES, toggles.hills) });
+}
+
+function cycleFamiliar(): void {
+  onChange({ ...toggles, familiar: next(FAMILIAR_VALUES, toggles.familiar) });
 }
 
 function flipFerries(): void {
@@ -117,6 +143,9 @@ function flipFerries(): void {
   {/if}
   {#if available.hill}
     {@render toggleButton(HILL_FACES[toggles.hills], cycleHills)}
+  {/if}
+  {#if available.familiar}
+    {@render toggleButton(FAMILIAR_FACES[toggles.familiar], cycleFamiliar)}
   {/if}
   {#if available.ferry}
     {@render toggleButton(ferryFace, flipFerries, toggles.ferries)}

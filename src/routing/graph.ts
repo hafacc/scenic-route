@@ -2,6 +2,7 @@
 
 import { cityById } from "../cities";
 import { afterControl } from "../sw/control";
+import type { FamiliarField } from "./familiar";
 import type { FerryTimetable } from "./ferry-schedule";
 import type { ShadeField } from "./shade";
 import type { ShedField } from "./sheds";
@@ -228,6 +229,9 @@ export interface RoutingGraph extends GraphIdentity {
 
   // Null until TSCH resolves or on a day no record covers, and every board edge then costs Infinity.
   transit: TransitTimetable | null;
+
+  // This device's walk history, attached by the page; null when the reader hasn't opted in.
+  familiar: FamiliarField | null;
 }
 
 // The feed id matches the display artifact's, so the two join on it.
@@ -503,6 +507,7 @@ export function decodeGraph(
     sheds: null, // populated lazily once the SHED artifact loads, keyed on the picked day
     ferries: null, // populated lazily once the FSCH artifact loads, keyed on the departure day
     transit: null, // and this once the TSCH artifact loads, keyed on the same day
+    familiar: null, // attached by the page from this device's walks, and only once opted in
     edgeDurationSeconds,
     ferryEdges,
     minFerrySecPerMeter,

@@ -102,10 +102,12 @@ export function mergeSettings(local: Settings, remote: Settings): Settings {
 
 // Firestore keeps the pre-rename `mode` names, which builds from before it still read and write.
 export function remoteDocument(local: Settings): object {
-  const { lens, lensLayers, updatedAt, ...rest } = local;
+  // Whether this device watches your walks is not for another device, nor the server, to know.
+  const { lens, lensLayers, updatedAt, trackWalks: _local, ...rest } = local;
   const stamps: Record<string, number> = {};
   for (const [path, at] of Object.entries(updatedAt)) {
-    if (path === "lens") {
+    if (path === "trackWalks") {
+    } else if (path === "lens") {
       stamps.mode = at;
     } else if (path.startsWith("lensLayers.")) {
       stamps[`modeLayers.${path.slice("lensLayers.".length)}`] = at;

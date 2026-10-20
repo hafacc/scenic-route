@@ -98,7 +98,7 @@ const errorMessage = $derived(
 />
 {#if shell.settingsSection !== null}
   <SettingsDialog
-    sections={["offline"]}
+    sections={["walks", "offline"]}
     syncingAs={shell.syncingAs}
     section={shell.settingsSection}
     onClose={() => shell.onSettings(null)}

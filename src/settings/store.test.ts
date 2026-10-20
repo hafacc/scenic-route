@@ -255,6 +255,7 @@ test("a switch a newer build wrote costs its own position, not the other two", (
     sun: DEFAULT_TOGGLES.sun,
     hills: "none",
     ferries: false,
+    familiar: DEFAULT_TOGGLES.familiar,
   });
 });
 

@@ -9,6 +9,7 @@ import SettingsDragHandle from "./settings-drag-handle.svelte";
 import SettingsHideToggle from "./settings-hide-toggle.svelte";
 import { useRowDrag } from "./use-row-drag.svelte";
 import { useSettings } from "./use-settings.svelte";
+import { useWalkCount } from "./use-walks.svelte";
 
 interface Props {
   weights: RouteWeights;
@@ -20,6 +21,11 @@ const { weights, onWeight }: Props = $props();
 const settings = useSettings();
 const order = $derived(factorRunOrder(settings.current.factorOrder));
 const hidden = $derived(new Set(settings.current.hiddenFactors));
+const walkCount = useWalkCount();
+// Nothing to prefer or avoid until this device remembers a walk.
+const familiarOffered = $derived(
+  settings.current.trackWalks && walkCount.current > 0,
+);
 
 // Before the rows move, so the focused handle is still the active element.
 $effect.pre(() => {
@@ -46,7 +52,7 @@ function toggle(key: FactorKey): void {
 const rows = $derived(
   order.flatMap((key, index) => {
     const factor = FACTORS.find((entry) => entry.key === key);
-    return factor
+    return factor && (key !== "familiar" || familiarOffered)
       ? [{ key, index, factor, off: hidden.has(key), weight: weights[key] }]
       : [];
   }),

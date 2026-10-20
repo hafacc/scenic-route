@@ -42,6 +42,7 @@ test("every route field survives a round trip", () => {
     bridge: 0.65,
     shade: -0.85,
     shelter: 0.25,
+    familiar: 0, // never in a link: it reads the reader's own walks
     transit: 1.5,
     allowFerries: false,
     // No key of its own: the planner owns it.
@@ -175,7 +176,12 @@ test("every Lenses field survives a round trip", () => {
     pin: { lat: 40.741895, lng: -73.989308 },
     lens: "historic",
     alt: 2,
-    toggles: { sun: "shade", hills: "some", ferries: false },
+    toggles: {
+      sun: "shade",
+      hills: "some",
+      ferries: false,
+      familiar: "neutral",
+    },
     customHour: null,
     customDay: null,
   };
@@ -219,7 +225,7 @@ test("a link that pins a card pins the plan it is a card of", () => {
   const theirs: LensUrlState = {
     ...DEFAULT_LENS_STATE,
     lens: "rain",
-    toggles: { sun: "sun", hills: "some", ferries: false },
+    toggles: { sun: "sun", hills: "some", ferries: false, familiar: "neutral" },
   };
   const opened = decodeLenses(
     hashParams(formatHash(encodeLenses(sent))),
@@ -264,7 +270,12 @@ test("a missing Lenses key takes the reader's own default", () => {
   const stored: LensUrlState = {
     ...DEFAULT_LENS_STATE,
     lens: "streetlife",
-    toggles: { sun: "shade", hills: "none", ferries: false },
+    toggles: {
+      sun: "shade",
+      hills: "none",
+      ferries: false,
+      familiar: "neutral",
+    },
   };
   const decoded = decodeLenses(hashParams("#to=40.75,-73.98"), stored);
   expect(decoded.lens).toBe("streetlife");

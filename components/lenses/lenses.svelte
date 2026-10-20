@@ -109,10 +109,19 @@ function weights({ city, available }: RoutingContext): RouteWeights {
   return effectiveWeights(lensForCity(city, lensId), toggles, available);
 }
 // Each switch replaces the lens's own set outright, so genus only ever shares the map with the extras.
-function activeOverlays({ city }: RoutingContext): ReadonlySet<OverlayId> {
+function activeOverlays({
+  city,
+  available,
+}: RoutingContext): ReadonlySet<OverlayId> {
   const lens = lensForCity(city, lensId);
   return new Set<OverlayId>(
-    shownLensOverlays(city, lens, hiddenLayers[lens.id] ?? [], shownExtras),
+    shownLensOverlays(
+      city,
+      lens,
+      hiddenLayers[lens.id] ?? [],
+      shownExtras,
+      available.familiar,
+    ),
   );
 }
 function accent({ city }: RoutingContext): string {
@@ -135,10 +144,16 @@ function handleToggleExtra(id: OverlayId): void {
   updateSettings({ lensExtras: shownExtras });
 }
 
-function hiddenIn(city: City, lens: Lens): ReadonlySet<OverlayId> {
+function hiddenIn(
+  city: City,
+  lens: Lens,
+  walksHere: boolean,
+): ReadonlySet<OverlayId> {
   return new Set([
     ...(hiddenLayers[lens.id] ?? []),
-    ...lensExtrasForCity(city).filter((id) => !shownExtras.includes(id)),
+    ...lensExtrasForCity(city, walksHere).filter(
+      (id) => !shownExtras.includes(id),
+    ),
   ]);
 }
 
@@ -393,8 +408,12 @@ function exportable(shell: ShellDeck): boolean {
   <LensLayers
     city={context.city}
     overlays={lensForCity(context.city, lensId).overlays}
-    extras={lensExtrasForCity(context.city)}
-    hidden={hiddenIn(context.city, lensForCity(context.city, lensId))}
+    extras={lensExtrasForCity(context.city, context.available.familiar)}
+    hidden={hiddenIn(
+      context.city,
+      lensForCity(context.city, lensId),
+      context.available.familiar,
+    )}
     onToggle={(id) => handleToggleLayer(lensForCity(context.city, lensId), id)}
     onToggleExtra={handleToggleExtra}
   />

@@ -264,6 +264,45 @@ export function snapCandidates(
   return [...best.values()];
 }
 
+// Any component, unlike `snapCandidates`; the block of cells grows with `maxMeters`.
+export function nearestEdge(
+  graph: RoutingGraph,
+  index: SnapIndex,
+  point: { lat: number; lng: number },
+  maxMeters: number,
+): { edge: number; distanceMeters: number } | null {
+  const quantizedX = Math.round((point.lng - graph.originLng) / graph.scale);
+  const quantizedY = Math.round((point.lat - graph.originLat) / graph.scale);
+  const centerCellX = Math.floor(quantizedX / index.cellUnitsX);
+  const centerCellY = Math.floor(quantizedY / index.cellUnitsY);
+  const ring = Math.ceil(maxMeters / index.cellMeters);
+  let best: { edge: number; distanceMeters: number } | null = null;
+  const visited = new Set<number>();
+  for (let cellX = centerCellX - ring; cellX <= centerCellX + ring; cellX++) {
+    for (let cellY = centerCellY - ring; cellY <= centerCellY + ring; cellY++) {
+      for (const edge of index.cells.get(cellKey(cellX, cellY)) ?? []) {
+        if (visited.has(edge)) {
+          continue;
+        }
+        visited.add(edge);
+        const { distanceMeters } = projectToEdge(
+          graph,
+          edge,
+          point.lat,
+          point.lng,
+        );
+        if (
+          distanceMeters <= maxMeters &&
+          (best === null || distanceMeters < best.distanceMeters)
+        ) {
+          best = { edge, distanceMeters };
+        }
+      }
+    }
+  }
+  return best;
+}
+
 export type SnapPair =
   | { ok: true; start: Snap; dest: Snap }
   | { ok: false; reason: "startTooFar" | "destTooFar" | "disconnected" };

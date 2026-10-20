@@ -3,6 +3,7 @@ import {
   MdAccountBalance,
   MdConstruction,
   MdDirectionsCar,
+  MdDirectionsWalk,
   MdFactory,
   MdMapsHomeWork,
   MdPalette,
@@ -35,6 +36,7 @@ import {
   SHED_COLOR,
   SUBWAY_COLOR,
   TREE_COVER_COLOR,
+  WALK_COLOR,
 } from "./colors";
 import { treeCoverOpacity } from "./shelter";
 
@@ -53,7 +55,8 @@ export type OverlayId =
   | "shade"
   | "treecover"
   | "scaffolding"
-  | "elevation";
+  | "elevation"
+  | "walks";
 
 // Tinted per map theme, since a Tailwind tint shows only one half of the light/dark pair.
 function layerIcon(
@@ -68,6 +71,11 @@ const CANOPY_ICON: Record<ThemeName, string> = {
   light: CANOPY_HEX.light[5],
   dark: CANOPY_HEX.dark[5],
 };
+
+// Walks are this device's, not the city's, so they are offered where the shell has found some.
+export function offeredOverlays(city: City, walksHere: boolean): OverlayId[] {
+  return walksHere ? [...city.overlays, "walks"] : [...city.overlays];
+}
 
 export function overlayLabel(overlay: OverlayDef, city: City): string {
   return typeof overlay.label === "string"
@@ -207,6 +215,12 @@ export const OVERLAYS: readonly OverlayDef[] = [
     label: "Scaffolding",
     icon: layerIcon(MdConstruction, SHED_COLOR),
     swatch: (theme) => SHED_COLOR[theme],
+  },
+  {
+    id: "walks",
+    label: "History",
+    icon: layerIcon(MdDirectionsWalk, WALK_COLOR),
+    swatch: (theme) => WALK_COLOR[theme],
   },
   // Genus recolors every tree, so it doesn't compose with the other layers.
   {

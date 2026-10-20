@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { OverlayId } from "../../src/overlays/registry";
+import { type OverlayId, offeredOverlays } from "../../src/overlays/registry";
 import { LENSES_PAGE } from "../../src/pages";
 import { getPinnedTime } from "../../src/route-time/store";
 import type { RouteWeights } from "../../src/routing/cost";
@@ -55,6 +55,7 @@ function encodeHash(clock: {
   <RouteToggle active={shell.routingOpen} onToggle={shell.onToggleRouting} />
   <LayersControl
     {city}
+    offered={offeredOverlays(city, shell.available.familiar)}
     active={shown}
     onToggle={onToggleOverlay}
     onSettings={(section) => shell.onSettings(section ?? "")}

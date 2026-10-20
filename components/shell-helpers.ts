@@ -41,6 +41,13 @@ export function loadRouting(
   return request;
 }
 
+// Null where nothing has asked for this city's graph, so a caller can act on it without loading one.
+export function loadedRouting(
+  cityId: string,
+): Promise<{ graph: RoutingGraph; index: SnapIndex }> | null {
+  return routingPromises.get(cityId) ?? null;
+}
+
 export function metersBetween(
   a: { lat: number; lng: number },
   b: { lat: number; lng: number },

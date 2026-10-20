@@ -1,5 +1,4 @@
 // Which overlays Explorer draws, apart from which ones the reader has switched on.
-import type { City } from "../../src/cities";
 import { OVERLAYS, type OverlayId } from "../../src/overlays/registry";
 
 function isExclusive(id: OverlayId): boolean {
@@ -31,12 +30,10 @@ export function toggleOverlay(
 // A layer the city lacks or the reader has hidden has no row, so it is never drawn; the choice is kept.
 export function shownOverlays(
   chosen: ReadonlySet<OverlayId>,
-  city: City,
+  offered: readonly OverlayId[],
   hidden: readonly OverlayId[],
 ): ReadonlySet<OverlayId> {
   return new Set(
-    [...chosen].filter(
-      (id) => city.overlays.includes(id) && !hidden.includes(id),
-    ),
+    [...chosen].filter((id) => offered.includes(id) && !hidden.includes(id)),
   );
 }
