@@ -221,6 +221,7 @@ function weightsOf(over: Partial<RouteWeights> = {}): RouteWeights {
     bridge: 0,
     shade: 0,
     shelter: 0,
+    familiar: 0,
     transit: 0,
     allowFerries: false,
     allowTransit: true,

@@ -27,6 +27,7 @@ export const weights = (
   bridge: 0,
   shade: 0,
   shelter: 0,
+  familiar: 0,
   transit: 0,
   allowFerries,
   allowTransit: true,

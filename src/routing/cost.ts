@@ -1,5 +1,6 @@
 // Cost is effective seconds; A* is admissible only while discount attributes are < 1 and |w| <= 1.
 
+import { familiarAttrOf, familiarMax } from "./familiar";
 import {
   edgeKind,
   isTunnel,
@@ -101,6 +102,9 @@ export const MAX_SHADE_WEIGHT = 1;
 export const DEFAULT_SHADE_WEIGHT = 0;
 export const MAX_SHELTER_WEIGHT = 1;
 export const DEFAULT_SHELTER_WEIGHT = 0;
+// Signed like shade; FAMILIAR_REACH in ./familiar.ts keeps the multiplier between 0.5 and 1.5.
+export const MAX_FAMILIAR_WEIGHT = 1;
+export const DEFAULT_FAMILIAR_WEIGHT = 0;
 
 // The byte ceiling rather than 1, so no meter of the network is ever free.
 export const TUNNEL_SHELTER = 254 / 255;
@@ -135,6 +139,7 @@ export const DISCOUNT_KEYS = [
   "bridge",
   "shade",
   "shelter",
+  "familiar",
 ] as const;
 
 export type DiscountKey = (typeof DISCOUNT_KEYS)[number];
@@ -182,6 +187,7 @@ export interface RouteWeights {
   bridge: number;
   shade: number; // signed sun/shade preference in [-1, 1]; positive prefers sun, negative shade
   shelter: number; // preference for cover overhead in the rain: decks and canopy
+  familiar: number; // signed in [-1, 1]; positive prefers streets this device saw you walk, negative new ones
   transit: number;
   allowFerries: boolean;
   // Not a reader's switch: the planner turns it off so a no-ride lens still offers the walk.
@@ -286,6 +292,7 @@ export function edgeMultiplier(
   const shade =
     1 - weights.shade * shadeAttrOf(graph, edge, elapsedSeconds, shaded);
   const shelter = 1 - weights.shelter * shelterAttrOf(graph, edge, shed);
+  const familiar = 1 - weights.familiar * familiarAttrOf(graph, edge);
   const scenic =
     tree *
     landmark *
@@ -297,7 +304,8 @@ export function edgeMultiplier(
     historic *
     bridge *
     shade *
-    shelter;
+    shelter *
+    familiar;
   if (weights.allowSheds) {
     return scenic;
   } else {
@@ -314,7 +322,10 @@ export function minMultiplier(
   let product = 1;
   for (const key of DISCOUNT_KEYS) {
     // A deck or tunnel mixes the attribute toward -intensity, which stays within the field's maxAbs.
-    product *= 1 - Math.abs(weights[key]) * discountMax(graph, key);
+    const weight = weights[key];
+    // Only shade's attribute is signed; elsewhere a negative weight is a penalty and discounts nothing.
+    const discount = key === "shade" ? Math.abs(weight) : Math.max(0, weight);
+    product *= 1 - discount * discountMax(graph, key);
   }
   return product;
 }
@@ -338,6 +349,8 @@ export function discountMax(graph: RoutingGraph, key: DiscountKey): number {
       return graph.shade ? graph.shade.maxAbs : 0;
     case "shelter":
       return maxShelter(graph);
+    case "familiar":
+      return familiarMax(graph);
   }
 }
 

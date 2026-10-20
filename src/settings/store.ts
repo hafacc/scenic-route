@@ -1,6 +1,7 @@
 import {
   DEFAULT_LENS,
   DEFAULT_TOGGLES,
+  FAMILIAR_VALUES,
   HILLS_VALUES,
   isLensId,
   type LensId,
@@ -43,6 +44,8 @@ export interface Settings {
   hiddenGates: readonly GateKey[];
   // A ./offline.ts coverage id; the service worker holds and enforces its own copy.
   coverage: string;
+  // Opt-in to remembering walked streets; this device's alone, so ./sync.ts never uploads it.
+  trackWalks: boolean;
   // Keyed by field name or `weights.<factor>`; drives the per-field merge in ./sync.ts.
   updatedAt: Readonly<Record<string, number>>;
 }
@@ -62,6 +65,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lensLayers: {},
   lensExtras: [],
   coverage: DEFAULT_COVERAGE,
+  trackWalks: false,
   updatedAt: {},
 };
 
@@ -173,12 +177,15 @@ function storedToggles(value: unknown): Toggles {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return DEFAULT_TOGGLES;
   } else {
-    const { sun, hills, ferries } = value as Partial<Toggles>;
+    const { sun, hills, ferries, familiar } = value as Partial<Toggles>;
     return {
       sun: SUN_VALUES.find((state) => state === sun) ?? DEFAULT_TOGGLES.sun,
       hills:
         HILLS_VALUES.find((state) => state === hills) ?? DEFAULT_TOGGLES.hills,
       ferries: typeof ferries === "boolean" ? ferries : DEFAULT_TOGGLES.ferries,
+      familiar:
+        FAMILIAR_VALUES.find((state) => state === familiar) ??
+        DEFAULT_TOGGLES.familiar,
     };
   }
 }
@@ -280,6 +287,7 @@ export function settingsFrom(
       coverage: COVERAGE.some(({ id }) => id === stored.coverage)
         ? (stored.coverage as string)
         : DEFAULT_COVERAGE,
+      trackWalks: stored.trackWalks === true,
       updatedAt: lensStamps(stamps(stored.updatedAt)),
     },
     migrated: folded?.found ?? false,

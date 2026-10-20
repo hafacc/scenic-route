@@ -3,6 +3,7 @@ import {
   MdConstruction,
   MdDirectionsBoat,
   MdDirectionsCar,
+  MdDirectionsWalk,
   MdFactory,
   MdMapsHomeWork,
   MdPalette,
@@ -25,6 +26,7 @@ import {
   HISTORIC_COLOR,
   INDUSTRIAL_COLOR,
   LANDMARK_COLOR,
+  WALK_COLOR,
 } from "../overlays/colors";
 import type { OverlayId } from "../overlays/registry";
 import { CANOPY_HEX, ELEVATION_SUMMIT_HEX } from "../theme/palette";
@@ -34,6 +36,7 @@ import {
   MAX_ART_WEIGHT,
   MAX_BRIDGE_WEIGHT,
   MAX_COMMERCIAL_WEIGHT,
+  MAX_FAMILIAR_WEIGHT,
   MAX_FERRY_WEIGHT,
   MAX_HIGHWAY_WEIGHT,
   MAX_HILL_WEIGHT,
@@ -60,7 +63,8 @@ export interface Factor {
   max: number;
   tint: string; // text color for the icon and chip
   color: string; // the slider's fill/thumb color, and a standout route card's; the map layer's day color
-  signed?: boolean; // a bipolar −max..max slider (sun ↔ shade) rather than one-sided 0..max
+  // A bipolar −max..max slider rather than one-sided 0..max, read as [below zero, above zero].
+  signed?: readonly [string, string];
   // For the settings page, which has no graph to say what a city can answer; absent means every city.
   overlay?: OverlayId;
 }
@@ -116,7 +120,7 @@ export const FACTORS: readonly Factor[] = [
     label: "Prefer sun or shade",
     icon: { glyph: MdWbSunny },
     max: MAX_SHADE_WEIGHT,
-    signed: true,
+    signed: ["shade", "sun"],
     tint: "text-amber-600 dark:text-amber-400",
     color: "#f59e0b",
   },
@@ -221,6 +225,16 @@ export const FACTORS: readonly Factor[] = [
     color: FERRY_COLOR.light,
     overlay: "ferries",
   },
+  {
+    key: "familiar",
+    label: "Prefer new or familiar streets",
+    icon: { glyph: MdDirectionsWalk },
+    max: MAX_FAMILIAR_WEIGHT,
+    signed: ["new", "familiar"],
+    // No overlay: this device's walks answer it, so the shell says where it is offered.
+    tint: "text-indigo-600 dark:text-indigo-400",
+    color: WALK_COLOR.light,
+  },
 ];
 
 export const factorPercent = (factor: Factor, weight: number): number =>
@@ -238,7 +252,8 @@ export function factorReading(factor: Factor, weight: number): string {
   } else if (value === 0) {
     return "off";
   } else {
-    return value > 0 ? `${value} sun` : `${-value} shade`;
+    const [below, above] = factor.signed;
+    return value > 0 ? `${value} ${above}` : `${-value} ${below}`;
   }
 }
 

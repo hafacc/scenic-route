@@ -22,6 +22,13 @@ import {
   sameStamps,
   shadeKey,
 } from "./policy";
+import {
+  forgetHeat,
+  heatTileRequest,
+  keepHeatPoints,
+  serveHeat,
+  WALKS_CACHE,
+} from "./walks";
 
 // Storage policy only: an offline miss rejects rather than answering 404; public/sw.js is the no-cache dev stub.
 
@@ -133,7 +140,7 @@ scope.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       for (const name of await caches.keys()) {
-        if (!CURRENT.has(name)) {
+        if (!CURRENT.has(name) && name !== WALKS_CACHE) {
           await caches.delete(name);
         }
       }
@@ -160,6 +167,8 @@ scope.addEventListener("message", (event) => {
     | { type: "clear-overlays" }
     | { type: "release" }
     | { type: "skip-waiting" }
+    | { type: "walk-heat"; city: string; version: string; points: Float64Array }
+    | { type: "forget-walks" }
     | undefined;
   if (message?.type === "overlay-cap") {
     event.waitUntil(setOverlayCap(message.bytes));
@@ -168,6 +177,18 @@ scope.addEventListener("message", (event) => {
   } else if (message?.type === "release") {
     // Pages from before #272 offer a reload only when a parked worker answers above their 1.
     event.ports[0]?.postMessage({ release: 2 });
+  } else if (message?.type === "walk-heat") {
+    // Answered once kept, so the page asks for tiles of a version this worker can draw.
+    event.waitUntil(
+      keepHeatPoints(
+        scope.registration.scope,
+        message.city,
+        message.version,
+        message.points,
+      ).finally(() => event.ports[0]?.postMessage({ kept: message.version })),
+    );
+  } else if (message?.type === "forget-walks") {
+    event.waitUntil(forgetHeat());
   } else if (message?.type === "skip-waiting") {
     // Every open page must reload on the hand-over, since activation deletes the shell they import.
     event.waitUntil(scope.skipWaiting());
@@ -277,6 +298,11 @@ scope.addEventListener("fetch", (event) => {
   }
   if (request.destination === "worker") {
     event.respondWith(serveWorkerScript(event));
+    return;
+  }
+  const heat = heatTileRequest(request.url, scope.registration.scope);
+  if (heat) {
+    event.respondWith(serveHeat(request, heat, scope.registration.scope));
     return;
   }
   const filed = fileRequest(request.url, scope.registration.scope, SW_CITIES);

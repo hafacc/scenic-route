@@ -3,6 +3,7 @@
 import type { Plan } from "./alternatives";
 import type { RouteClock } from "./contexts";
 import type { RouteWeights } from "./cost";
+import type { FamiliarField } from "./familiar";
 import type { GraphIdentity } from "./graph";
 import type { RouteResult, RouteStep } from "./search";
 import type { Snap } from "./snap";
@@ -50,6 +51,8 @@ export type RouterRequest =
   | { type: "drag:end" }
   // Drop the weight brackets, whose stale baseline would read an endpoint drop's route as unchanged.
   | { type: "reset" }
+  // The page's walk history for one city, or null once the reader opts out or forgets.
+  | { type: "familiar"; cityId: string; field: FamiliarField | null }
   | { type: "plan"; id: number; request: RouteRequest }
   | ({ type: "waypoints"; id: number } & WaypointRequest);
 

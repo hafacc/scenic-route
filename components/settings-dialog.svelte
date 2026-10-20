@@ -9,6 +9,7 @@ import SettingsGateRows from "./settings-gate-rows.svelte";
 import SettingsLayerRows from "./settings-layer-rows.svelte";
 import SettingsOfflineSection from "./settings-offline-section.svelte";
 import Section from "./settings-section.svelte";
+import SettingsWalksSection from "./settings-walks-section.svelte";
 import Sheet from "./sheet.svelte";
 import { SHEET_SCROLL } from "./sheet-shell";
 
@@ -91,6 +92,10 @@ const syncNote = $derived(
         <SettingsFactorRows {weights} {onWeight} />
         <SettingsGateRows {weights} {onGate} />
       </Section>
+    {/if}
+
+    {#if sections.includes("walks")}
+      <SettingsWalksSection wanted={section === "walks"} />
     {/if}
 
     {#if sections.includes("offline")}

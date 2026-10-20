@@ -206,6 +206,7 @@ test("a graph with nothing baked answers only the factors every city bakes", () 
     commercial: false,
     ferry: false,
     transit: false,
+    familiar: false,
   });
   const loaded = graphFactors({
     maxLandmark: 0.4,

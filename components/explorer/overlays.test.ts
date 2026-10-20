@@ -34,12 +34,12 @@ test("the exclusive layer replaces every other, and any other replaces it", () =
 
 test("a layer the city doesn't offer isn't drawn there, and is back with its city", () => {
   const chosen = set("canopy", NYC_ONLY);
-  expect([...shownOverlays(chosen, SF, [])]).toEqual(["canopy"]);
-  expect(shownOverlays(chosen, NYC, [])).toEqual(chosen);
+  expect([...shownOverlays(chosen, SF.overlays, [])]).toEqual(["canopy"]);
+  expect(shownOverlays(chosen, NYC.overlays, [])).toEqual(chosen);
 });
 
 test("a layer hidden from the menu is not drawn, since it would have no row to turn it off", () => {
-  expect([...shownOverlays(set("canopy", NYC_ONLY), NYC, ["canopy"])]).toEqual([
-    NYC_ONLY,
-  ]);
+  expect([
+    ...shownOverlays(set("canopy", NYC_ONLY), NYC.overlays, ["canopy"]),
+  ]).toEqual([NYC_ONLY]);
 });

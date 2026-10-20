@@ -76,6 +76,7 @@ const weights = (hill: number): RouteWeights =>
     bridge: 0,
     shade: 0,
     shelter: 0,
+    familiar: 0,
     allowFerries: true,
     allowSheds: true,
   }) as RouteWeights;

@@ -84,6 +84,9 @@ export function createDispatch(
       case "reset":
         engine.resetCache();
         return;
+      case "familiar":
+        engine.setFamiliar(request.cityId, request.field);
+        return;
       case "drag:start":
         engine.dragStart(request.which);
         return;

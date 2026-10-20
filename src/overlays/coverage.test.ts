@@ -26,6 +26,7 @@ const SOURCE_DIR: Record<OverlayId, string | null> = {
   treecover: "canopy",
   elevation: null,
   scaffolding: null,
+  walks: null, // this device's own history
 };
 
 // Layers deliberately withheld from a city that has the data, each with its reason.

@@ -3,7 +3,7 @@ import { tick } from "svelte";
 import type { RowDrag } from "./use-row-drag.svelte";
 
 // Named once here so the deep links, the scroll-to and the headings can't disagree.
-export const SECTIONS = ["layers", "routing", "offline"] as const;
+export const SECTIONS = ["layers", "routing", "walks", "offline"] as const;
 
 // Long enough to be seen after a smooth scroll, short enough to read as a flash.
 export const HIGHLIGHT_MS = 1600;
@@ -12,6 +12,7 @@ export type SettingsSection = (typeof SECTIONS)[number];
 export const SECTION_TITLE: Record<SettingsSection, string> = {
   layers: "Map layers",
   routing: "Route preferences",
+  walks: "History",
   offline: "Offline maps",
 };
 

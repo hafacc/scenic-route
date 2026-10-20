@@ -87,6 +87,7 @@ const summary = $derived(
     shadeWeight={weights.shade}
     shadeDataLost={shell.shadeDataLost}
     shelterWeight={weights.shelter}
+    familiarWeight={weights.familiar}
     allowSheds={weights.allowSheds}
     allowCrossings={weights.allowCrossings}
     directions={shell.directions}
@@ -106,6 +107,7 @@ const summary = $derived(
     onBridgeWeight={(weight) => onWeight("bridge", weight)}
     onShadeWeight={(weight) => onWeight("shade", weight)}
     onShelterWeight={(weight) => onWeight("shelter", weight)}
+    onFamiliarWeight={(weight) => onWeight("familiar", weight)}
     {onGate}
     onStartSelect={shell.onStartSelect}
     onDestSelect={shell.onDestSelect}

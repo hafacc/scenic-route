@@ -1,5 +1,5 @@
 <script lang="ts">
-import { type Component, onMount } from "svelte";
+import { type Component, onMount, untrack } from "svelte";
 import { browser } from "$app/env";
 import {
   CITY_ZOOM,
@@ -50,6 +50,7 @@ import {
 } from "../src/routing/contexts";
 import type { RouteWeights } from "../src/routing/cost";
 import { buildDirections } from "../src/routing/directions";
+import { familiarField } from "../src/routing/familiar";
 import type { RoutingGraph } from "../src/routing/graph";
 import { navProgress } from "../src/routing/nav-progress";
 import { loadPois, type PoiSet, passedPois } from "../src/routing/pois";
@@ -77,6 +78,8 @@ import {
   type LatLng,
   withoutDestQuery,
 } from "../src/url-state";
+import { walks } from "../src/walks/history";
+import { type Fix, WalkTracker } from "../src/walks/tracker";
 import AboutDialog from "./about-dialog.svelte";
 import { setCity as provideCity } from "./city-context";
 import FollowToggle from "./follow-toggle.svelte";
@@ -90,6 +93,7 @@ import {
   ART_PASS_METERS,
   accentVars,
   LANDMARK_PASS_METERS,
+  loadedRouting,
   loadRouting,
   messageFor,
   SEARCH_PIN_ZOOM,
@@ -121,6 +125,7 @@ import type {
 import SignInDialog from "./sign-in-dialog.svelte";
 import { useHashFlag, useHashSection } from "./use-hash-flag.svelte";
 import { useStandalone } from "./use-install.svelte";
+import { useSettings } from "./use-settings.svelte";
 
 // One object, so going idle again notifies nobody.
 const IDLE: RouteState = { kind: "idle" };
@@ -194,10 +199,13 @@ let destPrefill = $state.raw<DestPrefill | null>(null);
 let shadeDataLost = $state.raw<boolean>(false);
 let routeTimeTick = $state.raw<number>(0);
 let routingGraph = $state.raw<RoutingGraph | null>(null);
+// This device's walks in this city, which neither the graph nor the city can say.
+let familiarHere = $state.raw<boolean>(false);
 // Until the graph lands, the city's authored layer list stands in.
-const available: FactorAvailability = $derived(
-  routingGraph ? graphFactors(routingGraph) : cityFactors(city),
-);
+const available: FactorAvailability = $derived({
+  ...(routingGraph ? graphFactors(routingGraph) : cityFactors(city)),
+  familiar: familiarHere,
+});
 const weights: RouteWeights = $derived(
   typeof weightsProp === "function"
     ? weightsProp({ city, available })
@@ -342,6 +350,71 @@ $effect(() => {
   };
 });
 
+const storedSettings = useSettings();
+const trackWalks = $derived(storedSettings.current.trackWalks);
+const walkTracker = new WalkTracker();
+
+// Only while opted in, and only from the watch the location dot already runs.
+function trackFix(position: GeolocationPosition): void {
+  const fix: Fix = {
+    lat: position.coords.latitude,
+    lng: position.coords.longitude,
+    accuracy: position.coords.accuracy,
+    speed: position.coords.speed,
+    at: position.timestamp,
+  };
+  const cityId = city.id;
+  if (!trackWalks || !containsPoint(city, fix)) {
+    return;
+  }
+  loadRouting(cityId).then(
+    ({ graph, index }) => {
+      const key = walkTracker.observe(fix, graph, index);
+      if (key !== null && trackWalks) {
+        walks.record(cityId, key, fix.at);
+      }
+    },
+    () => {}, // the route effect reports a graph that won't load
+  );
+}
+
+let walksChanged = $state.raw<number>(0);
+onMount(() =>
+  walks.subscribe(() => {
+    walksChanged += 1;
+  }),
+);
+
+// Opting in loads the graph, which matching a fix needs anyway; opting out touches only a loaded one.
+$effect(() => {
+  const cityId = city.id;
+  const on = trackWalks;
+  void walksChanged;
+  const routing = on ? loadRouting(cityId) : loadedRouting(cityId);
+  if (routing === null) {
+    familiarHere = false;
+    return;
+  }
+  let canceled = false;
+  routing.then(
+    ({ graph }) => {
+      if (canceled) {
+        return;
+      }
+      const field = on
+        ? familiarField(graph, walks.records(cityId), Date.now())
+        : null;
+      graph.familiar = field;
+      routerClient().familiar(cityId, field);
+      familiarHere = field !== null;
+    },
+    () => {},
+  );
+  return () => {
+    canceled = true;
+  };
+});
+
 // Registered again on a retry, or allowing location in Settings waits for a relaunch.
 let stopLocating: (() => void) | null = null;
 function locate(): void {
@@ -356,6 +429,7 @@ function locate(): void {
       const lng = position.coords.longitude;
       userLocation = { lat, lng };
       locationError = null;
+      trackFix(position);
       // Only the first fix picks the city, and only if the link named none; else the nearest.
       if (!coverageChecked) {
         coverageChecked = true;
@@ -372,12 +446,15 @@ function locate(): void {
       }
     },
     failLocation,
-    { enableHighAccuracy: false, maximumAge: 30_000 },
+    // The dot is fine with a coarse fix; matching a fix to one sidewalk is not.
+    { enableHighAccuracy: trackWalks, maximumAge: 30_000 },
   );
   stopLocating = () => navigator.geolocation.clearWatch(watchId);
 }
-onMount(() => {
-  locate();
+// Registered again when the opt-in flips, so the GPS runs at full accuracy only while it is on.
+$effect(() => {
+  void trackWalks;
+  untrack(locate);
   return () => stopLocating?.();
 });
 
@@ -507,7 +584,10 @@ const liveClock: RouteClock = $derived({
 const routeClock = $derived(clockProp ?? liveClock);
 
 // All false until the graph lands.
-const graphAvailable: FactorAvailability = $derived(graphFactors(routingGraph));
+const graphAvailable: FactorAvailability = $derived({
+  ...graphFactors(routingGraph),
+  familiar: familiarHere,
+});
 // Sheds are fetched apart from the graph, so the scaffolding gate asks the city's overlay list.
 const shedFeed = $derived(city.overlays.includes("scaffolding"));
 const shelterHere = $derived(hasShelter(city));

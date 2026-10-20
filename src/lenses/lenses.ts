@@ -5,8 +5,9 @@ import {
   LANDMARK_COLOR,
   LEGACY_COLOR,
 } from "../overlays/colors";
-import type { OverlayId } from "../overlays/registry";
+import { type OverlayId, offeredOverlays } from "../overlays/registry";
 import {
+  MAX_FAMILIAR_WEIGHT,
   MAX_HILL_WEIGHT,
   MAX_SHADE_WEIGHT,
   type RouteWeights,
@@ -34,6 +35,8 @@ export interface Toggles {
   sun: "sun" | "shade" | "neutral";
   hills: "any" | "some" | "none";
   ferries: boolean;
+  // Offered only where this device remembers walks; see `familiar` in FactorAvailability.
+  familiar: "familiar" | "new" | "neutral";
 }
 
 // Every switch, so a new one is synced and stamped by construction.
@@ -41,6 +44,7 @@ export const TOGGLE_KEYS: readonly (keyof Toggles)[] = [
   "sun",
   "hills",
   "ferries",
+  "familiar",
 ];
 
 export const SUN_VALUES: readonly Toggles["sun"][] = [
@@ -54,10 +58,17 @@ export const HILLS_VALUES: readonly Toggles["hills"][] = [
   "none",
 ];
 
+export const FAMILIAR_VALUES: readonly Toggles["familiar"][] = [
+  "familiar",
+  "new",
+  "neutral",
+];
+
 export const DEFAULT_TOGGLES: Toggles = {
   sun: "neutral",
   hills: "any",
   ferries: true,
+  familiar: "neutral",
 };
 
 // 2 is where the Potrero measurement first stops using a 12% block.
@@ -69,6 +80,11 @@ const HILL_WEIGHTS: Readonly<Record<Toggles["hills"], number>> = {
 const SHADE_WEIGHTS: Readonly<Record<Toggles["sun"], number>> = {
   sun: MAX_SHADE_WEIGHT,
   shade: -MAX_SHADE_WEIGHT,
+  neutral: 0,
+};
+const FAMILIAR_WEIGHTS: Readonly<Record<Toggles["familiar"], number>> = {
+  familiar: MAX_FAMILIAR_WEIGHT,
+  new: -MAX_FAMILIAR_WEIGHT,
   neutral: 0,
 };
 
@@ -152,7 +168,7 @@ export const LENSES: readonly Lens[] = [
 export const DEFAULT_LENS: Lens = LENSES[0];
 
 // Offered after every lens's own layers and off until asked for; display only, never routing.
-export const LENS_EXTRAS: readonly OverlayId[] = ["ferries", "subway"];
+export const LENS_EXTRAS: readonly OverlayId[] = ["ferries", "subway", "walks"];
 
 export function lensById(id: string): Lens | null {
   return LENSES.find((lens) => lens.id === id) ?? null;
@@ -202,6 +218,8 @@ export function graphFactors(graph: GraphMaxima | null): FactorAvailability {
     commercial: (graph?.maxCommercial ?? 0) > 0,
     ferry: (graph?.ferryEdges.length ?? 0) > 0,
     transit: (graph?.boardEdges.length ?? 0) > 0,
+    // This device's walks answer it, not the graph; the shell fills it in.
+    familiar: false,
   };
 }
 
@@ -214,6 +232,7 @@ export function cityFactors(city: City): FactorAvailability {
       available[key] = offered.has(overlay);
     }
   }
+  available.familiar = false;
   return available;
 }
 
@@ -240,12 +259,15 @@ export function effectiveWeights(
       weights[key] = (lens.weights[key] ?? 0) * max;
     }
   }
-  // The two toggles own their factors outright; no lens names either.
+  // The toggles own their factors outright; no lens names any.
   if (available.shade) {
     weights.shade = SHADE_WEIGHTS[toggles.sun];
   }
   if (available.hill) {
     weights.hill = HILL_WEIGHTS[toggles.hills];
+  }
+  if (available.familiar) {
+    weights.familiar = FAMILIAR_WEIGHTS[toggles.familiar];
   }
   return weights;
 }
@@ -267,8 +289,8 @@ export function lensesForCity(city: City): Lens[] {
   );
 }
 
-export function lensExtrasForCity(city: City): OverlayId[] {
-  const offered = new Set<OverlayId>(city.overlays);
+export function lensExtrasForCity(city: City, walksHere = false): OverlayId[] {
+  const offered = new Set<OverlayId>(offeredOverlays(city, walksHere));
   return LENS_EXTRAS.filter((id) => offered.has(id));
 }
 
@@ -278,10 +300,11 @@ export function shownLensOverlays(
   lens: Lens,
   hidden: readonly OverlayId[],
   extras: readonly OverlayId[],
+  walksHere = false,
 ): OverlayId[] {
   return [
     ...lens.overlays.filter((id) => !hidden.includes(id)),
-    ...lensExtrasForCity(city).filter((id) => extras.includes(id)),
+    ...lensExtrasForCity(city, walksHere).filter((id) => extras.includes(id)),
   ];
 }
 

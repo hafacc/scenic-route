@@ -67,6 +67,12 @@ export const TREE_COVER_COLOR: Record<ThemeName, string> = {
   dark: "#a9c7b0",
 };
 
+// Indigo, which no other layer wears; the dark stop is a step lighter so a faint street still reads.
+export const WALK_COLOR: Record<ThemeName, string> = {
+  light: "#4f46e5", // indigo-600
+  dark: "#818cf8", // indigo-400
+};
+
 export const SHED_COLOR: Record<ThemeName, string> = {
   light: "#ea580c", // orange-600
   dark: "#fb923c", // orange-400

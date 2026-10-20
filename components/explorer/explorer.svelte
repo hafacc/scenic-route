@@ -3,11 +3,13 @@ import {
   applyExclusivity,
   isOverlayId,
   type OverlayId,
+  offeredOverlays,
 } from "../../src/overlays/registry";
 import {
   DEFAULT_ART_WEIGHT,
   DEFAULT_BRIDGE_WEIGHT,
   DEFAULT_COMMERCIAL_WEIGHT,
+  DEFAULT_FAMILIAR_WEIGHT,
   DEFAULT_FERRY_WEIGHT,
   DEFAULT_HIGHWAY_WEIGHT,
   DEFAULT_HILL_WEIGHT,
@@ -18,6 +20,7 @@ import {
   DEFAULT_SHELTER_WEIGHT,
   DEFAULT_TRANSIT_WEIGHT,
   DEFAULT_TREE_WEIGHT,
+  MAX_FAMILIAR_WEIGHT,
   MAX_FERRY_WEIGHT,
   MAX_HIGHWAY_WEIGHT,
   MAX_HILL_WEIGHT,
@@ -82,6 +85,12 @@ function storedWeights(): RouteWeights {
       MAX_SHADE_WEIGHT,
     ),
     shelter: read("shelter", DEFAULT_SHELTER_WEIGHT, 0, MAX_SHELTER_WEIGHT),
+    familiar: read(
+      "familiar",
+      DEFAULT_FAMILIAR_WEIGHT,
+      -MAX_FAMILIAR_WEIGHT,
+      MAX_FAMILIAR_WEIGHT,
+    ),
     transit: read("transit", DEFAULT_TRANSIT_WEIGHT, 0, MAX_TRANSIT_WEIGHT),
     allowFerries,
     // Never a stored preference: the planner owns it (routing/cost.ts, INTERNAL_FLAGS).
@@ -115,8 +124,15 @@ const settings = useSettings();
 // Its own derived, so a moved slider being stored doesn't redraw the layers.
 const hiddenLayers = $derived(settings.current.hiddenLayers);
 // Called inside the shell's own derived, whose city it is; nothing prunes the choice itself.
-function activeOverlays({ city }: RoutingContext): ReadonlySet<OverlayId> {
-  return shownOverlays(chosenOverlays, city, hiddenLayers);
+function activeOverlays({
+  city,
+  available,
+}: RoutingContext): ReadonlySet<OverlayId> {
+  return shownOverlays(
+    chosenOverlays,
+    offeredOverlays(city, available.familiar),
+    hiddenLayers,
+  );
 }
 // Replaced whole on every change, since the search compares it by identity and posts it to the worker.
 let weights = $state.raw<RouteWeights>(DEFAULT_WEIGHTS);

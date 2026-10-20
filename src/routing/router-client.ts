@@ -1,6 +1,7 @@
 // An overtaken request is answered `stale`, which resolves to null.
 
 import type { Plan } from "./alternatives";
+import type { FamiliarField } from "./familiar";
 import { graphBuffer, type RoutingGraph } from "./graph";
 import type {
   DragRequest,
@@ -219,6 +220,11 @@ export class RouterClient {
 
   reset(): void {
     this.post({ type: "reset" });
+  }
+
+  // Copied, not transferred: the page's graph keeps its own for the control's availability.
+  familiar(cityId: string, field: FamiliarField | null): void {
+    this.post({ type: "familiar", cityId, field });
   }
 
   private ask(

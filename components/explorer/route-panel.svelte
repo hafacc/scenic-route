@@ -82,6 +82,7 @@ interface RoutePanelProps {
   // Every city bakes these, so this means a fetch failed, not missing data.
   shadeDataLost: boolean;
   shelterWeight: number;
+  familiarWeight: number; // signed: −1 new streets, +1 familiar, 0 off
   allowSheds: boolean;
   allowCrossings: boolean;
   directions: Maneuver[] | null;
@@ -101,6 +102,7 @@ interface RoutePanelProps {
   onBridgeWeight: (weight: number) => void;
   onShadeWeight: (weight: number) => void;
   onShelterWeight: (weight: number) => void;
+  onFamiliarWeight: (weight: number) => void;
   onGate: (key: GateKey, on: boolean) => void;
   onStartSelect: (result: GeocodeResult) => void;
   onDestSelect: (result: GeocodeResult) => void;
@@ -177,6 +179,7 @@ const {
   shadeWeight,
   shadeDataLost,
   shelterWeight,
+  familiarWeight,
   allowSheds,
   allowCrossings,
   directions,
@@ -196,6 +199,7 @@ const {
   onBridgeWeight,
   onShadeWeight,
   onShelterWeight,
+  onFamiliarWeight,
   onGate,
   onStartSelect,
   onDestSelect,
@@ -311,6 +315,11 @@ const factorState: Record<FactorKey, FactorState> = $derived({
     // Inert but visible while the gate is off, since the reader chose it and can undo it.
     disabled: !allowFerries,
   },
+  familiar: {
+    weight: familiarWeight,
+    onChange: onFamiliarWeight,
+    available: graphAvailable.familiar,
+  },
 });
 // In the reader's order, the same list the settings page shows.
 const allFactors: PanelFactor[] = $derived(
@@ -348,6 +357,8 @@ const factorChips = $derived(
     (factor) =>
       factor.key !== "ferry" &&
       factor.key !== "shelter" &&
+      // Your own history, so a share of it would only read back what you walked.
+      factor.key !== "familiar" &&
       // A ride carries no scenery, so the transit mean is 0 on every route by construction.
       factor.key !== "transit",
   ),

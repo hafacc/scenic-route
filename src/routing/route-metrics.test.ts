@@ -125,6 +125,7 @@ function buildGraph(nodes: NodeSpec[], edges: EdgeSpec[]): RoutingGraph {
     walkSeconds: null,
     shade: null,
     sheds: null,
+    familiar: null,
     ferries: null,
     edgeDurationSeconds: new Uint16Array(edgeCount),
     ferryEdges: new Uint32Array(0),
