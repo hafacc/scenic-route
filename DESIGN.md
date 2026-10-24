@@ -44,20 +44,20 @@ should be 190/255, ~25% too dark, worst where the overlap is densest.
 These came out of the scaffolding work and neither is about scaffolding. They apply to any file that
 is rebuilt rather than authored.
 
-**Packed git deltas a rewritten binary; LFS does not.** The shed artifact is 1.1 MB rebuilt every
-morning, and "git keeps a whole copy of every version of a binary" is the sentence that kept it off
-`main`. Measured over 177 real successive days, one commit each, repacked from scratch: **1.7 KB a
-day** at `--aggressive`, 22 KB at git's default `pack.window=10` — 44× to 550× under the naive figure.
-`closed.bin` is append-only but for two header bytes, so it deltas to **86 B a day** for a 940 KB
-file; the churn is nearly all `open.bin`, whose job-number order scatters the day's new permits
-through it, and git's own commits and trees add 385 B a day. Packfile size is not a reason to keep a
-daily artifact off `main`, and it no longer keeps this one off: `public/sheds/` is committed and the
+**Packed git deltas a rewritten file; LFS does not.** The shed history is rewritten every morning,
+and "git keeps a whole copy of every version" is the sentence that kept it off `main`. Measured on the
+1.1 MB binary it used to be, over 177 real successive days, one commit each, repacked from scratch:
+**1.7 KB a day** at `--aggressive`, 22 KB at git's default `pack.window=10` — 44× to 550× under the
+naive figure. The text file it is now churns less than that binary did: a standing job's line is the
+same every day, so a day's change is the header and the lines of the jobs that went up, came down or
+were re-read. Packfile size is not a reason to keep a daily artifact off `main`, and it no longer
+keeps this one off: `public/sheds/` is committed and the
 daily job pushes a commit there, which the client then reads off `main` through
 raw.githubusercontent.com. `main` always exists, so nothing has to be bootstrapped before the first
 read, and the read is as fresh as the job rather than as the last deploy.
 
 **The same sentence is exactly true of LFS**, which stores each version whole and deltas nothing:
-1.1 MB × 365 = **401 MB a year**, charged to the account's quota rather than the repo's. That is what
+1.7 MB × 365 = **640 MB a year**, charged to the account's quota rather than the repo's. That is what
 picked `public/sheds/` over `data/sheds/` for the committed copy. `.gitattributes` tracks
 `data/<name>/*.bin` per directory, so a fifteenth directory under `data/` sits one habitual line away
 from being tracked — and the line would read as restoring an oversight rather than as signing up for
@@ -415,8 +415,8 @@ under sheds for why an edge cannot be keyed on its position. An OSM sidewalk way
 way id as that source id, and must not. Measured against Overpass attic snapshots joined to today's
 extract, **10.65% of the 2022 sidewalk way ids and 3.13% of the 2024 ids are dead now** — about
 1.5–2% a year, concentrated exactly where mapping is active, which is now the Bronx frontier.
-`closed.bin` is append-only history whose spans are never re-placed, so those losses would be silent
-and permanent between full rebuilds. The association already computed for the labels mints the key
+A shed's spans are re-placed only when its reading changes or the graph is refreshed, so those losses
+would be silent until the next refresh. The association already computed for the labels mints the key
 instead: a mapped sidewalk edge is keyed on the CSCL `physicalid` it flanks, stable however mappers
 split or redraw the way. Way-id keys survive only on the ~155 km of street-less ways — esplanades,
 bridge decks — where scaffolding is rare and 1.5–2% a year is an acceptable exposure.
@@ -671,12 +671,14 @@ client can read anything. It is also why this is the one store that may never mo
 `raw` would serve a pointer's text rather than its bytes. A dev server reads the local `public/sheds/`
 like every other artifact. `scripts/README.md` says what it holds; this is why.
 
-### The feed is a git repo with four traps in it
+### The feed is a git repo with five traps in it
 
 There is no scaffolding *history* dataset. What exists is DOB's own daily CSV of active sheds,
-committed to a public repo since 2017-12-28, so eight and a half years of history is a walk over
-commits rather than a reconstruction. Every trap in that walk multiplies the interval count, and none
-of them announces itself:
+committed to a public repo, so history is a walk over commits rather than a reconstruction. That
+repo's history once reached back to 2017-12-28 and now starts on 2026-03-02, so the committed shed
+file is the archive of every day since and nothing rebuilds it from less (`scripts/README.md`). The
+first four traps were measured on the older history; every one of them multiplies the run count, and
+none of them announces itself:
 
 - **1,369 of 4,840 commits carry no CSV at all.** Read as empty snapshots, every shed in the city
   closes and reopens that day.
@@ -687,6 +689,11 @@ of them announces itself:
   backward is also what makes a day's verdict final the moment it is made.
 - **The header has taken seven distinct shapes**, not the three it looks like: 16, 19, 20, 22, 23, 24
   and 25 columns, the two oldest carrying no borough digit at all.
+- **A job number can be another column's value.** From 2026-10-22 the feed wrote `METAL & WOOD`, the
+  construction material, where job 302585815's number belongs. Keyed literally, it closes a seven-year
+  shed and opens a permit no other row can share a key with. A row whose job number is neither shape
+  DOB issues is matched instead, on BIN, address and first permit date, to the one job the day leaves
+  unlisted, and dropped when that is not exactly one.
 
 The ids do not reconcile across DOB's own systems either: only 0.9% of BIS jobs have a plausible
 handoff to a DOB NOW id within ±7 days and 662 same-address pairs overlap in time, so same address is
@@ -867,13 +874,11 @@ conditional on the gate.
 
 Proving an individual key still means what it meant would take the re-placement it would be trying to
 avoid, so a refresh that moved nothing near any shed blanks exactly as one that moved everything
-does. Re-placement is the rectification: it
-re-derives all 72,020 records from the DOB history and the tax lots against the new graph, keeping
-nothing from the old artifact, which is why a forgotten re-place cannot corrupt anything and the next
-`build-sheds` heals it. A graph-change table that migrated the old keys was evaluated and declined —
-it would make `closed.bin` a function of the chain of graphs it migrated through, the exact property
-the 27-record replay bug was fixed to remove, and it buys only the two minutes a cached re-place
-costs.
+does. Re-placement is the rectification: it re-places every job in the file from its stored reading
+and the tax lots against the new graph, keeping no span from the old placement, which is why a
+forgotten re-place cannot corrupt anything and the next `build-sheds` heals it. A graph-change table
+that migrated the old keys was evaluated and declined — it would make the file a function of the
+chain of graphs it migrated through, and it buys only a cached re-place.
 
 **Enforcement sits at the deploy, because that is the only place holding both halves.** The graph is
 built by the deploy and never committed; the artifact is committed and never built by one. A push or
@@ -882,7 +887,7 @@ Pages upload, and a refresh that forgot `build-sheds` fails there rather than sh
 but it is not after the fact: nothing reaches the site.
 
 **The daily job has to refuse rather than re-stamp**, which is the sharper edge of the same rule. It
-carries every held record forward untouched and writes the header itself, so stamping the deployed
+carries every held record forward untouched and writes the `keySpace` line itself, so stamping the deployed
 graph's key space over an artifact placed against another one would hand the client old keys wearing
 the new graph's name — turning the blank map into a wrong one within a day of the mistake, and healing
 the one symptom anybody would have noticed. It reads the deployed graph first and stops on the
@@ -892,33 +897,31 @@ What is left is a window rather than a hole: the artifact is committed before th
 the graph up, so the live map draws no sheds between the two, and the daily job refuses inside it.
 `scripts/README.md` has the procedure.
 
-### A function of its end date, and nothing else
+### A function of the feed it has seen, and nothing else
 
-The daily job has to land on the bytes a full rebuild would write, however far back the chain started,
-or "what stood on 12 March 2021" depends on the deploy history rather than on 12 March 2021. Rewinding
-six months and replaying broke that, and the obvious suspects were innocent: both chains agreed record
-for record on which permit stood on which days, so neither the truncation filter nor the fortnight
-merge was involved. What differed was where 27 records were **placed**.
+The daily job has to land on the bytes one walk over the whole feed would write, however far back the
+chain of updates started, or "what stood on 12 March" depends on the deploy history rather than on
+12 March. An earlier binary format kept that only with care: it merged runs into intervals as it wrote
+them and froze each interval's placement once it closed, so every update replayed a fortnight of
+history to re-derive what the merge could still change, and a correction to a closed interval's
+permit left two placements for one shed.
 
-`build-sheds` placed a permit once, from the last snapshot that carried it. DOB goes on correcting a
-permit's geocode, length and BBL for years, including on permits whose earlier stints closed long ago
-— so a full build placed a 2018 record from the attributes the feed carries *now*, and two full builds
-six months apart disagreed with **each other** before any incremental update existed. An update cannot
-do that at all: `closed.bin` is append-only, so it freezes a record when it closes.
+The file now stores neither decision. **Runs are written exactly as the feed listed them** and the
+fortnight merge happens in the client, per query, so nothing on disk depends on the merge rule. **A
+job has one placement, from its latest reading**, shared by all its runs and redone whenever the
+reading changes. The feed's changes to a permit's location are corrections, not moves — over the
+history since March, several hundred readings changed and at most a handful looked like a shed that
+went somewhere else — so the latest reading is also the better one for the runs that came before it.
+What is left depends only on the snapshots applied: each day is judged once, against a truncation
+window carried in the file, and a snapshot dated on or before the file's `through` is skipped.
 
-The fix is to make the full build behave like the incremental one, placing each interval from the
-reading its own interval ended under. It is also the better history — the shed that stood in 2024 was
-the length the feed gave in 2024 — and it costs 6%, not the tripling it was assumed to cost: 65,026
-placements for 61,331 permits and 72,020 records, because a correction is rare enough that almost
-every permit still needs exactly one reading.
-
-Verifying the fix turned up a quieter version of the same defect: the fallback resolving a condominium
+A placement has a quieter way to depend on more than its own reading: the fallback resolving a condominium
 billing lot to the base lots under it ran only over the permits' own BBLs, so whether a shed found its
 lot depended on whether some *other* permit in the batch happened to name that BBL. A placement has to
-be a function of its own permit — anything read out of the batch it was fetched in is this bug wearing
-different clothes. `scripts/shed-drill.ts` is what holds it to that: drop one permit, rebuild, and no
-surviving record may have moved. Run it after anything that moves the graph, since placement snaps
-against the graph and the artifact outlives it.
+be a function of its own permit — anything read out of the batch it was fetched in makes the daily
+job, which places only new and re-read jobs, disagree with a full re-place. `scripts/shed-drill.ts` is
+what holds it to that: drop one job, re-place the rest, and no surviving job may have moved. Run it
+after anything that moves the graph, since placement snaps against the graph and the file outlives it.
 
 ### How it casts, and how it shelters
 

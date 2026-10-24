@@ -1,89 +1,56 @@
-// Replays every snapshot since the artifact's own day, never assuming it ran yesterday: cron skips.
+// Advances sheds.tsv over every snapshot after its `through`, never assuming it ran yesterday: cron skips.
 
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { RoutingGraph } from "../src/routing/graph";
+import { parseShedFile, type ShedFile } from "../src/routing/shed-file";
 import {
-  byJobNumber,
   DOB_CITY,
-  encodedShedsOf,
   loadGraphBytes,
-  parcelRequestsOf,
-  placementAttributes,
-  placeRecords,
-  type ShedCoverage,
-  toConfidenceByte,
-  toEncodedSpans,
-  toShedRecord,
-  writeShedArtifact,
+  placeSheds,
+  shedFilePath,
+  writeShedFile,
 } from "./build-sheds";
-import { shedDir } from "./graph-inputs";
 import {
-  type DecodedShedArtifact,
-  decodeShedArtifact,
-  type EncodedShed,
-  shedDayOf,
-  shedGraphMismatch,
-} from "./shed-encode";
-import { buildSidewalkIndex } from "./shed-map";
-import { fetchShedParcels } from "./shed-parcels";
-import {
-  daysBetween,
-  MERGE_TOLERANCE_DAYS,
-  mergeIntervals,
-  readShedPermits,
-  resumeFrom,
-  type ShedAttributes,
-  type ShedPermit,
+  finishWalk,
+  listedCount,
   shedSnapshots,
+  startWalk,
+  walkSnapshots,
 } from "./shed-permits";
 
 // New sheds must be placed on the deployed graph the client runs, not what a checkout would build.
 const SITE = process.env.SHED_SITE ?? "https://scenic.hafa.cc";
 const GRAPH_URL = `${SITE}/routing/${DOB_CITY}.bin`;
-// A directory, or a URL to read the artifact over HTTP.
-const ARTIFACT = process.env.SHED_ARTIFACT ?? shedDir(DOB_CITY);
+// A path, or a URL to read the file over HTTP.
+const SHED_FILE = process.env.SHED_FILE ?? shedFilePath(DOB_CITY);
 const SHALLOW_DAYS = 30;
 const DAY_MS = 86_400_000;
-const EPOCH_MS = Date.UTC(2017, 11, 28); // the first DOB snapshot; every day number counts from here
 
-function isoDay(day: number): string {
-  return new Date(EPOCH_MS + day * DAY_MS).toISOString().slice(0, 10);
-}
-
-async function readArtifact(name: string): Promise<Uint8Array> {
-  if (ARTIFACT.startsWith("http")) {
-    const url = `${ARTIFACT}/${name}`;
-    const response = await fetch(url);
+async function readCurrentFile(): Promise<ShedFile> {
+  if (SHED_FILE.startsWith("http")) {
+    const response = await fetch(SHED_FILE);
     if (!response.ok) {
       throw new Error(
-        `${url}: ${response.status} ${response.statusText} —` +
-          " `bun run build-sheds` has to have laid the artifact down and published it once",
+        `${SHED_FILE}: ${response.status} ${response.statusText} —` +
+          " `bun run build-sheds-from-feed` has to have laid the file down and published it once",
       );
     }
-    return new Uint8Array(await response.arrayBuffer());
+    return parseShedFile(await response.text());
   } else {
-    const file = await readFile(join(ARTIFACT, name));
-    return new Uint8Array(file.buffer, file.byteOffset, file.byteLength);
+    return parseShedFile(await readFile(SHED_FILE, "utf-8"));
   }
 }
 
 // A month of slack: a commit's UTC stamp can fall after the New York day its CSV claims.
-export function readCommitsFrom(applyFrom: string): string {
-  return new Date(Date.parse(applyFrom) - SHALLOW_DAYS * DAY_MS)
+export function readCommitsFrom(through: string): string {
+  return new Date(Date.parse(through) - SHALLOW_DAYS * DAY_MS)
     .toISOString()
     .slice(0, 10);
 }
 
-// From the artifact alone, so the clone depth is known before the pipeline runs.
+// From the file alone, so the clone depth is known before the pipeline runs.
 export async function shedWindow(): Promise<string> {
-  const [open, closed] = await Promise.all([
-    readArtifact("open.bin"),
-    readArtifact("closed.bin"),
-  ]);
-  return readCommitsFrom(
-    resumeFrom(isoDay(decodeShedArtifact(open, closed).lastDay)),
-  );
+  return readCommitsFrom((await readCurrentFile()).through);
 }
 
 // Null when the site serves no usable graph yet, which is the deploy lagging, not an error.
@@ -99,7 +66,7 @@ export async function loadDeployedGraph(): Promise<RoutingGraph | null> {
   if (!response.ok) {
     console.error(
       `  ${GRAPH_URL}: ${response.status} ${response.statusText}, so the site is serving no graph` +
-        " at all; leaving the artifact alone. This run will pick the day up once a deploy has put" +
+        " at all; leaving the file alone. This run will pick the day up once a deploy has put" +
         " one there.",
     );
     return null;
@@ -110,82 +77,26 @@ export async function loadDeployedGraph(): Promise<RoutingGraph | null> {
     // An unreadable deployed graph is a deploy behind a format change.
     console.error(
       `  ${GRAPH_URL} is not a graph this checkout can read (${String(error)});` +
-        " leaving the artifact alone. Deploy the site, and this run will pick the day up once it" +
+        " leaving the file alone. Deploy the site, and this run will pick the day up once it" +
         " serves a graph this checkout can read.",
     );
     return null;
   }
 }
 
-function lastSeenBy(permit: ShedPermit, through: string): string | null {
-  let latest: string | null = null;
-  for (const run of permit.runs) {
-    if (run.first <= through) {
-      const day = run.last < through ? run.last : through;
-      if (latest === null || day > latest) {
-        latest = day;
-      }
-    }
-  }
-  return latest;
-}
-
-// What the feed says `open.bin` must hold, as a check on the mapping the artifact states.
-export function standingOn(
-  permits: readonly ShedPermit[],
-  through: string,
-): ShedPermit[] {
-  return permits.filter((permit) => {
-    const seen = lastSeenBy(permit, through);
-    return seen !== null && daysBetween(seen, through) < MERGE_TOLERANCE_DAYS;
-  });
-}
-
-// `closed.bin` is append-only: its records ended over a renewal ago, so nothing merges into them.
-export function reconcileSheds(
-  artifact: DecodedShedArtifact,
-  permits: readonly ShedPermit[],
-  lastDay: string,
-  placed: ReadonlyMap<ShedAttributes, ShedCoverage>,
-): EncodedShed[] {
-  const through = isoDay(artifact.lastDay);
-  const held = new Map<string, EncodedShed>(
-    artifact.open.map((record) => [record.job, record]),
-  );
-  const standing = standingOn(permits, through);
-  const missing = standing.find((permit) => !held.has(permit.job));
-  if (standing.length !== held.size || missing !== undefined) {
-    throw new Error(
-      `the feed says ${standing.length} sheds were standing on ${through} and open.bin names` +
-        ` ${held.size}${missing === undefined ? "" : `, not including ${missing.job}`}:` +
-        " the two disagree, so rebuild with `bun run build-sheds`",
+// Writers must stop on a mismatch, not re-stamp, or the client's blank map turns wrong.
+export function shedGraphMismatch(
+  file: ShedFile,
+  graphKeyHash: string,
+): string | null {
+  if (file.keySpace === graphKeyHash) {
+    return null;
+  } else {
+    return (
+      `the shed file was placed against key space ${file.keySpace},` +
+      ` this graph's is ${graphKeyHash}`
     );
   }
-  // A held record keeps its first day: its run reaches back past the window.
-  const rebuilt = encodedShedsOf(
-    permits.map((permit) => {
-      const record = held.get(permit.job);
-      const intervals = mergeIntervals(permit.runs);
-      if (record !== undefined) {
-        intervals[0] = { ...intervals[0], first: isoDay(record.first) };
-      }
-      return { ...permit, intervals };
-    }),
-    (interval, permit) => {
-      // A changed reading is always re-placed, so a record on file matches its reading.
-      const coverage = placed.get(interval.attributes);
-      if (coverage !== undefined) {
-        return coverage;
-      }
-      const record = held.get(permit.job);
-      if (record === undefined) {
-        throw new Error(`${permit.job} is neither on record nor newly placed`);
-      }
-      return { spans: record.spans, confidence: record.confidence };
-    },
-    shedDayOf(lastDay),
-  );
-  return [...artifact.closed, ...rebuilt];
 }
 
 // Unread, the blob pipe dies of SIGPIPE upstream, which pipefail turns into a failed daily job.
@@ -198,93 +109,48 @@ async function drainStdin(): Promise<void> {
 }
 
 export async function updateSheds(): Promise<void> {
-  const [openBytes, closedBytes] = await Promise.all([
-    readArtifact("open.bin"),
-    readArtifact("closed.bin"),
-  ]);
-  const artifact = decodeShedArtifact(openBytes, closedBytes);
-  const through = isoDay(artifact.lastDay);
+  const file = await readCurrentFile();
   console.error(
-    `  the artifact reaches ${through}: ${artifact.open.length.toLocaleString()} standing,` +
-      ` ${artifact.closed.length.toLocaleString()} come down`,
+    `  the file reaches ${file.through}: ${listedCount(file).toLocaleString()} listed on` +
+      ` ${file.seen}, ${file.records.length.toLocaleString()} permits`,
   );
 
-  // Old keys re-stamped under a new key space would misplace every shed. Skips rather than fails,
-  // since the daily job's timetable steps run after this.
+  // Old keys re-stamped under a new key space would misplace every shed.
   const graph = await loadDeployedGraph();
   if (graph === null) {
     await drainStdin();
     return;
   }
-  const mismatch = shedGraphMismatch(artifact, graph.keyHash);
+  const mismatch = shedGraphMismatch(file, graph.keyHash);
   if (mismatch !== null) {
     console.error(
-      `  ${mismatch}; leaving the artifact alone. A graph-input change lands as one deploy:` +
+      `  ${mismatch}; leaving the file alone. A graph-input change lands as one deploy:` +
         " bun run build-sheds against the new graph, commit, then deploy. This run will pick the" +
-        " day up once the site serves the graph the artifact names.",
+        " day up once the site serves the graph the file names.",
     );
     await drainStdin();
     return;
   }
 
-  const applyFrom = resumeFrom(through);
   const { sources, blobs } = await shedSnapshots(
     "update-sheds",
-    readCommitsFrom(applyFrom),
+    readCommitsFrom(file.through),
   );
-  const { permits, lastDay, counts } = await readShedPermits(
-    sources,
-    blobs,
-    applyFrom,
-    artifact.counts,
+  const walk = startWalk(file);
+  await walkSnapshots(walk, sources, blobs);
+  const advanced = finishWalk(walk);
+  const unplaced = advanced.records.filter((record) =>
+    walk.unplaced.has(record.job),
   );
-  permits.sort(byJobNumber);
   console.error(
-    `  the feed now reaches ${lastDay}, ${permits.length.toLocaleString()} permits mentioned since ${applyFrom}`,
+    `  ${unplaced.length} permits are new or re-read, ${advanced.records.length - unplaced.length}` +
+      " keep their spans",
   );
-
-  const held = new Set(artifact.open.map((record) => record.job));
-  const fresh = permits.filter(
-    (permit) => !held.has(permit.job) || permit.corrected,
-  );
-  // A corrected permit has two readings: the one its earlier interval ended under and today's.
-  const attributes = placementAttributes(fresh);
+  const placements = await placeSheds(graph, unplaced);
+  await writeShedFile(DOB_CITY, advanced);
   console.error(
-    `  ${fresh.length} permits need a parcel read over ${attributes.length} readings,` +
-      ` ${permits.length - fresh.length} carry their spans over`,
-  );
-  const parcels = await fetchShedParcels(parcelRequestsOf(attributes));
-
-  const index = buildSidewalkIndex(graph);
-  console.error(
-    `  graph ${graph.hash}, key space ${graph.keyHash}, ${index.edges.length} sidewalk edges`,
-  );
-  const placements = placeRecords(
-    index,
-    attributes.map((reading) => toShedRecord(reading, parcels)),
-  );
-  const placed = new Map(
-    attributes.map((reading, order) => [
-      reading,
-      {
-        spans: toEncodedSpans(graph, placements[order]),
-        confidence: toConfidenceByte(placements[order]),
-      },
-    ]),
-  );
-
-  const records = reconcileSheds(artifact, permits, lastDay, placed);
-  await writeShedArtifact(
-    DOB_CITY,
-    records,
-    graph.keyHash,
-    shedDayOf(lastDay),
-    counts,
-  );
-  const stillUp = records.filter((record) => record.close === null).length;
-  console.error(
-    `sheds: ${stillUp} standing on ${lastDay}, ${records.length - stillUp} come down` +
-      ` (${fresh.length} newly placed, ${placements.filter((placement) => placement.spans.length > 0).length} onto a sidewalk)`,
+    `sheds: ${listedCount(advanced)} listed on ${advanced.seen} (${unplaced.length} placed,` +
+      ` ${placements.filter((placement) => placement.spans.length > 0).length} onto a sidewalk)`,
   );
 }
 

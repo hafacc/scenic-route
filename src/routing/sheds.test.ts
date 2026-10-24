@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
-import { encodeSheds, graphHashOf } from "../../scripts/shed-encode";
+import { graphHashOf } from "../../scripts/graph-hash";
 import { cityById } from "../cities";
 import {
   clearEdgePathCache,
@@ -8,6 +8,7 @@ import {
   type RoutingGraph,
 } from "./graph";
 import { sunAt } from "./shade";
+import { parseShedFile, serializeShedFile } from "./shed-file";
 import {
   computeEdgeSheds,
   DECK_HEIGHT_METERS,
@@ -15,7 +16,9 @@ import {
   decodeSheds,
   type EdgeDeck,
   loadSheds,
+  MERGE_TOLERANCE_DAYS,
   MIN_DECK_DEPTH_METERS,
+  SHED_EPOCH_DAY,
   SHED_OBLIQUE_FLOOR,
   type Shed,
   type ShedField,
@@ -26,10 +29,9 @@ import {
   shedField,
   shedShade,
   shedsOn,
-  shedUrls,
+  shedUrl,
 } from "./sheds";
 import {
-  CLOSED_BASE64,
   COVERAGE,
   FIXTURE_EDGES,
   type FixtureShed,
@@ -37,41 +39,14 @@ import {
   fixtureDurable,
   fixtureJob,
   GRAPH_KEY_HASH,
-  INDEX_BASE64,
   LAST_DAY,
-  OPEN_BASE64,
   SHEDS,
+  SHEDS_TSV,
 } from "./sheds.fixture";
 
-// Expected records come from the prototype's CSV, not an encoder; the blobs are only regression pins.
+// Expected records come from the prototype's CSV, not a writer; the text is only a regression pin.
 
-function buffer(base64: string): ArrayBuffer {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes.buffer;
-}
-
-const history = decodeSheds(
-  buffer(OPEN_BASE64),
-  buffer(CLOSED_BASE64),
-  buffer(INDEX_BASE64),
-);
-
-const DURABLE_SHEDS = SHEDS.map((shed, order) => ({
-  job: fixtureJob(order),
-  first: shed.first,
-  close: shed.close,
-  confidence: shed.confidence,
-  spans: shed.spans.map((span) => ({
-    ...fixtureDurable(span.edge),
-    t0: span.t0,
-    t1: span.t1,
-    depth: fixtureDepth(span.edge),
-  })),
-}));
+const history = decodeSheds(SHEDS_TSV);
 
 const DEGREES = Math.PI / 180;
 const MIDTOWN = { lat: 40.75, lng: -73.98 };
@@ -138,7 +113,7 @@ function namedGraph(edgeCount: number): RoutingGraph {
 const EDGE_COUNT = Math.max(...FIXTURE_EDGES) + 1;
 const graph = namedGraph(EDGE_COUNT);
 
-// The oracle the seek-and-suffix decode is checked against.
+// The oracle the run merge is checked against.
 function standingOn(day: number): FixtureShed[] {
   return SHEDS.filter(
     (shed) => shed.first <= day && (shed.close === null || shed.close >= day),
@@ -179,69 +154,67 @@ function fromReader(sheds: Shed[]): string {
   return normalize(sheds);
 }
 
-test("the header describes the two halves it was written with", () => {
+function probeDays(): Set<number> {
+  const days = new Set<number>([LAST_DAY + 1, LAST_DAY + 400]);
+  for (const shed of SHEDS) {
+    for (const day of [shed.first - 1, shed.first, shed.first + 1]) {
+      days.add(day);
+    }
+    if (shed.close !== null) {
+      for (const day of [shed.close - 1, shed.close, shed.close + 1]) {
+        days.add(day);
+      }
+    }
+  }
+  return days;
+}
+
+test("the file round-trips to the bytes checked in", () => {
+  expect(serializeShedFile(parseShedFile(SHEDS_TSV))).toBe(SHEDS_TSV);
+});
+
+test("the file holds one job per fixture record, in job order", () => {
+  const file = parseShedFile(SHEDS_TSV);
   expect(history.graphKeyHash).toBe(GRAPH_KEY_HASH);
-  const open = SHEDS.filter((shed) => shed.close === null);
-  const closed = SHEDS.filter((shed) => shed.close !== null);
-  expect(history.open.count).toBe(open.length);
-  expect(history.closed.count).toBe(closed.length);
-  expect(history.open.spanCount).toBe(
-    open.reduce((total, shed) => total + shed.spans.length, 0),
+  expect(file.records.map((record) => record.job)).toEqual(
+    SHEDS.map((_, order) => fixtureJob(order)).sort(),
   );
-  expect(history.closed.spanCount).toBe(
-    closed.reduce((total, shed) => total + shed.spans.length, 0),
-  );
-});
-
-test("the encoder writes the bytes checked in beside the records", () => {
-  const rebuilt = encodeSheds(DURABLE_SHEDS, GRAPH_KEY_HASH, LAST_DAY);
-  expect(rebuilt.open).toEqual(new Uint8Array(buffer(OPEN_BASE64)));
-  expect(rebuilt.closed).toEqual(new Uint8Array(buffer(CLOSED_BASE64)));
-  expect(rebuilt.index).toEqual(new Uint8Array(buffer(INDEX_BASE64)));
-});
-
-test("the daily job's window in the header moves the records, not the answers", () => {
-  // 60 bytes of daily-job state in closed.bin's header must shift every index.bin offset.
-  const counts = Array.from({ length: 30 }, (_, order) => 8_900 + order);
-  const withWindow = encodeSheds(
-    DURABLE_SHEDS,
-    GRAPH_KEY_HASH,
-    LAST_DAY,
-    counts,
-  );
-  const bare = encodeSheds(DURABLE_SHEDS, GRAPH_KEY_HASH, LAST_DAY);
-
-  expect(withWindow.closed.length).toBe(bare.closed.length + 2 * counts.length);
-  expect(withWindow.open).toEqual(bare.open);
-  const offsetsOf = (index: Uint8Array): number[] => {
-    const view = new DataView(index.buffer as ArrayBuffer);
-    return Array.from({ length: index.length / 8 }, (_, entry) =>
-      view.getUint32(entry * 8 + 2, true),
-    );
-  };
-  expect(offsetsOf(withWindow.index)).toEqual(
-    offsetsOf(bare.index).map((offset) => offset + 2 * counts.length),
-  );
-  const shifted = decodeSheds(
-    withWindow.open.buffer as ArrayBuffer,
-    withWindow.closed.buffer as ArrayBuffer,
-    withWindow.index.buffer as ArrayBuffer,
-  );
-  for (const day of COVERAGE.map((entry) => entry.day)) {
-    expect(fromReader(shedsOn(graph, shifted, day))).toBe(
-      fromFixture(standingOn(day)),
+  for (const [order, shed] of SHEDS.entries()) {
+    const record = file.records.find((held) => held.job === fixtureJob(order));
+    expect(record?.confidence).toBe(shed.confidence);
+    expect(record?.spans).toEqual(
+      expect.arrayContaining(
+        shed.spans.map((span) => ({
+          ...fixtureDurable(span.edge),
+          t0: span.t0,
+          t1: span.t1,
+          depth: fixtureDepth(span.edge),
+        })),
+      ),
     );
   }
 });
 
-test("the two halves are rejected in the wrong order", () => {
-  expect(() =>
-    decodeSheds(
-      buffer(CLOSED_BASE64),
-      buffer(OPEN_BASE64),
-      buffer(INDEX_BASE64),
-    ),
-  ).toThrow();
+test("columns are found by name, not position", () => {
+  const lines = SHEDS_TSV.split("\n");
+  const header = lines.findIndex((line) => line.startsWith("job\t"));
+  const swap = (line: string): string => {
+    const fields = line.split("\t");
+    return [fields[11], ...fields.slice(1, 11), fields[0]].join("\t");
+  };
+  const reordered = [
+    ...lines.slice(0, header),
+    ...lines.slice(header).map((line) => (line === "" ? line : swap(line))),
+  ].join("\n");
+  expect(parseShedFile(reordered)).toEqual(parseShedFile(SHEDS_TSV));
+});
+
+test("the writer refuses a field that would break a line", () => {
+  const file = parseShedFile(SHEDS_TSV);
+  for (const bad of ["WEST\t20 STREET", "WEST\n20 STREET"]) {
+    file.records[0].street = bad;
+    expect(() => serializeShedFile(file)).toThrow("break");
+  }
 });
 
 test("a shed decodes on the first and last day it stood, and not around them", () => {
@@ -257,33 +230,72 @@ test("a shed decodes on the first and last day it stood, and not around them", (
   }
 });
 
-function probeDays(): Set<number> {
-  const days = new Set<number>();
-  for (const shed of SHEDS) {
-    for (const day of [shed.first - 1, shed.first, shed.first + 1]) {
-      days.add(day);
-    }
-    if (shed.close !== null) {
-      for (const day of [shed.close - 1, shed.close, shed.close + 1]) {
-        days.add(day);
-      }
-    }
-  }
-  for (const month of history.months) {
-    days.add(month);
-    days.add(month - 1);
-  }
-  return days;
-}
-
-// Seeking must re-base the close-day chain from the index and restart each record's edge deltas.
-test("seeking to a past day decodes the records the file was built from", () => {
-  expect(history.months.length).toBeGreaterThan(1); // or the seek is never exercised
+test("every probed day decodes the records the file was built from", () => {
   for (const day of probeDays()) {
     expect(fromReader(shedsOn(graph, history, day))).toBe(
       fromFixture(standingOn(day)),
     );
   }
+});
+
+// Day numbers from SHED_EPOCH_DAY; `seen` is day 100.
+function oneJob(runs: string): ShedHistory {
+  const iso = (day: number): string =>
+    new Date(Date.UTC(2026, 2, 2 + day)).toISOString().slice(0, 10);
+  const text = [
+    "version\t1",
+    "city\tnyc",
+    `keySpace\t${GRAPH_KEY_HASH}`,
+    `through\t${iso(100)}`,
+    `seen\t${iso(100)}`,
+    "counts\t",
+    "job\tbin\thouse\tstreet\tfirst_permit\tbbl\tlat\tlng\tfeet\truns\tconfidence\tspans",
+    `104416464\t1\t1\tA STREET\t\t\t\t\t\t${runs.replace(/\d+/g, (day) => iso(Number(day)))}\t200\t${fixtureDurable(FIXTURE_EDGES[0]).sourceId}:${fixtureDurable(FIXTURE_EDGES[0]).side}:${fixtureDurable(FIXTURE_EDGES[0]).ordinal}:0:255:30`,
+    "",
+  ].join("\n");
+  return decodeSheds(text);
+}
+
+function standingDays(job: ShedHistory, days: readonly number[]): Shed[][] {
+  return days.map((day) => shedsOn(graph, job, day));
+}
+
+test("a renewal gap of up to a fortnight is one shed, a longer one is two", () => {
+  const short = oneJob(`10..20,${20 + MERGE_TOLERANCE_DAYS}..40`);
+  const long = oneJob(`10..20,${21 + MERGE_TOLERANCE_DAYS}..40`);
+  const [during] = standingDays(short, [25]);
+  expect(during).toHaveLength(1);
+  expect(during[0]).toMatchObject({ first: 10, close: 40 });
+  expect(standingDays(long, [25])[0]).toEqual([]);
+  expect(standingDays(long, [20, 35]).map((day) => day[0]?.first)).toEqual([
+    10,
+    21 + MERGE_TOLERANCE_DAYS,
+  ]);
+});
+
+test("a shed seen within a fortnight of `seen` stands on every later day", () => {
+  const open = oneJob("10..");
+  const lapsing = oneJob(`10..${101 - MERGE_TOLERANCE_DAYS}`);
+  const closed = oneJob(`10..${100 - MERGE_TOLERANCE_DAYS}`);
+  for (const day of [100, 101, 1000]) {
+    expect(standingDays(open, [day])[0][0]).toMatchObject({ close: null });
+    expect(standingDays(lapsing, [day])[0][0]).toMatchObject({ close: null });
+    expect(standingDays(closed, [day])[0]).toEqual([]);
+  }
+  expect(
+    standingDays(closed, [100 - MERGE_TOLERANCE_DAYS])[0][0],
+  ).toMatchObject({ first: 10, close: 100 - MERGE_TOLERANCE_DAYS });
+  expect(standingDays(open, [9])[0]).toEqual([]);
+});
+
+test("a query resolves its own copy of the spans", () => {
+  const rebuilt = movedGraph(EDGE_COUNT, (edge) => EDGE_COUNT - 1 - edge);
+  const day = SHEDS[0].first;
+  const first = shedsOn(graph, history, day);
+  const second = shedsOn(rebuilt, history, day);
+  const third = shedsOn(graph, history, day);
+  expect(fromReader(third)).toBe(fromReader(first));
+  expect(second[0].spans[0].edge).toBe(EDGE_COUNT - 1 - first[0].spans[0].edge);
 });
 
 // Reversing the edge order is as thorough a renumbering as there is.
@@ -309,7 +321,7 @@ test("a shed lands on the same street after a rebuild renumbers every edge", () 
 });
 
 // Wrong-but-invisible scaffolding is worse than a blank map.
-test("an artifact placed against another key space resolves no span at all", () => {
+test("a file placed against another key space resolves no span at all", () => {
   const stale: ShedHistory = { ...history, graphKeyHash: "0000000000000000" };
   let resolved = 0;
   for (const day of probeDays()) {
@@ -322,22 +334,7 @@ test("an artifact placed against another key space resolves no span at all", () 
   expect(resolved).toBeGreaterThan(0); // or the matching graph resolves nothing either
 });
 
-test("the index seek agrees with a full linear scan", () => {
-  // No index, so every seek starts at the head; a disagreement is the seek's.
-  const scanned: ShedHistory = {
-    ...history,
-    months: new Uint16Array(0),
-    offsets: new Uint32Array(0),
-    closeDays: new Uint16Array(0),
-  };
-  for (const day of probeDays()) {
-    expect(fromReader(shedsOn(graph, history, day))).toBe(
-      fromReader(shedsOn(graph, scanned, day)),
-    );
-  }
-});
-
-test("coverage per edge matches the encoder's own day scan", () => {
+test("coverage per edge matches the prototype's own day scan", () => {
   for (const { day, edges } of COVERAGE) {
     const decks = shedCoverage(graph, history, day);
     expect([...decks.keys()].sort((left, right) => left - right)).toEqual(
@@ -422,13 +419,9 @@ test("a doubtful placement covers its edge like any other", () => {
   expect(doubted).toBeGreaterThan(0); // or the fixture has nothing doubtful in it
 });
 
-// Served for New York alone, so a fetch of any other city's artifact fails the test.
+// Served for New York alone, so a fetch of any other city's file fails the test.
 const NEW_YORK = cityById("nyc")!;
-const SERVED: Record<string, string> = {
-  [shedUrls("nyc").open]: OPEN_BASE64,
-  [shedUrls("nyc").closed]: CLOSED_BASE64,
-  [shedUrls("nyc").index]: INDEX_BASE64,
-};
+const SERVED: Record<string, string> = { [shedUrl("nyc")]: SHEDS_TSV };
 const realFetch = globalThis.fetch;
 afterAll(() => {
   globalThis.fetch = realFetch;
@@ -436,11 +429,11 @@ afterAll(() => {
 
 function serveFixture(): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
-    const base64 = SERVED[String(input)];
-    if (base64 === undefined) {
+    const text = SERVED[String(input)];
+    if (text === undefined) {
       throw new Error(`unexpected fetch of ${String(input)}`);
     }
-    return new Response(buffer(base64));
+    return new Response(text);
   }) as typeof fetch;
 }
 
@@ -451,7 +444,7 @@ test("computeEdgeSheds fills the graph with the day's coverage, capped below 1",
   const { day, edges } = COVERAGE[COVERAGE.length - 1];
   const highest = edges[edges.length - 1][0];
   const cut = namedGraph(highest);
-  await computeEdgeSheds(cut, new Date(2017, 11, 28 + day), NEW_YORK);
+  await computeEdgeSheds(cut, new Date(2026, 2, 2 + day), NEW_YORK);
 
   const sheds = cut.sheds as NonNullable<RoutingGraph["sheds"]>;
   expect(sheds.coverage.length).toBe(highest);
@@ -482,13 +475,13 @@ test("computeEdgeSheds fills the graph with the day's coverage, capped below 1",
   }
 });
 
-test("a graph the artifact was not placed against costs no scaffolding", async () => {
+test("a graph the file was not placed against costs no scaffolding", async () => {
   serveFixture();
   const { day } = COVERAGE[COVERAGE.length - 1];
   const other = namedGraph(EDGE_COUNT);
   other.keyHash = "0000000000000000";
   await expect(
-    computeEdgeSheds(other, new Date(2017, 11, 28 + day), NEW_YORK),
+    computeEdgeSheds(other, new Date(2026, 2, 2 + day), NEW_YORK),
   ).rejects.toThrow(GRAPH_KEY_HASH);
 
   const sheds = other.sheds as NonNullable<RoutingGraph["sheds"]>;
@@ -497,22 +490,23 @@ test("a graph the artifact was not placed against costs no scaffolding", async (
 });
 
 // The fixture server throws on any other URL, so these pass only without a fetch.
-test("a city with no shed artifact stands nothing, without fetching one", async () => {
+test("a city with no shed file stands nothing, without fetching one", async () => {
   serveFixture();
   const { day } = COVERAGE[COVERAGE.length - 1];
   const history = await loadSheds("sf");
   expect(shedsOn(namedGraph(EDGE_COUNT), history, day)).toEqual([]);
 
   const other = namedGraph(EDGE_COUNT);
-  await computeEdgeSheds(other, new Date(2017, 11, 28 + day), cityById("sf")!);
+  await computeEdgeSheds(other, new Date(2026, 2, 2 + day), cityById("sf")!);
   const sheds = other.sheds as NonNullable<RoutingGraph["sheds"]>;
   expect(sheds.maxCoverage).toBe(0);
 });
 
 test("a Date maps to its own local calendar day", () => {
-  expect(shedDay(new Date(2017, 11, 28, 23, 59))).toBe(0);
-  expect(shedDay(new Date(2018, 0, 1, 0, 0))).toBe(4);
-  expect(shedDay(new Date(2026, 6, 29, 12, 0))).toBe(3135);
+  expect(shedDay(new Date(2026, 2, 2, 23, 59))).toBe(0);
+  expect(shedDay(new Date(2026, 2, 6, 0, 0))).toBe(4);
+  expect(shedDay(new Date(2026, 9, 24, 12, 0))).toBe(236);
+  expect(SHED_EPOCH_DAY).toBe("2026-03-02");
 });
 
 // Synthetic straight streets vary the sun's angle to the street independently of its elevation.

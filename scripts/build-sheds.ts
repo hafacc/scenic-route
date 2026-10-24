@@ -1,4 +1,4 @@
-// The artifact must be a function of the feed and its end date alone, so incremental runs match it.
+// Re-places every job in sheds.tsv from its stored reading; --from-feed first walks the whole feed afresh.
 // Reads public/routing/<city>.bin, so it runs after `bun run build-tiles`.
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -10,20 +10,19 @@ import {
   type RoutingGraph,
 } from "../src/routing/graph";
 import type { ShedCity } from "../src/routing/shed-cities";
-import { shedDir, writeShedInputs } from "./graph-inputs";
 import {
   CONFIDENCE_CEILING,
   DEPTH_CEILING,
   DEPTH_SCALE,
-  type EncodedShed,
-  type EncodedSpan,
-  encodeSheds,
   FRACTION_SCALE,
-  graphHashOf,
-  graphKeyHashOf,
-  SIDE_BITS,
-  shedDayOf,
-} from "./shed-encode";
+  parseShedFile,
+  type ShedFile,
+  type ShedFileRecord,
+  type ShedFileSpan,
+  serializeShedFile,
+} from "../src/routing/shed-file";
+import { graphHashOf, graphKeyHashOf } from "./graph-hash";
+import { shedDir, writeShedInputs } from "./graph-inputs";
 import {
   buildSidewalkIndex,
   pickShedParts,
@@ -41,19 +40,19 @@ import {
   type ShedParcels,
 } from "./shed-parcels";
 import {
-  MERGE_TOLERANCE_DAYS,
-  readShedPermits,
-  type ShedAttributes,
-  type ShedInterval,
-  type ShedPermit,
+  emptyShedFile,
+  finishWalk,
   shedSnapshots,
+  startWalk,
+  walkSnapshots,
 } from "./shed-permits";
 
 const PUBLIC_DIR = join(import.meta.dirname, "..", "public");
 const ROUTING_DIR = join(PUBLIC_DIR, "routing");
 // The city the DOB permit feed covers; another city's sheds are another permit source.
 export const DOB_CITY: ShedCity = "nyc";
-const SIDE_MASK = 0x7; // the graph's kind-and-side byte, bits 3-5
+const SIDE_BITS = 3; // the graph's kind-and-side byte keeps the side in bits 3-5
+const SIDE_MASK = 0x7;
 const METERS_PER_MILE = 1609.344;
 const PROGRESS_EVERY = 5_000;
 
@@ -98,58 +97,41 @@ export interface ShedRecord {
   footprint: Ring | null; // anchors a permit shorter than its frontage
 }
 
+export function bblOfRecord(record: ShedFileRecord): string | null {
+  const [borough, block, lot] = record.bbl.split("/");
+  return record.bbl === "" ? null : bblOf(borough, block, lot);
+}
+
 export function toShedRecord(
-  attributes: ShedAttributes,
+  record: ShedFileRecord,
   parcels: ShedParcels,
 ): ShedRecord {
-  const bbl = bblOf(attributes.boroughDigit, attributes.block, attributes.lot);
+  const linearFeet = record.feet ?? Number.NaN;
   const parts = pickShedParts({
-    street: attributes.street,
-    linearFeet: attributes.linearFeet,
-    lot: lotFor(parcels, bbl, attributes.bin),
-    footprint: parcels.footprints.get(attributes.bin) ?? null,
-    lng: attributes.lng,
-    lat: attributes.lat,
+    street: record.street,
+    linearFeet,
+    lot: lotFor(parcels, bblOfRecord(record), record.bin),
+    footprint: parcels.footprints.get(record.bin) ?? null,
+    lng: record.lng,
+    lat: record.lat,
   });
   return {
-    street: attributes.street,
-    linearFeet: attributes.linearFeet,
-    lng: attributes.lng,
-    lat: attributes.lat,
+    street: record.street,
+    linearFeet,
+    lng: record.lng,
+    lat: record.lat,
     lot: parts.lot === null ? null : quantizeRing(parts.lot),
     footprint: parts.footprint === null ? null : quantizeRing(parts.footprint),
   };
 }
 
-// Includes readings an interval ended under that the feed has since corrected.
-export function placementAttributes(
-  permits: readonly ShedPermit[],
-): ShedAttributes[] {
-  const distinct: ShedAttributes[] = [];
-  const seen = new Set<ShedAttributes>();
-  for (const permit of permits) {
-    for (const interval of permit.intervals) {
-      if (!seen.has(interval.attributes)) {
-        seen.add(interval.attributes);
-        distinct.push(interval.attributes);
-      }
-    }
-  }
-  return distinct;
-}
-
 export function parcelRequestsOf(
-  attributes: readonly ShedAttributes[],
+  records: readonly ShedFileRecord[],
 ): { bin: string; bbl: string | null }[] {
-  return attributes.map((reading) => ({
-    bin: reading.bin,
-    bbl: bblOf(reading.boroughDigit, reading.block, reading.lot),
+  return records.map((record) => ({
+    bin: record.bin,
+    bbl: bblOfRecord(record),
   }));
-}
-
-// The artifact's record order: the only one the daily job can rebuild from the CSV alone.
-export function byJobNumber(left: ShedPermit, right: ShedPermit): number {
-  return left.job < right.job ? -1 : left.job > right.job ? 1 : 0;
 }
 
 export function shedRequestOf(record: ShedRecord): ShedRequest {
@@ -179,11 +161,11 @@ export function placeRecords(
   });
 }
 
-// Keyed by durable id, not edge id: the artifact outlives the graph it was snapped against.
-export function toEncodedSpans(
+// Keyed by durable id, not edge id: the file outlives the graph it was snapped against.
+export function toFileSpans(
   graph: RoutingGraph,
   placement: ShedPlacement,
-): EncodedSpan[] {
+): ShedFileSpan[] {
   return placement.spans.map((span) => {
     const sourceId = graph.edgeSourceId[span.edge];
     if (sourceId === NO_SOURCE_ID) {
@@ -215,75 +197,91 @@ export function toConfidenceByte(placement: ShedPlacement): number {
   return Math.min(CONFIDENCE_CEILING, Math.round(placement.confidence * 255));
 }
 
-// Provisional (a reappearance could still extend it) goes in open.bin; the rest are final.
-export function isProvisional(last: number, lastDay: number): boolean {
-  return lastDay - last < MERGE_TOLERANCE_DAYS;
+// Each record is placed from its own reading alone, so placing a few matches placing them all.
+export async function placeSheds(
+  graph: RoutingGraph,
+  records: readonly ShedFileRecord[],
+): Promise<ShedPlacement[]> {
+  if (records.length === 0) {
+    return [];
+  }
+  const parcels = await fetchShedParcels(parcelRequestsOf(records));
+  const started = performance.now();
+  const index = buildSidewalkIndex(graph);
+  console.error(
+    `  graph ${graph.hash}, key space ${graph.keyHash}, ${index.edges.length} sidewalk edges` +
+      ` indexed in ${((performance.now() - started) / 1000).toFixed(1)}s`,
+  );
+  const placements = placeRecords(
+    index,
+    records.map((record) => toShedRecord(record, parcels)),
+  );
+  for (const [order, record] of records.entries()) {
+    record.spans = toFileSpans(graph, placements[order]);
+    record.confidence = toConfidenceByte(placements[order]);
+  }
+  return placements;
 }
 
-export interface ShedCoverage {
-  spans: EncodedSpan[];
-  confidence: number; // 0..254
+export function shedFilePath(city: ShedCity): string {
+  return join(shedDir(city), "sheds.tsv");
 }
 
-// One record per (permit, interval); `permits` must already be in job order.
-export function encodedShedsOf(
-  permits: readonly ShedPermit[],
-  coverageOf: (interval: ShedInterval, permit: ShedPermit) => ShedCoverage,
-  lastDay: number,
-): EncodedShed[] {
-  const encoded: EncodedShed[] = [];
-  for (const permit of permits) {
-    for (const interval of permit.intervals) {
-      const { spans, confidence } = coverageOf(interval, permit);
-      const last = shedDayOf(interval.last);
-      encoded.push({
-        job: permit.job,
-        first: shedDayOf(interval.first),
-        close: isProvisional(last, lastDay) ? null : last,
-        confidence,
-        spans,
-      });
+export async function readShedFile(path: string): Promise<ShedFile> {
+  return parseShedFile(await readFile(path, "utf-8"));
+}
+
+export async function writeShedFile(
+  city: ShedCity,
+  file: ShedFile,
+): Promise<void> {
+  // Committed under public/; the tile build neither renders nor clears it.
+  await mkdir(shedDir(city), { recursive: true });
+  const text = serializeShedFile(file);
+  await writeFile(shedFilePath(city), text);
+  console.error(
+    `  sheds.tsv: ${file.records.length.toLocaleString()} permits, ${text.length.toLocaleString()} bytes`,
+  );
+}
+
+function firstDayOf(file: ShedFile): string | null {
+  let first: string | null = null;
+  for (const record of file.records) {
+    const day = record.runs[0].first;
+    if (first === null || day < first) {
+      first = day;
     }
   }
-  return encoded;
+  return first;
 }
 
-export async function writeShedArtifact(
-  city: ShedCity,
-  encoded: readonly EncodedShed[],
-  graphKeyHash: string,
-  lastDay: number,
-  counts: readonly number[],
-): Promise<void> {
-  const artifact = encodeSheds(encoded, graphKeyHash, lastDay, counts);
-  // Committed under public/; the tile build neither renders nor clears it.
-  const dir = shedDir(city);
-  await mkdir(dir, { recursive: true });
-  for (const [name, bytes] of [
-    ["open.bin", artifact.open],
-    ["closed.bin", artifact.closed],
-    ["index.bin", artifact.index],
-  ] as const) {
-    await writeFile(join(dir, name), bytes);
-    console.error(`  ${name}: ${bytes.length.toLocaleString()} bytes`);
+// The file is the archive: a feed that has since forgotten days must not erase them unasked.
+export function truncationOf(
+  existing: ShedFile | null,
+  rebuilt: ShedFile,
+): string | null {
+  const kept = existing === null ? null : firstDayOf(existing);
+  const start = firstDayOf(rebuilt);
+  if (kept === null || start === null || kept >= start) {
+    return null;
+  } else {
+    return (
+      `the shed file has runs from ${kept}, before the feed's first snapshot on ${start}:` +
+      " rebuilding from the feed would drop them, so pass --force to mean that"
+    );
   }
 }
 
+// `placements` in the order of `records`.
 export function summarize(
-  permits: readonly ShedPermit[],
-  placementOf: (interval: ShedInterval) => ShedPlacement,
-  lastDay: string,
+  records: readonly ShedFileRecord[],
+  placements: readonly ShedPlacement[],
+  seen: string,
 ): void {
-  const day = shedDayOf(lastDay);
-  const records = permits.flatMap((permit) =>
-    permit.intervals.map((interval) => ({
-      standing: isProvisional(shedDayOf(interval.last), day),
-      placement: placementOf(interval),
-    })),
-  );
-  const placements = records.map((record) => record.placement);
   const assigned = placements.filter((placement) => placement.spans.length > 0);
-  const standing = records.filter((record) => record.standing);
+  const standing = placements.filter(
+    (_, order) => records[order].runs.at(-1)?.last === null,
+  );
   const coverage = (of: readonly ShedPlacement[]): number =>
     of.reduce((total, placement) => total + placement.coveredMeters, 0);
   const weighted =
@@ -296,16 +294,16 @@ export function summarize(
   for (const placement of placements) {
     status.set(placement.status, (status.get(placement.status) ?? 0) + 1);
   }
-  const standingAssigned = standing
-    .map((record) => record.placement)
-    .filter((placement) => placement.spans.length > 0);
+  const standingAssigned = standing.filter(
+    (placement) => placement.spans.length > 0,
+  );
   console.error(
-    `sheds: ${assigned.length}/${records.length} records placed over ${permits.length} permits, ` +
+    `sheds: ${assigned.length}/${records.length} permits placed, ` +
       `${(coverage(assigned) / METERS_PER_MILE).toFixed(1)} mi of coverage, ` +
       `coverage-weighted confidence ${weighted.toFixed(3)}`,
   );
   console.error(
-    `  standing on ${lastDay}: ${standingAssigned.length}/${standing.length} placed, ` +
+    `  standing on ${seen}: ${standingAssigned.length}/${standing.length} placed, ` +
       `${(coverage(standingAssigned) / METERS_PER_MILE).toFixed(1)} mi`,
   );
   console.error(
@@ -360,56 +358,53 @@ export function summarize(
   console.error(
     `  unplaced: ${(unplacedMeters / METERS_PER_MILE).toFixed(1)} of` +
       ` ${(declaredMeters / METERS_PER_MILE).toFixed(1)} declared mi had no frontage to stand on;` +
-      ` per placed record p50 ${shortfall(0.5)} p90 ${shortfall(0.9)}` +
+      ` per placed permit p50 ${shortfall(0.5)} p90 ${shortfall(0.9)}` +
       ` p99 ${shortfall(0.99)} max ${shortfall(1)} m,` +
       ` ${halved}/${declaring.length} placing under half what they declare`,
   );
 }
 
-export async function buildSheds(): Promise<void> {
-  const { sources, blobs } = await shedSnapshots("build-sheds");
-  const { permits, lastDay, counts } = await readShedPermits(sources, blobs);
-  permits.sort(byJobNumber);
-  const attributes = placementAttributes(permits);
-  const parcels = await fetchShedParcels(parcelRequestsOf(attributes));
-  const records = attributes.map((reading) => toShedRecord(reading, parcels));
-
+export async function buildSheds(flags: readonly string[]): Promise<void> {
+  const path = shedFilePath(DOB_CITY);
+  const existing = await readShedFile(path).catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") {
+        return null;
+      }
+      throw error;
+    },
+  );
+  let file: ShedFile;
+  if (flags.includes("--from-feed")) {
+    const { sources, blobs } = await shedSnapshots("build-sheds-from-feed");
+    const walk = startWalk(emptyShedFile(DOB_CITY));
+    await walkSnapshots(walk, sources, blobs);
+    file = finishWalk(walk);
+    const truncation = truncationOf(existing, file);
+    if (truncation !== null && !flags.includes("--force")) {
+      throw new Error(truncation);
+    }
+  } else if (existing === null) {
+    throw new Error(
+      `${path} is missing: \`bun run build-sheds-from-feed\` lays it down from the DOB feed`,
+    );
+  } else {
+    file = existing;
+  }
   const graph = await loadGraph(DOB_CITY);
-  const started = performance.now();
-  const index = buildSidewalkIndex(graph);
-  console.error(
-    `  ${index.edges.length} sidewalk edges indexed in ${((performance.now() - started) / 1000).toFixed(1)}s`,
-  );
-  const placements = placeRecords(index, records);
-  const placed = new Map(
-    attributes.map((reading, order) => [reading, placements[order]]),
-  );
-  const placementOf = (interval: ShedInterval): ShedPlacement =>
-    placed.get(interval.attributes)!;
-  const day = shedDayOf(lastDay);
-  await writeShedArtifact(
-    DOB_CITY,
-    encodedShedsOf(
-      permits,
-      (interval) => ({
-        spans: toEncodedSpans(graph, placementOf(interval)),
-        confidence: toConfidenceByte(placementOf(interval)),
-      }),
-      day,
-    ),
-    graph.keyHash,
-    day,
-    counts,
-  );
+  const placements = await placeSheds(graph, file.records);
+  file.keySpace = graph.keyHash;
+  await writeShedFile(DOB_CITY, file);
   // Stamped only here: update-sheds re-stamping would launder an input change nobody re-placed.
   const inputs = await writeShedInputs(DOB_CITY);
   console.error(
     `  inputs.json: ${inputs.files} committed key-space inputs stamped ${inputs.stamp}, key probe` +
       ` ${inputs.keySpace}`,
   );
-  summarize(permits, placementOf, lastDay);
+  summarize(file.records, placements, file.seen);
 }
 
 if (import.meta.main) {
-  await buildSheds();
+  // argv[2] is the commit index when the feed pipeline runs this.
+  await buildSheds(process.argv.slice(2));
 }
