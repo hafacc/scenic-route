@@ -1,46 +1,14 @@
-// NYCDOB/ActiveShedPermits commits one CSV snapshot of active shed permits most days since 2017.
+// NYCDOB/ActiveShedPermits commits one CSV snapshot of active shed permits most days.
 // The git plumbing that streams the blobs in lives in package.json.
 
 import { readFile } from "node:fs/promises";
+import type { ShedFile, ShedFileRecord } from "../src/routing/shed-file";
+import { byJob } from "../src/routing/shed-file";
 
-// The DOB corrects geocodes for years after a shed is gone, so an interval keeps its final reading.
-export interface ShedAttributes {
-  bin: string;
-  street: string;
-  linearFeet: number; // NaN when the feed carries none
-  lat: number | null;
-  lng: number | null;
-  boroughDigit: string; // Borough Digit / Block / Lot: the last non-blank ones given
-  block: string;
-  lot: string;
-}
-
-export interface ShedPermit extends ShedAttributes {
-  job: string;
-  houseNumber: string;
-  runs: ShedInterval[]; // ascending and disjoint
-  intervals: ShedInterval[]; // runs with renewal gaps merged
-  // The daily job places only unseen permits, so this is how it hears of a corrected one.
-  corrected: boolean;
-}
-
-export interface ShedInterval {
-  first: string; // ISO YYYY-MM-DD
-  last: string;
-  open: boolean; // still standing in the newest snapshot
-  attributes: ShedAttributes; // as of `last`
-}
-
-// The feed drops permits for a few days around a renewal.
-export const MERGE_TOLERANCE_DAYS = 14;
 // Degraded writes come in multi-week runs; backward-only, so a day's verdict is final once made.
-// Also the reorder depth that collapses a day's several commits into one snapshot.
 export const TRUNCATION_NEIGHBORS = 30;
 const TRUNCATION_RATIO = 0.75;
-// A run re-reads the last MERGE_TOLERANCE_DAYS, so its window must be seeded from further back.
-const JUDGED_TAIL = TRUNCATION_NEIGHBORS + MERGE_TOLERANCE_DAYS;
-const PROGRESS_INTERVAL = 500;
-const DAY_MS = 86_400_000;
+const PROGRESS_INTERVAL = 50;
 const NEWLINE = 0x0a;
 const CARRIAGE_RETURN = 0x0d;
 const QUOTE = 0x22;
@@ -57,6 +25,7 @@ type Column =
   | "boroughDigit"
   | "block"
   | "lot"
+  | "firstPermitDate"
   | "currentDate";
 
 // By name, not position: the feed has shipped seven headers, adding and reordering columns.
@@ -75,6 +44,7 @@ const COLUMNS: Record<Column, readonly string[]> = {
   boroughDigit: ["borough digit", "borough_digit", "boro digit"],
   block: ["block"],
   lot: ["lot"],
+  firstPermitDate: ["first permit date", "first_permit_date"],
   currentDate: ["current date", "current_date"],
 };
 
@@ -91,16 +61,25 @@ export interface SnapshotRow {
   boroughDigit: string;
   block: string;
   lot: string;
+  firstPermitDate: string;
+}
+
+// A row whose job number the feed overwrote with another column's value.
+export interface GarbledRow {
+  job: string;
+  row: SnapshotRow;
 }
 
 interface ParsedSnapshot {
   csvDate: string | null;
   rows: Map<string, SnapshotRow>;
+  garbled: GarbledRow[];
 }
 
 export interface DatedSnapshot {
   date: string;
   rows: Map<string, SnapshotRow>;
+  garbled: readonly GarbledRow[];
 }
 
 function clean(text: string): string {
@@ -149,30 +128,12 @@ function parseSnapshotDate(raw: string): string | null {
   }
 }
 
-export function daysBetween(from: string, to: string): number {
-  return (Date.parse(to) - Date.parse(from)) / DAY_MS;
-}
+// DOB job numbers come in two shapes: nine-digit BIS, and DOB NOW ("M12345678-I1").
+const JOB_NUMBER = /^(\d{9}|[BMQSX]\d{8}-[A-Z]\d)$/;
 
-function shiftDay(iso: string, days: number): string {
-  return new Date(Date.parse(iso) + days * DAY_MS).toISOString().slice(0, 10);
-}
-
-// A shed last seen before this can no longer be extended by anything the feed publishes next.
-export function resumeFrom(lastDay: string): string {
-  return shiftDay(lastDay, 1 - MERGE_TOLERANCE_DAYS);
-}
-
-// The feed may write thousands separators.
-function toNumber(raw: string): number {
-  if (raw === "") {
-    return Number.NaN;
-  } else {
-    return Number(raw.replace(/,/g, ""));
-  }
-}
-
-function toCoordinate(raw: string): number | null {
-  const value = toNumber(raw);
+// The feed may write thousands separators; blank or unreadable is null.
+function toNumber(raw: string): number | null {
+  const value = raw === "" ? Number.NaN : Number(raw.replace(/,/g, ""));
   return Number.isNaN(value) ? null : value;
 }
 
@@ -193,6 +154,7 @@ function resolveHeader(header: readonly string[]): ColumnIndex {
     boroughDigit: -1,
     block: -1,
     lot: -1,
+    firstPermitDate: -1,
     currentDate: -1,
   };
   const wanted = Object.entries(COLUMNS) as [Column, readonly string[]][];
@@ -338,9 +300,10 @@ function readRecord(
 // Dated by majority, so a handful of stale rows can't misfile the day.
 function parseSnapshot(bytes: Uint8Array): ParsedSnapshot {
   const rows = new Map<string, SnapshotRow>();
+  const garbled: GarbledRow[] = [];
   const decoder = new TextDecoder();
   if (bytes.length === 0) {
-    return { csvDate: null, rows };
+    return { csvDate: null, rows, garbled };
   }
   const record: CsvRecord = { line: "", starts: [], fields: null, next: 0 };
   readRecord(bytes, 0, decoder, record);
@@ -361,7 +324,7 @@ function parseSnapshot(bytes: Uint8Array): ParsedSnapshot {
     if (job === "") {
       continue;
     }
-    rows.set(job, {
+    const row: SnapshotRow = {
       bin: field(record, columns.bin),
       street: field(record, columns.street),
       houseNumber: field(record, columns.houseNumber),
@@ -371,7 +334,13 @@ function parseSnapshot(bytes: Uint8Array): ParsedSnapshot {
       boroughDigit: field(record, columns.boroughDigit),
       block: field(record, columns.block),
       lot: field(record, columns.lot),
-    });
+      firstPermitDate: field(record, columns.firstPermitDate),
+    };
+    if (JOB_NUMBER.test(job)) {
+      rows.set(job, row);
+    } else {
+      garbled.push({ job, row });
+    }
     const raw = field(record, columns.currentDate);
     if (raw !== lastRaw) {
       lastRaw = raw;
@@ -389,7 +358,7 @@ function parseSnapshot(bytes: Uint8Array): ParsedSnapshot {
       best = count;
     }
   }
-  return { csvDate, rows };
+  return { csvDate, rows, garbled };
 }
 
 export interface SnapshotSource {
@@ -456,7 +425,7 @@ export async function shedSnapshots(
   };
 }
 
-// Distinct: the feed often recommits an unchanged CSV, so this is 4.6 GB down the pipe, not 7.5.
+// Distinct: the feed often recommits an unchanged CSV.
 export function distinctBlobs(sources: readonly SnapshotSource[]): string[] {
   const blobs: string[] = [];
   const seen = new Set<string>();
@@ -553,299 +522,167 @@ async function* readBlobs(
   }
 }
 
-interface OpenRun {
-  first: string;
-  last: string;
-}
-
-interface RunTracker {
-  order: string[]; // by first mention
-  open: Map<string, OpenRun>;
-  closed: Map<string, ShedInterval[]>;
-  // Replaced only on change, so intervals share the object exactly when they place the same way.
-  attributes: Map<string, ShedAttributes>;
-  houseNumbers: Map<string, string>;
-  located: Map<string, SnapshotRow>; // the last row that gave the job a block and lot
-  corrected: Set<string>;
-}
-
-function closeRun(
-  tracker: RunTracker,
-  job: string,
-  run: OpenRun,
-  open: boolean,
-): void {
-  const intervals = tracker.closed.get(job);
-  const interval: ShedInterval = {
-    first: run.first,
-    last: run.last,
-    open,
-    attributes: tracker.attributes.get(job)!,
-  };
-  if (intervals === undefined) {
-    tracker.closed.set(job, [interval]);
-  } else {
-    intervals.push(interval);
-  }
-}
-
-// Block and lot from the last row carrying them, so a blank day isn't a change of address.
-function attributesOf(
-  row: SnapshotRow,
-  located: SnapshotRow | undefined,
-): ShedAttributes {
+export function emptyShedFile(city: string): ShedFile {
   return {
-    bin: row.bin,
-    street: row.street,
-    linearFeet: toNumber(row.linearFeet),
-    lat: toCoordinate(row.lat),
-    lng: toCoordinate(row.lng),
-    boroughDigit: located?.boroughDigit ?? "",
-    block: located?.block ?? "",
-    lot: located?.lot ?? "",
+    city,
+    keySpace: "",
+    through: "",
+    seen: "",
+    counts: [],
+    records: [],
   };
-}
-
-// `Object.is`, so a NaN length compares equal to itself.
-function sameAttributes(left: ShedAttributes, right: ShedAttributes): boolean {
-  return (
-    left.bin === right.bin &&
-    left.street === right.street &&
-    Object.is(left.linearFeet, right.linearFeet) &&
-    left.lat === right.lat &&
-    left.lng === right.lng &&
-    left.boroughDigit === right.boroughDigit &&
-    left.block === right.block &&
-    left.lot === right.lot
-  );
-}
-
-function applySnapshot(tracker: RunTracker, snapshot: DatedSnapshot): void {
-  for (const [job, row] of snapshot.rows) {
-    if (row.block !== "" && row.lot !== "") {
-      tracker.located.set(job, row);
-    }
-    tracker.houseNumbers.set(job, row.houseNumber);
-    const attributes = attributesOf(row, tracker.located.get(job));
-    const previous = tracker.attributes.get(job);
-    if (previous === undefined) {
-      tracker.order.push(job);
-      tracker.attributes.set(job, attributes);
-    } else if (!sameAttributes(previous, attributes)) {
-      tracker.attributes.set(job, attributes);
-      tracker.corrected.add(job);
-    }
-    const run = tracker.open.get(job);
-    if (run === undefined) {
-      tracker.open.set(job, { first: snapshot.date, last: snapshot.date });
-    } else {
-      run.last = snapshot.date;
-    }
-  }
-  for (const [job, run] of tracker.open) {
-    if (!snapshot.rows.has(job)) {
-      tracker.open.delete(job);
-      closeRun(tracker, job, run, false);
-    }
-  }
-}
-
-// The later run's attributes and open flag win.
-export function mergeIntervals(
-  intervals: readonly ShedInterval[],
-): ShedInterval[] {
-  if (intervals.length === 0) {
-    // A kept permit whose only sighting a later walk judged a truncated snapshot.
-    return [];
-  }
-  const merged: ShedInterval[] = [];
-  let current = intervals[0];
-  for (const next of intervals.slice(1)) {
-    if (daysBetween(current.last, next.first) <= MERGE_TOLERANCE_DAYS) {
-      current = {
-        first: current.first,
-        last: next.last,
-        open: next.open,
-        attributes: next.attributes,
-      };
-    } else {
-      merged.push(current);
-      current = next;
-    }
-  }
-  merged.push(current);
-  return merged;
-}
-
-interface SnapshotWindow {
-  pending: DatedSnapshot[];
-  before: number[]; // row counts of the most recently judged days
-  judged: string; // a snapshot for this day or earlier is too late
-  seed: readonly number[]; // the counts this walk was handed
-  tail: DayCount[];
-  kept: number;
-  dropped: number;
-  stale: number;
-  firstDate: string;
-  lastDate: string;
-}
-
-export interface DayCount {
-  date: string;
-  rows: number;
-}
-
-function judgeSnapshot(
-  window: SnapshotWindow,
-  emit: (snapshot: DatedSnapshot) => void,
-): void {
-  const snapshot = window.pending[0];
-  const neighbors = window.before.slice();
-  neighbors.sort((left, right) => left - right);
-  const median =
-    neighbors.length === 0 ? 0 : neighbors[Math.floor(neighbors.length / 2)];
-  if (median !== 0 && snapshot.rows.size < TRUNCATION_RATIO * median) {
-    window.dropped += 1;
-  } else {
-    if (window.kept === 0) {
-      window.firstDate = snapshot.date;
-    }
-    window.lastDate = snapshot.date;
-    window.kept += 1;
-    emit(snapshot);
-  }
-  // Dropped days count too, or the window would depend on its own earlier verdicts.
-  window.judged = snapshot.date;
-  window.pending.shift();
-  window.before.push(snapshot.rows.size);
-  if (window.before.length > TRUNCATION_NEIGHBORS) {
-    window.before.shift();
-  }
-  window.tail.push({ date: snapshot.date, rows: snapshot.rows.size });
-  if (window.tail.length > JUDGED_TAIL) {
-    window.tail.shift();
-  }
-}
-
-// A later commit for a pending day replaces it.
-function acceptSnapshot(
-  window: SnapshotWindow,
-  snapshot: DatedSnapshot,
-  emit: (snapshot: DatedSnapshot) => void,
-): void {
-  if (snapshot.date <= window.judged) {
-    window.stale += 1;
-    return;
-  }
-  let index = window.pending.length - 1;
-  while (index >= 0 && window.pending[index].date > snapshot.date) {
-    index -= 1;
-  }
-  if (index >= 0 && window.pending[index].date === snapshot.date) {
-    window.pending[index] = snapshot;
-  } else {
-    window.pending.splice(index + 1, 0, snapshot);
-  }
-  while (window.pending.length > TRUNCATION_NEIGHBORS) {
-    judgeSnapshot(window, emit);
-  }
 }
 
 export interface ShedWalk {
-  permits: ShedPermit[];
-  lastDay: string; // the newest usable snapshot
-  counts: number[]; // the window seed for a walk resuming at `resumeFrom(lastDay)`
+  file: ShedFile;
+  records: Map<string, ShedFileRecord>;
+  unplaced: Set<string>; // new, or re-read since their placement
+  kept: number;
+  dropped: number;
+  skipped: number;
 }
 
-export interface ShedFold {
-  tracker: RunTracker;
-  window: SnapshotWindow;
-  applyFrom: string; // "" reads the whole history
-}
-
-// `before` seeds the window so the first day sees the neighbors a full-history walk would.
-export function startFold(
-  applyFrom = "",
-  before: readonly number[] = [],
-): ShedFold {
+export function startWalk(file: ShedFile): ShedWalk {
   return {
-    tracker: {
-      order: [],
-      open: new Map(),
-      closed: new Map(),
-      attributes: new Map(),
-      houseNumbers: new Map(),
-      located: new Map(),
-      corrected: new Set(),
-    },
-    window: {
-      pending: [],
-      before: [...before],
-      judged: "",
-      seed: before,
-      tail: [],
-      kept: 0,
-      dropped: 0,
-      stale: 0,
-      firstDate: "",
-      lastDate: "",
-    },
-    applyFrom,
+    file,
+    records: new Map(file.records.map((record) => [record.job, record])),
+    unplaced: new Set(),
+    kept: 0,
+    dropped: 0,
+    skipped: 0,
   };
 }
 
-// An earlier snapshot would push its count onto a window already seeded past it.
-export function foldSnapshot(fold: ShedFold, snapshot: DatedSnapshot): void {
-  if (snapshot.date < fold.applyFrom) {
-    fold.window.stale += 1;
-    return;
-  }
-  acceptSnapshot(fold.window, snapshot, (dated) => {
-    applySnapshot(fold.tracker, dated);
-  });
+function emptyRecord(job: string): ShedFileRecord {
+  return {
+    job,
+    bin: "",
+    house: "",
+    street: "",
+    firstPermit: "",
+    bbl: "",
+    lat: null,
+    lng: null,
+    feet: null,
+    runs: [],
+    confidence: 0,
+    spans: [],
+  };
 }
 
-export function finishFold(fold: ShedFold): ShedWalk {
-  const { tracker, window } = fold;
-  while (window.pending.length > 0) {
-    judgeSnapshot(window, (dated) => {
-      applySnapshot(tracker, dated);
-    });
+// True when the placement's inputs moved; a house number or permit date alone doesn't move it.
+function readRow(record: ShedFileRecord, row: SnapshotRow): boolean {
+  // Block and lot from the last row carrying them, so a blank day isn't a change of address.
+  const bbl =
+    row.block !== "" && row.lot !== ""
+      ? `${row.boroughDigit}/${row.block}/${row.lot}`
+      : record.bbl;
+  const lat = toNumber(row.lat);
+  const lng = toNumber(row.lng);
+  const feet = toNumber(row.linearFeet);
+  const moved =
+    record.bin !== row.bin ||
+    record.street !== row.street ||
+    record.bbl !== bbl ||
+    record.lat !== lat ||
+    record.lng !== lng ||
+    record.feet !== feet;
+  record.bin = row.bin;
+  record.house = row.houseNumber;
+  record.street = row.street;
+  record.firstPermit = parseSnapshotDate(row.firstPermitDate) ?? "";
+  record.bbl = bbl;
+  record.lat = lat;
+  record.lng = lng;
+  record.feet = feet;
+  return moved;
+}
+
+// A garbled row is the one permit at its address and first permit date that the day leaves out.
+function recoverRows(
+  walk: ShedWalk,
+  snapshot: DatedSnapshot,
+): Map<string, SnapshotRow> {
+  if (snapshot.garbled.length === 0) {
+    return snapshot.rows;
   }
-  for (const [job, run] of tracker.open) {
-    closeRun(tracker, job, run, true);
+  const rows = new Map(snapshot.rows);
+  for (const { job, row } of snapshot.garbled) {
+    const firstPermit = parseSnapshotDate(row.firstPermitDate) ?? "";
+    const matches = [...walk.records.values()].filter(
+      (record) =>
+        !rows.has(record.job) &&
+        record.bin === row.bin &&
+        record.house === row.houseNumber &&
+        record.street === row.street &&
+        record.firstPermit === firstPermit,
+    );
+    if (matches.length === 1) {
+      rows.set(matches[0].job, row);
+    } else {
+      console.error(
+        `  ${snapshot.date}: dropped a row with job number ${JSON.stringify(job)}: ${matches.length}` +
+          ` unlisted permits at BIN ${row.bin}, ${row.houseNumber} ${row.street}, first permit` +
+          ` ${row.firstPermitDate}`,
+      );
+    }
   }
-  const permits: ShedPermit[] = [];
-  for (const job of tracker.order) {
-    const runs = tracker.closed.get(job)!;
-    permits.push({
-      ...tracker.attributes.get(job)!,
-      job,
-      houseNumber: tracker.houseNumbers.get(job)!,
-      runs,
-      intervals: mergeIntervals(runs),
-      corrected: tracker.corrected.has(job),
-    });
+  return rows;
+}
+
+// Snapshots must come in commit order; one dated on or before `through` was already judged.
+export function advanceSheds(walk: ShedWalk, snapshot: DatedSnapshot): void {
+  const { file } = walk;
+  if (snapshot.date <= file.through) {
+    walk.skipped += 1;
+    return;
   }
-  // The counts from before the day the next walk starts, since it re-judges the overlap.
-  const resume = window.lastDate === "" ? "" : resumeFrom(window.lastDate);
-  const counts = [
-    ...window.seed,
-    ...window.tail
-      .filter((judged) => judged.date < resume)
-      .map((judged) => judged.rows),
-  ].slice(-TRUNCATION_NEIGHBORS);
-  // The snapshot's day, not the run's, so a quiet feed resumes from its last real day.
-  return { permits, lastDay: window.lastDate, counts };
+  const count = snapshot.rows.size + snapshot.garbled.length;
+  const neighbors = [...file.counts].sort((left, right) => left - right);
+  const median =
+    neighbors.length === 0 ? 0 : neighbors[Math.floor(neighbors.length / 2)];
+  // Dropped days count too, or the window would depend on its own earlier verdicts.
+  file.counts = [...file.counts, count].slice(-TRUNCATION_NEIGHBORS);
+  file.through = snapshot.date;
+  if (median !== 0 && count < TRUNCATION_RATIO * median) {
+    walk.dropped += 1;
+    return;
+  }
+  walk.kept += 1;
+  const rows = recoverRows(walk, snapshot);
+  for (const [job, row] of rows) {
+    let record = walk.records.get(job);
+    if (record === undefined) {
+      record = emptyRecord(job);
+      walk.records.set(job, record);
+    }
+    if (readRow(record, row)) {
+      walk.unplaced.add(job);
+    }
+    if (record.runs.at(-1)?.last !== null) {
+      record.runs.push({ first: snapshot.date, last: null });
+    }
+  }
+  for (const record of walk.records.values()) {
+    const run = record.runs[record.runs.length - 1];
+    if (run.last === null && !rows.has(record.job)) {
+      run.last = file.seen;
+    }
+  }
+  file.seen = snapshot.date;
+}
+
+export function finishWalk(walk: ShedWalk): ShedFile {
+  walk.file.records = [...walk.records.values()].sort(byJob);
+  return walk.file;
 }
 
 // The stream must answer `sources` in order, once per distinct blob.
-export async function readShedPermits(
+export async function walkSnapshots(
+  walk: ShedWalk,
   sources: readonly SnapshotSource[],
   stream: AsyncIterable<Uint8Array>,
-  applyFrom?: string,
-  before: readonly number[] = [],
-): Promise<ShedWalk> {
+): Promise<void> {
   if (sources.length === 0) {
     // A pipeline exits with its last command's status, so upstream failures surface here.
     throw new Error(
@@ -854,69 +691,60 @@ export async function readShedPermits(
     );
   }
   const blobOrder = distinctBlobs(sources);
-  const lastUse = new Map<string, number>();
-  for (const [position, source] of sources.entries()) {
-    lastUse.set(source.blob, position);
-  }
   console.error(
     `  ${sources.length} commits carry a snapshot, ${blobOrder.length} distinct blobs`,
   );
-
-  const fold = startFold(applyFrom, before);
-  // Held only while a later commit still points at it.
-  const parsed = new Map<string, ParsedSnapshot>();
+  // A recommitted blob carries the day it carried before, which the walk has already judged.
+  const read = new Set<string>();
   const blobs = readBlobs(stream, blobOrder);
   for (const [position, source] of sources.entries()) {
-    const cached = parsed.get(source.blob);
-    let snapshot: ParsedSnapshot;
-    if (cached !== undefined) {
-      snapshot = cached;
-      if (lastUse.get(source.blob) === position) {
-        parsed.delete(source.blob);
-      }
-    } else {
-      const next = await blobs.next();
-      if (next.done === true) {
-        throw new Error(`git cat-file --batch stopped at blob ${source.blob}`);
-      }
-      snapshot = parseSnapshot(next.value);
-      if (lastUse.get(source.blob) !== position) {
-        parsed.set(source.blob, snapshot);
-      }
+    if (read.has(source.blob)) {
+      walk.skipped += 1;
+      continue;
     }
-    if (snapshot.rows.size > 0) {
-      foldSnapshot(fold, {
+    read.add(source.blob);
+    const next = await blobs.next();
+    if (next.done === true) {
+      throw new Error(`git cat-file --batch stopped at blob ${source.blob}`);
+    }
+    const snapshot = parseSnapshot(next.value);
+    if (snapshot.rows.size + snapshot.garbled.length > 0) {
+      advanceSheds(walk, {
         date: snapshot.csvDate ?? source.commitDate,
         rows: snapshot.rows,
+        garbled: snapshot.garbled,
       });
     }
     if ((position + 1) % PROGRESS_INTERVAL === 0) {
       console.error(
-        `  read ${position + 1}/${sources.length} snapshots, ${fold.tracker.open.size} sheds standing on ${fold.window.lastDate}`,
+        `  read ${position + 1}/${sources.length} snapshots, through ${walk.file.through}`,
       );
     }
   }
-  const walk = finishFold(fold);
-  const { window } = fold;
   console.error(
-    `  ${window.kept} usable dated snapshots ${window.firstDate}..${window.lastDate}` +
-      ` (${window.dropped} truncated dropped, ${window.stale} stale)`,
+    `  ${walk.kept} usable dated snapshots up to ${walk.file.seen}` +
+      ` (${walk.dropped} truncated dropped, ${walk.skipped} already judged)`,
   );
-  return walk;
+}
+
+export function listedCount(file: ShedFile): number {
+  return file.records.filter((record) => record.runs.at(-1)?.last === null)
+    .length;
 }
 
 if (import.meta.main) {
   const started = performance.now();
   const { sources, blobs } = await shedSnapshots("shed-walk");
-  const { permits } = await readShedPermits(sources, blobs);
-  let intervals = 0;
-  let open = 0;
-  for (const permit of permits) {
-    intervals += permit.intervals.length;
-    open += permit.intervals.filter((interval) => interval.open).length;
-  }
+  const walk = startWalk(emptyShedFile("nyc"));
+  await walkSnapshots(walk, sources, blobs);
+  const file = finishWalk(walk);
+  const runs = file.records.reduce(
+    (total, record) => total + record.runs.length,
+    0,
+  );
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   console.error(
-    `sheds: ${permits.length} permits, ${intervals} intervals, ${open} standing today, in ${seconds}s`,
+    `sheds: ${file.records.length} permits, ${runs} runs, ${listedCount(file)} listed on` +
+      ` ${file.seen}, in ${seconds}s`,
   );
 }

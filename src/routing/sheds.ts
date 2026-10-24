@@ -1,10 +1,14 @@
-// Reads the SHED artifact from scripts/shed-encode.ts; layout in scripts/README.md, rationale in DESIGN.md.
+// Reads the shed file (src/routing/shed-file.ts); layout in scripts/README.md, rationale in DESIGN.md.
 
 import { activeCity, type City } from "../cities";
 import { rainTau } from "../shade/phenology";
-import { type Cursor, readUnsignedVarint, readVarint } from "../tiles/varint";
 import { artifactUrl } from "./artifact-base";
-import { durableKey, edgePath, NO_SOURCE_ID, type RoutingGraph } from "./graph";
+import {
+  durableKey,
+  edgeDurableKey,
+  edgePath,
+  type RoutingGraph,
+} from "./graph";
 import {
   SCHEDULE_BUCKETS,
   SCHEDULE_STEP_SECONDS,
@@ -12,6 +16,12 @@ import {
   sunAt,
 } from "./shade";
 import { hasSheds } from "./shed-cities";
+import {
+  CONFIDENCE_SCALE,
+  DEPTH_SCALE,
+  FRACTION_SCALE,
+  parseShedFile,
+} from "./shed-file";
 
 // Unmeasured; DOB requires 8 ft of clearance and typical decks run 12-15 ft.
 export const DECK_HEIGHT_METERS = 4;
@@ -32,17 +42,10 @@ export function deckDepth(depth: number): number {
   return Math.max(MIN_DECK_DEPTH_METERS, measuredDepth(depth));
 }
 
-const MAGIC = "SHED";
-const FORMAT_VERSION = 3;
-const CLOSED_FLAG = 0x1; // header byte 26, set in closed.bin
-const INDEX_ENTRY_BYTES = 8; // u16 month, u32 offset, u16 close day
-const FRACTION_SCALE = 255; // a span's t0/t1 are a fraction of its edge; 255 is exactly 1.0
-const CONFIDENCE_SCALE = 255; // the byte is capped at 254, as the graph's cover and scenic bytes are
-const DEPTH_SCALE = 10; // a span's depth byte is decimeters; 0 means the placement could not measure one
-const SIDE_BITS = 3; // a span's packed side-and-ordinal varint, as the graph's kind-and-side byte packs it
-const SIDE_MASK = 0x7;
+// The feed drops permits for a few days around a renewal, so a gap this short is one shed.
+export const MERGE_TOLERANCE_DAYS = 14;
 const MILLISECONDS_PER_DAY = 86_400_000;
-const EPOCH_MS = Date.UTC(2017, 11, 28); // the first DOB snapshot; every day number counts from here
+const EPOCH_MS = Date.UTC(2026, 2, 2); // the first day the file has, day 0
 
 // The earliest day the map has scaffolding for, as the date picker's "YYYY-MM-DD".
 export const SHED_EPOCH_DAY = new Date(EPOCH_MS).toISOString().slice(0, 10);
@@ -55,19 +58,11 @@ const SHED_BASE =
   (process.env.NODE_ENV === "development" ? "sheds" : SHED_MAIN_URL);
 
 // Per city, placed against that city's graph alone.
-export function shedUrls(cityId: string): {
-  open: string;
-  closed: string;
-  index: string;
-} {
-  return {
-    open: `${SHED_BASE}/${cityId}/open.bin`,
-    closed: `${SHED_BASE}/${cityId}/closed.bin`,
-    index: `${SHED_BASE}/${cityId}/index.bin`,
-  };
+export function shedUrl(cityId: string): string {
+  return `${SHED_BASE}/${cityId}/sheds.tsv`;
 }
 
-// `edge` is -1 when this graph has no edge by the artifact's durable key.
+// `edge` is -1 when this graph has no edge by the file's durable key.
 export interface ShedSpan {
   edge: number;
   t0: number;
@@ -76,7 +71,7 @@ export interface ShedSpan {
   depth: number;
 }
 
-// A permit that came down and went back up is two of these with disjoint intervals.
+// A permit's runs, merged across renewal gaps, as of the day asked about.
 export interface Shed {
   first: number; // day number of the first day it stood
   close: number | null; // day number of the last, or null while it is still up
@@ -84,25 +79,17 @@ export interface Shed {
   spans: ShedSpan[];
 }
 
-// Kept as bytes, since the suffix read walks records per query.
-interface ShedFile {
-  bytes: Uint8Array;
-  count: number;
-  spanCount: number;
-  firstDay: number; // the day the file's delta chain starts from — the first record's own day
-  // Both files end their headers with daily-job state the client skips.
-  records: number;
+// Spans hold durable keys; a query copies them before resolving edges.
+interface ShedJob {
+  runs: number[]; // first and last day number of each run, ascending; an open run ends on `seen`
+  confidence: number;
+  spans: ShedSpan[];
 }
 
 export interface ShedHistory {
   graphKeyHash: string; // FNV-1a 64 of the graph's durable key space, as routing/version.json spells it
-  lastDay: number; // the newest usable DOB snapshot the artifact was built through
-  open: ShedFile;
-  closed: ShedFile;
-  // Per month with a record: its first day, the first record closing on or after it, and that close day.
-  months: Uint16Array;
-  offsets: Uint32Array;
-  closeDays: Uint16Array;
+  seen: number; // the newest usable DOB snapshot the file was built through
+  jobs: ShedJob[];
 }
 
 // By local calendar date, since sheds' dates are New York calendar days.
@@ -115,168 +102,56 @@ export function shedDay(date: Date): number {
   return Math.round((midnight - EPOCH_MS) / MILLISECONDS_PER_DAY);
 }
 
-function decodeFile(buffer: ArrayBuffer, closed: boolean): ShedFile {
-  const bytes = new Uint8Array(buffer);
-  const view = new DataView(buffer);
-  const magic = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]);
-  const version = view.getUint16(4, true);
-  if (magic !== MAGIC || version !== FORMAT_VERSION) {
-    throw new Error(`not a v${FORMAT_VERSION} shed file`);
-  }
-  if (((bytes[26] & CLOSED_FLAG) !== 0) !== closed) {
-    throw new Error(
-      `shed file is ${closed ? "the open" : "the closed"} half, the other was expected`,
-    );
-  }
+function dayOf(iso: string): number {
+  return Math.round((Date.parse(iso) - EPOCH_MS) / MILLISECONDS_PER_DAY);
+}
+
+export function decodeSheds(text: string): ShedHistory {
+  const file = parseShedFile(text);
+  const seen = dayOf(file.seen);
   return {
-    bytes,
-    count: view.getUint32(8, true),
-    spanCount: view.getUint32(12, true),
-    firstDay: view.getUint16(24, true),
-    records: view.getUint16(6, true),
+    graphKeyHash: file.keySpace,
+    seen,
+    jobs: file.records.map((record) => ({
+      runs: record.runs.flatMap((run) => [
+        dayOf(run.first),
+        run.last === null ? seen : dayOf(run.last),
+      ]),
+      confidence: record.confidence / CONFIDENCE_SCALE,
+      spans: record.spans.map((span) => ({
+        edge: durableKey(span.sourceId, span.side, span.ordinal),
+        t0: span.t0 / FRACTION_SCALE,
+        t1: span.t1 / FRACTION_SCALE,
+        depth: span.depth / DEPTH_SCALE,
+      })),
+    })),
   };
 }
 
-// Read as two halves so nothing needs BigInt.
-function decodeGraphKeyHash(view: DataView): string {
-  const low = view.getUint32(16, true);
-  const high = view.getUint32(20, true);
-  return `${high.toString(16).padStart(8, "0")}${low.toString(16).padStart(8, "0")}`;
-}
-
-export function decodeSheds(
-  openBuffer: ArrayBuffer,
-  closedBuffer: ArrayBuffer,
-  indexBuffer: ArrayBuffer,
-): ShedHistory {
-  const open = decodeFile(openBuffer, false);
-  const closed = decodeFile(closedBuffer, true);
-  const openHash = decodeGraphKeyHash(new DataView(openBuffer));
-  const closedHash = decodeGraphKeyHash(new DataView(closedBuffer));
-  if (openHash !== closedHash) {
-    throw new Error(
-      `shed halves were baked against different key spaces (${openHash}, ${closedHash})`,
-    );
-  }
-
-  const entries = Math.floor(indexBuffer.byteLength / INDEX_ENTRY_BYTES);
-  const view = new DataView(indexBuffer);
-  const months = new Uint16Array(entries);
-  const offsets = new Uint32Array(entries);
-  const closeDays = new Uint16Array(entries);
-  for (let entry = 0; entry < entries; entry++) {
-    const at = entry * INDEX_ENTRY_BYTES;
-    months[entry] = view.getUint16(at, true);
-    offsets[entry] = view.getUint32(at + 2, true); // unaligned, which a DataView reads fine
-    closeDays[entry] = view.getUint16(at + 6, true);
-  }
-  const lastDay = new DataView(openBuffer).getUint16(28, true);
-  if (lastDay !== new DataView(closedBuffer).getUint16(28, true)) {
-    throw new Error("the shed halves were built through different days");
-  }
-  return {
-    graphKeyHash: openHash,
-    lastDay,
-    open,
-    closed,
-    months,
-    offsets,
-    closeDays,
-  };
-}
-
-// The source-id delta chain restarts every record, or the suffix read would be impossible.
-function readSpans(bytes: Uint8Array, cursor: Cursor): ShedSpan[] {
-  const count = readUnsignedVarint(bytes, cursor);
-  const spans: ShedSpan[] = new Array(count);
-  let sourceId = 0;
-  for (let span = 0; span < count; span++) {
-    sourceId += readUnsignedVarint(bytes, cursor);
-    const packed = readUnsignedVarint(bytes, cursor);
-    const t0 = bytes[cursor.offset] / FRACTION_SCALE;
-    const t1 = bytes[cursor.offset + 1] / FRACTION_SCALE;
-    const depth = bytes[cursor.offset + 2] / DEPTH_SCALE;
-    cursor.offset += 3;
-    spans[span] = {
-      edge: durableKey(sourceId, packed & SIDE_MASK, packed >> SIDE_BITS),
-      t0,
-      t1,
-      depth,
-    };
-  }
-  return spans;
-}
-
-// In job-number order, so the first-day deltas are signed and every record is walked.
-function openOn(file: ShedFile, day: number): Shed[] {
-  const standing: Shed[] = [];
-  const cursor: Cursor = { offset: file.records };
-  let first = file.firstDay;
-  for (let record = 0; record < file.count; record++) {
-    first += readVarint(file.bytes, cursor);
-    const confidence = file.bytes[cursor.offset] / CONFIDENCE_SCALE;
-    cursor.offset += 1;
-    const spans = readSpans(file.bytes, cursor); // walked either way: it is how the next record is reached
-    if (first <= day) {
-      standing.push({ first, close: null, confidence, spans });
+// The merged stretch of runs holding `day`; the last stays open while a renewal could still extend it.
+function standingOn(job: ShedJob, seen: number, day: number): Shed | null {
+  const { runs } = job;
+  let first = runs[0];
+  let last = runs[1];
+  for (let run = 2; run <= runs.length; run += 2) {
+    if (run < runs.length && runs[run] - last <= MERGE_TOLERANCE_DAYS) {
+      last = runs[run + 1];
+      continue;
     }
-  }
-  return standing;
-}
-
-// The index states the close day to re-base from, so the file needn't be replayed.
-function seek(
-  history: ShedHistory,
-  day: number,
-): { offset: number; closeDay: number } {
-  let low = 0;
-  let high = history.months.length;
-  while (low < high) {
-    const middle = (low + high) >> 1;
-    if (history.months[middle] <= day) {
-      low = middle + 1;
-    } else {
-      high = middle;
+    const close =
+      run === runs.length && seen - last < MERGE_TOLERANCE_DAYS ? null : last;
+    if (first <= day && (close === null || day <= close)) {
+      return {
+        first,
+        close,
+        confidence: job.confidence,
+        spans: job.spans.map((span) => ({ ...span })),
+      };
     }
+    first = runs[run];
+    last = runs[run + 1];
   }
-  if (low === 0) {
-    return {
-      offset: history.closed.records,
-      closeDay: history.closed.firstDay,
-    };
-  } else {
-    return {
-      offset: history.offsets[low - 1],
-      closeDay: history.closeDays[low - 1],
-    };
-  }
-}
-
-// Records after the seek point are in close-day order, so only a suffix is walked.
-function closedOn(history: ShedHistory, day: number): Shed[] {
-  const { bytes } = history.closed;
-  const start = seek(history, day);
-  const cursor: Cursor = { offset: start.offset };
-  const standing: Shed[] = [];
-  // The record at the seek point has the index's absolute close day; later ones chain from it.
-  let close = start.closeDay;
-  let chained = false;
-  while (cursor.offset < bytes.length) {
-    const delta = readUnsignedVarint(bytes, cursor);
-    if (chained) {
-      close += delta;
-    } else {
-      chained = true;
-    }
-    const first = close - readUnsignedVarint(bytes, cursor);
-    const confidence = bytes[cursor.offset] / CONFIDENCE_SCALE;
-    cursor.offset += 1;
-    const spans = readSpans(bytes, cursor); // walked either way: it is how the next record is reached
-    if (close >= day && first <= day) {
-      standing.push({ first, close, confidence, spans });
-    }
-  }
-  return standing;
+  return null;
 }
 
 // An unknown key leaves the span at -1 rather than dropping it; every consumer skips negatives.
@@ -288,16 +163,9 @@ function resolveSpans(graph: RoutingGraph, sheds: readonly Shed[]): void {
     }
   }
   for (let edge = 0; edge < graph.edgeCount; edge++) {
-    const sourceId = graph.edgeSourceId[edge];
-    if (sourceId !== NO_SOURCE_ID) {
-      const key = durableKey(
-        sourceId,
-        (graph.edgeKindSide[edge] >> SIDE_BITS) & SIDE_MASK,
-        graph.edgeOrdinal[edge],
-      );
-      if (wanted.has(key)) {
-        wanted.set(key, edge);
-      }
+    const key = edgeDurableKey(graph, edge);
+    if (wanted.has(key)) {
+      wanted.set(key, edge);
     }
   }
   for (const shed of sheds) {
@@ -321,7 +189,13 @@ export function shedsOn(
   if (!sameGraph(graph, history)) {
     return [];
   }
-  const standing = [...openOn(history.open, day), ...closedOn(history, day)];
+  const standing: Shed[] = [];
+  for (const job of history.jobs) {
+    const shed = standingOn(job, history.seen, day);
+    if (shed !== null) {
+      standing.push(shed);
+    }
+  }
   resolveSpans(graph, standing);
   return standing;
 }
@@ -502,48 +376,27 @@ export async function computeEdgeSheds(
 
 const historyPromises = new Map<string, Promise<ShedHistory>>();
 
-async function fetchBuffer(path: string): Promise<ArrayBuffer> {
+async function fetchText(path: string): Promise<string> {
   const url = artifactUrl(path);
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`${url}: ${response.status} ${response.statusText}`);
   }
-  return response.arrayBuffer();
+  return response.text();
 }
 
-const NO_RECORDS: ShedFile = {
-  bytes: new Uint8Array(0),
-  count: 0,
-  spanCount: 0,
-  firstDay: 0,
-  records: 0,
-};
-
 // Placed against no graph, so every graph reads it as standing nothing.
-const NO_SHEDS: ShedHistory = {
-  graphKeyHash: "none",
-  lastDay: 0,
-  open: NO_RECORDS,
-  closed: NO_RECORDS,
-  months: new Uint16Array(0),
-  offsets: new Uint32Array(0),
-  closeDays: new Uint16Array(0),
-};
+const NO_SHEDS: ShedHistory = { graphKeyHash: "none", seen: 0, jobs: [] };
 
-// A city with no artifact gets an empty history without a fetch, which would only 404.
+// A city with no shed file gets an empty history without a fetch, which would only 404.
 export function loadSheds(cityId: string): Promise<ShedHistory> {
   if (!hasSheds(cityId)) {
     return Promise.resolve(NO_SHEDS);
   }
   let history = historyPromises.get(cityId);
   if (!history) {
-    const urls = shedUrls(cityId);
-    history = Promise.all([
-      fetchBuffer(urls.open),
-      fetchBuffer(urls.closed),
-      fetchBuffer(urls.index),
-    ])
-      .then(([open, closed, index]) => decodeSheds(open, closed, index))
+    history = fetchText(shedUrl(cityId))
+      .then(decodeSheds)
       .catch((error: unknown) => {
         historyPromises.delete(cityId); // a failed load must not be memoized
         throw error;

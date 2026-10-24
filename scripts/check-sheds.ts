@@ -1,13 +1,15 @@
-// Fails the deploy if the committed shed artifact's key space doesn't match the built graph's,
+// Fails the deploy if the committed shed file's key space doesn't match the built graph's,
 // which would silently blank every shed. Compares key space, not bytes: f32 lengths differ by OS.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { GraphIdentity } from "../src/routing/graph";
 import { SHED_CITIES } from "../src/routing/shed-cities";
+import { parseShedFile } from "../src/routing/shed-file";
 import { loadGraphBytes } from "./build-sheds";
 import { shedDir as shedDirOf } from "./graph-inputs";
-import { decodeShedArtifact, shedGraphMismatch } from "./shed-encode";
+import { listedCount } from "./shed-permits";
+import { shedGraphMismatch } from "./update-sheds";
 
 const ROUTING_DIR = join(import.meta.dirname, "..", "public", "routing");
 
@@ -15,10 +17,9 @@ export async function checkSheds(
   graphPath: string,
   shedDir: string,
 ): Promise<void> {
-  const [graphBytes, open, closed] = await Promise.all([
+  const [graphBytes, text] = await Promise.all([
     readFile(graphPath),
-    readFile(join(shedDir, "open.bin")),
-    readFile(join(shedDir, "closed.bin")),
+    readFile(join(shedDir, "sheds.tsv"), "utf-8"),
   ]);
   // Recomputed in TypeScript, so this also checks the Rust key-space hash against this one.
   const { hash, keyHash } = loadGraphBytes(graphBytes);
@@ -39,11 +40,8 @@ export async function checkSheds(
     }
   }
 
-  const artifact = decodeShedArtifact(
-    new Uint8Array(open.buffer, open.byteOffset, open.byteLength),
-    new Uint8Array(closed.buffer, closed.byteOffset, closed.byteLength),
-  );
-  const mismatch = shedGraphMismatch(artifact, keyHash);
+  const file = parseShedFile(text);
+  const mismatch = shedGraphMismatch(file, keyHash);
   if (mismatch !== null) {
     throw new Error(
       `${mismatch}, so every shed would resolve to nothing on the deployed map.` +
@@ -52,7 +50,7 @@ export async function checkSheds(
     );
   }
   console.error(
-    `sheds: ${artifact.open.length.toLocaleString()} standing, placed against key space ${keyHash}` +
+    `sheds: ${listedCount(file).toLocaleString()} listed on ${file.seen}, placed against key space ${keyHash}` +
       ` (graph ${hash}, ${graphPath})`,
   );
 }

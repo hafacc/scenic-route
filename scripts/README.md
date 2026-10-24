@@ -3904,7 +3904,7 @@ could ever pass a gate on a graph built by the other. `hash` was left alone rath
 it names these exact bytes, and it is what tells two builds of the same graph apart at all.
 
 Both are written by `write_version`/`key_space_hash` in crates/tiler/src/graph.rs and recomputed by
-`graphHashOf`/`graphKeyHashOf` in scripts/shed-encode.ts, which `bun run check-sheds` runs against
+`graphHashOf`/`graphKeyHashOf` in scripts/graph-hash.ts, which `bun run check-sheds` runs against
 each other on every deploy.
 
 It is only worth reading because the bake is **reproducible**: identical inputs give identical bytes.
@@ -4122,69 +4122,76 @@ An edge reads positive when net sunlit and negative when net shaded; the clamp i
 `|attr| <= 127/128 < 1`, and with it the cost model's `1 - w*attr` positive for `|w| <= 1`. A ferry
 edge has no polyline and reads 0 in both rows — its cost never consults the attribute.
 
-### `public/sheds/<city>/` — the sidewalk-shed history, magic `SHED` (v3, derived, **committed**)
+### `public/sheds/<city>/sheds.tsv` — the sidewalk-shed history (text, derived, **committed**)
 
-Every scaffolding permit New York has issued since **2017-12-28**, placed on the GRPH edges it stands
-over. Not baked by `tiler`: `bun run build-sheds` (`scripts/build-sheds.ts`) does the whole pipeline
-and writes these three files; `bun run update-sheds` keeps them current without ever running it
-again. It reads `public/routing/nyc.bin`, so it runs **after** `bun run build-tiles`, which bakes
-that graph and never touches this directory. **The artifact is per city**: each city in
-`SHED_CITIES` (`src/routing/shed-cities.ts`) has its own `open.bin`, `closed.bin`, `index.bin` and
-`inputs.json` under `public/sheds/<city>/`, placed on that city's graph, and the client fetches the
-active city's, or nothing for a city not listed. Only New York has a permit source (the DOB feed, `DOB_CITY` in `build-sheds.ts`), so
-the list is `["nyc"]`; adding a city is a permit source that writes its directory plus an entry in
-the list — `check-sheds`, `check-shed-inputs` and the daily job's commit step already go over every
-listed city. Nothing empties `public/routing` any more either: the
-graph pass removes exactly its own per-city pieces when that city's stamp fails, and the driver's
-sweep only takes away names belonging to a city the manifest dropped. All dates are
-**day numbers from 2017-12-28**, which a u16 holds until 2197.
+Every scaffolding permit the DOB feed has listed since **2026-03-02**, the first day its history
+still holds, with the days it was listed and where it stands on the GRPH edges. Not baked by `tiler`:
+`bun run build-sheds-from-feed` lays the file down from the whole feed, `bun run update-sheds`
+advances it every morning, and `bun run build-sheds` re-places every job in it against
+`public/routing/nyc.bin` without reading the feed at all, which is how a graph refresh re-places the
+history. Both build scripts read the built graph, so they run **after** `bun run build-tiles`, which
+bakes that graph and never touches this directory. **The file is per city**: each city in
+`SHED_CITIES` (`src/routing/shed-cities.ts`) has its own `sheds.tsv` and `inputs.json` under
+`public/sheds/<city>/`, placed on that city's graph, and the client fetches the active city's, or
+nothing for a city not listed. Only New York has a permit source (the DOB feed, `DOB_CITY` in
+`build-sheds.ts`), so the list is `["nyc"]`; adding a city is a permit source that writes its
+directory plus an entry in the list — `check-sheds`, `check-shed-inputs` and the daily job's commit
+step already go over every listed city. Nothing empties `public/routing` any more either: the graph
+pass removes exactly its own per-city pieces when that city's stamp fails, and the driver's sweep only
+takes away names belonging to a city the manifest dropped.
 
 Derived but committed, which nothing else under `public/` is: this is the one artifact rebuilt by a
 daily job rather than by a deploy, so it has to survive a checkout that has run no build. The client
-does not read it out of the deploy — it fetches these three files off `main` through
-raw.githubusercontent.com, so what it draws is as fresh as the job rather than as the last deploy.
-**Nothing shed-related is in Git LFS and none of it may ever be** — LFS is the one store that keeps
-each rewrite whole, and a megabyte a day really would cost ~400 MB a year there (DESIGN.md). Packed
-git deltas it to 1.7-22 KB a day.
+does not read it out of the deploy — it fetches the file off `main` through raw.githubusercontent.com,
+so what it draws is as fresh as the job rather than as the last deploy. **Nothing shed-related is in
+Git LFS and none of it may ever be** — LFS is the one store that keeps each rewrite whole (DESIGN.md).
+A standing job's line does not change from one day to the next, so git deltas a day down to the
+header and the lines of the jobs that went up, came down or were re-read.
 
-Three sources feed it. What stood when comes from the DOB's own daily CSV snapshots, which survive
-only as the git history of `NYCDOB/ActiveShedPermits` — `scripts/shed-permits.ts` walks every commit,
-turns a permit's appearances and disappearances into presence intervals (runs less than a fortnight
-apart are one shed, and a snapshot far below its neighbors' row count is a truncated write, not a
-day the city took every shed down), and recovers the Block/Lot the permit claimed. Where it stood
-comes from the DOF digital tax map and the building footprints (`scripts/shed-parcels.ts`): a shed
-runs along the property line, so the **tax lot** is the geometry, and the footprint only picks which
-part of a multi-part lot is in use and anchors a permit shorter than its frontage. `scripts/
-shed-map.ts` puts the two together — the connected stretch of lot boundary nearest a sidewalk that
-carries the permit's street name is the measured frontage, and a permit longer than that runs on
-around the corner as a bounded walk over the sidewalk network. What a permit resolves to there depends on that
-permit alone and never on the company it was fetched in: the parts of a multi-part lot are sorted
-before they are unioned, because Socrata's row order shifts with the batch, and the lot a permit's BIN
-*reports* — the fallback when the tax map has no polygon for the permit's own BBL — is run through the
-same condominium resolution as the permits' own lots, because otherwise it found geometry only when
-some unrelated permit happened to name the same BBL. Each placement carries a confidence, the product
-of six ways it can be wrong; `scripts/shed-streets.ts` is the DOB-to-CSCL street-name comparison the
-first of those factors reads.
+**The file is the archive.** The DOB's own history of the feed now starts on 2026-03-02, and a day
+that has gone from there survives only in this file. So `build-sheds-from-feed` refuses to overwrite a
+file holding runs from before the feed's first snapshot unless it is passed `--force`, and nothing
+else ever rebuilds the runs: `build-sheds` re-places what the file says and `update-sheds` only adds
+days to it.
 
-**The git half of that walk is package.json's, not TypeScript's.** `bun run build-sheds` clones the
-DOB repo if `.cache/ActiveShedPermits` is not there, has `git log` name each commit's two candidate
-snapshot paths, resolves them all in one `git cat-file --batch-check` into `.build/shed-index.txt`,
-and pipes the distinct blobs — 2,614 of them behind 3,623 snapshot-carrying commits — through
-`git cat-file --batch` into the walk's stdin. `bun run update-sheds` is the same chain with a
-`--shallow-since` clone and a fetch in front of it, bounded by the day `scripts/shed-window.ts` reads
-off the artifact. Nothing spawns git; a script at the end of one of those pipes checks the sha on
-every record it is handed, because a shell pipeline reports only its last command's failure.
+What stood when comes from the DOB's daily CSV snapshots, which survive as the git history of
+`NYCDOB/ActiveShedPermits` — `scripts/shed-permits.ts` walks the commits, turns a permit's
+appearances and disappearances into runs of days (a snapshot far below its neighbors' row count is a
+truncated write, not a day the city took every shed down), and keeps the Block/Lot the permit last
+claimed. Where it stood comes from the DOF digital tax map and the building footprints
+(`scripts/shed-parcels.ts`): a shed runs along the property line, so the **tax lot** is the geometry,
+and the footprint only picks which part of a multi-part lot is in use and anchors a permit shorter
+than its frontage. `scripts/shed-map.ts` puts the two together — the connected stretch of lot boundary
+nearest a sidewalk that carries the permit's street name is the measured frontage, and a permit longer
+than that runs on around the corner as a bounded walk over the sidewalk network. What a permit
+resolves to there depends on that permit alone and never on the company it was fetched in: the parts
+of a multi-part lot are sorted before they are unioned, because Socrata's row order shifts with the
+batch, and the lot a permit's BIN *reports* — the fallback when the tax map has no polygon for the
+permit's own BBL — is run through the same condominium resolution as the permits' own lots, because
+otherwise it found geometry only when some unrelated permit happened to name the same BBL. Each
+placement carries a confidence, the product of six ways it can be wrong; `scripts/shed-streets.ts` is
+the DOB-to-CSCL street-name comparison the first of those factors reads.
 
-**`bun run shed-drill` is that claim measured**, because nothing else can see it: it builds
-the record set from every permit, builds it again with one permit dropped, and compares every
-surviving record's `(first, close, confidence, spans)`, which is the whole of what the artifact
-stores. Only the dropped permit's own records may differ — one that moved because an unrelated permit
-left the run is one the daily job would have written differently from a full rebuild, and then
-`closed.bin` could not be appended to at all. It drops one permit per shape (a corner lot, a mid-block
-lot, a superblock run, one declaring far more length than its lot can hold), preferring permits naming
-a BIN and a BBL no other permit names, since those are the drops that actually take a key out of the
-sorted lists `fetchKeyed` batches and so re-compose every batch after it. It reads the built graph and
-the DOB clone, so it is a by-hand check beside `check-sheds` rather than part of `bun test src`.
+**The git half of that walk is package.json's, not TypeScript's.** `bun run build-sheds-from-feed`
+clones the DOB repo if `.cache/ActiveShedPermits` is not there, has `git log` name each commit's two
+candidate snapshot paths, resolves them all in one `git cat-file --batch-check` into
+`.build/shed-index.txt`, and pipes the distinct blobs — 211 of them behind 215 snapshot-carrying
+commits — through `git cat-file --batch` into the walk's stdin. `bun run update-sheds` is the same
+chain with a `--shallow-since` clone and a fetch in front of it, starting a month before the file's
+`through`, the day `scripts/shed-window.ts` reads off it. Nothing spawns git; a script at the end of
+one of those pipes checks the sha on every record it is handed, because a shell pipeline reports only
+its last command's failure.
+
+**`bun run shed-drill` is that claim measured**, because nothing else can see it: it places every job
+in the committed file, places them again with one job dropped, and compares every surviving job's
+confidence and spans, which is the whole of what the file stores for a placement. Only the dropped job
+may differ — one that moved because an unrelated job left the batch is one the daily job, which places
+only new and re-read jobs, would have written differently from `build-sheds`. It drops one job per
+shape (a corner lot, a mid-block lot, a superblock run, one declaring far more length than its lot can
+hold), preferring jobs naming a BIN and a BBL no other job names, since those are the drops that
+actually take a key out of the sorted lists `fetchKeyed` batches and so re-compose every batch after
+it. It reads the built graph, so it is a by-hand check beside `check-sheds` rather than part of
+`bun test src`.
 
 **Run it against a same-day `.cache/`.** Entries never expire and are keyed by the batch they were
 fetched in, so a drop that shifts a batch boundary re-fetches part of the key space — and the city
@@ -4194,116 +4201,83 @@ different between 30 July and 2 August 2026, which was 58 records. `REFRESH=1` p
 the drill counts the readings whose parcel geometry differed between its own two runs and says so
 rather than letting it pass for a placement that shifted.
 
-Almost every query is "what is up today", so the records are split by whether they still are.
-`open.bin` (138 KB) holds the sheds still standing and answers that query on its own; `closed.bin`
-(961 KB) holds the ones that have come down, **sorted by the day they did**, so a query for a past day
-seeks into it with `index.bin` and decodes only the suffix that could still have been standing. A
-permit that came down and went back up is **two records with their own geometry** — its intervals
-are disjoint, so no day sees it twice, and each is placed from the attributes the feed carried on the
-day it ended rather than from the ones the feed carries now.
+#### The format
 
-The split is not "in the newest snapshot" but "could still be extended". Runs less than a fortnight
-apart are one shed, so an interval whose last sighting is within `MERGE_TOLERANCE_DAYS` of the newest
-usable snapshot is **provisional**: a reappearance would lengthen it. Those go in `open.bin` with no
-close day; everything else is final and goes in `closed.bin`. The feed drops and re-adds 40-70 permits
-a day around a renewal, so about 400 of `open.bin`'s records are a shed the newest snapshot happens
-not to carry. That is also what makes `closed.bin` **append-only**: nothing in it can ever change, so
-the daily job appends the day's closures rather than revisiting the file. Nothing, including a
-correction — the DOB goes on fixing a permit's geocode and length years after its shed came down, and
-a record placed from the reading in force *now* would have to move with them.
+UTF-8 text, `\n` line ends, tab-separated, written and read by the one module both sides share,
+`src/routing/shed-file.ts`. Plain text was chosen over a binary layout because the client already
+downloads a 44 MB graph and the whole file is 1.7 MB and gzips to about 570 KB; a binary encoding is a TODO for
+when that stops being true. First the header, one `name<TAB>value` line each:
 
-**`open.bin` names its records**, in job-number order, and every permit gets a record even when the
-placement could put it nowhere. The job numbers ride in its header, so which record is which permit is
-something the artifact **states** rather than something the daily job has to re-derive; the feed's own
-answer — the permits still provisional on the day the file reached, sorted the same way — is then a
-check on it, and a disagreement stops the run. Sorting `open.bin` by day instead would have made its
-first-day deltas monotone and saved a byte a record; the byte buys the job numbers a delta chain to
-ride on. `closed.bin` is that same order stably re-sorted by close day, so records closing on one day
-stay in job order, and it carries no job numbers at all — nothing ever has to ask a closed record
-which permit it was.
+| line | value |
+| --- | --- |
+| `version` | the format version, 1 |
+| `city` | the city the file is for |
+| `keySpace` | the graph key-space hash the spans were placed against — the `keyHash` `routing/<city>.version.json` carries |
+| `through` | the last day the walk judged, whether it kept that snapshot or dropped it as truncated |
+| `seen` | the last day it kept |
+| `counts` | the row counts of the last 30 days judged, oldest first, comma-separated |
 
-Header, 32 bytes plus each file's own trailing block, both record files:
+Then a line naming the columns, then one line per job, in job order:
 
-| offset | type | field |
-| --- | --- | --- |
-| 0 | u8[4] | magic `SHED` |
-| 4 | u16 | format version = 3 |
-| 6 | u16 | header bytes, and so where the records start: 32 plus whatever the block below runs to |
-| 8 | u32 | records in this file |
-| 12 | u32 | spans in this file |
-| 16 | u64 | graph key-space hash — the `keyHash` `routing/<city>.version.json` carries |
-| 24 | u16 | the day the file's delta chain starts from: its first record's own day |
-| 26 | u8 | flags: bit0 set in `closed.bin` |
-| 27 | u8 | reserved, zero |
-| 28 | u16 | the newest usable DOB snapshot the artifact was built through |
-| 30 | u8[2] | reserved, zero |
-| 32 | u16[n] | `closed.bin` only: the truncation window, n ≤ 30 row counts |
-| 32 | varint pairs | `open.bin` only: one job number per record, in record order |
+| column | value |
+| --- | --- |
+| `job` | the DOB job number |
+| `bin`, `house`, `street` | the building, house number and street the feed last gave |
+| `first_permit` | the permit's first permit date, ISO, blank when the feed gave none |
+| `bbl` | `borough/block/lot` from the last row that carried a block and lot, blank if none has |
+| `lat`, `lng` | the feed's last geocode, blank when it gave none |
+| `feet` | the shed's declared length in linear feet, blank when the feed gave none |
+| `runs` | the days it was listed, comma-separated `first..last`, ascending and disjoint |
+| `confidence` | the placement's confidence, 0–254 |
+| `spans` | space-separated `sourceId:side:ordinal:t0:t1:depth`, ascending by durable key; blank for a shed the placement could put nowhere |
 
-Both blocks are state for the daily job rather than anything a reader of the records needs, which is
-why they sit in front of the records instead of inside them: the client takes the record offset from
-the header-bytes field and walks straight past them, and never decodes a byte of either.
+```
+302585815	3058752	1	FORT GREENE PLACE	2019-02-22	3/2098/13	40.68891	-73.97643	0	2026-03-02..	254	95300:2:0:93:248:60
+```
 
-The window is there so the daily job does not have to rediscover it: the truncated-snapshot rule
-judges a day against the row counts of the 30 published days before it, and a run that picks the feed
-up a fortnight back has none of them in hand. Thirty exactly, not a round number with slack — the
-whole feed is re-walkable from the DOB's git history whenever the rule is retuned, so there is nothing
-to be gained by carrying counts the rule does not ask for.
+Columns are found by name, so one can be added without breaking a reader of the others. The writer
+throws on a tab or a newline inside a field rather than write a line that would read back as
+something else. Only a job's last run may be open, written `first..`, which means "through `seen`" —
+that is what keeps a standing job's line the same from day to day. Runs are stored exactly as the feed
+listed them and **never merged**: the feed drops permits for a few days around a renewal, and joining
+runs across that gap is the client's job (below), so the file says what the feed said and nothing the
+merge rule decided.
 
-A job number is stored as **two varints, not a string**: the delta from the previous record's key,
-then a suffix code. The key is the nine digits of a BIS number as they stand, or a DOB NOW one's
-borough letter and eight digits as 1e9 + borough × 1e8 + digits, with the borough indexed over
-`BMQSX` — digits sort below letters, so both run in the order the strings themselves sort in, the
-file's own order, and the deltas are non-negative. The suffix code is 0 for a BIS number and
-1 + 10 × (job-type letter − `A`) + its digit otherwise, which is the part with no order to exploit
-and the one the delta would otherwise be multiplied by. That costs **2.60 bytes a record** against
-the 12 or 13 a string does: `open.bin` 117 KB → 138 KB raw, over 7,940 records. A job number of a third shape is a code change and a full rebuild, so the encoder throws on
-one rather than storing something that will not read back as itself — and likewise on a block that
-would overrun the header-bytes u16, which would take about 21,000 standing sheds against a set that
-has sat near 7,500 for eight years.
-
-A record in `closed.bin` is a varint **close-day delta** from the previous record's close day, a
-varint **duration** (`close - first`), a u8 confidence, a varint span count, and then per span a
-varint **source-id delta**, a varint packing the **side** in its low three bits and the **ordinal**
-above them, and the three bytes `t0`, `t1`, `depth`. A record in `open.bin` is the same without the duration, and
-its first field is a **zigzag first-day delta** instead — an open shed has no close day, so there is
-nothing for a duration to be measured from, and the file is in job order rather than day order, so
-that delta takes either sign. Both day chains start from the header's day, so the first record's
-delta is 0.
+**One placement per job, from its latest reading.** The feed keeps correcting a permit's address,
+geocode and length long after it first lists it, and those changes are corrections, not moves: a shed
+does not walk down the block. So every run of a job shares the one set of spans, placed from the
+reading the job carries now, and a job is re-placed whenever its bin, street, block and lot, geocode or
+length changes. A changed house number or permit date is written but moves no placement.
 
 A span names its edge by the graph's **durable key** — `(source id, side, ordinal)`, the GRPH edge
 record's bytes 29–33 (v6) — not by the edge's position. Edge ids are positional and every one of them
-moves when the graph is rebuilt, so an artifact keyed on positions does not fail on a rebuild, it
-quietly puts scaffolding on other streets. The client turns keys back into positions in one pass over
-the graph's key column, per query: a day's standing set is ~13k spans against 531k edges, so a map of
-the keys that day wants is a hundredth of the size of a map of every edge. A key this graph has no
-edge for — a source segment the rebuild dropped, or one whose contraction changed enough to break the
-key — contributes no coverage, which is the correct answer rather than a silent misplacement.
+moves when the graph is rebuilt, so a file keyed on positions does not fail on a rebuild, it quietly
+puts scaffolding on other streets. The client turns keys back into positions in one pass over the
+graph's key column, per query: a day's standing set is ~13k spans against 531k edges, so a map of the
+keys that day wants is a hundredth of the size of a map of every edge. A key this graph has no edge
+for — a source segment the rebuild dropped, or one whose contraction changed enough to break the key —
+contributes no coverage, which is the correct answer rather than a silent misplacement.
 
 A key survives a rebuild; it does not promise to still name the same edge across one. A conflation
 fix that stopped a second OSM mapping of a street becoming a spur left 2,284 of 302,985 keys naming
-an edge a **median 26 m** from the one they had named. So the header's key-space hash is a **gate**,
-not a note: the client reads its own graph's `keyHash` out of `routing/<city>.version.json` — recomputing it
-is a 368k-element sort and an FNV over 3 MB, to arrive at a number the deploy already wrote down —
-and an artifact naming any other key space resolves **nothing at all**. The band, the router and the
-shadow caster all resolve through the one call, so they go quiet together: a day of bare pavement is
-a failure anyone can see, scaffolding down the wrong street is not.
+an edge a **median 26 m** from the one they had named. So the `keySpace` line is a **gate**, not a
+note: the client reads its own graph's `keyHash` out of `routing/<city>.version.json` — recomputing it
+is a 368k-element sort and an FNV over 3 MB, to arrive at a number the deploy already wrote down — and
+a file naming any other key space resolves **nothing at all**. The band, the router and the shadow
+caster all resolve through the one call, so they go quiet together: a day of bare pavement is a
+failure anyone can see, scaffolding down the wrong street is not.
 
 The whole **set**, not the individual key, and not the graph's bytes. Ordinals are handed out 0..n-1
 within a `(source id, side)`, so a source segment that splits into a different number of edges — the
 shape every conflation and re-noding change takes — moves the set and fires the gate, while a
-rebuild that only landed some f32 lengths a ulp elsewhere does not. `SHED` v2 named the graph's
-bytes here, which meant an artifact placed on a laptop could never match a graph the deploy's Linux
-built; v3 is the same file with this field's meaning changed, so the version bump is what stops a v2
-artifact being read as if it named a key space.
+rebuild that only landed some f32 lengths a ulp elsewhere does not.
 
 `t0`/`t1` are how far along the edge the shed runs, as `round(fraction * 255)`. Confidence is
 `round(value * 255)` capped at 254, as the graph's cover and scenic bytes are. `depth` is how deep
 the deck runs ACROSS the pavement, in **decimeters**, and **0 means the placement could not measure
 one** rather than a deck of no depth — the client turns that into its own 4 m fallback, in one place.
 
-Depth is per SPAN rather than per shed, at a byte a span (~91 KB over the whole history, ~13 KB of
-`open.bin`), because a shed that turns a corner off a Midtown avenue onto a side street really does
+Depth is per SPAN rather than per shed, because a shed that turns a corner off a Midtown avenue onto a side street really does
 stand on two pavements of different widths, and both the band and the shadow are drawn per span.
 
 **How it is measured**, all of it in `scripts/shed-map.ts`, since no dataset New York publishes
@@ -4324,8 +4298,8 @@ carries a sidewalk width:
   of the curb by.
 - A span with no lot boundary behind it — the wrap walk stepped onto a street the lot does not front
   — takes the median of the same shed's other spans, and a shed with none at all writes 0. Over the
-  whole history 113,248 of 115,573 spans (98.0%) measure their own, 2,325 take their shed's median,
-  and none write 0. The fallback path is the client's belt and braces, not a load-bearing one.
+  pre-2026 history 113,248 of 115,573 spans (98.0%) measured their own, 2,325 took their shed's median,
+  and none wrote 0. The fallback path is the client's belt and braces, not a load-bearing one.
 
 Over the whole feed that comes out as a clean bell around **3.7 m** (a 12 ft sidewalk, which is what
 New York builds), running p90 6.5 m on the avenues, which is why the flat 4 m assumption it replaced
@@ -4338,24 +4312,31 @@ either side of it, so 2.4 m — is floored by the reader instead (`deckDepth`, `
 which is the only side that knows where the curb was put and so the only one that can widen a deck
 outward over the roadway rather than into the building the measurement found.
 
-**The source-id chain restarts at every record.** A chain running across records would make the
-suffix read below impossible and drift the ids silently instead of failing — the bug that cost a day
-in the `CSTR` work. Spans within a record are ascending by durable key, which keeps those deltas
-non-negative and puts the two sidewalks of one street next to each other at a delta of zero. The
-close-day chain does run across records, because the file is sorted and the deltas are tiny; a suffix
-read re-bases it from the index.
+**The walk.** Snapshots are applied in commit order. One dated on or before `through` is skipped
+without a word: a day is judged once. Otherwise the day is judged against `counts` — truncated if it
+carries under three quarters of their median — and its count is pushed onto them either way, so the
+window never depends on its own earlier verdicts. A truncated day moves `through` and nothing else.
+A kept day extends each listed job's open run or starts it a new one, updates its reading, closes the
+open run of every job it does not list on the previous `seen`, and becomes the new `seen`.
 
-`index.bin` is a bare array of 8-byte entries, one per calendar month that has a record in
-`closed.bin`, ascending: a u16 month (as the day number of its first day, clamped at the epoch), the
-u32 byte offset of the first record closing on or after it, and that record's u16 **absolute** close
-day. The third field is the whole point — a reader seeking to a month starts its close-day chain from
-that value rather than replaying the file to rebuild it.
+**A row whose job number the feed garbled is matched, not trusted.** A job number is nine digits
+(after dropping a trailing `(BIS)`) or a DOB NOW number like `M12345678-I1`; on 2026-10-22 the feed
+started writing `METAL & WOOD`, another column's value, into job 302585815's. Such a row is kept apart
+rather than keyed by its job number, since two of them would collide, and stands for the one job in
+the file with the same BIN, house number, street and first permit date that the day lists under no
+number of its own and no earlier garbled row has claimed. No such job, or more than one, and the row
+is dropped with one line in the log saying how many matched and what the row said. A permit first seen
+garbled is therefore dropped too: there is nothing for it to match.
 
-The sheds standing on day `D` are everything in `open.bin` with `first <= D` — the whole file is
-walked, since it is in job order — plus the suffix of `closed.bin` from the first record with
-`close >= D`, filtered to `first <= D`. Coverage per edge is
-the sum of `t1 - t0` over its spans, clamped to 1: concurrent permits overlap, and about a tenth of
-the touched edges are covered past their own length before the clamp.
+**The client merges runs on the fly.** The sheds standing on day `D` come from a scan over every job:
+runs no more than `MERGE_TOLERANCE_DAYS` (14) apart join into one stretch, and the stretch holding `D`
+is the shed. The last stretch stays open — standing on every later day too — while `seen` minus its
+last day is under 14, since a reappearance could still lengthen it; the feed drops and re-adds 40-70
+permits a day around a renewal, so about 500 of the sheds standing on `seen` are ones that day's
+snapshot happens not to carry. Each query copies the spans it returns before resolving their keys to
+edges, so no query sees another's edge ids. Coverage per edge is the sum of `t1 - t0` over its spans,
+clamped to 1: concurrent permits overlap, and about a tenth of the touched edges are covered past their
+own length before the clamp.
 
 `components/shed-layer.svelte` draws the standing set as **lines on the paths**: a span becomes the
 stretch of its edge's own baked polyline between `t0` and `t1`, `src/tiles/shed-strokes.ts` chains a
@@ -4371,7 +4352,7 @@ and hands them with the tile's canvas to the tile worker, which strokes them as 
 (`src/tiles/strokes.ts`), so the raster never costs the page a frame. Below z14 the width stops
 following the curve and holds the ground it covers at z14 instead, halving with each level out, and
 below z11 the layer is not drawn: a borough's sheds at a fixed pixel width are a solid block. The date comes from the
-route-time store, which is why the date picker now reaches back to the epoch rather than one year.
+route-time store, which is why the date picker reaches back to the file's first day, 2026-03-02.
 
 `src/tiles/shed-decks.ts` still turns a chain of spans into the POLYGON the deck covers, now for the
 shade overlay alone, which casts each deck's shadow from it (`castSheds`). The band's two edges are
@@ -4385,7 +4366,7 @@ join only spans that end exactly on a node, as they always did, so the shadows a
 
 `computeEdgeSheds` (`src/routing/sheds.ts`) turns the standing set into one per-edge byte on the same
 0-254 ceiling the graph's own attributes use — the share of the edge standing under a deck — which
-three cost terms read. A placement's confidence is not one of the inputs: it stays in the artifact as
+three cost terms read. A placement's confidence is not one of the inputs: it stays in the file as
 a diagnostic, but nothing in the client weights by it, because being unsure whether a deck is there is
 a reason to steer clear of it rather than to discount it.
 
@@ -4416,86 +4397,64 @@ a reason to steer clear of it rather than to discount it.
 
 The DOB publishes a new snapshot every morning, so this is the one artifact rebuilt by a job rather
 than by a deploy. `.github/workflows/sheds.yml` runs `bun run update-sheds` at 15:00 UTC, which reads
-each shed city's committed files under `public/sheds/<city>/` out of the checkout, rewrites them,
-and pushes one ordinary commit to `main`. `build.yml`'s push trigger ignores `public/sheds/**`, so
-that commit does not fire a lint+test run; `paths-ignore` is not on the `pull_request` trigger, so
-a person editing the pipeline still gets one. The push is never forced — not even
-`--force-with-lease`, whose lease is checked against the tip this checkout fetched, which is exactly
-the human push it would be overwriting. A rejected push
+each shed city's committed `sheds.tsv` out of the checkout, advances it, and pushes one ordinary
+commit to `main` alongside the day's ferry and transit timetables. Those two steps and the commit run
+even when the shed step fails, so a bad day in the DOB feed costs the map a day of sheds and nothing
+else. `build.yml`'s push trigger ignores `public/sheds/**`, so that commit does not fire a lint+test
+run; `paths-ignore` is not on the `pull_request` trigger, so a person editing the pipeline still gets
+one. The push is never forced — not even `--force-with-lease`, whose lease is checked against the tip
+this checkout fetched, which is exactly the human push it would be overwriting. A rejected push
 re-reads `main`, re-stages the same files on the new tip and commits again, up to three times;
 nothing else is ever staged, so there is nothing for a retry to conflict with.
 
 That commit is what the client reads. It fetches
-`raw.githubusercontent.com/hafacc/scenic-route/main/public/sheds/<city>/{open,closed,index}.bin` — `raw`
-serves any branch with `access-control-allow-origin: *`, gzip, an etag, a five-minute cache and range
-requests — **so the scaffolding on the map is as fresh as the job, not as the last deploy**, which
-matters because Pages ships on `workflow_dispatch` only. A dev server reads its own `public/sheds/`
-instead, as it does every other artifact; `NEXT_PUBLIC_SHED_BASE` overrides the base either way. Set
-`SHED_ARTIFACT` to point the *job* at another copy — a directory, or a URL to read one over HTTP.
+`raw.githubusercontent.com/hafacc/scenic-route/main/public/sheds/<city>/sheds.tsv` — `raw` serves any
+branch with `access-control-allow-origin: *`, gzip, an etag, a five-minute cache and range requests —
+**so the scaffolding on the map is as fresh as the job, not as the last deploy**, which matters
+because Pages ships on `workflow_dispatch` only. A dev server reads its own `public/sheds/` instead,
+as it does every other artifact; `NEXT_PUBLIC_SHED_BASE` overrides the base either way. Set
+`SHED_FILE` to point the *job* at another copy — a path, or a URL to read one over HTTP.
 
-**Nothing shed-related is in Git LFS and none of it may ever be.** LFS keeps every rewrite whole, so a
-megabyte a day really does cost ~400 MB a year there, charged to the account. Packed git does not:
-1.7-22 KB a day depending on the repack window (DESIGN.md has the measurement), which is why the
-artifact is committed at all — and why it is committed under `public/` rather than beside the LFS
-directories in `data/`.
+**Nothing shed-related is in Git LFS and none of it may ever be.** LFS keeps every rewrite whole and
+charges the account for each; packed git stores a day as its delta, which is why the file is
+committed at all — and why it is committed under `public/` rather than beside the LFS directories in
+`data/`.
 
-**A format bump needs a full rebuild before the job can run again.** The artifact is rebuilt outside
-any deploy, so the client and the artifact are versioned independently and a `SHED` version bump
-breaks both directions at once: the new reader rejects the files the job last committed, and the new
-`update-sheds` rejects them too. The move is `bun run build-sheds`, commit, then deploy — there is
-no in-place migration and none is wanted, since a full rebuild is two minutes and reproduces the
-artifact exactly.
+**A format bump is a conversion of the committed file.** The file is rewritten outside any deploy, so
+the client and the file are versioned independently, and a `version` bump breaks both directions at
+once: the new reader rejects the file the job last committed, and the new `update-sheds` rejects it
+too. Since the file is the archive, the move is a one-off rewrite of it into the new version, commit,
+then deploy; `build-sheds-from-feed` would only do as long as the feed still reaches the file's first
+day.
 
-**The job keeps nothing of its own between runs.** The artifact's header says which day it was built
-through and which permit each of its standing records is, the DOB's CSV history says what stood on
-that day and every day since, and the difference is the update — no side file, no clock. The feed's
-own answer to the identity question, the permits still provisional on that day in job order, is
-checked against the stored one on every run, and a disagreement stops the job rather than shifting
-every shed onto its neighbor's street.
+**The job keeps nothing of its own between runs.** The file's `through`, `seen` and `counts` are the
+whole of the walk's state, its lines are the whole of what it knows about each job, and the DOB's CSV
+history says what stood on every day since — so the update is the file plus the snapshots after
+`through`, with no side file and no clock.
 
 **And it never assumes it ran yesterday.** Cron is best-effort, a scheduled workflow on a public repo
-is switched off after sixty days of repository quiet, a run can fail unnoticed for a week, and the
-feed itself has 74 gaps totalling 392 days (the worst a 66-day hole in early 2021). So it reads the
-artifact's own day and replays every snapshot published since — one or three hundred, the same code
-either way. It is `scripts/shed-permits.ts`'s own walk over a window rather than a second
-implementation, over exactly the days whose intervals could still change and not one day more.
-Running after a month idle produces what running every morning would have, running twice in a day
-writes the same bytes, and — the property the other two are corollaries of — the artifact is a
-function of the day it was built through and of nothing else, so a chain of updates lands on the
-bytes a full `build-sheds` at the same day writes however far back the chain started
-(`src/routing/shed-update.test.ts`).
+is switched off after sixty days of repository quiet, and a run can fail unnoticed for a week. So it
+clones from a month before `through` — a commit's UTC stamp can fall after the New York day its CSV
+claims — and applies every snapshot dated after it: one or thirty, the same code either way, the same
+walk `build-sheds-from-feed` does from an empty file. Running after a month idle produces what running
+every morning would have, running twice in a day writes the same bytes, and a chain of updates lands on
+the bytes one walk over the whole feed writes however far back the chain started
+(`src/routing/shed-update.test.ts`). Three properties of the rest of the pipeline are what let it be
+this small:
 
-Four properties of the rest of the pipeline are what let it be this small:
-
-- **The truncated-snapshot rule looks only backwards, and its window travels in the artifact.** A day
-  is judged against the row counts of the 30 published days *before* it, so its verdict is final the
-  moment it is made and no later run can disagree with an earlier one about a day both have seen. A
-  two-sided window cannot say that, which is why the job used to need a separate settled-day clock; a
-  30-day backward window still outvotes the longest degraded run the feed has had, a fortnight in
-  mid-2019. Those 30 counts ride in `closed.bin`'s header, so the run judges its first day exactly as
-  a walk over the whole history would without reading a day of history to find out how.
-- **A record is placed from the reading its own interval ended under.** The feed keeps correcting a
-  permit's geocode and length, and the walk swaps a permit's attributes only when they actually
-  change, so an interval that closed before a correction keeps the object the walk held then. A full
-  rebuild places one reading per permit plus one per correction an older interval predates — 65,026
-  placements against 61,331 permits and 72,020 records, so 6% more work, not the tripling this used
-  to warn of.
+- **The truncated-snapshot rule looks only backwards, and its window travels in the file.** A day is
+  judged against the row counts of the 30 days judged *before* it, so its verdict is final the moment
+  it is made and no later run can disagree with an earlier one about a day both have seen. Those 30
+  counts are the `counts` line, so the run judges its first day exactly as a walk over the whole feed
+  would.
+- **Runs are never merged and placements never depend on a day.** A run only ever grows at its open
+  end, and a job's spans are a function of its current reading, so nothing the job writes depends on
+  where the chain of runs that produced the file started.
 - **Spans are keyed by the graph's durable edge id.** A rebuilt graph invalidates no record, so
-  nothing has to be stored in order to place anything again, and the job re-places only what is new.
-- **`closed.bin` is append-only.** Nothing whose last sighting is more than a renewal old can change,
-  so the window the job reads is exactly the renewal tolerance plus however far behind it is.
+  nothing has to be stored in order to place anything again, and the job places only what is new.
 
-The only thing it fetches fresh is the tax lot for a permit the artifact has never placed: the day's
-~16 new sheds, plus the ~28 whose length or geocode the feed has corrected inside the window, which
-`ShedPermit.corrected` reports. One Socrata batch per dataset.
-
-**It used to reproduce all but one thing, and that one thing was the bug.** A permit whose length the
-feed corrected *after* an earlier stint of its had closed kept that stint's old placement, where a
-full rebuild gave every one of its intervals today's number — so what the artifact held depended on
-where the replay that produced it started, not only on the day it reached. Rewinding six months and
-catching up left 27 of 64,080 closed records disagreeing, and a 92-byte `closed.bin`. The fix is the
-second property above, and it settled the argument the other way from what this used to guess: the
-shed that stood in 2024 was the length the feed gave in 2024, and a full rebuild now says so too.
+The only thing it fetches fresh is the tax lot for a job the file has never placed or whose reading
+the day changed — the day's new sheds and the few the feed corrected. One Socrata batch per dataset.
 
 #### Refreshing the sources — the re-place rides with it
 
@@ -4507,7 +4466,7 @@ has mapped yet.
 
 **Every refresh re-places the whole shed history, in the same push.** A span names its edge by a
 durable key, but the ordinal in that key is a within-build disambiguator with no cross-build duty, so
-a rebuilt graph is usually a rebuilt key space — which is why the header carries the hash of that key
+a rebuilt graph is usually a rebuilt key space — which is why the file carries the hash of that key
 space and why `shedsOn` resolves *nothing at all* against any graph that does not carry it. When the
 OSM-primary sidewalk network landed, the committed artifact resolved 14,402 of 14,402 standing spans
 against the graph it named and **0** against the new one.
@@ -4534,9 +4493,9 @@ someone forgot, not a license to skip one.
    ingest refuses to start without the measurement it writes. These
    are LFS blobs: commit them with **git**, not `sl`, and push the objects (above).
 2. `bun run build-tiles` — the graph, its `version.json` hashes, the SHDB bake and every pyramid.
-3. `bun run build-sheds` — re-derives all 72,020 records against the new graph from the DOB history
-   and the tax lots. Two minutes, deterministic, disk-cached; it is not a migration and keeps no
-   state from the old artifact.
+3. `bun run build-sheds` — re-places every job in `sheds.tsv` against the new graph from its stored
+   reading and the tax lots. Deterministic and disk-cached; it reads nothing from the DOB feed, so the
+   runs the file holds survive it untouched.
 4. Commit `public/sheds/<city>/` (plain git — **never** LFS) alongside the sources, one push.
 5. `bun run check-sheds`, then dispatch the deploy.
 
@@ -4550,8 +4509,8 @@ against.
 
 Afterwards, three things say it worked: `check-sheds` passing in the deploy's own log, scaffolding
 actually drawn on the deployed site (the client blanks silently, so this is the only visual check),
-and the next morning's `sheds.yml` run going green — `update-sheds` refuses a graph the artifact was
-not placed against rather than re-stamping the header, so a red run the day after a refresh means the
+and the next morning's `sheds.yml` run going green — `update-sheds` refuses a graph the file was not
+placed against rather than re-stamping its `keySpace`, so a red run the day after a refresh means the
 pairing, not the feed.
 
 **And a push that forgets step 3 is caught before any of that.** `check-sheds` needs a graph, so it

@@ -1,55 +1,39 @@
-// Cron skips and DOB feed gaps mean updates can't assume yesterday; any start must match a full rebuild.
+// Cron skips and DOB feed gaps mean updates can't assume yesterday; any chain must match one walk.
 
 import { expect, test } from "bun:test";
+import { truncationOf } from "../../scripts/build-sheds";
 import {
-  byJobNumber,
-  encodedShedsOf,
-  isProvisional,
-  placementAttributes,
-} from "../../scripts/build-sheds";
-import {
-  decodeShedArtifact,
-  type EncodedShed,
-  encodeSheds,
-  shedDayOf,
-  shedGraphMismatch,
-} from "../../scripts/shed-encode";
-import {
+  advanceSheds,
   type DatedSnapshot,
-  finishFold,
-  foldSnapshot,
-  MERGE_TOLERANCE_DAYS,
-  mergeIntervals,
-  resumeFrom,
-  type ShedAttributes,
-  type ShedInterval,
-  type ShedPermit,
-  type ShedWalk,
+  emptyShedFile,
+  finishWalk,
+  type GarbledRow,
   type SnapshotRow,
-  startFold,
+  startWalk,
   TRUNCATION_NEIGHBORS,
 } from "../../scripts/shed-permits";
 import {
   loadDeployedGraph,
-  reconcileSheds,
-  standingOn,
+  shedGraphMismatch,
 } from "../../scripts/update-sheds";
+import {
+  parseShedFile,
+  type ShedFile,
+  type ShedFileRecord,
+  serializeShedFile,
+} from "./shed-file";
 
 const DAY_MS = 86_400_000;
-const START_MS = Date.UTC(2020, 0, 1);
+const START_MS = Date.UTC(2026, 2, 2);
 const DAYS = 120;
 const FILLERS = 20; // permits that are simply always there, so the row count has a stable median
 const TRUNCATED_DAY = 85; // a partial write: two rows where there should be two dozen
 const SILENT_DAY = 90; // the feed publishes nothing, which is not a day every shed came down
+const CORRECTED_DAY = 40;
 const GRAPH_HASH = "a362598948ca0eb3";
 
 function isoDay(day: number): string {
   return new Date(START_MS + day * DAY_MS).toISOString().slice(0, 10);
-}
-
-// The feed's day 0 is 2020-01-01 but the artifact's is 2017-12-28.
-function feedDay(shedDay: number): number {
-  return shedDay - shedDayOf(isoDay(0));
 }
 
 // Job numbers shaped like the DOB's: a nine-digit BIS number first, then DOB NOW numbers.
@@ -85,6 +69,7 @@ function rowFor(job: string, feet: number): SnapshotRow {
     boroughDigit: "1",
     block: "01234",
     lot: "0001",
+    firstPermitDate: "2/22/2019",
   };
 }
 
@@ -98,7 +83,7 @@ function snapshotFor(day: number): DatedSnapshot | null {
       names.push(`filler${filler}`);
     }
     if (day <= 20 || day >= 30) {
-      names.push("flapping"); // nine days away, well inside the fortnight the merge forgives
+      names.push("flapping"); // nine days away, well inside the fortnight the client forgives
     }
     if (day <= 10) {
       names.push("brief"); // this one really did come down
@@ -107,302 +92,278 @@ function snapshotFor(day: number): DatedSnapshot | null {
       names.push("returning"); // and this one came back, far too late to be the same shed
     }
     if (day <= 95) {
-      names.push("ending"); // still up when a rewound artifact was written, down by the time it updates
+      names.push("ending");
     }
     if (day >= 118) {
-      names.push("late"); // first seen inside the window the update re-derives
+      names.push("late");
     }
   }
   const rows = new Map<string, SnapshotRow>();
   for (const name of names) {
-    // A correction must carry forward into a standing permit, but not into an already-closed stint.
-    const corrected =
-      (name === "always" && day >= 40) || (name === "returning" && day >= 100);
+    const corrected = name === "always" && day >= CORRECTED_DAY;
     rows.set(jobFor(name), rowFor(jobFor(name), corrected ? 88 : 40));
   }
-  return { date: isoDay(day), rows };
+  return { date: isoDay(day), rows, garbled: [] };
 }
 
 const feed = Array.from({ length: DAYS }, (_, day) => snapshotFor(day));
 
-// `from` is "" for the whole feed; `before` is the window the updated artifact handed over.
-function walk(through: number, from = "", before: number[] = []): ShedWalk {
-  const fold = startFold(from, before);
+// Two spans derived from street and length, so a re-read reading's placement is visible.
+function placeFake(records: readonly ShedFileRecord[]): void {
+  for (const record of records) {
+    let hash = 0;
+    for (const character of `${record.street}/${record.feet}`) {
+      hash = (hash * 31 + character.charCodeAt(0)) % 100_000;
+    }
+    record.spans = [
+      { sourceId: hash + 7, side: 3, ordinal: 1, t0: 0, t1: 255, depth: 18 },
+      { sourceId: hash, side: 1, ordinal: 0, t0: 10, t1: 200, depth: 0 },
+    ];
+    record.confidence = 128 + (hash % 100);
+  }
+}
+
+// What update-sheds does with a file and the feed so far: advance, place the unplaced, write.
+function advance(
+  text: string | null,
+  through: number,
+): { text: string; unplaced: Set<string> } {
+  const file = text === null ? emptyShedFile("nyc") : parseShedFile(text);
+  const walk = startWalk(file);
   for (const snapshot of feed.slice(0, through + 1)) {
     if (snapshot !== null) {
-      foldSnapshot(fold, snapshot);
+      advanceSheds(walk, snapshot);
     }
   }
-  const walked = finishFold(fold);
-  walked.permits.sort(byJobNumber);
-  return walked;
+  const advanced = finishWalk(walk);
+  placeFake(advanced.records.filter((record) => walk.unplaced.has(record.job)));
+  advanced.keySpace = GRAPH_HASH;
+  return { text: serializeShedFile(advanced), unplaced: walk.unplaced };
 }
 
-// Two spans per record, derived from street and length, so a corrected reading's placement is visible.
-function coverageOf(attributes: ShedAttributes): {
-  spans: {
-    sourceId: number;
-    side: number;
-    ordinal: number;
-    t0: number;
-    t1: number;
-    depth: number;
-  }[];
-  confidence: number;
-} {
-  let hash = 0;
-  for (const character of `${attributes.street}/${attributes.linearFeet}`) {
-    hash = (hash * 31 + character.charCodeAt(0)) % 100_000;
-  }
-  return {
-    spans: [
-      { sourceId: hash, side: 1, ordinal: 0, t0: 10, t1: 200, depth: 0 },
-      {
-        sourceId: hash + 7,
-        side: 3,
-        ordinal: 1,
-        t0: 0,
-        t1: 255,
-        depth: 18 + (hash % 62),
-      },
-    ],
-    confidence: 128 + (hash % 100),
-  };
-}
-
-function build(through: number) {
-  const { permits, counts } = walk(through);
-  const day = shedDayOf(isoDay(through));
-  return encodeSheds(
-    encodedShedsOf(permits, (interval) => coverageOf(interval.attributes), day),
-    GRAPH_HASH,
-    day,
-    counts,
+function recordOf(text: string, name: string): ShedFileRecord | undefined {
+  return parseShedFile(text).records.find(
+    (record) => record.job === jobFor(name),
   );
 }
 
-function update(from: ReturnType<typeof build>, through: number) {
-  const artifact = decodeShedArtifact(from.open, from.closed);
-  const reached = feedDay(artifact.lastDay);
-  const { permits, counts } = walk(
-    through,
-    resumeFrom(isoDay(reached)),
-    artifact.counts,
-  );
-  const standing = new Set(
-    standingOn(permits, isoDay(reached)).map((permit) => permit.job),
-  );
-  const fresh = permits.filter(
-    (permit) => !standing.has(permit.job) || permit.corrected,
-  );
-  const placed = new Map(
-    placementAttributes(fresh).map((reading) => [reading, coverageOf(reading)]),
-  );
-  const day = shedDayOf(isoDay(through));
-  return encodeSheds(
-    reconcileSheds(artifact, permits, isoDay(through), placed),
-    GRAPH_HASH,
-    day,
-    counts,
-  );
-}
+test("the walk records the traps the synthetic feed carries", () => {
+  const { text } = advance(null, DAYS - 1);
+  const file = parseShedFile(text);
 
-function days(intervals: readonly ShedInterval[]) {
-  return intervals.map(({ first, last, open }) => ({ first, last, open }));
-}
-
-test("the synthetic feed carries the traps it is meant to", () => {
-  const byJob = new Map(
-    walk(DAYS - 1).permits.map((permit) => [permit.job, permit]),
-  );
-
+  expect(file.through).toBe(isoDay(DAYS - 1));
+  expect(file.seen).toBe(isoDay(DAYS - 1));
   // Read literally, a silent day or a truncated write would close every standing permit.
-  expect(days(byJob.get(jobFor("always"))?.runs ?? [])).toEqual([
-    { first: isoDay(0), last: isoDay(DAYS - 1), open: true },
+  expect(recordOf(text, "always")?.runs).toEqual([
+    { first: isoDay(0), last: null },
   ]);
-  expect(byJob.get(jobFor("filler1"))?.runs).toHaveLength(1);
-
-  // A nine-day disappearance is two runs on record but one standing shed to a query.
-  expect(byJob.get(jobFor("flapping"))?.runs).toHaveLength(2);
-  expect(
-    days(mergeIntervals(byJob.get(jobFor("flapping"))?.runs ?? [])),
-  ).toEqual([{ first: isoDay(0), last: isoDay(DAYS - 1), open: true }]);
-  expect(days(mergeIntervals(byJob.get(jobFor("brief"))?.runs ?? []))).toEqual([
-    { first: isoDay(0), last: isoDay(10), open: false },
+  expect(recordOf(text, "filler1")?.runs).toHaveLength(1);
+  // Runs are stored as seen; the client merges the nine-day gap.
+  expect(recordOf(text, "flapping")?.runs).toEqual([
+    { first: isoDay(0), last: isoDay(20) },
+    { first: isoDay(30), last: null },
   ]);
-  const returning = mergeIntervals(byJob.get(jobFor("returning"))?.runs ?? []);
-  expect(returning).toHaveLength(2);
-  expect(byJob.get(jobFor("always"))?.linearFeet).toBe(88);
-  expect(byJob.get(jobFor("returning"))?.linearFeet).toBe(88);
-  expect(returning.map((interval) => interval.attributes.linearFeet)).toEqual([
-    40, 88,
+  expect(recordOf(text, "brief")?.runs).toEqual([
+    { first: isoDay(0), last: isoDay(10) },
   ]);
+  expect(recordOf(text, "returning")?.runs).toEqual([
+    { first: isoDay(0), last: isoDay(60) },
+    { first: isoDay(100), last: null },
+  ]);
+  expect(recordOf(text, "always")?.feet).toBe(88);
+  expect(recordOf(text, "always")?.bbl).toBe("1/01234/0001");
+  expect(recordOf(text, "always")?.firstPermit).toBe("2019-02-22");
+  expect(file.records.map((record) => record.job)).toEqual(
+    PERMITS.map(jobFor).sort(),
+  );
+  expect(serializeShedFile(file)).toBe(text);
 });
 
-test("open.bin names every standing permit, in job order", () => {
-  // The update reads record ownership from the file; the feed only has to agree.
-  const through = DAYS - 1;
-  const { permits } = walk(through);
-  const day = shedDayOf(isoDay(through));
-  const standing = standingOn(permits, isoDay(through));
-  const artifact = decodeShedArtifact(
-    build(through).open,
-    build(through).closed,
-  );
-
-  expect(standing.map((permit) => permit.job)).toEqual(
-    [...standing].map((permit) => permit.job).sort(),
-  );
-  expect(artifact.open).toHaveLength(standing.length);
-  for (const [order, permit] of standing.entries()) {
-    const { spans, confidence } = coverageOf(permit);
-    // Both job-number shapes survive the header's delta chain.
-    expect(artifact.open[order].job).toBe(permit.job);
-    expect(artifact.open[order].spans).toEqual(spans);
-    expect(artifact.open[order].confidence).toBe(confidence);
-  }
-  expect(artifact.open.map((record) => record.job)).toContain("104416464");
-  for (const permit of permits) {
-    const provisional = mergeIntervals(permit.runs).filter((interval) =>
-      isProvisional(shedDayOf(interval.last), day),
-    );
-    expect(provisional.length).toBe(standing.includes(permit) ? 1 : 0);
-  }
-});
-
-test("a standing permit open.bin does not name stops the run", () => {
-  // A record missing from the file would otherwise be re-placed as new, with the wrong first day.
-  const artifact = decodeShedArtifact(
-    build(DAYS - 1).open,
-    build(DAYS - 1).closed,
-  );
-  const short = {
-    ...artifact,
-    open: artifact.open.filter((record) => record.job !== jobFor("flapping")),
-  };
-
-  expect(() =>
-    reconcileSheds(short, walk(DAYS - 1).permits, isoDay(DAYS - 1), new Map()),
-  ).toThrow(jobFor("flapping"));
-});
-
-// The real feed agrees (300-, 177-, 60- and 29-day chains), but that takes a 370 MB clone.
-test("an update lands on a full rebuild wherever the replay started", () => {
-  const rebuilt = build(DAYS - 1);
-
+test("a day at a time, one jump and a walk from the start write the same file", () => {
+  const whole = advance(null, DAYS - 1).text;
   for (const start of [DAYS - 5, DAYS - 20, DAYS - 45, DAYS - 80]) {
-    let replayed = build(start);
+    let stepped = advance(null, start).text;
     for (let day = start + 1; day < DAYS; day++) {
-      replayed = update(replayed, day);
+      stepped = advance(stepped, day).text;
     }
-    expect({ start, ...replayed }).toEqual({ start, ...rebuilt });
+    const jumped = advance(advance(null, start).text, DAYS - 1).text;
+    expect({ start, stepped }).toEqual({ start, stepped: whole });
+    expect({ start, jumped }).toEqual({ start, jumped: whole });
   }
 });
 
-test("the truncation window travels in the artifact", () => {
-  // The truncated write is dropped against its thirty neighbors but believed against none.
-  const artifact = decodeShedArtifact(
-    build(TRUNCATED_DAY + MERGE_TOLERANCE_DAYS - 1).open,
-    build(TRUNCATED_DAY + MERGE_TOLERANCE_DAYS - 1).closed,
-  );
-  expect(artifact.counts).toHaveLength(TRUNCATION_NEIGHBORS);
-  expect(resumeFrom(isoDay(TRUNCATED_DAY + MERGE_TOLERANCE_DAYS - 1))).toBe(
-    isoDay(TRUNCATED_DAY),
-  );
+test("running twice in one day writes the same bytes and places nothing", () => {
+  const once = advance(null, DAYS - 1).text;
+  const twice = advance(once, DAYS - 1);
+  expect(twice.text).toBe(once);
+  expect(twice.unplaced.size).toBe(0);
+});
 
-  const seeded = startFold(isoDay(TRUNCATED_DAY), artifact.counts);
-  const blind = startFold(isoDay(TRUNCATED_DAY));
-  for (const fold of [seeded, blind]) {
-    for (const snapshot of feed) {
-      if (snapshot !== null) {
-        foldSnapshot(fold, snapshot);
-      }
-    }
-    finishFold(fold);
+test("a truncated day moves `through` but not `seen`, and closes nothing", () => {
+  const before = advance(null, TRUNCATED_DAY - 1).text;
+  const file = parseShedFile(advance(before, TRUNCATED_DAY).text);
+  expect(file.through).toBe(isoDay(TRUNCATED_DAY));
+  expect(file.seen).toBe(isoDay(TRUNCATED_DAY - 1));
+  expect(file.counts.at(-1)).toBe(2);
+  expect(file.records.map((record) => record.runs)).toEqual(
+    parseShedFile(before).records.map((record) => record.runs),
+  );
+});
+
+test("the truncation window holds the last thirty judged days, dropped ones too", () => {
+  const counts = parseShedFile(advance(null, TRUNCATED_DAY + 5).text).counts;
+  expect(counts).toHaveLength(TRUNCATION_NEIGHBORS);
+  expect(counts).toContain(2);
+});
+
+test("a snapshot dated on or before `through` is skipped", () => {
+  const text = advance(null, 50).text;
+  const walk = startWalk(parseShedFile(text));
+  const sameDay = snapshotFor(50) as DatedSnapshot;
+  sameDay.rows.delete(jobFor("always"));
+  advanceSheds(walk, snapshotFor(10) as DatedSnapshot);
+  advanceSheds(walk, sameDay);
+  expect(walk.skipped).toBe(2);
+  expect(serializeShedFile(finishWalk(walk))).toBe(text);
+});
+
+test("a correction re-places only its own job", () => {
+  const before = advance(null, CORRECTED_DAY - 1).text;
+  const { text, unplaced } = advance(before, CORRECTED_DAY);
+  expect([...unplaced]).toEqual([jobFor("always")]);
+  expect(recordOf(text, "always")?.spans).not.toEqual(
+    recordOf(before, "always")?.spans,
+  );
+  expect(recordOf(text, "filler3")?.spans).toEqual(
+    recordOf(before, "filler3")?.spans,
+  );
+  // A house number alone moves no placement.
+  const walk = startWalk(parseShedFile(text));
+  const renumbered = snapshotFor(CORRECTED_DAY + 1) as DatedSnapshot;
+  const row = renumbered.rows.get(jobFor("filler3")) as SnapshotRow;
+  renumbered.rows.set(jobFor("filler3"), { ...row, houseNumber: "102" });
+  advanceSheds(walk, renumbered);
+  expect(walk.unplaced.size).toBe(0);
+  expect(walk.records.get(jobFor("filler3"))?.house).toBe("102");
+});
+
+// The day after `base`, with `garble`'s rows under a mangled job number and `extra` added.
+function garbledDay(
+  base: string,
+  garble: readonly string[],
+  extra: readonly GarbledRow[] = [],
+): { file: ShedFile; snapshot: DatedSnapshot } {
+  const file = parseShedFile(base);
+  const day = feed.findIndex((snapshot) => snapshot?.date === file.through);
+  const snapshot = snapshotFor(day + 1) as DatedSnapshot;
+  const garbled = [...extra];
+  for (const name of garble) {
+    garbled.push({
+      job: "METAL & WOOD",
+      row: snapshot.rows.get(jobFor(name)) as SnapshotRow,
+    });
+    snapshot.rows.delete(jobFor(name));
   }
-  expect(seeded.window.dropped).toBe(1);
-  expect(blind.window.dropped).toBe(0);
+  return { file, snapshot: { ...snapshot, garbled } };
+}
+
+// Gives filler4 always's address, so a row at it has two permits to choose from.
+function twinned(text: string): string {
+  const file = parseShedFile(text);
+  const byName = (name: string): ShedFileRecord =>
+    file.records.find(
+      (record) => record.job === jobFor(name),
+    ) as ShedFileRecord;
+  byName("filler4").bin = byName("always").bin;
+  byName("filler4").street = byName("always").street;
+  return serializeShedFile(file);
+}
+
+function lastRun(walk: ReturnType<typeof startWalk>, name: string) {
+  return walk.records.get(jobFor(name))?.runs.at(-1);
+}
+
+test("a garbled row continues the one permit that matches it", () => {
+  const { file, snapshot } = garbledDay(advance(null, 50).text, ["always"]);
+  const walk = startWalk(file);
+  advanceSheds(walk, snapshot);
+  expect(walk.records.get(jobFor("always"))?.runs).toEqual([
+    { first: isoDay(0), last: null },
+  ]);
+  expect(walk.records.has("METAL & WOOD")).toBe(false);
 });
 
-test("catching up after a month idle lands where running daily would have", () => {
-  const daily = build(DAYS - 1);
-  const caughtUp = update(build(DAYS - 31), DAYS - 1);
-
-  expect(caughtUp.open).toEqual(daily.open);
-  expect(caughtUp.closed).toEqual(daily.closed);
-  expect(caughtUp.index).toEqual(daily.index);
-});
-
-test("an update applied a day at a time agrees with one that jumped", () => {
-  let stepped = build(DAYS - 31);
-  for (let day = DAYS - 30; day < DAYS; day++) {
-    stepped = update(stepped, day);
+test("a garbled row matching no permit, several, or one listed that day is dropped", () => {
+  const base = advance(null, 50).text;
+  const stranger: GarbledRow = {
+    job: "METAL & WOOD",
+    row: { ...rowFor("nobody", 40), bin: "9999999" },
+  };
+  const listed: GarbledRow = {
+    job: "METAL & WOOD",
+    row: rowFor(jobFor("filler2"), 40),
+  };
+  for (const { file, snapshot } of [
+    garbledDay(base, [], [stranger]),
+    garbledDay(base, [], [listed]),
+  ]) {
+    const walk = startWalk(file);
+    advanceSheds(walk, snapshot);
+    expect(walk.records.size).toBe(file.records.length);
+    expect(walk.records.get(jobFor("filler2"))?.runs).toHaveLength(1);
+    expect(lastRun(walk, "filler2")?.last).toBeNull();
   }
-  const jumped = update(build(DAYS - 31), DAYS - 1);
-
-  expect(stepped.open).toEqual(jumped.open);
-  expect(stepped.closed).toEqual(jumped.closed);
-  expect(stepped.index).toEqual(jumped.index);
+  // Neither twin is listed, so the row can't say which it is, and both close.
+  const { file, snapshot } = garbledDay(twinned(base), ["always"]);
+  snapshot.rows.delete(jobFor("filler4"));
+  const walk = startWalk(file);
+  advanceSheds(walk, snapshot);
+  expect(lastRun(walk, "always")?.last).toBe(isoDay(50));
+  expect(lastRun(walk, "filler4")?.last).toBe(isoDay(50));
 });
 
-test("running twice in one day is a no-op", () => {
-  const once = update(build(DAYS - 31), DAYS - 1);
-  const twice = update(once, DAYS - 1);
-
-  expect(twice.open).toEqual(once.open);
-  expect(twice.closed).toEqual(once.closed);
-  expect(twice.index).toEqual(once.index);
+test("two garbled rows on one day each claim their own permit", () => {
+  const { file, snapshot } = garbledDay(advance(null, 50).text, [
+    "always",
+    "filler7",
+  ]);
+  const walk = startWalk(file);
+  advanceSheds(walk, snapshot);
+  expect(lastRun(walk, "always")).toEqual({ first: isoDay(0), last: null });
+  expect(lastRun(walk, "filler7")).toEqual({ first: isoDay(0), last: null });
+  expect(walk.records.size).toBe(file.records.length);
 });
 
-test("closed.bin is only ever appended to", () => {
-  const before = decodeShedArtifact(
-    build(DAYS - 31).open,
-    build(DAYS - 31).closed,
-  );
-  const after = update(build(DAYS - 31), DAYS - 1);
-  const grown = decodeShedArtifact(after.open, after.closed);
-
-  expect(grown.closed.length).toBeGreaterThan(before.closed.length);
-  expect(grown.closed.slice(0, before.closed.length)).toEqual(before.closed);
-  // Sound only because nothing already down can close again later.
-  const oldest = before.closed.map((record) => record.close as number);
-  for (const record of grown.closed.slice(before.closed.length)) {
-    expect(record.close as number).toBeGreaterThan(Math.max(...oldest));
-  }
+test("a permit first seen garbled is dropped", () => {
+  const { file, snapshot } = garbledDay(advance(null, 117).text, ["late"]);
+  const walk = startWalk(file);
+  advanceSheds(walk, snapshot);
+  expect(walk.records.has(jobFor("late"))).toBe(false);
+  expect(walk.records.size).toBe(file.records.length);
 });
 
-test("a permit that comes back long after it came down is a second record", () => {
-  const artifact = decodeShedArtifact(
-    build(DAYS - 1).open,
-    build(DAYS - 1).closed,
-  );
-  const returning = walk(DAYS - 1).permits.find(
-    (permit) => permit.job === jobFor("returning"),
-  ) as ShedPermit;
-  const intervals = mergeIntervals(returning.runs);
-
-  expect(intervals).toHaveLength(2);
-  const records = [...artifact.open, ...artifact.closed];
-  for (const interval of intervals) {
-    const { spans } = coverageOf(interval.attributes);
-    const found = records.filter(
-      (record: EncodedShed) =>
-        JSON.stringify(record.spans) === JSON.stringify(spans),
-    );
-    expect(found).toHaveLength(1);
-    expect(found[0].first).toBe(shedDayOf(interval.first));
-  }
+test("a rebuild from the feed refuses to drop days the file holds", () => {
+  const whole = parseShedFile(advance(null, DAYS - 1).text);
+  const late: ShedFile = {
+    ...whole,
+    records: whole.records.map((record) => ({
+      ...record,
+      runs: [{ first: isoDay(5), last: null }],
+    })),
+  };
+  expect(truncationOf(null, whole)).toBeNull();
+  expect(truncationOf(whole, whole)).toBeNull();
+  expect(truncationOf(late, whole)).toBeNull();
+  expect(truncationOf(whole, late)).toContain(isoDay(0));
+  expect(truncationOf(whole, late)).toContain("--force");
 });
 
-test("an artifact is only extended against the graph it names", () => {
-  const artifact = decodeShedArtifact(
-    build(DAYS - 1).open,
-    build(DAYS - 1).closed,
-  );
+test("a file is only extended against the graph it names", () => {
+  const file = parseShedFile(advance(null, DAYS - 1).text);
 
-  expect(shedGraphMismatch(artifact, GRAPH_HASH)).toBeNull();
+  expect(shedGraphMismatch(file, GRAPH_HASH)).toBeNull();
   // Carrying records forward under a new hash would put them on whatever edge their keys now name.
-  const other = shedGraphMismatch(artifact, "0123456789abcdef");
+  const other = shedGraphMismatch(file, "0123456789abcdef");
   expect(other).toContain(GRAPH_HASH);
   expect(other).toContain("0123456789abcdef");
 });
@@ -429,7 +390,7 @@ test("a deployed graph this checkout cannot read skips the day", async () => {
     console.error = originalError;
   }
   expect(logged[1]).toContain("not a graph this checkout can read");
-  expect(logged[1]).toContain("leaving the artifact alone");
+  expect(logged[1]).toContain("leaving the file alone");
   expect(logged[3]).toContain("404");
-  expect(logged[3]).toContain("leaving the artifact alone");
+  expect(logged[3]).toContain("leaving the file alone");
 });

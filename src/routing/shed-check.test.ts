@@ -1,4 +1,4 @@
-// Real GRPH bytes, since the artifact must agree with the graph's durable key space, not its bytes.
+// Real GRPH bytes, since the shed file must agree with the graph's durable key space, not its bytes.
 
 import { expect, test } from "bun:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -6,10 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadGraphBytes } from "../../scripts/build-sheds";
 import { checkSheds } from "../../scripts/check-sheds";
-import { encodeSheds } from "../../scripts/shed-encode";
 import { encodeGraph } from "./graph-bytes.fixture";
+import { serializeShedFile } from "./shed-file";
 
-const LAST_DAY = 3136;
 const KIND_SIDEWALK = 0;
 const EDGE_LENGTH_SECTION = 8;
 
@@ -63,12 +62,14 @@ async function deploy(
 ): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "shed-check-"));
   const built = loadGraphBytes(graph);
-  const artifact = encodeSheds(
-    [],
-    loadGraphBytes(placedAgainst).keyHash,
-    LAST_DAY,
-    [],
-  );
+  const text = serializeShedFile({
+    city: "nyc",
+    keySpace: loadGraphBytes(placedAgainst).keyHash,
+    through: "2026-10-24",
+    seen: "2026-10-24",
+    counts: [],
+    records: [],
+  });
   await Promise.all([
     writeFile(join(dir, "nyc.bin"), graph),
     writeFile(
@@ -79,15 +80,14 @@ async function deploy(
         keyHash: built.keyHash,
       }),
     ),
-    writeFile(join(dir, "open.bin"), artifact.open),
-    writeFile(join(dir, "closed.bin"), artifact.closed),
+    writeFile(join(dir, "sheds.tsv"), text),
   ]);
   return dir;
 }
 
 const GRAPH = graphBytes(EDGES);
 
-test("a deploy whose artifact names its own key space passes", async () => {
+test("a deploy whose shed file names its own key space passes", async () => {
   const dir = await deploy(GRAPH, GRAPH);
 
   await expect(checkSheds(join(dir, "nyc.bin"), dir)).resolves.toBeUndefined();

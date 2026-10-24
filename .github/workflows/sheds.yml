@@ -65,19 +65,23 @@ jobs:
           SOCRATA_VERBOSE: "1"
 
       # Writes only public/ferry-schedule/; the LFS zips under data/ferries/ must never be written here.
+      # This and the steps after it run even when sheds fail, so a shed failure costs no timetable.
       - run: bun run update-ferry-schedule
+        if: ${{ !cancelled() }}
 
       # Writes only public/transit-schedule/; data/transit/ is a graph input rebuilt by hand.
       - run: bun run update-transit-schedule
+        if: ${{ !cancelled() }}
 
       # Never track these in LFS: git deltas them to a few KB a day, LFS would store every copy.
       # No --force-with-lease: its lease is this checkout's fetch, which is the push it would clobber.
       - name: commit the artifacts
+        if: ${{ !cancelled() }}
         run: |
           staged="$(mktemp -d)"
           mkdir -p "$staged/sheds" "$staged/ferry-schedule" "$staged/transit-schedule"
-          # Per city, and the bins alone: inputs.json is build-sheds' to write, never this job's.
-          (cd public && cp --parents sheds/*/*.bin "$staged/")
+          # Per city, and the shed file alone: inputs.json is build-sheds' to write, never this job's.
+          (cd public && cp --parents sheds/*/sheds.tsv "$staged/")
           cp public/ferry-schedule/*.bin "$staged/ferry-schedule/"
           cp public/transit-schedule/*.bin "$staged/transit-schedule/"
           git config user.name "github-actions[bot]"
@@ -86,7 +90,7 @@ jobs:
             git fetch --depth=1 origin main
             git reset --quiet --hard FETCH_HEAD
             mkdir -p public/sheds public/ferry-schedule public/transit-schedule
-            (root="$PWD" && cd "$staged" && cp --parents sheds/*/*.bin "$root/public/")
+            (root="$PWD" && cd "$staged" && cp --parents sheds/*/sheds.tsv "$root/public/")
             cp "$staged"/ferry-schedule/*.bin public/ferry-schedule/
             cp "$staged"/transit-schedule/*.bin public/transit-schedule/
             git add public/sheds public/ferry-schedule public/transit-schedule
