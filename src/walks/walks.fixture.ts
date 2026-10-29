@@ -26,12 +26,12 @@ function zigzag(value: number, into: number[]): void {
 }
 
 // Straight-line geometry and a source id per edge, which `buildGraph` leaves out.
-function straightGraph(
-  nodes: { lat: number; lng: number }[],
-  pairs: [number, number][],
+export function straightGraph(
+  nodes: readonly { lat: number; lng: number }[],
+  pairs: readonly (readonly [number, number])[],
 ): RoutingGraph {
   const graph = buildGraph(
-    nodes,
+    [...nodes],
     pairs.map(([a, b]) => ({
       a,
       b,

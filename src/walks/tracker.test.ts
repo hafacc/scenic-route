@@ -277,6 +277,28 @@ test("jitter, however long it goes on, doesn't add up to coverage", () => {
   ).toEqual([]);
 });
 
+test("a street a gap filled counts once in its pass, however it is seen again", () => {
+  const { graph, index } = setup();
+  const tracker = new WalkTracker();
+  const key = edgeDurableKey(graph, 0);
+  expect(tracker.fresh([key], NOW)).toEqual([key]);
+  expect(tracker.fresh([key], NOW + 15_000)).toEqual([]);
+  expect(
+    tracker.observe(
+      fix(along(graph, 0, 0.05), { at: NOW + 30_000 }),
+      graph,
+      index,
+    ),
+  ).toEqual([]);
+  expect(
+    tracker.observe(
+      fix(along(graph, 0, 0.95), { at: NOW + 150_000 }),
+      graph,
+      index,
+    ),
+  ).toEqual([]);
+});
+
 // Fixes every 15 s at walking pace along the given edges, recorded as the page would.
 function walk(
   graph: RoutingGraph,

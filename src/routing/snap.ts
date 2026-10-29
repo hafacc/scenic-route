@@ -270,13 +270,17 @@ export function nearestEdge(
   index: SnapIndex,
   point: { lat: number; lng: number },
   maxMeters: number,
-): { edge: number; distanceMeters: number } | null {
+): { edge: number; distanceMeters: number; metersFromA: number } | null {
   const quantizedX = Math.round((point.lng - graph.originLng) / graph.scale);
   const quantizedY = Math.round((point.lat - graph.originLat) / graph.scale);
   const centerCellX = Math.floor(quantizedX / index.cellUnitsX);
   const centerCellY = Math.floor(quantizedY / index.cellUnitsY);
   const ring = Math.ceil(maxMeters / index.cellMeters);
-  let best: { edge: number; distanceMeters: number } | null = null;
+  let best: {
+    edge: number;
+    distanceMeters: number;
+    metersFromA: number;
+  } | null = null;
   const visited = new Set<number>();
   for (let cellX = centerCellX - ring; cellX <= centerCellX + ring; cellX++) {
     for (let cellY = centerCellY - ring; cellY <= centerCellY + ring; cellY++) {
@@ -285,7 +289,7 @@ export function nearestEdge(
           continue;
         }
         visited.add(edge);
-        const { distanceMeters } = projectToEdge(
+        const { distanceMeters, metersFromA } = projectToEdge(
           graph,
           edge,
           point.lat,
@@ -295,7 +299,7 @@ export function nearestEdge(
           distanceMeters <= maxMeters &&
           (best === null || distanceMeters < best.distanceMeters)
         ) {
-          best = { edge, distanceMeters };
+          best = { edge, distanceMeters, metersFromA };
         }
       }
     }
