@@ -26,15 +26,19 @@ function zigzag(value: number, into: number[]): void {
 }
 
 // Straight-line geometry and a source id per edge, which `buildGraph` leaves out.
-export function walkGraph(): RoutingGraph {
+function straightGraph(
+  nodes: { lat: number; lng: number }[],
+  pairs: [number, number][],
+): RoutingGraph {
   const graph = buildGraph(
-    NODES,
-    [
-      [0, 1],
-      [1, 3],
-      [0, 2],
-      [2, 3],
-    ].map(([a, b]) => ({ a, b, ferry: false, cover: 0, durationSeconds: 0 })),
+    nodes,
+    pairs.map(([a, b]) => ({
+      a,
+      b,
+      ferry: false,
+      cover: 0,
+      durationSeconds: 0,
+    })),
   );
   const bytes: number[] = [];
   for (let edge = 0; edge < graph.edgeCount; edge++) {
@@ -56,6 +60,52 @@ export function walkGraph(): RoutingGraph {
   graph.nodeComponent = new Uint16Array(graph.nodeCount);
   graph.familiar = null;
   return graph;
+}
+
+export function walkGraph(): RoutingGraph {
+  return straightGraph(NODES, [
+    [0, 1],
+    [1, 3],
+    [0, 2],
+    [2, 3],
+  ]);
+}
+
+// An avenue running north, crossed by a street, met by a dead-end side street, with a short block and a stub.
+export const GRID_NODES = [
+  { lat: 0.001, lng: 0.002 }, // 0: avenue, south end
+  { lat: 0.002, lng: 0.002 }, // 1: avenue at the cross street
+  { lat: 0.003, lng: 0.002 }, // 2: avenue at the side street
+  { lat: 0.004, lng: 0.002 }, // 3: avenue, north end
+  { lat: 0.002, lng: 0.001 }, // 4: cross street, west end
+  { lat: 0.002, lng: 0.003 }, // 5: cross street at the stub
+  { lat: 0.002, lng: 0.0033 }, // 6: the short block's east corner, 33 m on
+  { lat: 0.002, lng: 0.0043 }, // 7: cross street, east end
+  { lat: 0.003, lng: 0.001 }, // 8: side street, west end
+  { lat: 0.002108, lng: 0.003 }, // 9: the stub's end, 12 m north
+];
+
+// Every edge but the short block and the stub is 111 m.
+export const AVENUE = [0, 1, 2];
+export const CROSS_WEST = 3;
+export const CROSS_EAST = 4;
+export const SHORT_BLOCK = 5;
+export const CROSS_FAR = 6;
+export const SIDE_STREET = 7;
+export const STUB = 8;
+
+export function gridGraph(): RoutingGraph {
+  return straightGraph(GRID_NODES, [
+    [0, 1],
+    [1, 2],
+    [2, 3],
+    [4, 1],
+    [1, 5],
+    [5, 6],
+    [6, 7],
+    [8, 2],
+    [5, 9],
+  ]);
 }
 
 export function ends(graph: RoutingGraph): { start: Snap; dest: Snap } {

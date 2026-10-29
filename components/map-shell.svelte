@@ -369,8 +369,8 @@ function trackFix(position: GeolocationPosition): void {
   }
   loadRouting(cityId).then(
     ({ graph, index }) => {
-      const key = walkTracker.observe(fix, graph, index);
-      if (key !== null && trackWalks) {
+      const keys = walkTracker.observe(fix, graph, index);
+      for (const key of trackWalks ? keys : []) {
         walks.record(cityId, key, fix.at);
       }
     },
