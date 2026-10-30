@@ -3,13 +3,13 @@ import {
   FiCompass,
   MdDirectionsBoat,
   MdDirectionsWalk,
-  MdHorizontalRule,
-  MdLandscape,
   MdOutlineDirectionsWalk,
+  MdOutlineTerrain,
   MdTerrain,
   MdWbShade,
   MdWbSunny,
   MdWbTwilight,
+  TbMountainOff,
 } from "../../src/icons/glyphs";
 import type { IconData } from "../../src/icons/types";
 import type { FactorAvailability } from "../../src/lenses/lenses";
@@ -44,17 +44,17 @@ const SUN_FACES: Readonly<Record<Toggles["sun"], ToggleFace>> = {
 };
 
 const HILL_FACES: Readonly<Record<Toggles["hills"], ToggleFace>> = {
-  any: {
-    icon: MdTerrain,
-    tint: "text-[#966c5c] dark:text-[#c29684]",
-    label: "Hills are fine",
-  },
+  any: { icon: MdTerrain, tint: GRAY, label: "Hills ignored" },
   some: {
-    icon: MdLandscape,
+    icon: MdOutlineTerrain,
     tint: "text-[#966c5c] dark:text-[#c29684]",
     label: "Fewer hills",
   },
-  none: { icon: MdHorizontalRule, tint: GRAY, label: "Avoid hills" },
+  none: {
+    icon: TbMountainOff,
+    tint: "text-[#966c5c] dark:text-[#c29684]",
+    label: "Avoid hills",
+  },
 };
 
 const FERRY_FACES: Readonly<Record<"on" | "off", ToggleFace>> = {
