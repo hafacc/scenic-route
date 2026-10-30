@@ -11,6 +11,7 @@ import {
   ferrySeconds,
   heuristicFloor,
   hillFractionOf,
+  hillPriceOf,
   type RouteWeights,
   rawSeconds,
   shadeAttrOf,
@@ -19,6 +20,7 @@ import {
   walkSecondsCoeff,
   walkSecondsPerMeter,
 } from "./cost";
+import { familiarAttrOf } from "./familiar";
 import {
   type EdgeKind,
   edgeKind,
@@ -93,6 +95,13 @@ export interface RouteFactors {
   ferry: number; // the share of the trip spent on the boat itself, the pier wait excluded
 }
 
+// Attribute-seconds as the cost multiplier prices them, where the chip reads otherwise or not at all.
+export interface PricedSeconds {
+  shade: number; // signed, sun positive
+  hill: number;
+  familiar: number;
+}
+
 export interface TransitLeg {
   route: TransitRoute | null;
   boardStation: string | null;
@@ -130,6 +139,7 @@ export interface RouteResult {
   factors: RouteFactors; // each scenic attribute's share of the trip's time
   // Undivided attribute-seconds, which a card's absolute scenic score is summed from.
   factorSeconds: RouteFactors;
+  pricedSeconds: PricedSeconds;
   start: Snap;
   dest: Snap;
 }
@@ -368,6 +378,7 @@ function reconstruct(
     shelter: 0,
     ferry: 0,
   };
+  const priced: PricedSeconds = { shade: 0, hill: 0, familiar: 0 };
   for (const step of steps) {
     lengthMeters += step.lengthMeters;
     if (step.kind === "ferry" || isTransitKind(step.kind)) {
@@ -444,6 +455,9 @@ function reconstruct(
       // Reads the deck's whole coverage, not its sun-slid share: up to 0.18 points too shaded.
       const shadeAttr = shadeAttrOf(graph, edge, elapsedSeconds, shed);
       sums.shade += Math.max(0, shadeAttr) * seconds;
+      priced.shade += shadeAttr * seconds;
+      priced.hill += hillPriceOf(graph, edge) * seconds;
+      priced.familiar += familiarAttrOf(graph, edge) * seconds;
       travelSeconds += seconds;
       elapsedSeconds += seconds;
     }
@@ -468,6 +482,7 @@ function reconstruct(
     rides,
     ferries: ferryLegs(graph, steps, rides),
     factorSeconds,
+    pricedSeconds: priced,
     factors: {
       tree: share(factorSeconds.tree),
       shade: share(factorSeconds.shade),
@@ -1027,6 +1042,7 @@ export function reverseResult(
     ferries: ferryLegs(graph, steps, result.rides),
     factors: result.factors,
     factorSeconds: result.factorSeconds,
+    pricedSeconds: result.pricedSeconds,
     start: result.dest,
     dest: result.start,
   };

@@ -204,6 +204,7 @@ function routeOver(
     ferries: [],
     factors: noFactors(),
     factorSeconds: noFactors(),
+    pricedSeconds: { shade: 0, hill: 0, familiar: 0 },
     start: snap(
       pointOf(
         firstForward ? graph.edgeNodeA[firstEdge] : graph.edgeNodeB[firstEdge],

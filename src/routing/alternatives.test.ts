@@ -11,6 +11,7 @@ import {
 import {
   MAX_COMMERCIAL_WEIGHT,
   MAX_INDUSTRIAL_WEIGHT,
+  MAX_SHADE_WEIGHT,
   MAX_SHELTER_WEIGHT,
   MAX_TRANSIT_WEIGHT,
   MAX_TREE_WEIGHT,
@@ -841,6 +842,30 @@ test("a slower trip is a card when it is worth more", async () => {
   );
   expect(edgesOf(plan)).toEqual([1, 2]);
   expect(plan.routes[0].result.steps[0].edge).toBe(1);
+});
+
+// The shady walk is slower and has fewer trees, but the lens asks for shade.
+test("a trip only the lens's shade favors is still a card", async () => {
+  const shaded = (
+    edge: number,
+    travelSeconds: number,
+    treeSeconds: number,
+    sunSeconds: number,
+    north: number,
+  ): RouteResult =>
+    ({
+      ...treeWalk(edge, travelSeconds, treeSeconds, north),
+      pricedSeconds: { shade: sunSeconds, hill: 0, familiar: 0 },
+    }) as unknown as RouteResult;
+
+  const sunny = shaded(1, 1200, 600, 900, 0);
+  const shady = shaded(2, 1300, 500, -900, 400);
+
+  const plan = await planOverPool(
+    [sunny, shady],
+    weightsOf({ tree: MAX_TREE_WEIGHT, shade: -MAX_SHADE_WEIGHT }),
+  );
+  expect(edgesOf(plan)).toEqual([1, 2]);
 });
 
 test("nothing beats the most scenic trip or the quickest one", () => {
