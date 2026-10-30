@@ -1,14 +1,19 @@
 // A card says what a route is, never how the planner found it or what it avoided.
 
-import { SCENIC_KEYS, type ScenicKey } from "../routing/cost";
+import { PENALTY_KEYS, type RouteWeights } from "../routing/cost";
 import {
   durationMinutes,
   formatDistance,
   formatDuration,
 } from "../routing/directions";
-import { FACTORS, type FactorKey } from "../routing/factors";
-import type { FerryLeg, TransitLeg } from "../routing/search";
-import type { FactorAvailability, Lens } from "./lenses";
+import {
+  chipPercent,
+  FACTORS,
+  type FactorKey,
+  UNCHIPPED,
+} from "../routing/factors";
+import type { FerryLeg, RouteResult, TransitLeg } from "../routing/search";
+import type { Lens } from "./lenses";
 
 // The single-route color, worn by the least scenic card.
 export const DIRECT_COLOR = "#334155";
@@ -155,28 +160,6 @@ export function cardLine(
     .join(" · ");
 }
 
-// Shelter chips show exposure (100 less shelter), since in rain the question is time spent out in it.
-export interface ChipReading {
-  percent: number;
-  exposure: boolean;
-}
-
-export function chipReading(key: FactorKey, percent: number): ChipReading {
-  return key === "shelter"
-    ? { percent: 100 - percent, exposure: true }
-    : { percent, exposure: false };
-}
-
-// Penalties aren't reported, nor factors this city can't answer.
-export function chipFactors(
-  lens: Lens,
-  available: FactorAvailability,
-): ScenicKey[] {
-  return SCENIC_KEYS.filter(
-    (key) => (lens.weights[key] ?? 0) > 0 && available[key],
-  );
-}
-
 export interface CardRank {
   scenicScore: number;
   colorFactor: FactorKey | null; // the feature this route has markedly more of
@@ -223,38 +206,113 @@ export function cardColors(lens: Lens, cards: readonly CardRank[]): string[] {
   });
 }
 
-// The raw share; `chipReading` inverts shelter when drawn.
-export interface ChipView {
-  key: FactorKey;
+// The key a card chip is drawn by; `unwalked` is the new-streets side of `familiar`.
+export type ChipKey = FactorKey | "sheds" | "unwalked";
+
+// `percent` is the number drawn, shelter already read as exposure.
+export interface CardChip {
+  key: ChipKey;
   percent: number;
   best: boolean;
 }
 
-// A share that rounds to zero is dropped, so a route with no shelter doesn't wear a 100 exposure.
-export function visibleChips(
-  keys: readonly FactorKey[],
-  shares: readonly Partial<Record<FactorKey, number>>[],
-): ChipView[][] {
-  const percents = shares.map((factors) =>
-    keys.map((key) => Math.round((factors[key] ?? 0) * 100)),
-  );
-  // Starting at 0 skips hidden chips and keeps the earlier, more scenic, of two equal cards.
-  const bestCards = keys.map((_, column) => {
-    let bestCard: number | null = null;
-    let bestPercent = 0;
-    for (const [card, row] of percents.entries()) {
-      if (row[column] > bestPercent) {
-        bestPercent = row[column];
-        bestCard = card;
-      }
+// What a card reads its chips from: the factor shares plus the two a route carries outside them.
+export type CardShares = Partial<Record<FactorKey | "sheds", number>>;
+
+export function cardShares(
+  result: Pick<RouteResult, "factors" | "familiar" | "sheds">,
+): CardShares {
+  return { ...result.factors, familiar: result.familiar, sheds: result.sheds };
+}
+
+interface ChipRule {
+  key: ChipKey;
+  share: FactorKey | "sheds";
+  // Whether a bigger drawn number is the better route.
+  more: boolean;
+  shown: (percent: number) => number;
+  // Hidden rather than drawn, so a route with none of a thing doesn't wear a zero.
+  hidden: (percent: number) => boolean;
+}
+
+const asIs = (percent: number): number => percent;
+const isZero = (percent: number): boolean => percent === 0;
+const PENALTIES: ReadonlySet<FactorKey> = new Set<FactorKey>(PENALTY_KEYS);
+
+// Every factor the router priced, in the factors' own order, then scaffolding when it was avoided.
+function chipRules(weights: RouteWeights): ChipRule[] {
+  const rules: ChipRule[] = [];
+  for (const { key } of FACTORS) {
+    const weight = weights[key];
+    if (weight === 0) {
+    } else if (key === "shelter") {
+      // Exposure, since in rain the question is time spent out in it; no shelter at all isn't drawn.
+      rules.push({
+        key,
+        share: key,
+        more: false,
+        shown: (percent) => 100 - percent,
+        hidden: isZero,
+      });
+    } else if (key === "familiar") {
+      const walked = weight > 0;
+      rules.push({
+        key: walked ? key : "unwalked",
+        share: key,
+        more: true,
+        shown: walked ? asIs : (percent) => 100 - percent,
+        hidden: walked ? isZero : (percent) => percent === 100,
+      });
+    } else if (!UNCHIPPED.has(key)) {
+      // A penalty, or the shade side of sun, is better the less of it the route has.
+      const more = !PENALTIES.has(key) && weight > 0;
+      rules.push({ key, share: key, more, shown: asIs, hidden: isZero });
     }
-    return bestCard;
+  }
+  if (!weights.allowSheds) {
+    rules.push({
+      key: "sheds",
+      share: "sheds",
+      more: false,
+      shown: asIs,
+      hidden: isZero,
+    });
+  }
+  return rules;
+}
+
+// Bold goes to every best card, unless the best draws nothing or every card ties.
+export function cardChips(
+  weights: RouteWeights,
+  shares: readonly CardShares[],
+): CardChip[][] {
+  const rules = chipRules(weights);
+  const percents = shares.map((card) =>
+    rules.map((rule) => chipPercent(card[rule.share] ?? 0)),
+  );
+  const bestCards = rules.map((rule, column): ReadonlySet<number> => {
+    const shown = percents.map((row) => rule.shown(row[column]));
+    const target = rule.more ? Math.max(...shown) : Math.min(...shown);
+    const hidden = percents.map((row) => rule.hidden(row[column]));
+    const best = [...shown.keys()].filter((card) => shown[card] === target);
+    const drawn = hidden.filter((isHidden) => !isHidden).length;
+    // Cards that all read the same have no best among them.
+    const level = drawn > 1 && best.length === drawn;
+    return level || best.some((card) => hidden[card])
+      ? new Set()
+      : new Set(best);
   });
   return percents.map((row, card) =>
-    keys.flatMap((key, column) =>
-      row[column] === 0
+    rules.flatMap((rule, column) =>
+      rule.hidden(row[column])
         ? []
-        : [{ key, percent: row[column], best: bestCards[column] === card }],
+        : [
+            {
+              key: rule.key,
+              percent: rule.shown(row[column]),
+              best: bestCards[column].has(card),
+            },
+          ],
     ),
   );
 }

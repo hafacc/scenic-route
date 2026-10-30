@@ -631,7 +631,7 @@ export async function planRoutes(input: PlanInput): Promise<Plan> {
     return { routes: [], bestByFactor: {}, searches, superseded };
   }
 
-  // Penalties are never scored or chipped: a card says what a route has, not what it avoided.
+  // Penalties are never scored: a card ranks by what a route has, not what it avoided.
   const scored = scenic.filter(
     (key) => SCENIC.has(key) && factorMean(maxRoute.result, key) !== null,
   );

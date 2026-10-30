@@ -2,18 +2,17 @@
 import type { City } from "../../src/cities";
 import {
   type CardSummary,
+  cardChips,
   cardColors,
   cardLine,
-  chipFactors,
+  cardShares,
   ferrySummaries,
   rideSummaries,
-  visibleChips,
 } from "../../src/lenses/cards";
 import {
   DEFAULT_LENS,
   DEFAULT_TOGGLES,
   effectiveWeights,
-  graphFactors,
   type Lens,
   type LensId,
   lensExtrasForCity,
@@ -195,7 +194,7 @@ async function solve(request: SolveRequest): Promise<SolveReply | null> {
       id,
       graph: request.graph,
       lens: lensForCity(request.city, asked),
-      available: graphFactors(request.graph),
+      weights: request.weights,
       plan: swept,
     },
   });
@@ -214,9 +213,9 @@ const cards = $derived.by((): CardView[] => {
   if (!landed) {
     return [];
   }
-  const chips = visibleChips(
-    chipFactors(landed.lens, landed.available),
-    routes.map((route) => route.result.factors),
+  const chips = cardChips(
+    landed.weights,
+    routes.map((route) => cardShares(route.result)),
   );
   return routes.map((route, index) => ({
     summary: summaryOf(route.result),

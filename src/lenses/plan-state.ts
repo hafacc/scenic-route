@@ -1,8 +1,9 @@
 import type { Plan } from "../routing/alternatives";
 import type { RouteClock } from "../routing/contexts";
+import type { RouteWeights } from "../routing/cost";
 import type { RoutingGraph } from "../routing/graph";
 import type { RouteResult } from "../routing/search";
-import type { FactorAvailability, Lens } from "./lenses";
+import type { Lens } from "./lenses";
 
 // Held until the next sweep lands, since clearing the list to wait is what the reader would see.
 export interface LandedPlan {
@@ -10,7 +11,8 @@ export interface LandedPlan {
   graph: RoutingGraph;
   // The sweep's own lens, since the reader may have switched by the time it lands.
   lens: Lens;
-  available: FactorAvailability;
+  // What the sweep priced, which the cards chip.
+  weights: RouteWeights;
   plan: Plan;
 }
 

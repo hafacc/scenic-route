@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 import type { Plan } from "../routing/alternatives";
 import type { RoutingGraph } from "../routing/graph";
 import type { RouteResult } from "../routing/search";
-import { ALL_FACTORS, type Lens, lensById } from "./lenses";
+import {
+  ALL_FACTORS,
+  DEFAULT_TOGGLES,
+  effectiveWeights,
+  type Lens,
+  lensById,
+} from "./lenses";
 import {
   type LandedPlan,
   NO_PLAN,
@@ -34,7 +40,13 @@ const PLAN: Plan = {
 };
 
 function landedPlan(id: number): LandedPlan {
-  return { id, graph: GRAPH, lens: LENS, available: ALL_FACTORS, plan: PLAN };
+  return {
+    id,
+    graph: GRAPH,
+    lens: LENS,
+    weights: effectiveWeights(LENS, DEFAULT_TOGGLES, ALL_FACTORS),
+    plan: PLAN,
+  };
 }
 
 function started(id: number): PlanState {

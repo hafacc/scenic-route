@@ -1,10 +1,10 @@
 // What the route cards share that is not a component.
-import type { CardSummary, ChipView } from "../../src/lenses/cards";
+import type { CardChip, CardSummary } from "../../src/lenses/cards";
 
 export interface CardView {
   summary: CardSummary;
   color: string;
-  chips: ChipView[];
+  chips: CardChip[];
 }
 
 // Inline rather than a flex item, so a summary too long for its row ellipses like a sentence.
