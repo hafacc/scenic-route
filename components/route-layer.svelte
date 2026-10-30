@@ -591,7 +591,7 @@ const showConnector = $derived(
   />
 {/each}
 {#if start}
-  <!-- zIndexOffset: above the live-location marker, which would otherwise swallow the drag. -->
+  <!-- zIndexOffset: above the route badges and dots; only the live-location marker sits higher. -->
   <Marker
     position={[start.lat, start.lng]}
     icon={startIcon}
