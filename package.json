@@ -79,7 +79,7 @@
     "p-retry": "^8.0.1",
     "polygon-clipping": "^0.15.7",
     "svelte": "^5.57.1",
-    "svelte-check": "^4.7.6",
+    "svelte-check": "^4.7.7",
     "tailwindcss": "^4.3.3",
     "typescript": "~6",
     "vite": "^8.3.3"
