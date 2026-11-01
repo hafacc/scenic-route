@@ -60,7 +60,7 @@
     "firebase": "^12.19.0",
     "leaflet": "^1.9.4",
     "protomaps-leaflet": "^5.1.0",
-    "suncalc": "^2.1.0"
+    "suncalc": "^2.1.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
