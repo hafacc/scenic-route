@@ -57,7 +57,7 @@
     "update-search-index": "bun run scripts/search-index.ts"
   },
   "dependencies": {
-    "firebase": "^12.19.0",
+    "firebase": "^13.1.0",
     "leaflet": "^1.9.4",
     "protomaps-leaflet": "^5.1.0",
     "suncalc": "^2.1.0"
