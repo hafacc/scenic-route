@@ -132,7 +132,7 @@ function haversineMeters(
 }
 
 // Along-distance is scaled to the edge's geodesic length.
-function projectToEdge(
+export function projectToEdge(
   graph: RoutingGraph,
   edge: number,
   lat: number,
