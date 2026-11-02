@@ -3,6 +3,7 @@
 import {
   GATE_KEYS,
   INTERNAL_FLAGS,
+  PENALTY_KEYS,
   type RouteWeights,
   SCENIC_KEYS,
 } from "./cost";
@@ -240,6 +241,7 @@ function lineDistanceMeters(
 }
 
 const SCENIC: ReadonlySet<FactorKey> = new Set<FactorKey>(SCENIC_KEYS);
+const PENALTIES: ReadonlySet<FactorKey> = new Set<FactorKey>(PENALTY_KEYS);
 
 // The reader's gates and the planner's own rail flag, which it moves itself below.
 const SWITCHES: readonly (keyof RouteWeights)[] = [
@@ -263,6 +265,20 @@ function factorMean(result: RouteResult, key: FactorKey): number | null {
 function factorSeconds(result: RouteResult, key: FactorKey): number {
   const totals: Partial<Record<FactorKey, number>> = result.factorSeconds;
   return totals[key] ?? 0;
+}
+
+// The seconds the cost prices a factor on, where that differs from what its chip reads.
+function pricedSeconds(result: RouteResult, key: FactorKey): number {
+  switch (key) {
+    case "transit":
+      return result.transitSeconds;
+    case "shade":
+    case "hill":
+    case "familiar":
+      return result.pricedSeconds[key];
+    default:
+      return factorSeconds(result, key);
+  }
 }
 
 // Counts legs, not lines: one subway ride is the same trip as any other, whatever line it is.
@@ -331,22 +347,20 @@ function separationCache(): Separation {
   };
 }
 
-// Routes equal on both keys are the same offer twice, and the earlier one stands for them.
+// Scores count higher as better; routes equal on every key are the same offer twice, and the earlier one stands.
 export function undominated(
   travelSeconds: readonly number[],
-  scenicScores: readonly number[],
+  ...scores: (readonly number[])[]
 ): number[] {
+  const keys = [travelSeconds.map((seconds) => -seconds), ...scores];
   const kept: number[] = [];
   for (let candidate = 0; candidate < travelSeconds.length; candidate++) {
     let dominated = false;
     for (let rival = 0; rival < travelSeconds.length && !dominated; rival++) {
       if (rival !== candidate) {
-        const quicker = travelSeconds[rival] < travelSeconds[candidate];
-        const duller = scenicScores[rival] < scenicScores[candidate];
-        const nicer = scenicScores[rival] > scenicScores[candidate];
-        const slower = travelSeconds[rival] > travelSeconds[candidate];
-        dominated =
-          !slower && !duller && (quicker || nicer || rival < candidate);
+        const worse = keys.some((key) => key[rival] < key[candidate]);
+        const better = keys.some((key) => key[rival] > key[candidate]);
+        dominated = !worse && (better || rival < candidate);
       }
     }
     if (!dominated) {
@@ -628,9 +642,22 @@ export async function planRoutes(input: PlanInput): Promise<Plan> {
     }
     return total;
   });
+  // Penalties go unscored but every search priced them, so a route only they favor still stands.
+  const unscored = factorKeys(weights).filter(
+    (key) => weights[key] !== 0 && !scored.includes(key),
+  );
+  const penaltyScores = pool.map((pooled) => {
+    let total = 0;
+    for (const key of unscored) {
+      const priced = weights[key] * pricedSeconds(pooled.result, key);
+      total += PENALTIES.has(key) ? -priced : priced;
+    }
+    return total;
+  });
   const survivors = undominated(
     pool.map((pooled) => pooled.result.travelSeconds),
     scenicScores,
+    penaltyScores,
   ).map((index) => pool[index]);
   selectionDiagnostics.dominated += pool.length - survivors.length;
   const chosen = selectRoutes(survivors, maxRoute, separation);

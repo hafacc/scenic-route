@@ -78,6 +78,12 @@ export function hillFractionOf(graph: RoutingGraph, edge: number): number {
   return Math.min(1, edgeGrade(graph, edge) / HILL_REFERENCE_GRADE);
 }
 
+// Unclamped above the reference, since San Francisco has streets at three times it.
+export function hillPriceOf(graph: RoutingGraph, edge: number): number {
+  const gradeShare = edgeGrade(graph, edge) / HILL_REFERENCE_GRADE;
+  return gradeShare * gradeShare;
+}
+
 // 15 on the slider's grid; 0.5 moved 64% of seeded highway trips for 1.6% more walking, so re-measure.
 export const DEFAULT_HIGHWAY_WEIGHT = 0.45;
 // Hill time is already charged by the grade-adjusted walking speed; this is only how much you mind one.
@@ -280,9 +286,7 @@ export function edgeMultiplier(
   const landmark = 1 - weights.landmark * (graph.edgeLandmark[edge] / 255);
   const art = 1 - weights.art * (graph.edgeArt[edge] / 255);
   const highway = 1 + weights.highway * (graph.edgeHighway[edge] / 255);
-  // Unclamped above the reference, since San Francisco has streets at three times it.
-  const gradeShare = edgeGrade(graph, edge) / HILL_REFERENCE_GRADE;
-  const hill = 1 + weights.hill * gradeShare * gradeShare;
+  const hill = 1 + weights.hill * hillPriceOf(graph, edge);
   const commercial =
     1 - weights.commercial * (graph.edgeCommercial[edge] / 255);
   const industrial =
