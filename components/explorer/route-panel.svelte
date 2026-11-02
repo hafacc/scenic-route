@@ -22,6 +22,7 @@ import { cardLine } from "../../src/lenses/cards";
 import type { FactorAvailability } from "../../src/lenses/lenses";
 import type { Maneuver } from "../../src/routing/directions";
 import {
+  chipPercent,
   FACTORS,
   type Factor,
   type FactorKey,
@@ -29,11 +30,13 @@ import {
   factorReading,
   GATES,
   type GateKey,
+  UNCHIPPED,
 } from "../../src/routing/factors";
 import type { NavProgress } from "../../src/routing/nav-progress";
 import type { RouteFactors } from "../../src/routing/search";
 import { factorRunOrder } from "../../src/settings/store";
 import EndpointFields from "../endpoint-fields.svelte";
+import FactorChip from "../factor-chip.svelte";
 import FactorSlider from "../factor-slider.svelte";
 import Icon from "../icon.svelte";
 import CardLine from "../lenses/card-line.svelte";
@@ -220,11 +223,6 @@ const {
 const settings = useSettings();
 const hidden = $derived(new Set(settings.current.hiddenFactors));
 const hiddenGate = $derived(new Set(settings.current.hiddenGates));
-const gateTint: Record<GateKey, string> = {
-  allowFerries: "text-blue-600 dark:text-blue-400",
-  allowSheds: "text-orange-600 dark:text-orange-400",
-  allowCrossings: "text-teal-600 dark:text-teal-400",
-};
 const gateOpen: Record<GateKey, boolean> = $derived({
   allowFerries,
   allowSheds,
@@ -351,17 +349,8 @@ const hiddenApplying = $derived(
 
 // Chips show only what acts on this route; the expanded list stays complete to raise a zero.
 const actingFactors = $derived(factors.filter((factor) => factor.weight !== 0));
-// No chip for presence-only ferry, or for shelter, whose tree half rests on about four trees.
 const factorChips = $derived(
-  actingFactors.filter(
-    (factor) =>
-      factor.key !== "ferry" &&
-      factor.key !== "shelter" &&
-      // Your own history, so a share of it would only read back what you walked.
-      factor.key !== "familiar" &&
-      // A ride carries no scenery, so the transit mean is 0 on every route by construction.
-      factor.key !== "transit",
-  ),
+  actingFactors.filter((factor) => !UNCHIPPED.has(factor.key)),
 );
 // Missing data the reader asked for: the route shown is not the route asked for.
 const ignoredFactors = $derived(
@@ -391,7 +380,14 @@ const fallback = $derived(
 );
 
 const chipScore = (routeFactors: RouteFactors, factor: PanelFactor): number =>
-  Math.round(routeFactors[factor.key as keyof RouteFactors] * 100);
+  chipPercent(routeFactors[factor.key as keyof RouteFactors]);
+
+// A share that rounds to zero is dropped, as on the route cards.
+const drawnChips = $derived(
+  summary
+    ? factorChips.filter((factor) => chipScore(summary.factors, factor) > 0)
+    : [],
+);
 
 const directionsLabel = $derived(
   directionsOpen ? "Hide directions" : "Get directions",
@@ -456,7 +452,7 @@ const hiddenLabel = $derived(
               aria-label={gate.label}
               aria-pressed={gateOpen[gate.key]}
               title={gateOpen[gate.key] ? gate.on : gate.off}
-              class={`-m-1 grid h-8 w-8 place-items-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 ${gateOpen[gate.key] ? gateTint[gate.key] : "text-slate-400"}`}
+              class={`-m-1 grid h-8 w-8 place-items-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 ${gateOpen[gate.key] ? gate.tint : "text-slate-400"}`}
             >
               <Icon icon={gate.icon.glyph} />
             </button>
@@ -649,14 +645,15 @@ const hiddenLabel = $derived(
               {@render cloudOff()}{factor.lost}
             </p>
           {/each}
-          {#if factorChips.length > 0}
+          {#if drawnChips.length > 0}
             <div class="chip-row mt-1.5 gap-x-3">
-              {#each factorChips as factor (factor.key)}
-                <span
-                  class={`inline-flex items-center gap-1 text-xs font-semibold ${factor.tint}`}
-                >
-                  {@render glyph(factor)}{chipScore(summary.factors, factor)}
-                </span>
+              {#each drawnChips as factor (factor.key)}
+                <FactorChip
+                  icon={factor.icon.glyph}
+                  tint={factor.tint}
+                  title={factor.label}
+                  text={`${chipScore(summary.factors, factor)}`}
+                />
               {/each}
             </div>
           {/if}

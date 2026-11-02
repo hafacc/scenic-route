@@ -461,6 +461,11 @@ export const MdElevator: IconData = {
   body: '<path fill="none" d="M0 0h24v24H0z"></path><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2M8.5 6a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5m2.5 8h-1v4H7v-4H6v-2.5c0-1.1.9-2 2-2h1c1.1 0 2 .9 2 2zm4.5 3L13 13h5zM13 11l2.5-4 2.5 4z"></path>',
 };
 
+export const MdExplore: IconData = {
+  attr: { viewBox: "0 0 24 24" },
+  body: '<path fill="none" d="M0 0h24v24H0z"></path><path d="M12 10.9c-.61 0-1.1.49-1.1 1.1s.49 1.1 1.1 1.1 1.1-.49 1.1-1.1-.49-1.1-1.1-1.1M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2m2.19 12.19L6 18l3.81-8.19L18 6z"></path>',
+};
+
 export const MdFactory: IconData = {
   attr: { viewBox: "0 0 24 24" },
   body: '<path fill="none" d="M0 0h24v24H0z"></path><path d="M22 10v12H2V10l7-3v2l5-2v3zm-4.8-1.5L18 2h3l.8 6.5zM11 18h2v-4h-2zm-4 0h2v-4H7zm10-4h-2v4h2z"></path>',

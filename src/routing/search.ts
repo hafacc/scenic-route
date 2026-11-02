@@ -137,6 +137,10 @@ export interface RouteResult {
   // Built here for the same reason as `rides`: only the search's clock knows the pier wait.
   ferries: FerryLeg[];
   factors: RouteFactors; // each scenic attribute's share of the trip's time
+  // The walked share, familiarity-weighted; this device's own, so kept out of the scenic factors.
+  familiar: number;
+  // The walked share under scaffolding, which a lens that avoids it still has to pass.
+  sheds: number;
   // Undivided attribute-seconds, which a card's absolute scenic score is summed from.
   factorSeconds: RouteFactors;
   pricedSeconds: PricedSeconds;
@@ -364,6 +368,8 @@ function reconstruct(
   let elapsedSeconds = 0;
   // Normalized by the field's peak so full sun at peak reads ~100%; 0 disables the sun chip.
   const shadeMaxAbs = graph.shade ? graph.shade.maxAbs : 0;
+  let familiarSeconds = 0;
+  let shedSeconds = 0;
   const sums: RouteFactors = {
     tree: 0,
     shade: 0,
@@ -449,7 +455,9 @@ function reconstruct(
       sums.industrial += (graph.edgeIndustrial[edge] / 255) * seconds;
       sums.historic += (graph.edgeHistoric[edge] / 255) * seconds;
       sums.bridge += (graph.edgeBridge[edge] / 255) * seconds;
+      familiarSeconds += ((graph.familiar?.edges[edge] ?? 0) / 255) * seconds;
       const shed = edgeShed(graph, edge);
+      shedSeconds += shed * seconds;
       // The same attribute the shelter discount prices, so the chip and the cost agree.
       sums.shelter += shelterAttrOf(graph, edge, shed) * seconds;
       // Reads the deck's whole coverage, not its sun-slid share: up to 0.18 points too shaded.
@@ -497,6 +505,8 @@ function reconstruct(
       shelter: share(factorSeconds.shelter),
       ferry: share(factorSeconds.ferry),
     },
+    familiar: share(familiarSeconds),
+    sheds: share(shedSeconds),
     start,
     dest,
   };
@@ -1041,6 +1051,8 @@ export function reverseResult(
     // Re-read off the flipped steps: the boat the other way sails at another time from the other pier.
     ferries: ferryLegs(graph, steps, result.rides),
     factors: result.factors,
+    familiar: result.familiar,
+    sheds: result.sheds,
     factorSeconds: result.factorSeconds,
     pricedSeconds: result.pricedSeconds,
     start: result.dest,

@@ -1,20 +1,31 @@
 import { describe, expect, test } from "bun:test";
+import type { RouteFactors } from "../routing/search";
 import {
+  type CardChip,
+  type CardShares,
+  cardChips,
   cardColors,
   cardLine,
-  chipFactors,
-  chipReading,
+  cardShares,
   DIRECT_COLOR,
   ferrySummaries,
   rideSummaries,
-  visibleChips,
 } from "./cards";
-import { ALL_FACTORS, type FactorAvailability, lensById } from "./lenses";
+import {
+  ALL_FACTORS,
+  DEFAULT_TOGGLES,
+  effectiveWeights,
+  type FactorAvailability,
+  type Lens,
+  lensById,
+  type Toggles,
+} from "./lenses";
 
 const NATURALIST = lensById("naturalist");
 const HISTORIC = lensById("historic");
-if (NATURALIST === null || HISTORIC === null) {
-  throw new Error("the two lenses these tests are about are gone");
+const RAIN = lensById("rain");
+if (NATURALIST === null || HISTORIC === null || RAIN === null) {
+  throw new Error("the lenses these tests are about are gone");
 }
 
 const MILE = 1609.344;
@@ -257,42 +268,6 @@ describe("ferrySummaries", () => {
   });
 });
 
-describe("chips", () => {
-  test("only the lens's own discounts, never its penalties", () => {
-    expect(chipFactors(NATURALIST, ALL_FACTORS)).toEqual(["tree", "bridge"]);
-    expect(chipFactors(HISTORIC, ALL_FACTORS)).toEqual([
-      "landmark",
-      "art",
-      "historic",
-      "bridge",
-      "ferry",
-    ]);
-  });
-
-  test("a factor the city cannot answer is not chipped", () => {
-    const withoutArt: FactorAvailability = { ...ALL_FACTORS, art: false };
-    expect(chipFactors(HISTORIC, withoutArt)).toEqual([
-      "landmark",
-      "historic",
-      "bridge",
-      "ferry",
-    ]);
-  });
-
-  test("a city with no boat to catch is not offered the chip", () => {
-    const withoutFerries: FactorAvailability = {
-      ...ALL_FACTORS,
-      ferry: false,
-    };
-    expect(chipFactors(HISTORIC, withoutFerries)).toEqual([
-      "landmark",
-      "art",
-      "historic",
-      "bridge",
-    ]);
-  });
-});
-
 describe("cardColors", () => {
   const plain = (scenicScore: number) => ({ scenicScore, colorFactor: null });
 
@@ -379,63 +354,231 @@ describe("cardColors", () => {
   });
 });
 
-describe("chipReading", () => {
-  test("in the rain the chip counts what the shelter mean leaves out", () => {
-    expect(chipReading("shelter", 91)).toEqual({ percent: 9, exposure: true });
+const NO_FACTORS: RouteFactors = {
+  tree: 0,
+  shade: 0,
+  landmark: 0,
+  art: 0,
+  highway: 0,
+  hill: 0,
+  commercial: 0,
+  industrial: 0,
+  historic: 0,
+  bridge: 0,
+  shelter: 0,
+  ferry: 0,
+};
+
+const priced = (
+  lens: Lens,
+  toggles: Partial<Toggles> = {},
+  available: FactorAvailability = ALL_FACTORS,
+) => effectiveWeights(lens, { ...DEFAULT_TOGGLES, ...toggles }, available);
+
+const keysOf = (chips: CardChip[][]) =>
+  chips.map((card) => card.map((chip) => chip.key));
+
+describe("cardChips, which factors", () => {
+  const everything: CardShares = {
+    ...Object.fromEntries(Object.keys(NO_FACTORS).map((key) => [key, 0.3])),
+    familiar: 0.3,
+    sheds: 0.3,
+  };
+
+  test("every priced factor chips, in the factors' order, ferry and subway left to the legs", () => {
+    expect(keysOf(cardChips(priced(HISTORIC), [everything]))).toEqual([
+      ["landmark", "art", "historic", "industrial", "bridge", "sheds"],
+    ]);
+    expect(keysOf(cardChips(priced(NATURALIST), [everything]))).toEqual([
+      ["tree", "highway", "industrial", "bridge", "sheds"],
+    ]);
   });
 
-  test("the driest route is the least exposed one, so the bold card does not move", () => {
-    const shelter = [91, 64, 40];
-    const exposure = shelter.map(
-      (mean) => chipReading("shelter", mean).percent,
-    );
-    expect(exposure).toEqual([9, 36, 60]);
-    expect(exposure.indexOf(Math.min(...exposure))).toBe(
-      shelter.indexOf(Math.max(...shelter)),
-    );
+  test("scaffolding chips only where the lens routes around it", () => {
+    expect(keysOf(cardChips(priced(RAIN), [everything]))).toEqual([
+      ["shelter", "bridge"],
+    ]);
   });
 
-  test("every other factor reads as itself", () => {
-    expect(chipReading("tree", 64)).toEqual({ percent: 64, exposure: false });
-    expect(chipReading("shade", 12)).toEqual({ percent: 12, exposure: false });
+  test("the switches add sun, hills and familiar streets", () => {
+    const walked = { ...ALL_FACTORS, familiar: true };
+    expect(
+      keysOf(
+        cardChips(
+          priced(
+            RAIN,
+            { sun: "shade", hills: "some", familiar: "new" },
+            walked,
+          ),
+          [everything],
+        ),
+      ),
+    ).toEqual([["shade", "shelter", "hill", "bridge", "unwalked"]]);
+  });
+
+  test("a factor the city cannot answer is not chipped", () => {
+    const without = { ...ALL_FACTORS, art: false, hill: false };
+    expect(
+      keysOf(
+        cardChips(priced(HISTORIC, { hills: "none" }, without), [everything]),
+      ),
+    ).toEqual([["landmark", "historic", "industrial", "bridge", "sheds"]]);
   });
 });
 
-describe("visibleChips", () => {
-  test("a factor a route has none of is not drawn at all", () => {
-    expect(visibleChips(["tree", "art"], [{ tree: 0.42, art: 0 }])).toEqual([
-      [{ key: "tree", percent: 42, best: true }],
-    ]);
-  });
-
-  test("a chip is kept by what it would read, so it rounds the way it prints", () => {
-    expect(visibleChips(["art"], [{ art: 0.004 }, { art: 0.006 }])).toEqual([
-      [],
-      [{ key: "art", percent: 1, best: true }],
-    ]);
-  });
-
-  test("in the rain the raw shelter decides, not the exposure the chip shows", () => {
+describe("cardChips, numbers and bold", () => {
+  test("a share reads as Explorer's number, rounded the way it prints", () => {
     expect(
-      visibleChips(["shelter"], [{ shelter: 0 }, { shelter: 0.31 }]),
-    ).toEqual([[], [{ key: "shelter", percent: 31, best: true }]]);
+      cardChips(priced(NATURALIST), [{ tree: 0.004 }, { tree: 0.006 }]),
+    ).toEqual([[], [{ key: "tree", percent: 1, best: true }]]);
   });
 
-  test("the bold card is the best of the ones still saying it", () => {
+  test("the most of a scenic factor is bold, every card that ties for it", () => {
     expect(
-      visibleChips(
-        ["tree"],
-        [{ tree: 0 }, { tree: 0.12 }, { tree: 0.37 }, { tree: 0.2 }],
-      ),
+      cardChips(priced(NATURALIST), [
+        { tree: 0 },
+        { tree: 0.37 },
+        { tree: 0.37 },
+        { tree: 0.2 },
+      ]),
     ).toEqual([
       [],
-      [{ key: "tree", percent: 12, best: false }],
+      [{ key: "tree", percent: 37, best: true }],
       [{ key: "tree", percent: 37, best: true }],
       [{ key: "tree", percent: 20, best: false }],
     ]);
   });
 
-  test("a factor no card has leaves every card without it", () => {
-    expect(visibleChips(["shade"], [{ shade: 0 }, {}])).toEqual([[], []]);
+  test("the least of a penalty is bold, and none when a card has none of it", () => {
+    expect(
+      cardChips(priced(NATURALIST), [
+        { industrial: 0.2, highway: 0.04 },
+        { industrial: 0.05, highway: 0 },
+      ]),
+    ).toEqual([
+      [
+        { key: "highway", percent: 4, best: false },
+        { key: "industrial", percent: 20, best: false },
+      ],
+      [{ key: "industrial", percent: 5, best: true }],
+    ]);
+  });
+
+  test("hills read as the grade share, the flattest bold", () => {
+    expect(
+      cardChips(priced(RAIN, { hills: "none" }), [
+        { hill: 0.4 },
+        { hill: 0.05 },
+        { hill: 0.3 },
+      ]),
+    ).toEqual([
+      [{ key: "hill", percent: 40, best: false }],
+      [{ key: "hill", percent: 5, best: true }],
+      [{ key: "hill", percent: 30, best: false }],
+    ]);
+  });
+
+  test("cards that all read the same have no bold", () => {
+    expect(
+      cardChips(priced(NATURALIST), [
+        { tree: 0.2, highway: 0.1 },
+        { tree: 0.2, highway: 0 },
+        { tree: 0.2, highway: 0.1 },
+      ]),
+    ).toEqual([
+      [
+        { key: "tree", percent: 20, best: false },
+        { key: "highway", percent: 10, best: false },
+      ],
+      [{ key: "tree", percent: 20, best: false }],
+      [
+        { key: "tree", percent: 20, best: false },
+        { key: "highway", percent: 10, best: false },
+      ],
+    ]);
+  });
+
+  test("sun counts the sun either way, bold for the sunniest or the shadiest", () => {
+    const shares = [{ shade: 0.3 }, { shade: 0.6 }];
+    expect(cardChips(priced(RAIN, { sun: "sun" }), shares)).toEqual([
+      [{ key: "shade", percent: 30, best: false }],
+      [{ key: "shade", percent: 60, best: true }],
+    ]);
+    expect(cardChips(priced(RAIN, { sun: "shade" }), shares)).toEqual([
+      [{ key: "shade", percent: 30, best: true }],
+      [{ key: "shade", percent: 60, best: false }],
+    ]);
+  });
+
+  test("in the rain the chip counts exposure, the driest bold, and no shelter isn't drawn", () => {
+    expect(
+      cardChips(priced(RAIN), [
+        { shelter: 0 },
+        { shelter: 0.31 },
+        { shelter: 0.91 },
+      ]),
+    ).toEqual([
+      [],
+      [{ key: "shelter", percent: 69, best: false }],
+      [{ key: "shelter", percent: 9, best: true }],
+    ]);
+  });
+
+  test("familiar counts the walked share, new what the walks leave", () => {
+    const walked = { ...ALL_FACTORS, familiar: true };
+    const shares = [{ familiar: 0.25 }, { familiar: 0.8 }, { familiar: 1 }];
+    expect(
+      cardChips(priced(RAIN, { familiar: "familiar" }, walked), shares).map(
+        (card) => card.filter((chip) => chip.key === "familiar"),
+      ),
+    ).toEqual([
+      [{ key: "familiar", percent: 25, best: false }],
+      [{ key: "familiar", percent: 80, best: false }],
+      [{ key: "familiar", percent: 100, best: true }],
+    ]);
+    expect(
+      cardChips(priced(RAIN, { familiar: "new" }, walked), shares).map((card) =>
+        card.filter((chip) => chip.key === "unwalked"),
+      ),
+    ).toEqual([
+      [{ key: "unwalked", percent: 75, best: true }],
+      [{ key: "unwalked", percent: 20, best: false }],
+      [],
+    ]);
+  });
+
+  test("no walks here, no familiar chip", () => {
+    expect(
+      keysOf(
+        cardChips(
+          priced(
+            RAIN,
+            { familiar: "familiar" },
+            { ...ALL_FACTORS, familiar: false },
+          ),
+          [{ familiar: 0.5 }],
+        ),
+      ),
+    ).toEqual([[]]);
+  });
+
+  test("scaffolding still passed reads as its share, the least bold", () => {
+    expect(
+      cardChips(priced(NATURALIST), [{ sheds: 0.02 }, { sheds: 0.01 }]),
+    ).toEqual([
+      [{ key: "sheds", percent: 2, best: false }],
+      [{ key: "sheds", percent: 1, best: true }],
+    ]);
+  });
+});
+
+describe("cardShares", () => {
+  test("adds the walked share and the share under scaffolding", () => {
+    const factors = { ...NO_FACTORS, tree: 0.5 };
+    expect(cardShares({ factors, familiar: 0.4, sheds: 0.1 })).toEqual({
+      ...factors,
+      familiar: 0.4,
+      sheds: 0.1,
+    });
   });
 });

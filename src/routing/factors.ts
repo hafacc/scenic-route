@@ -72,7 +72,8 @@ export interface Factor {
 export interface Gate {
   key: GateKey;
   label: string;
-  icon: IconSpec; // sized and tinted where it is drawn
+  icon: IconSpec; // sized where it is drawn
+  tint: string; // text color for the open gate and its chip
   // Absent where the gate needs no data of its own, so every city offers it.
   overlay?: OverlayId;
   on: string;
@@ -85,6 +86,7 @@ export const GATES: readonly Gate[] = [
     key: "allowSheds",
     label: "Allow scaffolding",
     icon: { glyph: MdConstruction },
+    tint: "text-orange-600 dark:text-orange-400",
     overlay: "scaffolding",
     on: "Scaffolding allowed — click to route around sidewalk sheds",
     off: "Scaffolding avoided — click to walk under sidewalk sheds again",
@@ -93,6 +95,7 @@ export const GATES: readonly Gate[] = [
     key: "allowFerries",
     label: "Allow ferries",
     icon: { glyph: MdDirectionsBoat },
+    tint: "text-blue-600 dark:text-blue-400",
     overlay: "ferries",
     on: "Ferries allowed — click to route without them",
     off: "Ferries barred — click to allow ferry crossings",
@@ -101,6 +104,7 @@ export const GATES: readonly Gate[] = [
     key: "allowCrossings",
     label: "Allow crossings",
     icon: { glyph: MdTraffic },
+    tint: "text-teal-600 dark:text-teal-400",
     on: "Crossings are free — click to stop the route crossing and crossing back",
     off: "Crossings are priced — click to let the route spend them to reach what it is after",
   },
@@ -236,6 +240,21 @@ export const FACTORS: readonly Factor[] = [
     color: WALK_COLOR.light,
   },
 ];
+
+// No summary chip for these; the route cards draw shelter and familiar their own way.
+export const UNCHIPPED: ReadonlySet<FactorKey> = new Set<FactorKey>([
+  // Presence-only: the crossing already shows as its own leg.
+  "ferry",
+  // Its tree half rests on about four trees.
+  "shelter",
+  // Your own history, so a share of it would only read back what you walked.
+  "familiar",
+  // A ride carries no scenery, so the transit mean is 0 on every route by construction.
+  "transit",
+]);
+
+// A summary chip's number: the factor's share of the trip's time, out of 100.
+export const chipPercent = (share: number): number => Math.round(share * 100);
 
 export const factorPercent = (factor: Factor, weight: number): number =>
   Math.round((weight / factor.max) * 100);

@@ -1,8 +1,8 @@
 <script lang="ts">
 import {
-  FiCompass,
   MdDirectionsBoat,
   MdDirectionsWalk,
+  MdExplore,
   MdOutlineDirectionsWalk,
   MdOutlineTerrain,
   MdTerrain,
@@ -73,7 +73,7 @@ const FAMILIAR_FACES: Readonly<Record<Toggles["familiar"], ToggleFace>> = {
     label: "Prefer streets you've walked",
   },
   new: {
-    icon: FiCompass,
+    icon: MdExplore,
     tint: "text-indigo-600 dark:text-indigo-400",
     label: "Prefer streets you haven't walked",
   },

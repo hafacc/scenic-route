@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BOWED, STRAIGHT, walkGraph } from "../walks/walks.fixture";
+import { BOWED, ends, STRAIGHT, walkGraph } from "../walks/walks.fixture";
 import { edgeMultiplier, minMultiplier, walkSecondsCoeff } from "./cost";
 import {
   decayedWeight,
@@ -13,6 +13,7 @@ import {
 } from "./familiar";
 import { weights } from "./ferry.fixture";
 import { edgeDurableKey } from "./graph";
+import { findRoute } from "./search";
 
 const NOW = Date.UTC(2026, 9, 14);
 const plain = weights(0, 0, false);
@@ -109,4 +110,14 @@ test("the A* floor bounds every edge, and preferring new streets leaves it untou
   expect(walkSecondsCoeff(graph, { ...plain, familiar: -1 })).toBe(
     walkSecondsCoeff(graph, plain),
   );
+});
+
+test("a route reads its walked share, familiarity-weighted, and none without walks", () => {
+  const walked = fieldFor(STRAIGHT, 1);
+  const { start, dest } = ends(walked);
+  const route = findRoute(walked, start, dest, plain);
+  expect(route?.steps.every((step) => STRAIGHT.includes(step.edge))).toBe(true);
+  expect(route?.familiar).toBeCloseTo(familiarByte(1) / 255, 6);
+  const fresh = walkGraph();
+  expect(findRoute(fresh, start, dest, plain)?.familiar).toBe(0);
 });

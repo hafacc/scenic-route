@@ -203,6 +203,8 @@ function routeOver(
     rides: [],
     ferries: [],
     factors: noFactors(),
+    familiar: 0,
+    sheds: 0,
     factorSeconds: noFactors(),
     pricedSeconds: { shade: 0, hill: 0, familiar: 0 },
     start: snap(
