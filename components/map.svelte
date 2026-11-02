@@ -202,7 +202,13 @@ onMount(() => {
     />
   {/each}
   {#if userLocation}
-    <Marker position={[userLocation.lat, userLocation.lng]} icon={userIcon} />
+    <!-- Above every map mark; taps pass through so the start pin under it stays draggable. -->
+    <Marker
+      position={[userLocation.lat, userLocation.lng]}
+      icon={userIcon}
+      zIndexOffset={10000}
+      interactive={false}
+    />
   {/if}
   {#if draft}
     <Marker position={[draft.lat, draft.lng]} icon={draftIcon} />
