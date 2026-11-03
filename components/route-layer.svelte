@@ -3,6 +3,7 @@ import L from "leaflet";
 import { onMount, untrack } from "svelte";
 import { CROSS_CITY_METERS } from "../src/cities";
 import { FERRY_COLOR } from "../src/overlays/colors";
+import { lineColor } from "../src/overlays/line-colors";
 import type { RoutingGraph } from "../src/routing/graph";
 import {
   buildDrawing,
@@ -23,6 +24,7 @@ import Polyline from "./leaflet/polyline.svelte";
 import { getMap } from "./map-context";
 import { destIcon, startIcon } from "./map-icons";
 import type { RouteLine } from "./map-types";
+import { useMapTheme } from "./use-map-theme.svelte";
 
 const TILE_SIZE = 256;
 const PANE_NAME = "route";
@@ -177,7 +179,7 @@ class RouteGrid extends CanvasGrid {
       context.strokeStyle = FERRY_COLOR[currentTheme()];
       context.stroke(ferryPath);
       for (const [color, path] of ridePaths) {
-        context.strokeStyle = color;
+        context.strokeStyle = lineColor(color, currentTheme());
         context.stroke(path);
       }
       const dash = width * TRANSFER_WIDTH * TRANSFER_DASH;
@@ -313,6 +315,7 @@ const {
 }: RouteLayerProps = $props();
 const map = getMap();
 const current = useCity();
+const theme = useMapTheme();
 const cityId = $derived(current().id);
 let grid: RouteGrid | null = null;
 const dropped = $derived(destIcon(markerColor));
@@ -576,7 +579,7 @@ const showConnector = $derived(
   <!-- Under the route badge, over map marks. -->
   <Marker
     position={[station.lat, station.lng]}
-    icon={stationIcon(station.color)}
+    icon={stationIcon(lineColor(station.color, theme.current))}
     zIndexOffset={850}
     interactive={false}
   />
