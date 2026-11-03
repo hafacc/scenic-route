@@ -78,6 +78,7 @@ import {
   type LatLng,
   withoutDestQuery,
 } from "../src/url-state";
+import { WalkGaps } from "../src/walks/gap";
 import { walks } from "../src/walks/history";
 import { type Fix, WalkTracker } from "../src/walks/tracker";
 import AboutDialog from "./about-dialog.svelte";
@@ -353,6 +354,7 @@ $effect(() => {
 const storedSettings = useSettings();
 const trackWalks = $derived(storedSettings.current.trackWalks);
 const walkTracker = new WalkTracker();
+const walkGaps = new WalkGaps();
 
 // Only while opted in, and only from the watch the location dot already runs.
 function trackFix(position: GeolocationPosition): void {
@@ -370,7 +372,11 @@ function trackFix(position: GeolocationPosition): void {
   loadRouting(cityId).then(
     ({ graph, index }) => {
       const keys = walkTracker.observe(fix, graph, index);
-      for (const key of trackWalks ? keys : []) {
+      const filled = walkTracker.fresh(
+        walkGaps.observe(fix, graph, index),
+        fix.at,
+      );
+      for (const key of trackWalks ? [...keys, ...filled] : []) {
         walks.record(cityId, key, fix.at);
       }
     },

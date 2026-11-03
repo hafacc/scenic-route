@@ -58,11 +58,7 @@ export class WalkTracker {
       return [];
     }
     this.previous = { fix, edge: match.edge };
-    for (const [stale, pass] of this.passes) {
-      if (fix.at - pass.at >= PASS_MS) {
-        this.passes.delete(stale);
-      }
-    }
+    this.expire(fix.at);
     const bridge =
       previous !== null && fix.at - previous.fix.at < PASS_MS ? previous : null;
     // The step from the last fix runs along whichever of the two streets both fixes sit on.
@@ -117,6 +113,30 @@ export class WalkTracker {
       }
     }
     return counted;
+  }
+
+  // The keys this pass hasn't counted yet, now counted whole; a gap's fill goes through here.
+  fresh(keys: readonly number[], at: number): number[] {
+    this.expire(at);
+    const counted = keys.filter((key) => !this.passes.get(key)?.counted);
+    for (const key of counted) {
+      this.passes.set(key, {
+        from: Number.POSITIVE_INFINITY,
+        to: Number.NEGATIVE_INFINITY,
+        ...this.passes.get(key),
+        at,
+        counted: true,
+      });
+    }
+    return counted;
+  }
+
+  private expire(at: number): void {
+    for (const [stale, pass] of this.passes) {
+      if (at - pass.at >= PASS_MS) {
+        this.passes.delete(stale);
+      }
+    }
   }
 
   // The device's own speed where it has one; else the pace since the last fix.
