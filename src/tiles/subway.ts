@@ -1,4 +1,5 @@
 import { STATION_LABEL_COLOR } from "../overlays/colors";
+import { letterColor, lineColor } from "../overlays/line-colors";
 import {
   decodeSubway,
   mergeStations,
@@ -301,7 +302,7 @@ function bulletPath(
   }
 }
 
-// route_text_color is published for the name inside the bullet.
+// route_text_color names the bullet by day; at night letterColor sets it off the lifted fill.
 function drawBullets(
   context: OffscreenCanvasRenderingContext2D,
   subway: Subway,
@@ -331,14 +332,21 @@ function drawBullets(
     for (const [column, index] of inRow.entries()) {
       const bullet = subway.bullets[index];
       const centerX = left + column * pitch;
-      context.fillStyle = bullet?.color ?? NEUTRAL_COLOR;
+      context.fillStyle = lineColor(
+        bullet?.color ?? NEUTRAL_COLOR,
+        themeName(),
+      );
       bulletPath(context, centerX, centerY, radius, bullet?.diamond ?? false);
       context.fill();
       context.stroke();
       const legend = bullet && bulletText(context, bullet, diameter);
       if (bullet && legend) {
         context.font = `700 ${legend.size}px ${BULLET_FONT_FAMILY}`;
-        context.fillStyle = bullet.textColor;
+        context.fillStyle = letterColor(
+          bullet.color,
+          bullet.textColor,
+          themeName(),
+        );
         context.save();
         context.translate(centerX, centerY);
         context.scale(legend.squeeze, 1);
@@ -387,7 +395,7 @@ function drawLines(
             projectY(lats[vertex], zoom) - originY + offset * normalY[vertex],
           );
         }
-        context.strokeStyle = color;
+        context.strokeStyle = lineColor(color, themeName());
         context.beginPath();
         splinePath(context, pixelX, pixelY);
         context.stroke();
@@ -435,7 +443,7 @@ function drawStations(
           context.beginPath();
           context.arc(markerX, markerY, halfWidth, 0, 2 * Math.PI);
           context.fill();
-          context.strokeStyle = subway.rings[station];
+          context.strokeStyle = lineColor(subway.rings[station], themeName());
           context.stroke();
         }
       }
