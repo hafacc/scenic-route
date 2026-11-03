@@ -526,8 +526,7 @@ pub struct Streets {
     pub ids: Vec<u32>,    // CSCL physicalid (STRT) or OSM way id (PATH)
     pub road_types: Vec<u8>, // 1 street, 3 bridge, 4 tunnel, 5 boardwalk, 6 path, 7 step, 10 alley
     pub width_feet: Vec<u8>, // curb to curb, 0 unknown
-    // bit0 vehicular-only, bit1 non-vehicular deck, bit2 structure; on PATH and SWLK bit3 is tunnel
-    // on STRT bits 3-6 are sidewalks: OSM-mapped left/right, then surveyed left/right
+    // bit0 vehicular-only, bit1 non-vehicular deck, bit2 structure; bit3 tunnel on PATH/SWLK, bits 3-6 sidewalks on STRT
     pub flags: Vec<u8>,
     pub name_ids: Vec<u16>, // per segment: index into `names`, 0xFFFF when the row carried no label
     pub names: Vec<String>, // the distinct street names, decoded from the trailing name blob

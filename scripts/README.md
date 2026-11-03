@@ -2151,7 +2151,7 @@ meaning of a few record fields differ. Per 24-byte record:
 | 20 | u8 | rw_type | **kind: 6 = path, 7 = steps** (the two the model distinguishes) |
 | 21 | u8 | street width | **0** — a path has no roadway, so it is sampled once on its line |
 | 22 | u8 | posted speed | **0** |
-| 23 | u8 | flags | **bit2 structure** (a bridge/tunnel deck or a non-zero `layer`) and **bit3 tunnel** (`tunnel` present and not `no`, or `covered=yes`) only; bits 0/1 are zero. A tunnelled way sets both. Bit3 is the left-sidewalk bit on STRT, so read it as a tunnel only here |
+| 23 | u8 | flags | **bit2 structure** (a bridge/tunnel deck or a non-zero `layer`) and **bit3 tunnel** (`tunnel` present and not `no`, or `covered=yes`) only; bits 0/1 are zero. A tunneled way sets both. Bit3 is the left-sidewalk bit on STRT, so read it as a tunnel only here |
 
 Kind 6/7 both drive `half_offset_meters` to 0, so — exactly like a boardwalk or a CSCL path — the
 one sample taken on the centerline fills both density bytes of the vertex. The name blob holds the
@@ -4880,7 +4880,7 @@ here.** Alameda County's city limits are legal limits, and Oakland's, Berkeley's
 out over their tidelands as far as −122.347, most of the way to Yerba Buena Island. So the shoreline
 is *subtracted* rather than read — Census TIGER areal hydrography, codes H2051 (bay, estuary, gulf or
 sound) and H2053 (ocean), which between them are San Francisco Bay, the Oakland Estuary that
-separates Alameda island from Oakland, San Leandro Bay and Seaplane Harbour. Lakes and reservoirs
+separates Alameda island from Oakland, San Leandro Bay and Sea Plane Harbor. Lakes and reservoirs
 carry their own codes and are deliberately left in the land: Lake Merritt has no streets on it, and
 punching it out would only add rings. Southern Marin needs no subtracting at all — Sausalito is
 nearer the Ferry Building than San Leandro is, so the bounding rectangle reaches it, but no Marin

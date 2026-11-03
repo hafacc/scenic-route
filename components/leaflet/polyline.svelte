@@ -3,7 +3,6 @@ import L from "leaflet";
 import { onMount, untrack } from "svelte";
 import { getMap } from "../map-context";
 
-// A Leaflet polyline.
 interface Props {
   positions: L.LatLngExpression[];
   interactive?: boolean;

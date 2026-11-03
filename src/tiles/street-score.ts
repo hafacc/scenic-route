@@ -129,7 +129,7 @@ export function chunksAround(
   return found;
 }
 
-// The tile's own chunks must load; a neighbour only feeds the margin, so a failed one is left out.
+// The tile's own chunks must load; a neighbor only feeds the margin, so a failed one is left out.
 export function loadAround<Loaded>(
   coords: TileCoords,
   margin: number,
@@ -152,7 +152,7 @@ function strokeWidth(zoom: number): number {
 
 // Also the genus wash's (./genus.ts), which strokes the same lines as a density mask.
 export async function loadStreets(coords: TileCoords): Promise<Segment[]> {
-  // Chunks are filed by bbox alone, so a neighbour's sidewalk reaches in by a width plus the widest offset.
+  // Chunks are filed by bbox alone, so a neighbor's sidewalk reaches in by a width plus the widest offset.
   const width = strokeWidth(coords.z);
   const margin =
     width + Math.max(MAX_OFFSET_METERS / tileMetersPerPixel(coords), width);

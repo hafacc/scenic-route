@@ -32,8 +32,7 @@ const VOLUME_SOURCES: Record<string, (box: Bounds) => Promise<VolumeLine[]>> = {
   nyc: fetchHpmsVolumes,
 };
 
-// Per class byte, the length-weighted median severity of New York's counted lines of that class,
-// measured 2026-09-24; rail has no count and keeps full weight.
+// Per class byte, the length-weighted median severity of New York's counted lines (2026-09-24); uncounted rail keeps full weight.
 export const CLASS_SEVERITY: readonly number[] = [
   1, 0.582, 0.249, 0.133, 0.086, 1,
 ];

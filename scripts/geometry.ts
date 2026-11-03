@@ -9,7 +9,6 @@ export const COORD_SCALE = 1e-6; // degrees per quantized unit, ~0.1 m
 
 export const EARTH_RADIUS_METERS = 6_371_008.8;
 
-// Great-circle distance in meters.
 export function haversineMeters(from: Coord, to: Coord): number {
   const fromLat = from.lat * (Math.PI / 180);
   const toLat = to.lat * (Math.PI / 180);

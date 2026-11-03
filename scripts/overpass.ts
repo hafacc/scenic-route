@@ -716,8 +716,7 @@ const LINK_SUFFIX = "_link";
 const HIGHWAY_CLASSES = "^(motorway|trunk|primary|secondary|tertiary)(_link)?$";
 const RAIL_CLASSES = "^(rail|subway|light_rail)$";
 
-// Tunnels drop out on both branches. Any rail not underground counts: open cuts carry no bridge/layer
-// tag, so "elevated only" misses them.
+// Tunnels drop out on both branches; open cuts carry no bridge/layer tag, so any rail not underground counts.
 export function nuisanceLineOf(element: OverpassElement): NuisanceLine | null {
   if (
     element.type !== "way" ||

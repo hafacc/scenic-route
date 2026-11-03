@@ -72,8 +72,8 @@ test("pinning the live start where it stands, or naming it, keeps the same searc
   const live = resolveStart(NO_START, null, UNION_SQUARE);
   const pinned = resolveStart(live, { ...UNION_SQUARE }, UNION_SQUARE);
   expect(pinned.point).toBe(live.point);
-  const relabelled = resolveStart(pinned, { ...UNION_SQUARE }, BRYANT_PARK);
-  expect(relabelled).toBe(pinned);
+  const relabeled = resolveStart(pinned, { ...UNION_SQUARE }, BRYANT_PARK);
+  expect(relabeled).toBe(pinned);
 });
 
 test("clearing a named start goes back to the position, however near the old one was", () => {

@@ -97,8 +97,7 @@ function decodeHway(buffer: ArrayBuffer): {
     }
   }
 
-  // The service worker can serve a cached older blob to fresh JS: v1 has no trailing bytes and
-  // reads as all motorway, v2 has classes but no severities and reads its class's.
+  // A cached older blob may meet fresh JS: v1 has no trailing bytes (all motorway), v2 no severities (its class's).
   const classes = new Uint8Array(polylines.length);
   const severities = new Float32Array(polylines.length).fill(1);
   const hasClasses = format >= 2 && cursor.offset + count <= bytes.length;
@@ -357,8 +356,7 @@ function draw(
           }
         }
       }
-      // Erase what's under the group, then paint it: a pixel keeps the alpha of the last and so
-      // strongest group covering it rather than the sum, and one stroke never overlaps itself.
+      // Erase under the group, then paint, so a pixel keeps the last and strongest group's alpha and a stroke never overlaps itself.
       context.globalCompositeOperation = "destination-out";
       context.globalAlpha = 1;
       context.stroke();

@@ -9,7 +9,7 @@ export function setMap(map: () => L.Map | null): void {
   setMapGetter(map);
 }
 
-// Called while a layer component initialises, which is always after the map exists.
+// Called while a layer component initializes, which is always after the map exists.
 export function getMap(): L.Map {
   const map = mapGetter()();
   if (map === null) {

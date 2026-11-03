@@ -114,7 +114,7 @@ function draw(
   const zoom = coords.z;
   const originX = coords.x * TILE_SIZE;
   const originY = coords.y * TILE_SIZE;
-  // Padded, so districts just past the edge feed the blur and neighbouring tiles seam.
+  // Padded, so districts just past the edge feed the blur and neighboring tiles seam.
   const northWest = unproject(originX - BLUR_PAD, originY - BLUR_PAD, zoom);
   const southEast = unproject(
     originX + TILE_SIZE + BLUR_PAD,

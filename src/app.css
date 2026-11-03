@@ -94,14 +94,12 @@
 
 /* Never darken the map with a filter: inverting a style makes its key lines the least visible. */
 
-/* Blocks pinch-zoom off the map; the viewport meta would make iOS swallow Leaflet's pinch too.
-   `touch-action` intersects up the tree, so the map's own `none` still lets Leaflet handle it. */
+/* Blocks pinch-zoom off the map but not Leaflet's (the map sets its own `none`); the viewport meta would block both on iOS. */
 html {
   touch-action: pan-x pan-y;
 }
 
-/* Viewport-anchored surfaces cap their outer box at 100dvh less offsets; one child list scrolls.
-   `dvh`, not `vh`: mobile `100vh` assumes the URL bar is retracted, so it overflows when shown. */
+/* Viewport-anchored surfaces cap at 100dvh less offsets (not vh, which ignores a shown URL bar); one child list scrolls. */
 .toolbar-menu,
 .toolbar-menu-shell {
   max-height: calc(100dvh - 60px - env(safe-area-inset-bottom) - 0.75rem);

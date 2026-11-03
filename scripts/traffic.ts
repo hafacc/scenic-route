@@ -181,8 +181,7 @@ function distance2(
   return ex * ex + ey * ey;
 }
 
-// Each ~10 m of a road takes its nearest count line within reach, preferring one of the same
-// name; the line's AADT is the length-weighted median of those.
+// Each ~10 m of road takes its nearest count line in reach, same name preferred; a line's AADT is their length-weighted median.
 export function conflateVolumes(
   roads: readonly RoadLine[],
   volumes: readonly VolumeLine[],

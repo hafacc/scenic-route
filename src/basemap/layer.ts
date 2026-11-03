@@ -23,8 +23,7 @@ const BASEMAP_PREFIX = BASEMAP_URL.slice(0, BASEMAP_URL.indexOf("{"));
 
 let statusChecked = false;
 
-// protomaps-leaflet ignores the status and decodes the error page, so a 403 surfaces as
-// `Unimplemented type: 7`; wrapping fetch is the only seam, and aborts must still reject as aborts.
+// protomaps-leaflet decodes error pages (a 403 reads as `Unimplemented type: 7`), so fetch is wrapped; aborts still reject as aborts.
 function checkTileStatus(): void {
   // Prerendering evaluates this module on the server too, where there is no map and no fetch to wrap.
   if (statusChecked || typeof window === "undefined") {

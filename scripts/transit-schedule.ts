@@ -140,8 +140,7 @@ export function deriveBands(departures: readonly number[]): Band[] {
   return bands;
 }
 
-// Patterns come from `committed`, which the graph indexes into; the share rule is off since a
-// pattern this run would drop is still boardable. Sorted, so an unchanged feed writes identical bytes.
+// Patterns come from `committed`, which the graph indexes; no share rule, since a dropped pattern is still boardable. Sorted for stable bytes.
 export function buildTimetable(
   loaded: readonly LoadedFeed[],
   committed: TransitTopology,
