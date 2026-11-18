@@ -3,8 +3,8 @@ import { projectX, projectY, unproject } from "./mercator";
 
 // Sub-pixel drift would seam overlays, so pin the transcription to leaflet's CRS bit for bit.
 
-// leaflet sniffs the browser at import, so it needs just enough of one to get through that.
-Object.assign(globalThis, {
+// leaflet sniffs the browser at import and sets window.L, so fake just enough of one and put it all back after.
+const browser: Record<string, unknown> = {
   document: {
     documentElement: { style: {} },
     createElement: () => ({ style: {} }),
@@ -15,8 +15,19 @@ Object.assign(globalThis, {
   window: globalThis,
   devicePixelRatio: 1,
   screen: { deviceXDPI: 1, logicalXDPI: 1 },
-});
+};
+const saved = [...Object.keys(browser), "L"].map(
+  (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const,
+);
+Object.assign(globalThis, browser);
 const L = (await import("leaflet")).default;
+for (const [name, descriptor] of saved) {
+  if (descriptor) {
+    Object.defineProperty(globalThis, name, descriptor);
+  } else {
+    delete (globalThis as Record<string, unknown>)[name];
+  }
+}
 
 // Independent axes, so matching errors in lat and lng can't mask each other.
 function* samples(): Generator<{ lat: number; lng: number; zoom: number }> {

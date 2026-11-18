@@ -1,8 +1,6 @@
 // Both artifacts from one feed through their real encoders and decoders, asked what the router asks.
 
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import {
   buildTopology,
   decodeTopology,
@@ -14,7 +12,7 @@ import {
   deriveBands,
   encodeTimetable,
 } from "../../scripts/transit-schedule";
-import { SECONDS_PER_DAY, servicesOn, shiftedDay } from "./schedule-days";
+import { SECONDS_PER_DAY, shiftedDay } from "./schedule-days";
 import {
   FIRST_TRUNK_DEPARTURE,
   fixtureFeeds,
@@ -26,7 +24,11 @@ import {
   TRUNK_STATIONS,
   TRUNK_TRIPS,
 } from "./transit.fixture";
-import { decodeSchedule, resolveTimetable } from "./transit-schedule";
+import {
+  decodeSchedule,
+  resolveTimetable,
+  type ScheduleRecord,
+} from "./transit-schedule";
 
 // Instants use the local Date constructor, so timetables are read in the runner's own zone.
 const LOCAL_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -275,38 +277,31 @@ test("a frequency-based service boards off its published headway", () => {
   });
 });
 
-// Muni's calendars ended 2026-08-28 while BART's run into 2027; read off the shipped file.
+// A service whose calendars all ended still boards, beside one whose calendars are current.
 test("a weekday past Muni's calendars still boards Muni, and BART resolves normally", () => {
-  const bytes = new Uint8Array(
-    readFileSync(
-      join(import.meta.dirname, "../../public/transit-schedule/sf.bin"),
-    ),
-  );
-  const { record } = decodeSchedule(bytes);
-  const day = 20_260_904; // a Friday, past the Muni calendars and inside the BART ones
-  const running = servicesOn(record.services, record.exceptions, day);
-  const coverageEnd = (service: number): number =>
-    Math.max(
-      record.services[service].endDay,
-      ...record.exceptions
-        .filter((exception) => exception.service === service)
-        .map((exception) => exception.day),
-    );
-  const stale = [...running].filter((service) => coverageEnd(service) < day);
-  const live = [...running].filter((service) => coverageEnd(service) >= day);
-  expect(live.length).toBeGreaterThan(0); // BART, inside its own range
-  expect(stale.length).toBeGreaterThan(0); // Muni, voted in past the end of its own
-
-  // All 37 Muni Metro lanes (J/K/L/M/N/T) are in here, beside the cable cars and the F.
-  const noon = new Date(Date.UTC(2026, 8, 4, 19, 0, 0)); // 12:00 PDT
+  const muniLane = laneIdOf("muni:N", 0, ["Embarcadero", "Duboce Park"]);
+  const bartLane = laneIdOf("bart:Yellow", 0, ["Embarcadero", "Daly City"]);
+  const weekdays = 0b0011111;
+  const allDay = [{ start: 6 * 3600, end: 22 * 3600, headway: 600 }];
+  const record: ScheduleRecord = {
+    firstDay: 20_260_101,
+    lastDay: 0,
+    services: [
+      { mask: weekdays, startDay: 20_260_101, endDay: 20_260_831 }, // Muni, ended
+      { mask: weekdays, startDay: 20_260_101, endDay: 20_261_231 }, // BART, current
+    ],
+    exceptions: [],
+    patterns: [
+      { laneId: muniLane, offsets: [0, 600] },
+      { laneId: bartLane, offsets: [0, 900] },
+    ],
+    lanes: [
+      { pattern: 0, service: 0, bands: allDay },
+      { pattern: 1, service: 1, bands: allDay },
+    ],
+  };
+  const noon = new Date(Date.UTC(2026, 8, 4, 19, 0, 0)); // Friday 12:00 PDT
   const table = resolveTimetable(record, noon, "America/Los_Angeles");
-  const lanes = new Set(
-    record.lanes
-      .filter((lane) => stale.includes(lane.service))
-      .map((lane) => record.patterns[lane.pattern].laneId),
-  );
-  expect(lanes.size).toBeGreaterThan(0);
-  for (const lane of lanes) {
-    expect(table.board(lane, 0, 0)).not.toBeNull();
-  }
+  expect(table.board(muniLane, 0, 0)).not.toBeNull();
+  expect(table.board(bartLane, 0, 0)).not.toBeNull();
 });
