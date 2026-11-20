@@ -6,7 +6,7 @@ import type { TileCoords } from "./protocol";
 const TILE_SIZE = 256;
 const EQUATOR_METERS_PER_PIXEL = 156_543.033_92; // web mercator, at the equator, at z0
 
-// The pad (~3× max blur) lets geometry past the tile edge feed the blur, so neighbours seam.
+// The pad (~3× max blur) lets geometry past the tile edge feed the blur, so neighbors seam.
 export const MAX_BLUR_PX = 5;
 export const BLUR_PAD = 15;
 

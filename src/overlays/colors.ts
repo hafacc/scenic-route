@@ -84,7 +84,7 @@ export const SUBWAY_COLOR: Record<ThemeName, string> = {
   dark: "#4d94ff",
 };
 
-// Station names over the basemap-coloured label halo: ink by day, white by night.
+// Station names over the basemap-colored label halo: ink by day, white by night.
 export const STATION_LABEL_COLOR: Record<ThemeName, string> = {
   light: "#334155", // slate-700
   dark: "#ffffff",

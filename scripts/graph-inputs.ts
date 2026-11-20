@@ -1,5 +1,4 @@
-// Stamps what can change the graph's durable key set, which sheds resolve through; attribute-only
-// inputs move no key. Reads the tiler's reports; computes nothing.
+// Stamps what can change the graph's durable key set, which sheds resolve through (attribute-only inputs move none); reads the tiler's reports.
 
 import { readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
@@ -45,8 +44,7 @@ export async function graphInputStamp(city: ShedCity): Promise<{
   return { stamp, files };
 }
 
-// Code half: the key hash the pipeline produces on a fixture of real NYC slices, which stamps
-// behavior rather than source text. One per tiler, so every city's record carries the same one.
+// Code half: the key hash on a fixture of real NYC slices, stamping behavior not source; one per tiler, shared by every city.
 export async function keySpaceProbe(): Promise<string> {
   const { keyHash } = await report<{ keyHash?: string }>(
     PROBE_REPORT,

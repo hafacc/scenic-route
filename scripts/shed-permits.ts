@@ -438,8 +438,7 @@ export function distinctBlobs(sources: readonly SnapshotSource[]): string[] {
   return blobs;
 }
 
-// Each blob reuses one buffer, valid until the next. Shas are checked because a pipeline's status is
-// its last command's, so git dying halfway would otherwise look like a history that just stopped.
+// Each blob reuses one buffer, valid until the next; shas are checked since a pipeline only reports its last command's status.
 async function* readBlobs(
   stream: AsyncIterable<Uint8Array>,
   blobs: readonly string[],

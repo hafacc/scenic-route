@@ -14,9 +14,7 @@ const MARKED: [RegExp, string][] = [
 ];
 
 // Names the app whose embedded browser shows the page, or null for a real browser.
-// Only a webview that marks or strips the user agent is caught. An SFSafariViewController
-// (Slack, Discord and many others) and an Android Custom Tab send the
-// browser's user agent verbatim and expose no script signal, so they read as Safari or Chrome.
+// SFSafariViewController and Android Custom Tabs send the browser's own user agent, so they read as Safari or Chrome.
 export function inAppBrowser(agent: string): string | null {
   const marked = MARKED.find(([pattern]) => pattern.test(agent));
   if (marked) {

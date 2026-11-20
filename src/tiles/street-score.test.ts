@@ -29,7 +29,7 @@ async function requested(
   return fetched.filter((path) => path.startsWith(prefix)).sort();
 }
 
-test("a street tile on a chunk edge pulls its neighbour, one a tile in doesn't", async () => {
+test("a street tile on a chunk edge pulls its neighbor, one a tile in doesn't", async () => {
   const y = 210 * CHUNK_TILES + 9;
   expect(
     await requested("/streets/", () =>
@@ -43,7 +43,7 @@ test("a street tile on a chunk edge pulls its neighbour, one a tile in doesn't",
   ).toEqual(["/streets/111/210.bin"]);
 });
 
-test("a commercial tile on a chunk edge pulls its neighbour, one a tile in doesn't", async () => {
+test("a commercial tile on a chunk edge pulls its neighbor, one a tile in doesn't", async () => {
   const params = { kind: "commercial" } as const;
   const y = 220 * CHUNK_TILES + 9;
   expect(
@@ -77,7 +77,7 @@ test("an interior tile needs only its own chunk, however wide its margin", () =>
   expect(chunksAround(coords, 200)).toEqual([{ x: 100, y: 200 }]);
 });
 
-test("a tile on a chunk's corner takes its neighbours once the margin crosses", () => {
+test("a tile on a chunk's corner takes its neighbors once the margin crosses", () => {
   const coords = { x: 100 * CHUNK_TILES, y: 201 * CHUNK_TILES - 1, z: 17 };
   expect(chunksAround(coords, 0)).toEqual([{ x: 100, y: 200 }]);
   expect(chunksAround(coords, 1)).toEqual([
@@ -97,7 +97,7 @@ test("an overview tile spans the chunks under it", () => {
   ]);
 });
 
-test("a neighbour that fails to load leaves the tile drawing without it", async () => {
+test("a neighbor that fails to load leaves the tile drawing without it", async () => {
   const coords = { x: 100 * CHUNK_TILES, y: 200 * CHUNK_TILES + 9, z: 17 };
   const loaded = await loadAround(
     coords,

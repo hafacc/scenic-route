@@ -300,8 +300,7 @@ pub fn encode(edges: &[EdgeEnds], runs: &[Runs], key_hash: u64) -> (Vec<u8>, Sta
         from = to;
     }
 
-    // Straight on, cover joins whatever its length. Round a corner only a piece long enough to draw
-    // alone joins, or a short one that runs node to node between two others: anything else is a barb.
+    // Straight on, cover always joins; round a corner only a drawable piece or a node-to-node bridge joins, else it's a barb.
     let short = |piece: u32| piece_meters[piece as usize] < MIN_STRETCH_METERS;
     let mut turns: Vec<bool> = (0..total)
         .map(|piece| !short(piece) || through[piece as usize])

@@ -1039,8 +1039,7 @@ mod mosaic_tests {
         (bounds, grid)
     }
 
-    // The runs must read every cell from the same tile a cell-by-cell sweep would, decoding each
-    // tile once where the sweep decodes on every change of tile.
+    // The runs read every cell from the tile a cell-by-cell sweep would, but decode each tile once.
     #[test]
     fn the_run_resample_reads_what_a_cell_by_cell_sweep_does_decoding_each_tile_once() {
         let (_, grid) = around_the_block();

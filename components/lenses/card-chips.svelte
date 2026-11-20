@@ -28,7 +28,7 @@ const EXPLORER: Partial<Record<ChipKey, ChipFace>> = Object.fromEntries(
 );
 const sheds = GATES.find((gate) => gate.key === "allowSheds");
 
-// Explorer's own faces, relabelled where a card reads the share its own way.
+// Explorer's own faces, relabeled where a card reads the share its own way.
 const FACES: Partial<Record<ChipKey, ChipFace>> = {
   ...EXPLORER,
   // The number counts the rain you are out in, so a bigger one has to read as wetter.

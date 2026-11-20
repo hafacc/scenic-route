@@ -52,7 +52,7 @@ $effect(() => {
   };
 });
 
-// Strings, so a relabelled endpoint compares equal; the start is null until one is named.
+// Strings, so a relabeled endpoint compares equal; the start is null until one is named.
 const startKey = $derived(
   shell.manualStart
     ? `${shell.manualStart.lat},${shell.manualStart.lng}`

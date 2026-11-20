@@ -42,8 +42,7 @@ function stops(...hexes: string[]): readonly Rgb[] {
   return hexes.map(hexToRgb);
 }
 
-// Monotonic in lightness and mintier than the emerald route line; darkens on paper, brightens at
-// night, and the night ramp is grayer since saturation shouts on a dark ground.
+// Monotonic in lightness and mintier than the route line; the night ramp is grayer since saturation shouts on dark.
 export const CANOPY_HEX: Record<ThemeName, readonly string[]> = {
   light: [
     "#ccfbf1",
@@ -120,8 +119,7 @@ function paletteFor(theme: ThemeName): Palette {
       relief: null,
       reliefScale: 1,
     },
-    // Height in red, relief in green, ground share in alpha (crates/tiler/src/elevation.rs); relief
-    // exceeds 1 to brighten lit faces, matching HILLSHADE_MAX, and opacity keeps the basemap legible.
+    // Height in R, relief in G, ground share in A (crates/tiler/src/elevation.rs); relief over 1 brightens lit faces, matching HILLSHADE_MAX.
     elevation: {
       stops: ELEVATION_STOPS[theme],
       value: "red",

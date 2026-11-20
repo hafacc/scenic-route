@@ -20,8 +20,7 @@ function withoutLinks(text: string): string {
     .replace(TRIM, "");
 }
 
-// The whole string, then each comma part in written order; dashes aren't split on, or "Joe's Pizza
-// — 5 min" matches 5 Minetta Street as an exact address.
+// The whole string, then each comma part in order; not dashes, or "Joe's Pizza — 5 min" matches 5 Minetta Street.
 export function sharedQueries(text: string): string[] {
   const whole = text.trim();
   const parts = whole

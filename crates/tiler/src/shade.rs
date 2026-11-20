@@ -925,8 +925,7 @@ impl CityShade {
                 } else if self.ring_hulls[level_start + at] {
                     HullSize::one_ring(1, 2 * vertices)
                 } else {
-                    // Both rings and the strips: a run needs a facing edge and ends on one that
-                    // isn't, or is cut every MAX_SWEEP_RUN vertices, and a strip doubles its run.
+                    // Both rings and the strips: a run starts on a facing edge, ends on one that isn't or at MAX_SWEEP_RUN; a strip doubles its run.
                     let strips = vertices / 2 + vertices / (MAX_SWEEP_RUN - 1) + 1;
                     HullSize::one_ring(2 + strips, 2 * vertices + 2 * (vertices + strips))
                 };
@@ -2922,8 +2921,7 @@ mod tests {
         }
     }
 
-    // However the quadtree is cut, held, rooted or streamed, every tile comes out as it does
-    // rendered alone from its own hulls, down to the byte, and is counted the same.
+    // However the quadtree is cut, held, rooted or streamed, every tile matches its alone-rendered bytes and count.
     #[test]
     fn scheduled_render_matches_per_tile_streaming() {
         let world = World::new(vec![fixture_city(), second_city()]);
@@ -2980,8 +2978,7 @@ mod tests {
             assert!(!held_top.roots.is_empty());
             check("held z9", &held_top, 3);
 
-            // Held down to z11 with working sets too small for the upper zooms, so roots land at
-            // several depths and the quadrant west of the city catches the spill into it.
+            // Held to z11 with small working sets, so roots land at several depths and the west quadrant catches the spill.
             let mut mixed = 0;
             for per_task in (16..256).map(|step| step << 13) {
                 let schedule = planner.schedule_with(per_task, Some(11), usize::MAX);
@@ -3049,8 +3046,7 @@ mod tests {
         );
     }
 
-    // The index's boxes come from the geometry alone, yet hold every hull and, where there are
-    // any, are exactly their box; the byte estimates bound the hulls without overshooting much.
+    // Index boxes from geometry alone hold every hull and, where there are any, equal their box; byte estimates bound hulls without much overshoot.
     #[test]
     fn analytic_boxes_bound_the_hulls() {
         let world = World::new(vec![fixture_city()]);
@@ -3108,8 +3104,7 @@ mod tests {
         }
     }
 
-    // Given the room, the schedule hulls each caster about once per slot, and building the index
-    // hulls nothing; with none, every zoom regenerates the hulls its tiles see.
+    // Given room, the schedule hulls each caster about once per slot and indexing hulls nothing; with none, every zoom regenerates.
     #[test]
     fn each_caster_is_hulled_about_once() {
         let pool = rayon::ThreadPoolBuilder::new()
@@ -3138,8 +3133,7 @@ mod tests {
         assert!(none >= 4.0, "{none:.2}x without");
     }
 
-    // Every root fits its share of what the held masks leave, and no budget holds nothing and
-    // roots nothing that casts.
+    // Every root fits its share of what held masks leave, and a zero budget holds nothing and roots nothing that casts.
     #[test]
     fn schedules_keep_to_the_budget() {
         let world = World::new(vec![fixture_city(), second_city()]);

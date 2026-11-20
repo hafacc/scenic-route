@@ -77,7 +77,6 @@ export class PolygonPacker {
     this.closeRing();
   }
 
-  // Copies ring `ring` of `from`.
   copyRing(from: PackedPolygons, ring: number): void {
     const start = from.ringStarts[ring];
     const end = from.ringStarts[ring + 1];

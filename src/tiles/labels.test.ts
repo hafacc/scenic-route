@@ -110,7 +110,7 @@ test("the halo is the active theme's basemap background", () => {
   }
 });
 
-// Every fill a label draws in; art has no text shade, so its dot colour labels it.
+// Every fill a label draws in; art has no text shade, so its dot color labels it.
 const LABEL_FILLS = {
   landmark: LANDMARK_TEXT_COLOR,
   legacy: LEGACY_TEXT_COLOR,

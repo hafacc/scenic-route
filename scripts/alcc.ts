@@ -1,7 +1,6 @@
 // ALCC 1 m canopy height model, in feet; cover is it thresholded, so the county mask isn't fetched.
 // Read via the lossless tile service: the zip is Deflate64, which Bun and libarchive can't read.
-// License: Pacific Veg Map, which publishes it, states "All of the map data accessible via this
-// site is in the public domain and is freely accessible to all" (read 2026-08-27).
+// License: Pacific Veg Map states its map data "is in the public domain and is freely accessible to all" (read 2026-08-27).
 
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";

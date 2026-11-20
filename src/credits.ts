@@ -135,8 +135,7 @@ export const CITY_SOURCES: Record<string, readonly DataSource[]> = {
 };
 
 export const SHARED_SOURCES: readonly DataSource[] = [
-  // CDLA-Permissive-2.0 asks that its text travel with the data; the search index also holds OSM
-  // path names, which makes it an ODbL derivative credited below.
+  // CDLA-Permissive-2.0 asks that its text travel with the data; the index's OSM path names make it ODbL too, credited below.
   {
     label: "Places",
     detail: "Overture Maps Foundation (CDLA-Permissive-2.0)",

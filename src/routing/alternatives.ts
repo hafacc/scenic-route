@@ -502,9 +502,9 @@ export async function planRoutes(input: PlanInput): Promise<Plan> {
         .map((factor) => candidate[factor])
         .concat(SWITCHES.map((switched) => (candidate[switched] ? 1 : 0))),
     );
-    const memoised = byWeights.get(key);
-    if (memoised !== undefined) {
-      return memoised;
+    const memoized = byWeights.get(key);
+    if (memoized !== undefined) {
+      return memoized;
     }
     if (searches > 0 && input.superseded && (await input.superseded())) {
       superseded = true;

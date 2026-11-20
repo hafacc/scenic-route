@@ -1,5 +1,4 @@
-// Shadows depend only on declination and hour angle, so bins grid those; shared with the bake
-// (scripts/shade-schedule.ts). Azimuth is suncalc's: clockwise from north.
+// Shadows depend only on declination and hour angle, so bins grid those (shared with scripts/shade-schedule.ts); azimuth is clockwise from north.
 const DEGREES = Math.PI / 180;
 
 export const DECL_MAX_DEG = 23.44;

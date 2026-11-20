@@ -153,12 +153,12 @@ function bandWidth(coords: TileCoords): number {
   return Math.max(MIN_BAND_PX, BAND_METERS / tileMetersPerPixel(coords));
 }
 
-// Chunks are filed by bbox alone, so a neighbour's band reaches in by its width plus the blur pad.
+// Chunks are filed by bbox alone, so a neighbor's band reaches in by its width plus the blur pad.
 function load(
   _params: CommercialParams,
   coords: TileCoords,
 ): Promise<ChunkModel[]> {
-  // Below z12 the band is at its 4 px floor, so a ~3 px cut at a chunk seam is accepted to skip neighbours.
+  // Below z12 the band is at its 4 px floor, so a ~3 px cut at a chunk seam is accepted to skip neighbors.
   const margin = coords.z < CHUNK_ZOOM ? 0 : bandWidth(coords) + BLUR_PAD;
   return loadAround(coords, margin, loadChunkModel, NO_MODEL);
 }

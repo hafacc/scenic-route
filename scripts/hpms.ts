@@ -9,8 +9,7 @@ const HPMS_NY_URL =
 const PAGE_SIZE = 2_000;
 const REQUEST_TIMEOUT_MS = 180_000;
 const MAX_ATTEMPTS = 4;
-// Each county's default for an uncounted local street (Kings 986, Queens 739, New York 2157,
-// Bronx 1066, Richmond 383, Nassau 337, Westchester 341): a placeholder, not a count.
+// Placeholder (not counted) AADT for an uncounted local street: Kings, Queens, New York, Bronx, Richmond, Nassau, Westchester.
 export const HPMS_PLACEHOLDER_AADT: readonly number[] = [
   986, 739, 2157, 1066, 383, 337, 341,
 ];

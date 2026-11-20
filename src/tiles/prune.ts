@@ -27,8 +27,7 @@ export default function installTilePrune(): void {
   const updateOpacity = prototype._updateOpacity;
   prototype._updateOpacity = function (this: PrunableGridLayer): void {
     updateOpacity.call(this);
-    // `_setView` prunes when a zoom animation ends. `_initContainer` runs this before `onAdd` makes
-    // `_tiles`, and throwing then would leave the layer half-initialized and failing every zoom.
+    // `_setView` prunes after a zoom animation; `_initContainer` calls this before `_tiles` exists, and throwing would break the layer.
     if (this._noPrune || !this._tiles) {
       return;
     }

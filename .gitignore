@@ -35,22 +35,17 @@
 /public/landuse/
 /public/industrial/
 /public/historic/
-# NOT public/sheds/, public/ferry-schedule/ or public/transit-schedule/: all three are rebuilt daily
-# by a job rather than by a deploy, so they are committed — the job reads the last one out of the
-# checkout and the client reads it off `main` through raw.githubusercontent.com. Never LFS-track any
-# of them (data/README.md).
-# public/ferries/ above is a different thing entirely: the deploy's own drawn ferry lines.
-# Nor public/icons/ or public/sw.js: hand-made static assets that no build step writes.
+# Not public/sheds/, ferry-schedule/ or transit-schedule/: a daily job commits them and the client reads them off `main` (raw.githubusercontent.com); never LFS-track them (data/README.md).
+# public/ferries/ above is different: the deploy's own drawn ferry lines.
+# Nor public/icons/ or public/sw.js: hand-made static assets.
 
-# the named places read out of Overture by `bun run update-places`, an intermediate the search
-# index will consume; re-read from the pinned release rather than committed, unlike the rest of data/
+# Overture places from `bun run update-places`, re-read from the pinned release rather than committed
 /data/places/
 
 # raw source reads cached by `bun run build-tree-data`; --refresh to go back to the network
 /.cache/
 
-# build glue handed between the steps of `bun run build-tiles`, which package.json sequences and so
-# can name no temporary directory of the machine's
+# glue between the steps of `bun run build-tiles`, which can't name a machine temp dir
 /.build/
 
 # rust build output; crates/tiler is compiled by `bun run build-tiles`

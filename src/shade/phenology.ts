@@ -13,8 +13,7 @@ const RAIN_LEAF_OFF = 0.15;
 
 type Transition = [start: [number, number], end: [number, number]];
 
-// [month, day]: leaf-out late April, peak fall late Oct to mid Nov (NYC Parks, Central Park
-// Conservancy); leaf-out drifts ~0.43 d/yr later (doi 10.1088/1748-9326/adf1b9).
+// [month, day]: leaf-out late April, peak fall late Oct to mid Nov (NYC Parks); leaf-out drifts ~0.43 d/yr later (doi 10.1088/1748-9326/adf1b9).
 const LEAF_OUT: Transition = [
   [4, 12],
   [5, 6],

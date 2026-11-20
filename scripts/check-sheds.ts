@@ -1,5 +1,4 @@
-// Fails the deploy if the committed shed file's key space doesn't match the built graph's,
-// which would silently blank every shed. Compares key space, not bytes: f32 lengths differ by OS.
+// Fails the deploy if the shed file's key space (not bytes: f32 lengths differ by OS) mismatches the graph's, which would blank every shed.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";

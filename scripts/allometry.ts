@@ -1,5 +1,4 @@
-// Crown from trunk diameter, per McPherson, van Doorn & Peper 2016 (USDA GTR-PSW-253), whose fits
-// differ by climate region in both coefficients and equation form; only sizes the genus dots.
+// Crown from trunk diameter per McPherson, van Doorn & Peper 2016 (USDA GTR-PSW-253), fit per climate region; only sizes genus dots.
 
 // Registers record dbh in whole inches; the published equations take centimeters.
 export const CM_PER_INCH = 2.54;
