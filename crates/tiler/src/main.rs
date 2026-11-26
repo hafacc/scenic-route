@@ -72,6 +72,7 @@ pub enum Memory {
 const GIB: u64 = 1 << 30;
 
 // What auto leaves the rest of the build: the casters, graph and grids that aren't optional.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 const AUTO_RESERVE: u64 = 3 * GIB;
 
 /// `auto`, or a size such as `0`, `512M`, `12G` or `1.5GiB`; suffixes are powers of 1024.
@@ -132,6 +133,7 @@ fn cgroup_room() -> Option<u64> {
 
 /// What `auto` leaves the caches: 3/4 of what's free past a fixed reserve, but never under an
 /// eighth of it, so a small machine still holds a little rather than regenerating everything.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn auto_budget(available: u64) -> u64 {
     (available.saturating_sub(AUTO_RESERVE) / 4 * 3).max(available / 8)
 }
@@ -166,7 +168,26 @@ fn detect_budget() -> (u64, String) {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS has no MemAvailable, so the budget is sized from the machine's physical memory.
+#[cfg(target_os = "macos")]
+fn detect_budget() -> (u64, String) {
+    let memsize = std::process::Command::new("/usr/sbin/sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|text| text.trim().parse::<u64>().ok());
+    match memsize {
+        Some(bytes) => (
+            auto_budget(bytes),
+            format!("auto: hw.memsize {}", gib(bytes)),
+        ),
+        None => (0, "auto: no hw.memsize, so none".to_owned()),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn detect_budget() -> (u64, String) {
     (0, "auto: not detected on this platform, so none".to_owned())
 }

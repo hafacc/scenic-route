@@ -1,6 +1,7 @@
 // `--memory` for the fetch scripts, with the same semantics as crates/tiler/src/main.rs.
 
 import { readFileSync } from "node:fs";
+import { totalmem } from "node:os";
 import { join } from "node:path";
 
 const GIB = 2 ** 30;
@@ -104,6 +105,11 @@ function gib(bytes: number): string {
 export function memoryBudget(memory: Memory): { bytes: number; why: string } {
   if (memory !== "auto") {
     return { bytes: memory, why: "--memory" };
+  }
+  // macOS has no MemAvailable; os.totalmem() is hw.memsize, which the tiler reads there too.
+  if (process.platform === "darwin") {
+    const total = totalmem();
+    return { bytes: autoBudget(total), why: `auto: hw.memsize ${gib(total)}` };
   }
   const free = procKib(readText("/proc/meminfo") ?? "", "MemAvailable");
   if (free === null) {
