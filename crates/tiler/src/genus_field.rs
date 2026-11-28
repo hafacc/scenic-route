@@ -9,10 +9,10 @@ use rayon::prelude::*;
 use crate::Fallible;
 use crate::binfmt::{self, LAND_FORMAT, Trees};
 use crate::geometry::{self, Projection};
-use crate::manifest::{City, Manifest};
+use crate::manifest::City;
 use crate::raster::{
     EQUATOR_METERS_PER_PIXEL, LandMask, MIN_ZOOM, TILE_SIZE, Tile, encode_webp_lossless,
-    lat_to_pixel_y, lng_to_pixel_x, pixel_x_to_lng, pixel_y_to_lat, plan_tiles, rasterize_land,
+    lat_to_pixel_y, lng_to_pixel_x, pixel_x_to_lng, pixel_y_to_lat, plan_bounds, rasterize_land,
 };
 
 // z15 would triple the pyramid for detail the live dots already draw; the client magnifies z14.
@@ -50,7 +50,6 @@ const MAX_LAND_SAMPLES: f64 = 16.0;
 const POINT_CROWN_PX: f64 = 1.0;
 
 pub struct Args {
-    pub manifest: PathBuf,
     pub data: PathBuf,
     pub tiles: PathBuf,
 }
@@ -310,23 +309,12 @@ fn render(
     Ok(stats)
 }
 
-pub fn run(args: &Args) -> Fallible<()> {
+/// Renders one city's layers; a city without a genus layer gets blank ones over its bounds.
+pub fn run(args: &Args, city: &City) -> Fallible<()> {
     let started = Instant::now();
-    let manifest: Manifest = serde_json::from_slice(&fs::read(&args.manifest)?)?;
-
-    let fields: Vec<Option<Field>> = manifest
-        .cities
-        .iter()
-        .map(|city| read_field(city, &args.data))
-        .collect::<Fallible<Vec<Option<Field>>>>()?;
-    if fields.iter().all(Option::is_none) {
-        eprintln!("no city has a genus layer; nothing to render");
-        return Ok(());
-    }
-    for (city, field) in manifest.cities.iter().zip(&fields) {
-        if let Some(field) = field {
-            eprintln!("{}: {} trees", city.id, field.tree_count);
-        }
+    let fields = [read_field(city, &args.data)?];
+    if let [Some(field)] = &fields {
+        eprintln!("{}: {} trees", city.id, field.tree_count);
     }
 
     // One lossless pyramid per packed layer under public/tiles/genus-field/{0,1,2,3}.
@@ -334,7 +322,7 @@ pub fn run(args: &Args) -> Fallible<()> {
         .map(|layer| args.tiles.join(layer.to_string()))
         .collect();
 
-    let plan = plan_tiles(&manifest.cities, GENUS_MAX_ZOOM);
+    let plan = plan_bounds(&[city.bounds], GENUS_MAX_ZOOM);
     for directory in &directories {
         for tile in &plan {
             fs::create_dir_all(
@@ -347,7 +335,8 @@ pub fn run(args: &Args) -> Fallible<()> {
     let blank = encode_webp_lossless(&OPAQUE_ZERO.repeat(TILE_SIZE * TILE_SIZE));
 
     eprintln!(
-        "rendering {} genus-field tiles ({} positions x {LAYERS} layers) across {} threads",
+        "{}: rendering {} genus-field tiles ({} positions x {LAYERS} layers) across {} threads",
+        city.id,
         plan.len() * LAYERS,
         plan.len(),
         rayon::current_num_threads()
@@ -358,7 +347,8 @@ pub fn run(args: &Args) -> Fallible<()> {
         .try_reduce(Stats::default, |left, right| Ok(left + right))?;
 
     eprintln!(
-        "wrote {} genus-field tiles (z{MIN_ZOOM}-z{GENUS_MAX_ZOOM}, {} painted, {:.1} MiB) in {:.1}s",
+        "{}: wrote {} genus-field tiles (z{MIN_ZOOM}-z{GENUS_MAX_ZOOM}, {} painted, {:.1} MiB) in {:.1}s",
+        city.id,
         stats.tiles,
         stats.painted,
         stats.bytes as f64 / 1024.0 / 1024.0,

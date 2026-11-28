@@ -12,10 +12,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::dem::{Dem, MosaicTiles};
-use crate::manifest::{City, Manifest};
+use crate::manifest::{Bounds, City, Manifest};
 use crate::{
     Fallible, canopy, caster_chunks, chunks, commercial, elevation, genus_field, graph,
-    graph_cache, heights, shade,
+    graph_cache, heights, raster, shade,
 };
 
 /// The by-convention sources, `data/<kind>/<id>.bin`, kept out of the versioned manifest schema.
@@ -233,7 +233,7 @@ fn graph_pass(plan: &Plan, city: &City, stamp: String, bake: Option<&PathBuf>) -
     Pass {
         stamp,
         stamp_file: plan.routing.join(format!(".stamp-{}", city.id)),
-        root: None,
+        share: None,
         pieces: vec![
             blob.clone(),
             plan.routing.join(format!("{}.version.json", city.id)),
@@ -310,13 +310,92 @@ impl PlanCity {
     }
 }
 
-/// One module hashed by its token stream, ignoring comments and whitespace; `None` if unlexable.
+/// One module hashed by its token stream, ignoring comments, whitespace and `#[cfg(test)]` items;
+/// `None` if unlexable.
 fn token_oid(path: &Path) -> Option<String> {
     let source = fs::read_to_string(path).ok()?;
     let stream = proc_macro2::TokenStream::from_str(&source).ok()?;
     let mut digest = Sha256::new();
-    field(&mut digest, stream.to_string().as_bytes());
+    field(
+        &mut digest,
+        without_test_items(stream).to_string().as_bytes(),
+    );
     Some(hex(&digest.finalize()))
+}
+
+/// Whether an attribute's bracketed body is exactly `cfg(test)`.
+fn is_cfg_test(body: &proc_macro2::Group) -> bool {
+    let tokens: Vec<proc_macro2::TokenTree> = body.stream().into_iter().collect();
+    match tokens.as_slice() {
+        [
+            proc_macro2::TokenTree::Ident(name),
+            proc_macro2::TokenTree::Group(arguments),
+        ] => {
+            name == "cfg"
+                && arguments.delimiter() == proc_macro2::Delimiter::Parenthesis
+                && arguments.stream().to_string() == "test"
+        }
+        _ => false,
+    }
+}
+
+/// The stream with every `#[cfg(test)]` item dropped, at any depth, attributes and all.
+fn without_test_items(stream: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    use proc_macro2::{Delimiter, Group, TokenTree};
+    let tokens: Vec<TokenTree> = stream.into_iter().collect();
+    let mut kept: Vec<TokenTree> = Vec::with_capacity(tokens.len());
+    // An item's outer attributes, held until the item shows whether one of them is cfg(test).
+    let mut attributes: Vec<TokenTree> = Vec::new();
+    let mut test_item = false;
+    let mut index = 0;
+    while index < tokens.len() {
+        if let (TokenTree::Punct(pound), Some(TokenTree::Group(body))) =
+            (&tokens[index], tokens.get(index + 1))
+            && pound.as_char() == '#'
+            && body.delimiter() == Delimiter::Bracket
+        {
+            test_item |= is_cfg_test(body);
+            attributes.push(tokens[index].clone());
+            attributes.push(tokens[index + 1].clone());
+            index += 2;
+            continue;
+        }
+        if test_item {
+            // Stops at the first brace group, semicolon or comma, none of which can come after the
+            // item's end, so a misread only ever hashes more than it must.
+            while index < tokens.len() {
+                let token = &tokens[index];
+                index += 1;
+                match token {
+                    TokenTree::Punct(punct) if matches!(punct.as_char(), ';' | ',') => break,
+                    TokenTree::Group(group) if group.delimiter() == Delimiter::Brace => {
+                        if let Some(TokenTree::Punct(punct)) = tokens.get(index)
+                            && punct.as_char() == ';'
+                        {
+                            index += 1;
+                        }
+                        break;
+                    }
+                    _ => (),
+                }
+            }
+            attributes.clear();
+            test_item = false;
+            continue;
+        }
+        kept.append(&mut attributes);
+        kept.push(match &tokens[index] {
+            TokenTree::Group(group) => {
+                let mut inner = Group::new(group.delimiter(), without_test_items(group.stream()));
+                inner.set_span(group.span());
+                TokenTree::Group(inner)
+            }
+            other => other.clone(),
+        });
+        index += 1;
+    }
+    kept.extend(attributes);
+    kept.into_iter().collect()
 }
 
 /// The whole build; unknown fields are rejected so a misspelled directory fails loudly.
@@ -442,33 +521,114 @@ impl Plan {
                 discard(&entry)?;
             }
         }
+        let ids: Vec<&str> = claimed.iter().copied().collect();
+        for (root, exempt) in self.shared_roots() {
+            discard(&root.join(STAMP))?;
+            for entry in listing(root)? {
+                let name = file_name(&entry);
+                let named = name
+                    .strip_prefix(STRANDED_STAMP)
+                    .or_else(|| name.strip_prefix(CITY_STAMP))
+                    .or_else(|| name.strip_prefix(LEDGER));
+                if let Some(city) = named
+                    && !claimed.contains(city)
+                {
+                    discard(&entry)?;
+                }
+            }
+            // Also the migration from one stamp per directory: no ledger yet, so every city reruns.
+            for path in unclaimed(root, &ids, exempt)? {
+                discard(&root.join(path))?;
+            }
+            prune(root)?;
+        }
+        discard(&self.chunks.join(".stamp-stranded"))?;
+        for entry in listing(&self.commercial_lines)? {
+            if !claimed.contains(city_of(&entry).as_str()) {
+                discard(&entry)?;
+            }
+        }
         Ok(())
+    }
+
+    /// The directories every city writes into, each with the root-level names no city claims.
+    fn shared_roots(&self) -> [(&Path, &'static [&'static str]); 5] {
+        [
+            (&self.chunks, &[]),
+            (&self.commercial_signals, &[]),
+            (&self.casters, CASTER_EXEMPT),
+            (&self.canopy_tiles, &[]),
+            (&self.genus_field_tiles, &[]),
+        ]
     }
 }
 
 const STAMP: &str = ".stamp";
+/// A city's stamp in a directory the cities share: `.stamp-<city>`.
+const CITY_STAMP: &str = ".stamp-";
+/// A city's ledger of the files it wrote into a shared directory: `.files-<city>`.
+const LEDGER: &str = ".files-";
+/// The re-chunk's per-city stamp inside the chunk directory: `.stamp-stranded-<city>`.
+const STRANDED_STAMP: &str = ".stamp-stranded-";
+/// Root-level names in the caster directory that no city claims: the index every city shares.
+const CASTER_EXEMPT: &[&str] = &["manifest.json"];
 
 /// One pass's freshness; the stamp lives inside its output, so a cache restore carries it.
 struct Pass {
     stamp: String,
     /// Written only after the pass succeeds, so a killed run leaves no claim.
     stamp_file: PathBuf,
-    /// A whole-build directory this pass owns, emptied and recreated before it reruns.
-    root: Option<PathBuf>,
+    /// A city's share of a directory other cities write into too.
+    share: Option<Share>,
     /// A per-city piece, removed and not recreated: absence means "no such layer here".
     pieces: Vec<PathBuf>,
     /// Paths that must exist for the stamp to be believed; existence only, not completeness.
     witnesses: Vec<PathBuf>,
 }
 
+/// A city's files inside a directory every city writes into, told apart by per-city ledgers.
+struct Share {
+    /// The directory every city writes into.
+    root: PathBuf,
+    /// The city whose files these are.
+    city: String,
+    /// Every other manifest city, whose ledgers this city's clear must respect.
+    others: Vec<String>,
+    /// Root-level names no city claims.
+    exempt: &'static [&'static str],
+}
+
+impl Share {
+    /// `city`'s share of `root`, among `ids`, every manifest city.
+    fn new(root: &Path, city: &str, ids: &[&str], exempt: &'static [&'static str]) -> Share {
+        Share {
+            root: root.to_path_buf(),
+            city: city.to_owned(),
+            others: ids
+                .iter()
+                .filter(|id| **id != city)
+                .map(|id| (*id).to_owned())
+                .collect(),
+            exempt,
+        }
+    }
+
+    /// What no other city's ledger claims, which after this city's run is exactly its own.
+    fn unclaimed(&self) -> Fallible<Vec<String>> {
+        let others: Vec<&str> = self.others.iter().map(String::as_str).collect();
+        unclaimed(&self.root, &others, self.exempt)
+    }
+}
+
 impl Pass {
-    fn whole(stamp: String, root: &Path) -> Pass {
+    /// A pass writing `share`, stamped beside its ledger, which is also its witness.
+    fn shared(stamp: String, share: Share, pieces: Vec<PathBuf>) -> Pass {
         Pass {
             stamp,
-            stamp_file: root.join(STAMP),
-            root: Some(root.to_path_buf()),
-            pieces: Vec::new(),
-            witnesses: vec![root.to_path_buf()],
+            stamp_file: share.root.join(format!("{CITY_STAMP}{}", share.city)),
+            witnesses: vec![ledger_file(&share.root, &share.city)],
+            pieces,
+            share: Some(share),
         }
     }
 
@@ -479,7 +639,7 @@ impl Pass {
         recorded.trim() == self.stamp && self.witnesses.iter().all(|path| path.exists())
     }
 
-    /// Clears the output and creates the root, which the pass's manifest is written into.
+    /// Clears the output and creates the directory the stamp is written into.
     fn restart(&self) -> Fallible<()> {
         self.clear()?;
         if let Some(parent) = self.stamp_file.parent() {
@@ -490,11 +650,18 @@ impl Pass {
 
     /// Clears the output without recording a stamp, also for a pass rendering nothing this build.
     fn clear(&self) -> Fallible<()> {
-        for path in self.root.iter().chain(&self.pieces) {
-            discard(path)?;
+        if let Some(share) = &self.share {
+            // The stamp goes first, so a clear killed halfway leaves no claim.
+            discard(&self.stamp_file)?;
+            discard(&ledger_file(&share.root, &share.city))?;
+            for path in share.unclaimed()? {
+                discard(&share.root.join(path))?;
+            }
+            prune(&share.root)?;
+            fs::create_dir_all(&share.root)?;
         }
-        if let Some(root) = &self.root {
-            fs::create_dir_all(root)?;
+        for path in &self.pieces {
+            discard(path)?;
         }
         Ok(())
     }
@@ -503,8 +670,71 @@ impl Pass {
         if let Some(parent) = self.stamp_file.parent() {
             fs::create_dir_all(parent)?;
         }
+        if let Some(share) = &self.share {
+            let ledger: String = share
+                .unclaimed()?
+                .iter()
+                .map(|path| format!("{path}\n"))
+                .collect();
+            fs::write(ledger_file(&share.root, &share.city), ledger)?;
+        }
         Ok(fs::write(&self.stamp_file, &self.stamp)?)
     }
+}
+
+/// `city`'s ledger inside `root`.
+fn ledger_file(root: &Path, city: &str) -> PathBuf {
+    root.join(format!("{LEDGER}{city}"))
+}
+
+/// The files a city's ledger lists, relative to `root`; a missing ledger claims nothing.
+fn claims(root: &Path, city: &str) -> Fallible<Vec<String>> {
+    match fs::read_to_string(ledger_file(root, city)) {
+        Ok(ledger) => Ok(ledger.lines().map(str::to_owned).collect()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Files under `root` no listed city's ledger claims, `/`-separated relative to `root`, sorted.
+fn unclaimed(root: &Path, claimants: &[&str], exempt: &[&str]) -> Fallible<Vec<String>> {
+    let mut claimed: HashSet<String> = HashSet::new();
+    for city in claimants {
+        claimed.extend(claims(root, city)?);
+    }
+    let mut pending: Vec<(PathBuf, String)> = Vec::new();
+    for entry in listing(root)? {
+        let name = file_name(&entry);
+        if !name.starts_with('.') && !exempt.contains(&name.as_str()) {
+            pending.push((entry, name));
+        }
+    }
+    let mut found: Vec<String> = Vec::new();
+    while let Some((path, relative)) = pending.pop() {
+        if path.is_dir() {
+            for entry in listing(&path)? {
+                let name = format!("{relative}/{}", file_name(&entry));
+                pending.push((entry, name));
+            }
+        } else if !claimed.contains(&relative) {
+            found.push(relative);
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// Removes every directory under `root` left empty, bottom-up, and never `root` itself.
+fn prune(root: &Path) -> Fallible<()> {
+    for entry in listing(root)? {
+        if entry.is_dir() {
+            prune(&entry)?;
+            if listing(&entry)?.is_empty() {
+                fs::remove_dir(&entry)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One city's shade pyramid; bucket directories are matched to buckets by content key, not index.
@@ -691,7 +921,8 @@ fn dem_identity(digest: &mut Sha256, elevation: &[Elevation]) -> Fallible<()> {
     Ok(())
 }
 
-/// Per-pass stamps: SHA-256 over code, manifest, plan values, input contents and upstream stamps.
+/// Per-pass stamps: SHA-256 over code, the manifest entries read, plan values, input contents and
+/// upstream stamps.
 struct Stamps<'a> {
     plan: &'a Plan,
     shade_code: String,
@@ -703,7 +934,6 @@ struct Stamps<'a> {
     elevation_code: String,
     canopy_code: String,
     genus_field_code: String,
-    manifest_oid: String,
     oids: HashMap<PathBuf, String>,
 }
 
@@ -720,18 +950,31 @@ impl<'a> Stamps<'a> {
             canopy_code: plan.code_scope(&CANOPY_CODE)?,
             genus_field_code: plan.code_scope(&GENUS_FIELD_CODE)?,
             plan,
-            manifest_oid: input_oid(&plan.manifest)?,
             oids: HashMap::new(),
         })
     }
 
-    /// A digest seeded with the pass, its code scope and the manifest every pass reads.
+    /// A digest seeded with the pass and its code scope.
     fn scoped(&self, pass: &str, code: &str) -> Sha256 {
         let mut digest = Sha256::new();
         field(&mut digest, pass.as_bytes());
         field(&mut digest, code.as_bytes());
-        field(&mut digest, self.manifest_oid.as_bytes());
         digest
+    }
+
+    /// A digest seeded as `scoped`, then with each manifest entry the pass reads, as parsed, so an
+    /// edit to one city's entry leaves every other city's passes standing.
+    fn scoped_to<'c>(
+        &self,
+        pass: &str,
+        code: &str,
+        cities: impl IntoIterator<Item = &'c City>,
+    ) -> Fallible<Sha256> {
+        let mut digest = self.scoped(pass, code);
+        for city in cities {
+            field(&mut digest, &serde_json::to_vec(city)?);
+        }
+        Ok(digest)
     }
 
     /// One input: its data-relative path, then its content or absence, since appearing rebuilds.
@@ -759,61 +1002,54 @@ impl<'a> Stamps<'a> {
         Ok(())
     }
 
-    fn chunks(&mut self, cities: &[(&City, &PlanCity)]) -> Fallible<String> {
-        let mut digest = self.scoped("chunks", &self.chunks_code);
-        for (city, _) in cities {
-            let mut inputs = vec![self.plan.data.join("streets").join(&city.streets.file)];
-            inputs.extend(
-                city.paths
-                    .as_ref()
-                    .map(|layer| self.plan.data.join("paths").join(&layer.file)),
-            );
-            self.files(&mut digest, &inputs)?;
-        }
+    fn chunks(&mut self, city: &City) -> Fallible<String> {
+        let mut digest = self.scoped_to("chunks", &self.chunks_code, [city])?;
+        field(&mut digest, city.id.as_bytes());
+        let mut inputs = vec![self.plan.data.join("streets").join(&city.streets.file)];
+        inputs.extend(
+            city.paths
+                .as_ref()
+                .map(|layer| self.plan.data.join("paths").join(&layer.file)),
+        );
+        self.files(&mut digest, &inputs)?;
         Ok(hex(&digest.finalize()))
     }
 
-    /// Pass 2, over pass 1's stamp since its signals are keyed on the chunks' segment order.
-    fn commercial(&mut self, cities: &[(&City, &PlanCity)], chunks: &str) -> Fallible<String> {
-        let mut digest = self.scoped("commercial", &self.commercial_code);
+    /// Pass 2, over the city's pass 1 stamp since its signals are keyed on the chunks' segment order.
+    fn commercial(&mut self, city: &City, chunks: &str) -> Fallible<String> {
+        let mut digest = self.scoped_to("commercial", &self.commercial_code, [city])?;
+        field(&mut digest, city.id.as_bytes());
         field(&mut digest, chunks.as_bytes());
-        for (city, _) in cities {
-            let inputs: Vec<PathBuf> = ["landuse", "buildings", "openstreets", "dining"]
-                .iter()
-                .map(|kind| self.plan.data.join(kind).join(format!("{}.bin", city.id)))
-                .collect();
-            self.files(&mut digest, &inputs)?;
-        }
+        let inputs: Vec<PathBuf> = ["landuse", "buildings", "openstreets", "dining"]
+            .iter()
+            .map(|kind| self.plan.data.join(kind).join(format!("{}.bin", city.id)))
+            .collect();
+        self.files(&mut digest, &inputs)?;
         Ok(hex(&digest.finalize()))
     }
 
     /// Pass 3: only the grid's `maxShadowMeters` enters, since the chunks carry no sun position.
-    fn casters(
-        &mut self,
-        cities: &[(&City, &PlanCity)],
-        sun: Option<&shade::Params>,
-    ) -> Fallible<String> {
-        let mut digest = self.scoped("caster-chunks", &self.casters_code);
+    fn casters(&mut self, city: &City, sun: Option<&shade::Params>) -> Fallible<String> {
+        let mut digest = self.scoped_to("caster-chunks", &self.casters_code, [city])?;
+        field(&mut digest, city.id.as_bytes());
         match sun {
             Some(params) => field(&mut digest, &params.max_shadow_meters.to_le_bytes()),
             None => field(&mut digest, b"no sun"),
         }
-        for (city, _) in cities {
-            let mut inputs = vec![
-                self.plan
-                    .data
-                    .join("buildings")
-                    .join(format!("{}.bin", city.id)),
-                self.plan.data.join("trees").join(&city.field.trees.file),
-            ];
-            inputs.extend(
-                city.field
-                    .canopy
-                    .as_ref()
-                    .map(|layer| self.plan.data.join("canopy").join(&layer.file)),
-            );
-            self.files(&mut digest, &inputs)?;
-        }
+        let mut inputs = vec![
+            self.plan
+                .data
+                .join("buildings")
+                .join(format!("{}.bin", city.id)),
+            self.plan.data.join("trees").join(&city.field.trees.file),
+        ];
+        inputs.extend(
+            city.field
+                .canopy
+                .as_ref()
+                .map(|layer| self.plan.data.join("canopy").join(&layer.file)),
+        );
+        self.files(&mut digest, &inputs)?;
         Ok(hex(&digest.finalize()))
     }
 
@@ -824,7 +1060,7 @@ impl<'a> Stamps<'a> {
         params: &shade::Params,
         bucket: &shade::Bucket,
     ) -> Fallible<String> {
-        let mut digest = self.scoped("shade-bucket", &self.shade_code);
+        let mut digest = self.scoped_to("shade-bucket", &self.shade_code, [city])?;
         field(&mut digest, city.id.as_bytes());
         field(&mut digest, &params.max_zoom.to_le_bytes());
         field(&mut digest, &params.max_shadow_meters.to_le_bytes());
@@ -847,7 +1083,7 @@ impl<'a> Stamps<'a> {
     }
 
     fn elevation(&mut self, city: &City, planned: &PlanCity) -> Fallible<String> {
-        let mut digest = self.scoped("elevation", &self.elevation_code);
+        let mut digest = self.scoped_to("elevation", &self.elevation_code, [city])?;
         field(&mut digest, city.id.as_bytes());
         dem_identity(&mut digest, &planned.elevation)?;
         let land = self.plan.data.join("land").join(&city.field.land.file);
@@ -855,30 +1091,33 @@ impl<'a> Stamps<'a> {
         Ok(hex(&digest.finalize()))
     }
 
-    fn canopy(&mut self, cities: &[(&City, &PlanCity)]) -> Fallible<String> {
-        let mut digest = self.scoped("canopy", &self.canopy_code);
-        for (city, _) in cities {
-            if let Some(layer) = &city.field.canopy {
+    fn canopy(&mut self, city: &City) -> Fallible<String> {
+        let mut digest = self.scoped_to("canopy", &self.canopy_code, [city])?;
+        field(&mut digest, city.id.as_bytes());
+        match &city.field.canopy {
+            Some(layer) => {
                 let inputs = vec![
                     self.plan.data.join("canopy").join(&layer.file),
                     self.plan.data.join("land").join(&city.field.land.file),
                 ];
                 self.files(&mut digest, &inputs)?;
             }
+            None => field(&mut digest, b"blank"),
         }
         Ok(hex(&digest.finalize()))
     }
 
-    fn genus_field(&mut self, cities: &[(&City, &PlanCity)]) -> Fallible<String> {
-        let mut digest = self.scoped("genus-field", &self.genus_field_code);
-        for (city, _) in cities {
-            if city.field.genus.is_some() {
-                let inputs = vec![
-                    self.plan.data.join("trees").join(&city.field.trees.file),
-                    self.plan.data.join("land").join(&city.field.land.file),
-                ];
-                self.files(&mut digest, &inputs)?;
-            }
+    fn genus_field(&mut self, city: &City) -> Fallible<String> {
+        let mut digest = self.scoped_to("genus-field", &self.genus_field_code, [city])?;
+        field(&mut digest, city.id.as_bytes());
+        if city.field.genus.is_some() {
+            let inputs = vec![
+                self.plan.data.join("trees").join(&city.field.trees.file),
+                self.plan.data.join("land").join(&city.field.land.file),
+            ];
+            self.files(&mut digest, &inputs)?;
+        } else {
+            field(&mut digest, b"blank");
         }
         Ok(hex(&digest.finalize()))
     }
@@ -891,7 +1130,7 @@ impl<'a> Stamps<'a> {
         commercial: &str,
         bakes_shade: bool,
     ) -> Fallible<graph_cache::Keys> {
-        let mut digest = self.scoped("graph-base", &self.graph_code);
+        let mut digest = self.scoped_to("graph-base", &self.graph_code, [city])?;
         field(&mut digest, city.id.as_bytes());
         field(
             &mut digest,
@@ -1057,20 +1296,13 @@ impl<'a> Stamps<'a> {
         hex(&digest.finalize())
     }
 
-    /// Pass 9: pass 1's stamp plus the stranded set, so a rerun with the same islands skips it.
-    fn stranded_chunks(
-        &mut self,
-        cities: &[(&City, &PlanCity)],
-        chunks: &str,
-        stranded: &chunks::Stranded,
-    ) -> Fallible<String> {
-        let mut digest = self.scoped("chunks-stranded", &self.chunks_code);
+    /// Pass 9: the city's pass 1 stamp plus its stranded set, so a rerun with the same islands skips it.
+    fn stranded_chunks(&self, city: &City, chunks: &str, ways: &[u32]) -> Fallible<String> {
+        let mut digest = self.scoped_to("chunks-stranded", &self.chunks_code, [city])?;
+        field(&mut digest, city.id.as_bytes());
         field(&mut digest, chunks.as_bytes());
-        for (city, _) in cities {
-            field(&mut digest, city.id.as_bytes());
-            for way in stranded.ways(&city.id) {
-                digest.update(way.to_le_bytes());
-            }
+        for way in ways {
+            digest.update(way.to_le_bytes());
         }
         Ok(hex(&digest.finalize()))
     }
@@ -1128,14 +1360,6 @@ impl PassName {
             PassName::ChunksStranded => "chunks-stranded",
         }
     }
-
-    /// Whether the pass is stamped per city and so can be narrowed to one.
-    fn per_city(self) -> bool {
-        matches!(
-            self,
-            PassName::Shade | PassName::Elevation | PassName::Graph
-        )
-    }
 }
 
 enum Cities {
@@ -1170,12 +1394,6 @@ impl Selection {
                         format!("--only {term}: no pass is called {name}; they are {names:?}")
                     })?;
                 match city {
-                    Some(_) if !pass.per_city() => {
-                        return Err(format!(
-                            "--only {term}: the {name} pass is run over every city at once, so it takes no city"
-                        )
-                        .into());
-                    }
                     Some(city) => match passes
                         .entry(pass)
                         .or_insert_with(|| Cities::Named(HashSet::new()))
@@ -1287,8 +1505,13 @@ impl Verdict {
 }
 
 /// The stamp a downstream pass folds: the computed one if selected, else the recorded one.
-fn upstream(selection: &Selection, name: PassName, pass: &Pass) -> Fallible<String> {
-    if selection.selected(name, None) {
+fn upstream(
+    selection: &Selection,
+    name: PassName,
+    city: Option<&str>,
+    pass: &Pass,
+) -> Fallible<String> {
+    if selection.selected(name, city) {
         Ok(pass.stamp.clone())
     } else {
         match fs::read_to_string(&pass.stamp_file) {
@@ -1305,22 +1528,24 @@ const UNRECORDED: &str = "unrecorded";
 /// Checks that a selected pass's upstream output exists; stale is fine, missing is not.
 fn handoffs(plan: &Plan, cities: &[(&City, &PlanCity)], selection: &Selection) -> Fallible<()> {
     let mut wanted: Vec<(PassName, PassName, PathBuf)> = Vec::new();
-    if selection.handoff(PassName::Commercial, PassName::Chunks, None) {
-        wanted.push((PassName::Commercial, PassName::Chunks, plan.chunks.clone()));
-    }
-    if selection.handoff(PassName::ChunksStranded, PassName::Chunks, None) {
-        wanted.push((
-            PassName::ChunksStranded,
-            PassName::Chunks,
-            plan.chunks.clone(),
-        ));
-    }
-    if selection.handoff(PassName::Graph, PassName::Commercial, None) {
-        wanted.push((
-            PassName::Graph,
-            PassName::Commercial,
-            plan.commercial_lines.clone(),
-        ));
+    for (city, _) in cities {
+        let id = Some(city.id.as_str());
+        for consumer in [PassName::Commercial, PassName::ChunksStranded] {
+            if selection.handoff(consumer, PassName::Chunks, id) {
+                wanted.push((
+                    consumer,
+                    PassName::Chunks,
+                    ledger_file(&plan.chunks, &city.id),
+                ));
+            }
+        }
+        if selection.handoff(PassName::Graph, PassName::Commercial, id) {
+            wanted.push((
+                PassName::Graph,
+                PassName::Commercial,
+                ledger_file(&plan.commercial_signals, &city.id),
+            ));
+        }
     }
     for (city, _) in cities {
         if selection.handoff(PassName::ChunksStranded, PassName::Graph, Some(&city.id)) {
@@ -1341,6 +1566,32 @@ fn handoffs(plan: &Plan, cities: &[(&City, &PlanCity)], selection: &Selection) -
         .into()),
         None => Ok(()),
     }
+}
+
+/// The re-chunk's stamp for `city`.
+fn stranded_stamp_file(plan: &Plan, city: &City) -> PathBuf {
+    plan.chunks.join(format!("{STRANDED_STAMP}{}", city.id))
+}
+
+/// Fails on two cities sharing a z9 tile, since each city's share of a tile tree is its own tiles.
+fn disjoint(cities: &[(&City, &PlanCity)]) -> Fallible<()> {
+    let bounds: Vec<Bounds> = cities.iter().map(|(city, _)| city.bounds).collect();
+    for tile in raster::plan_bounds(&bounds, raster::MIN_ZOOM) {
+        if let [first, second, ..] = tile.members[..] {
+            return Err(format!(
+                "{} and {} share the z{} tile {}/{}; two regions that share a z{} tile must be one \
+                 manifest entry",
+                cities[first].0.id,
+                cities[second].0.id,
+                tile.zoom,
+                tile.x,
+                tile.y,
+                raster::MIN_ZOOM
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 /// A build on `jobs` rayon threads, sized before any parallel iterator builds the default pool.
@@ -1370,6 +1621,7 @@ pub fn run(
     plan.hash_source_tokens();
     let manifest: Manifest = serde_json::from_slice(&fs::read(&plan.manifest)?)?;
     let cities = plan.pair(&manifest)?;
+    disjoint(&cities)?;
     selection.check(&manifest)?;
     handoffs(&plan, &cities, selection)?;
     // A partial build sweeps nothing, since the reconcile reaches into unselected passes' output.
@@ -1394,21 +1646,45 @@ pub fn run(
 
     // Every stamp before any pass runs, since which DEMs to open depends on which passes are stale.
     let mut stamps = Stamps::new(&plan)?;
-    let chunk_pass = Pass::whole(stamps.chunks(&cities)?, &plan.chunks);
+    let ids: Vec<&str> = cities.iter().map(|(city, _)| city.id.as_str()).collect();
+    let chunk_passes: Vec<Pass> = cities
+        .iter()
+        .map(|(city, _)| {
+            Ok(Pass::shared(
+                stamps.chunks(city)?,
+                Share::new(&plan.chunks, &city.id, &ids, &[]),
+                // So a rerun chunk cannot leave a fresh-looking stranded stamp over empty bitmaps.
+                vec![stranded_stamp_file(&plan, city)],
+            ))
+        })
+        .collect::<Fallible<Vec<Pass>>>()?;
     // Handovers enter as what this build will leave, so a partial build claims nothing unbuilt.
-    let chunks_upstream = upstream(selection, PassName::Chunks, &chunk_pass)?;
-    let commercial_pass = Pass {
-        stamp: stamps.commercial(&cities, &chunks_upstream)?,
-        stamp_file: plan.commercial_signals.join(STAMP),
-        // That pass clears its own directories, since only it knows which cities write no file.
-        root: None,
-        pieces: Vec::new(),
-        witnesses: vec![
-            plan.commercial_signals.clone(),
-            plan.commercial_lines.clone(),
-        ],
-    };
-    let caster_pass = Pass::whole(stamps.casters(&cities, sun)?, &plan.casters);
+    let chunks_upstream: Vec<String> = cities
+        .iter()
+        .zip(&chunk_passes)
+        .map(|((city, _), pass)| upstream(selection, PassName::Chunks, Some(&city.id), pass))
+        .collect::<Fallible<Vec<String>>>()?;
+    let commercial_passes: Vec<Pass> = cities
+        .iter()
+        .zip(&chunks_upstream)
+        .map(|((city, _), chunks)| {
+            Ok(Pass::shared(
+                stamps.commercial(city, chunks)?,
+                Share::new(&plan.commercial_signals, &city.id, &ids, &[]),
+                vec![plan.commercial_lines.join(format!("{}.bin", city.id))],
+            ))
+        })
+        .collect::<Fallible<Vec<Pass>>>()?;
+    let caster_passes: Vec<Pass> = cities
+        .iter()
+        .map(|(city, _)| {
+            Ok(Pass::shared(
+                stamps.casters(city, sun)?,
+                Share::new(&plan.casters, &city.id, &ids, CASTER_EXEMPT),
+                Vec::new(),
+            ))
+        })
+        .collect::<Fallible<Vec<Pass>>>()?;
     // Shade is stamped per sun bucket, since no bucket is a function of another.
     let shade_pyramids: Vec<ShadePyramid> = cities
         .iter()
@@ -1434,20 +1710,43 @@ pub fn run(
             Ok(Pass {
                 stamp: stamps.elevation(city, planned)?,
                 stamp_file: root.join(STAMP),
-                root: None,
+                share: None,
                 pieces: vec![root.clone()],
                 witnesses: vec![root],
             })
         })
         .collect::<Fallible<Vec<Pass>>>()?;
-    let canopy_pass = Pass::whole(stamps.canopy(&cities)?, &plan.canopy_tiles);
-    let genus_pass = Pass::whole(stamps.genus_field(&cities)?, &plan.genus_field_tiles);
-    let commercial_upstream = upstream(selection, PassName::Commercial, &commercial_pass)?;
+    let canopy_passes: Vec<Pass> = cities
+        .iter()
+        .map(|(city, _)| {
+            Ok(Pass::shared(
+                stamps.canopy(city)?,
+                Share::new(&plan.canopy_tiles, &city.id, &ids, &[]),
+                Vec::new(),
+            ))
+        })
+        .collect::<Fallible<Vec<Pass>>>()?;
+    let genus_passes: Vec<Pass> = cities
+        .iter()
+        .map(|(city, _)| {
+            Ok(Pass::shared(
+                stamps.genus_field(city)?,
+                Share::new(&plan.genus_field_tiles, &city.id, &ids, &[]),
+                Vec::new(),
+            ))
+        })
+        .collect::<Fallible<Vec<Pass>>>()?;
+    let commercial_upstream: Vec<String> = cities
+        .iter()
+        .zip(&commercial_passes)
+        .map(|((city, _), pass)| upstream(selection, PassName::Commercial, Some(&city.id), pass))
+        .collect::<Fallible<Vec<String>>>()?;
     let graph_keys: Vec<graph_cache::Keys> = cities
         .iter()
         .zip(&baked)
-        .map(|((city, planned), bake)| {
-            stamps.graph_keys(city, planned, &commercial_upstream, bake.is_some())
+        .zip(&commercial_upstream)
+        .map(|(((city, planned), bake), commercial)| {
+            stamps.graph_keys(city, planned, commercial, bake.is_some())
         })
         .collect::<Fallible<Vec<graph_cache::Keys>>>()?;
     let graph_passes: Vec<Pass> = cities
@@ -1502,67 +1801,80 @@ pub fn run(
     }
 
     let chunk_args = chunks::Args {
-        manifest: plan.manifest.clone(),
         data: plan.data.clone(),
         chunks: plan.chunks.clone(),
     };
     stage(1, "chunks", &started);
-    let chunks_verdict = selection.verdict(PassName::Chunks, None, chunk_pass.is_fresh());
-    let chunk_files = if chunks_verdict.runs() {
-        chunk_pass.restart()?;
-        let cut = chunks::run(&chunk_args, &chunks::Stranded::default())?;
-        chunk_pass.record()?;
-        cut
-    } else {
-        chunks_verdict.announce(None);
-        chunks::Chunks {
-            dir: plan.chunks.clone(),
+    for ((city, _), pass) in cities.iter().zip(&chunk_passes) {
+        let verdict = selection.verdict(PassName::Chunks, Some(&city.id), pass.is_fresh());
+        if verdict.runs() {
+            pass.restart()?;
+            chunks::run(&chunk_args, city, &[])?;
+            pass.record()?;
+        } else {
+            verdict.announce(Some(&city.id));
         }
+    }
+    let chunk_files = chunks::Chunks {
+        dir: plan.chunks.clone(),
     };
 
     // The commercial signals are keyed on the chunks' segment index.
     stage(2, "commercial", &started);
-    let commercial_verdict =
-        selection.verdict(PassName::Commercial, None, commercial_pass.is_fresh());
-    let lines = if !commercial_verdict.runs() {
-        commercial_verdict.announce(None);
-        commercial::Lines::written(&plan.commercial_lines, &manifest)
-    } else {
-        commercial_pass.restart()?;
-        let written = commercial::run(
-            &commercial::Args {
-                manifest: plan.manifest.clone(),
-                data: plan.data.clone(),
-                signals: plan.commercial_signals.clone(),
-                lines: plan.commercial_lines.clone(),
-            },
-            &chunk_files,
-        )?;
-        commercial_pass.record()?;
-        written
+    let commercial_args = commercial::Args {
+        data: plan.data.clone(),
+        signals: plan.commercial_signals.clone(),
+        lines: plan.commercial_lines.clone(),
     };
+    for ((city, _), pass) in cities.iter().zip(&commercial_passes) {
+        let verdict = selection.verdict(PassName::Commercial, Some(&city.id), pass.is_fresh());
+        if verdict.runs() {
+            pass.restart()?;
+            fs::create_dir_all(&plan.commercial_lines)?;
+            commercial::run(&commercial_args, city, &chunk_files)?;
+            pass.record()?;
+        } else {
+            verdict.announce(Some(&city.id));
+        }
+    }
+    let lines = commercial::Lines::written(&plan.commercial_lines, &manifest);
 
     stage(3, "caster-chunks", &started);
-    let casters_verdict = selection.verdict(PassName::CasterChunks, None, caster_pass.is_fresh());
-    match sun {
-        Some(params) if any_casters => {
-            if casters_verdict.runs() {
-                caster_pass.restart()?;
-                caster_chunks::run(&caster_chunks::Args {
-                    manifest: plan.manifest.clone(),
-                    data: plan.data.clone(),
-                    chunks: plan.casters.clone(),
-                    params: params.clone(),
-                })?;
-                caster_pass.record()?;
-            } else {
-                casters_verdict.announce(None);
-            }
+    let caster_args = caster_chunks::Args {
+        data: plan.data.clone(),
+        chunks: plan.casters.clone(),
+    };
+    for ((city, planned), pass) in cities.iter().zip(&caster_passes) {
+        let casts = sun.is_some()
+            && (planned.source(&plan.data, Source::Buildings).is_some()
+                || city.field.canopy.is_some());
+        let verdict = selection.verdict(PassName::CasterChunks, Some(&city.id), pass.is_fresh());
+        if !selection.selected(PassName::CasterChunks, Some(&city.id)) {
+            verdict.announce(Some(&city.id));
+        } else if !casts {
+            pass.clear()?;
+        } else if verdict.runs() {
+            pass.restart()?;
+            caster_chunks::run(&caster_args, city)?;
+            pass.record()?;
+        } else {
+            verdict.announce(Some(&city.id));
         }
-        _ if !selection.selected(PassName::CasterChunks, None) => casters_verdict.announce(None),
-        _ => {
-            caster_pass.clear()?;
-            eprintln!("no sun grid or nothing to cast a shadow; no caster chunks");
+    }
+    if selection.selected(PassName::CasterChunks, None) {
+        let index = plan.casters.join(caster_chunks::INDEX);
+        match sun {
+            Some(params) if any_casters => {
+                let ledgers = ids
+                    .iter()
+                    .map(|id| claims(&plan.casters, id))
+                    .collect::<Fallible<Vec<Vec<String>>>>()?;
+                caster_chunks::write_index(&plan.casters, params.max_shadow_meters, &ledgers)?;
+            }
+            _ => {
+                discard(&index)?;
+                eprintln!("no sun grid or nothing to cast a shadow; no caster chunks");
+            }
         }
     }
 
@@ -1634,51 +1946,45 @@ pub fn run(
     }
 
     stage(6, "canopy", &started);
-    let canopy_verdict = selection.verdict(PassName::Canopy, None, canopy_pass.is_fresh());
-    if !selection.selected(PassName::Canopy, None) {
-        canopy_verdict.announce(None);
-    } else if manifest
-        .cities
-        .iter()
-        .any(|city| city.field.canopy.is_some())
-    {
-        if !canopy_verdict.runs() {
-            canopy_verdict.announce(None);
+    let any_canopy = cities.iter().any(|(city, _)| city.field.canopy.is_some());
+    let canopy_args = canopy::Args {
+        data: plan.data.clone(),
+        tiles: plan.canopy_tiles.clone(),
+    };
+    for ((city, _), pass) in cities.iter().zip(&canopy_passes) {
+        let verdict = selection.verdict(PassName::Canopy, Some(&city.id), pass.is_fresh());
+        if !selection.selected(PassName::Canopy, Some(&city.id)) {
+            verdict.announce(Some(&city.id));
+        } else if !any_canopy {
+            pass.clear()?;
+        } else if verdict.runs() {
+            pass.restart()?;
+            canopy::run(&canopy_args, city)?;
+            pass.record()?;
         } else {
-            canopy_pass.restart()?;
-            canopy::run(&canopy::Args {
-                manifest: plan.manifest.clone(),
-                data: plan.data.clone(),
-                tiles: plan.canopy_tiles.clone(),
-            })?;
-            canopy_pass.record()?;
+            verdict.announce(Some(&city.id));
         }
-    } else {
-        canopy_pass.clear()?;
     }
 
     stage(7, "genus-field", &started);
-    let genus_verdict = selection.verdict(PassName::GenusField, None, genus_pass.is_fresh());
-    if !selection.selected(PassName::GenusField, None) {
-        genus_verdict.announce(None);
-    } else if manifest
-        .cities
-        .iter()
-        .any(|city| city.field.genus.is_some())
-    {
-        if !genus_verdict.runs() {
-            genus_verdict.announce(None);
+    let any_genus = cities.iter().any(|(city, _)| city.field.genus.is_some());
+    let genus_args = genus_field::Args {
+        data: plan.data.clone(),
+        tiles: plan.genus_field_tiles.clone(),
+    };
+    for ((city, _), pass) in cities.iter().zip(&genus_passes) {
+        let verdict = selection.verdict(PassName::GenusField, Some(&city.id), pass.is_fresh());
+        if !selection.selected(PassName::GenusField, Some(&city.id)) {
+            verdict.announce(Some(&city.id));
+        } else if !any_genus {
+            pass.clear()?;
+        } else if verdict.runs() {
+            pass.restart()?;
+            genus_field::run(&genus_args, city)?;
+            pass.record()?;
         } else {
-            genus_pass.restart()?;
-            genus_field::run(&genus_field::Args {
-                manifest: plan.manifest.clone(),
-                data: plan.data.clone(),
-                tiles: plan.genus_field_tiles.clone(),
-            })?;
-            genus_pass.record()?;
+            verdict.announce(Some(&city.id));
         }
-    } else {
-        genus_pass.clear()?;
     }
 
     stage(8, "graph", &started);
@@ -1690,7 +1996,7 @@ pub fn run(
         if !verdict.runs() {
             verdict.announce(Some(&city.id));
             // Read only when the re-chunk runs, so `--only graph:nyc` opens no other city's file.
-            if selection.selected(PassName::ChunksStranded, None) {
+            if selection.selected(PassName::ChunksStranded, Some(&city.id)) {
                 stranded.insert(&city.id, graph::read_stranded(&stranded_file)?);
             }
             continue;
@@ -1760,24 +2066,26 @@ pub fn run(
 
     // Re-cut with the graph's stranded set; only the trailing bitmap changes.
     stage(9, "chunks (stranded)", &started);
-    // Rewrites pass 1's output in place, so it clears nothing.
-    let stranded_pass = Pass {
-        stamp: stamps.stranded_chunks(&cities, &chunks_upstream, &stranded)?,
-        stamp_file: plan.chunks.join(".stamp-stranded"),
-        root: None,
-        pieces: Vec::new(),
-        witnesses: vec![plan.chunks.clone()],
-    };
-    let stranded_verdict =
-        selection.verdict(PassName::ChunksStranded, None, stranded_pass.is_fresh());
-    if !selection.selected(PassName::ChunksStranded, None) {
-        stranded_verdict.announce(None);
-    } else if manifest.cities.iter().any(|city| city.paths.is_some()) {
-        if !stranded_verdict.runs() {
-            stranded_verdict.announce(None);
+    for (index, (city, _)) in cities.iter().enumerate() {
+        // A city without paths has no stranded bits, so pass 1's bytes stand.
+        if city.paths.is_none() {
+            continue;
+        }
+        let ways = stranded.ways(&city.id);
+        // Rewrites pass 1's files in place, so it clears nothing and keeps pass 1's ledger.
+        let pass = Pass {
+            stamp: stamps.stranded_chunks(city, &chunks_upstream[index], ways)?,
+            stamp_file: stranded_stamp_file(&plan, city),
+            share: None,
+            pieces: Vec::new(),
+            witnesses: vec![ledger_file(&plan.chunks, &city.id)],
+        };
+        let verdict = selection.verdict(PassName::ChunksStranded, Some(&city.id), pass.is_fresh());
+        if verdict.runs() {
+            chunks::run(&chunk_args, city, ways)?;
+            pass.record()?;
         } else {
-            chunks::run(&chunk_args, &stranded)?;
-            stranded_pass.record()?;
+            verdict.announce(Some(&city.id));
         }
     }
 
@@ -1923,6 +2231,39 @@ mod tests {
     use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
     use super::*;
+
+    /// A module's hashed text, as `token_oid` reads it.
+    fn hashed(source: &str) -> String {
+        without_test_items(TokenStream::from_str(source).expect("a token stream")).to_string()
+    }
+
+    #[test]
+    fn a_module_s_test_items_leave_its_hash_alone() {
+        let plain = "pub fn f() -> u8 { 1 } impl S { pub fn g(&self) {} }";
+        let tested = "pub fn f() -> u8 { 1 } #[cfg(test)] use std::{fs, io}; \
+                      impl S { pub fn g(&self) {} #[cfg(test)] /// doc\n fn h() {} } \
+                      #[cfg(test)] const X: S = S { a: 1 }; \
+                      #[cfg(test)] mod tests { fn t() {} }";
+        assert_eq!(hashed(plain), hashed(tested));
+        // Everything else still counts: a non-test attribute, and the code itself.
+        let other_cfg = "pub fn f() -> u8 { 1 } #[cfg(any(test, unix))] fn h() {} \
+                         impl S { pub fn g(&self) {} }";
+        assert_ne!(hashed(plain), hashed(other_cfg));
+        assert_ne!(
+            hashed(plain),
+            hashed("pub fn f() -> u8 { 2 } impl S { pub fn g(&self) {} }")
+        );
+    }
+
+    #[test]
+    fn a_test_field_leaves_the_fields_after_it_hashed() {
+        let with_field = "struct S { #[cfg(test)] a: u8, b: u8 }";
+        assert_eq!(hashed(with_field), hashed("struct S { b: u8 }"));
+        assert_ne!(
+            hashed(with_field),
+            hashed("struct S { #[cfg(test)] a: u8, b: u16 }")
+        );
+    }
 
     /// Two cities, one with neither a canopy nor a genus layer.
     const MANIFEST: &str = r#"{
@@ -2132,17 +2473,33 @@ mod tests {
         plan
     }
 
+    /// One city's share of `root`, among New York and San Francisco.
+    fn share_pass(root: &Path, city: &str, stamp: &str) -> Pass {
+        Pass::shared(
+            stamp.to_owned(),
+            Share::new(root, city, &["nyc", "sf"], &[]),
+            Vec::new(),
+        )
+    }
+
+    /// A tile at `relative` under `root`, as a pass would write it.
+    fn plant(root: &Path, relative: &str) {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().expect("a row directory")).expect("a row");
+        fs::write(path, relative).expect("a tile");
+    }
+
     #[test]
     fn a_pass_is_fresh_only_when_its_stamp_and_its_output_both_hold() {
         let root = scratch("fresh");
-        let pass = Pass::whole("5eaf00d".to_owned(), &root.join("streets"));
+        let pass = share_pass(&root.join("streets"), "nyc", "5eaf00d");
         assert!(!pass.is_fresh(), "nothing has recorded a stamp yet");
 
         pass.restart().expect("the output directory");
         pass.record().expect("the stamp");
         assert!(pass.is_fresh());
 
-        fs::remove_dir_all(root.join("streets")).expect("a removal");
+        fs::remove_file(ledger_file(&root.join("streets"), "nyc")).expect("a removal");
         assert!(!pass.is_fresh());
     }
 
@@ -2177,8 +2534,8 @@ mod tests {
     #[test]
     fn a_pass_that_reruns_clears_its_own_output_and_leaves_its_neighbors_alone() {
         let root = scratch("clearing");
-        let mine = Pass::whole("a".to_owned(), &root.join("streets"));
-        let theirs = Pass::whole("b".to_owned(), &root.join("casters"));
+        let mine = share_pass(&root.join("streets"), "nyc", "a");
+        let theirs = share_pass(&root.join("casters"), "nyc", "b");
         for pass in [&mine, &theirs] {
             pass.restart().expect("a directory");
             fs::write(pass.stamp_file.with_file_name("last-build.bin"), b"stale")
@@ -2198,6 +2555,170 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_city_s_restart_deletes_its_own_files_and_leaves_the_other_city_s() {
+        let root = scratch("share-restart");
+        let nyc = share_pass(&root, "nyc", "a");
+        let sf = share_pass(&root, "sf", "b");
+        nyc.restart().expect("a clearing");
+        plant(&root, "1203/1536.bin");
+        nyc.record().expect("new york's ledger");
+        sf.restart().expect("a clearing");
+        plant(&root, "654/1581.bin");
+        sf.record().expect("san francisco's ledger");
+        fs::write(root.join(".stamp-stranded-nyc"), b"a root dotfile").expect("a dotfile");
+
+        nyc.restart().expect("a clearing");
+
+        assert!(!root.join("1203").exists(), "its own tiles and their row");
+        assert!(root.join("654/1581.bin").is_file());
+        assert!(sf.is_fresh(), "the other city's claim stands");
+        assert!(root.join(".stamp-stranded-nyc").is_file());
+        assert!(!nyc.is_fresh());
+    }
+
+    #[test]
+    fn a_record_ledgers_only_what_the_other_city_does_not_claim() {
+        let root = scratch("share-record");
+        let nyc = share_pass(&root, "nyc", "a");
+        let sf = share_pass(&root, "sf", "b");
+        sf.restart().expect("a clearing");
+        plant(&root, "654/1581.bin");
+        sf.record().expect("san francisco's ledger");
+        nyc.restart().expect("a clearing");
+        plant(&root, "1203/1537.bin");
+        plant(&root, "1203/1536.bin");
+        plant(&root, "1204/1536.bin");
+        nyc.record().expect("new york's ledger");
+
+        assert_eq!(
+            fs::read_to_string(ledger_file(&root, "nyc")).expect("the ledger"),
+            "1203/1536.bin\n1203/1537.bin\n1204/1536.bin\n"
+        );
+        assert_eq!(claims(&root, "sf").expect("a ledger"), ["654/1581.bin"]);
+    }
+
+    #[test]
+    fn a_file_no_ledger_claims_and_the_legacy_stamp_are_deleted_by_the_reconcile() {
+        let plan = planted("share-orphans");
+        let nyc = share_pass(&plan.canopy_tiles, "nyc", "a");
+        nyc.restart().expect("a clearing");
+        plant(&plan.canopy_tiles, "9/150/192.webp");
+        nyc.record().expect("new york's ledger");
+        plant(&plan.canopy_tiles, "9/81/197.webp");
+        plant(&plan.casters, "5232/12000.bin");
+        fs::write(plan.casters.join(caster_chunks::INDEX), b"{}").expect("the index");
+        for root in [&plan.canopy_tiles, &plan.chunks] {
+            fs::create_dir_all(root).expect("a shared directory");
+            fs::write(root.join(STAMP), b"one stamp for every city").expect("a legacy stamp");
+        }
+        fs::write(plan.chunks.join(".stamp-stranded"), b"legacy").expect("a legacy stamp");
+
+        plan.reconcile(&manifest()).expect("a reconciliation");
+
+        assert!(plan.canopy_tiles.join("9/150/192.webp").is_file());
+        assert!(nyc.is_fresh());
+        assert!(
+            !plan.canopy_tiles.join("9/81").exists(),
+            "a killed run's tile"
+        );
+        assert!(!plan.casters.join("5232").exists(), "the old layout's");
+        assert!(plan.casters.join(caster_chunks::INDEX).is_file());
+        assert!(!plan.canopy_tiles.join(STAMP).exists());
+        assert!(!plan.chunks.join(STAMP).exists());
+        assert!(!plan.chunks.join(".stamp-stranded").exists());
+    }
+
+    #[test]
+    fn a_dropped_city_s_files_ledger_and_stamps_are_deleted_by_the_reconcile() {
+        let plan = planted("share-dropped");
+        for city in ["nyc", "boston"] {
+            let pass = Pass::shared(
+                "a".to_owned(),
+                Share::new(&plan.chunks, city, &["nyc", "boston"], &[]),
+                Vec::new(),
+            );
+            pass.restart().expect("a clearing");
+            plant(&plan.chunks, &format!("{city}/1.bin"));
+            pass.record().expect("a ledger");
+            fs::write(plan.chunks.join(format!(".stamp-stranded-{city}")), b"a")
+                .expect("a stranded stamp");
+        }
+        fs::create_dir_all(&plan.commercial_lines).expect("the lines");
+        for city in ["nyc", "boston"] {
+            fs::write(plan.commercial_lines.join(format!("{city}.bin")), b"lines")
+                .expect("a city's lines");
+        }
+
+        plan.reconcile(&manifest()).expect("a reconciliation");
+
+        for kept in [
+            "nyc/1.bin",
+            ".stamp-nyc",
+            ".files-nyc",
+            ".stamp-stranded-nyc",
+        ] {
+            assert!(plan.chunks.join(kept).is_file(), "{kept}");
+        }
+        for dropped in [
+            "boston",
+            ".stamp-boston",
+            ".files-boston",
+            ".stamp-stranded-boston",
+        ] {
+            assert!(!plan.chunks.join(dropped).exists(), "{dropped}");
+        }
+        assert!(plan.commercial_lines.join("nyc.bin").is_file());
+        assert!(!plan.commercial_lines.join("boston.bin").exists());
+    }
+
+    #[test]
+    fn a_chunk_restart_removes_its_own_city_s_stranded_stamp_and_not_the_other_s() {
+        let plan = planted("share-stranded");
+        let manifest = manifest();
+        let cities = plan.pair(&manifest).expect("a pairing");
+        let passes: Vec<Pass> = cities
+            .iter()
+            .map(|(city, _)| {
+                Pass::shared(
+                    "a".to_owned(),
+                    Share::new(&plan.chunks, &city.id, &["nyc", "sf"], &[]),
+                    vec![stranded_stamp_file(&plan, city)],
+                )
+            })
+            .collect();
+        for ((city, _), pass) in cities.iter().zip(&passes) {
+            pass.restart().expect("a clearing");
+            pass.record().expect("a ledger");
+            fs::write(stranded_stamp_file(&plan, city), b"a").expect("a stranded stamp");
+        }
+
+        passes[0].restart().expect("a clearing");
+
+        assert!(!stranded_stamp_file(&plan, cities[0].0).exists());
+        assert!(stranded_stamp_file(&plan, cities[1].0).is_file());
+    }
+
+    #[test]
+    fn two_regions_sharing_a_z9_tile_fail_the_guard() {
+        let plan = plan(BOTH);
+        let apart = manifest();
+        disjoint(&plan.pair(&apart).expect("a pairing")).expect("two cities a continent apart");
+
+        let mut adjacent = manifest();
+        adjacent.cities[1].bounds = Bounds {
+            south: 40.6,
+            west: -74.0,
+            north: 40.7,
+            east: -73.9,
+        };
+        let error = disjoint(&plan.pair(&adjacent).expect("a pairing"))
+            .expect_err("a second region inside new york's tiles");
+
+        assert!(error.to_string().contains("nyc and sf"), "{error}");
+        assert!(error.to_string().contains("one manifest entry"), "{error}");
+    }
+
     /// A pyramid or graph blob is removed and not recreated, since absence means "no such layer".
     #[test]
     fn a_city_that_stops_rendering_leaves_no_directory_behind() {
@@ -2206,7 +2727,7 @@ mod tests {
         let pass = Pass {
             stamp: "a".to_owned(),
             stamp_file: overlay.join(STAMP),
-            root: None,
+            share: None,
             pieces: vec![overlay.clone(), root.join("routing/shade/nyc")],
             witnesses: vec![overlay.clone()],
         };
@@ -2309,15 +2830,6 @@ mod tests {
     }
 
     #[test]
-    fn a_city_on_a_pass_that_has_no_cities_is_rejected() {
-        let error = Selection::new(&["chunks:nyc".to_owned()], false)
-            .err()
-            .expect("a pass with no cities to narrow to");
-
-        assert!(error.to_string().contains("every city"), "{error}");
-    }
-
-    #[test]
     fn a_pass_name_no_stage_answers_to_is_rejected() {
         let error = Selection::new(&["pyramid".to_owned()], false)
             .err()
@@ -2339,16 +2851,16 @@ mod tests {
     #[test]
     fn a_pass_left_out_keeps_its_stale_stamp_for_the_next_full_build() {
         let root = scratch("only-untouched");
-        let last = Pass::whole("what the last build read".to_owned(), &root.join("casters"));
+        let last = share_pass(&root.join("casters"), "nyc", "what the last build read");
         last.restart().expect("a directory");
         fs::write(last.stamp_file.with_file_name("chunk.bin"), b"last build").expect("a chunk");
         last.record().expect("a stamp");
-        let now = Pass::whole("what this one reads".to_owned(), &root.join("casters"));
+        let now = share_pass(&root.join("casters"), "nyc", "what this one reads");
         assert!(!now.is_fresh(), "its inputs moved");
 
         let partial = only(&["graph"]);
         assert!(matches!(
-            partial.verdict(PassName::CasterChunks, None, now.is_fresh()),
+            partial.verdict(PassName::CasterChunks, Some("nyc"), now.is_fresh()),
             Verdict::Excluded
         ));
 
@@ -2360,7 +2872,7 @@ mod tests {
         assert!(root.join("casters").join("chunk.bin").is_file());
         assert!(
             only(&[])
-                .verdict(PassName::CasterChunks, None, now.is_fresh())
+                .verdict(PassName::CasterChunks, Some("nyc"), now.is_fresh())
                 .runs(),
             "and the next full build catches it"
         );
@@ -2393,11 +2905,37 @@ mod tests {
         let cities = plan.pair(&manifest).expect("a pairing");
         let partial = only(&["graph"]);
 
-        let error = handoffs(&plan, &cities, &partial).expect_err("lines no pass has written");
+        let error = handoffs(&plan, &cities, &partial).expect_err("signals no pass has written");
         assert!(error.to_string().contains("commercial"), "{error}");
 
-        fs::create_dir_all(&plan.commercial_lines).expect("the lines");
-        handoffs(&plan, &cities, &partial).expect("lines that are there, however old");
+        fs::create_dir_all(&plan.commercial_signals).expect("the signals");
+        for city in ["nyc", "sf"] {
+            fs::write(ledger_file(&plan.commercial_signals, city), b"").expect("a ledger");
+        }
+        handoffs(&plan, &cities, &partial).expect("signals that are there, however old");
+    }
+
+    /// Both cities' chunk ledgers and an empty signal directory, as a chunks pass leaves them.
+    fn plant_chunk_ledgers(plan: &Plan) {
+        fs::create_dir_all(&plan.chunks).expect("the chunks");
+        fs::create_dir_all(&plan.commercial_signals).expect("the signals");
+        for city in ["nyc", "sf"] {
+            fs::write(ledger_file(&plan.chunks, city), b"").expect("a ledger");
+        }
+    }
+
+    #[test]
+    fn a_narrowed_commercial_pass_needs_only_its_own_city_s_chunks() {
+        let plan = planted("handoff-commercial");
+        let manifest = manifest();
+        let cities = plan.pair(&manifest).expect("a pairing");
+        fs::create_dir_all(&plan.chunks).expect("the chunks");
+        fs::write(ledger_file(&plan.chunks, "nyc"), b"").expect("a ledger");
+
+        handoffs(&plan, &cities, &only(&["commercial:nyc"])).expect("new york's chunks");
+        let error =
+            handoffs(&plan, &cities, &only(&["commercial"])).expect_err("san francisco's chunks");
+        assert!(error.to_string().contains(".files-sf"), "{error}");
     }
 
     #[test]
@@ -2406,7 +2944,7 @@ mod tests {
         let manifest = manifest();
         let cities = plan.pair(&manifest).expect("a pairing");
         let partial = only(&["chunks-stranded"]);
-        fs::create_dir_all(&plan.chunks).expect("the chunks");
+        plant_chunk_ledgers(&plan);
 
         let error =
             handoffs(&plan, &cities, &partial).expect_err("a stranded set no graph has written");
@@ -2419,29 +2957,47 @@ mod tests {
     #[test]
     fn a_selected_pass_folds_the_upstream_stamp_that_is_actually_on_disk() {
         let root = scratch("upstream");
-        let chunks = Pass::whole("what the chunks will be".to_owned(), &root.join("streets"));
+        let chunks = share_pass(&root.join("streets"), "nyc", "what the chunks will be");
         chunks.restart().expect("a directory");
         fs::write(&chunks.stamp_file, "what the chunks are").expect("a stamp");
 
         assert_eq!(
-            upstream(&only(&["commercial"]), PassName::Chunks, &chunks).expect("a stamp"),
+            upstream(
+                &only(&["commercial"]),
+                PassName::Chunks,
+                Some("nyc"),
+                &chunks
+            )
+            .expect("a stamp"),
             "what the chunks are",
             "the claim over the chunks the commercial pass is about to read"
         );
         assert_eq!(
-            upstream(&only(&["chunks", "commercial"]), PassName::Chunks, &chunks).expect("a stamp"),
+            upstream(
+                &only(&["chunks", "commercial"]),
+                PassName::Chunks,
+                Some("nyc"),
+                &chunks
+            )
+            .expect("a stamp"),
             "what the chunks will be",
             "a pass this build is running leaves the stamp it just computed"
         );
         assert_eq!(
-            upstream(&only(&[]), PassName::Chunks, &chunks).expect("a stamp"),
+            upstream(&only(&[]), PassName::Chunks, Some("nyc"), &chunks).expect("a stamp"),
             "what the chunks will be",
             "and so does every pass of a full build"
         );
 
         fs::remove_file(&chunks.stamp_file).expect("a removal");
         assert_eq!(
-            upstream(&only(&["commercial"]), PassName::Chunks, &chunks).expect("a stamp"),
+            upstream(
+                &only(&["commercial"]),
+                PassName::Chunks,
+                Some("nyc"),
+                &chunks
+            )
+            .expect("a stamp"),
             UNRECORDED
         );
     }
@@ -2451,9 +3007,9 @@ mod tests {
         let plan = planted("handoff-narrowed");
         let manifest = manifest();
         let cities = plan.pair(&manifest).expect("a pairing");
-        fs::create_dir_all(&plan.chunks).expect("the chunks");
-        // The graph's handoff is checked first, so these keep the error on the narrowed city.
-        fs::create_dir_all(&plan.commercial_lines).expect("the commercial lines");
+        plant_chunk_ledgers(&plan);
+        // The graph's handoff is checked first, so this keeps the error on the narrowed city.
+        fs::write(ledger_file(&plan.commercial_signals, "nyc"), b"").expect("a ledger");
         fs::create_dir_all(&plan.routing).expect("the routing directory");
         fs::write(plan.routing.join("nyc.stranded.bin"), b"a stranded set")
             .expect("new york's stranded set");
@@ -2644,7 +3200,7 @@ mod tests {
         plan
     }
 
-    /// One stamp per pass, per-city ones being New York's.
+    /// One stamp per pass, all New York's.
     struct Stamped {
         chunks: String,
         commercial: String,
@@ -2678,29 +3234,130 @@ mod tests {
         let manifest = manifest();
         let cities = plan.pair(&manifest).expect("a pairing");
         let mut stamps = Stamps::new(plan).expect("the stamps");
-        let chunks = stamps.chunks(&cities).expect("the chunks stamp");
-        let commercial = stamps
-            .commercial(&cities, &chunks)
-            .expect("the commercial stamp");
         let (city, planned) = cities[0];
+        let chunks = stamps.chunks(city).expect("the chunks stamp");
+        let commercial = stamps
+            .commercial(city, &chunks)
+            .expect("the commercial stamp");
         let keys = stamps
             .graph_keys(city, planned, &commercial, true)
             .expect("the graph keys");
         Stamped {
             casters: stamps
-                .casters(&cities, planned.shade.as_ref())
+                .casters(city, planned.shade.as_ref())
                 .expect("the caster-chunks stamp"),
             buckets: bucket_keys(plan),
             elevation: stamps
                 .elevation(city, planned)
                 .expect("the elevation stamp"),
-            canopy: stamps.canopy(&cities).expect("the canopy stamp"),
-            genus_field: stamps.genus_field(&cities).expect("the genus-field stamp"),
+            canopy: stamps.canopy(city).expect("the canopy stamp"),
+            genus_field: stamps.genus_field(city).expect("the genus-field stamp"),
             graph: stamps.graph(&keys),
             keys,
             chunks,
             commercial,
         }
+    }
+
+    /// Every stamp of one city, in pass order, graph keys included.
+    fn every_stamp(plan: &Plan, manifest: &Manifest, index: usize) -> Vec<String> {
+        let cities = plan.pair(manifest).expect("a pairing");
+        let mut stamps = Stamps::new(plan).expect("the stamps");
+        let (city, planned) = cities[index];
+        let chunks = stamps.chunks(city).expect("the chunks stamp");
+        let commercial = stamps
+            .commercial(city, &chunks)
+            .expect("the commercial stamp");
+        let keys = stamps
+            .graph_keys(city, planned, &commercial, true)
+            .expect("the graph keys");
+        let mut every = vec![
+            chunks.clone(),
+            commercial.clone(),
+            stamps
+                .casters(city, planned.shade.as_ref())
+                .expect("the caster-chunks stamp"),
+            stamps
+                .elevation(city, planned)
+                .expect("the elevation stamp"),
+            stamps.canopy(city).expect("the canopy stamp"),
+            stamps.genus_field(city).expect("the genus-field stamp"),
+            stamps.graph(&keys),
+            stamps
+                .stranded_chunks(city, &chunks, &[30, 31])
+                .expect("the stranded stamp"),
+        ];
+        if let Some(params) = &planned.shade {
+            for bucket in &params.buckets {
+                every.push(
+                    stamps
+                        .shade_bucket(city, params, bucket)
+                        .expect("a bucket key"),
+                );
+            }
+        }
+        every.extend([
+            keys.base,
+            keys.landmarks,
+            keys.art,
+            keys.highways,
+            keys.industrial,
+            keys.historic,
+            keys.bridge,
+            keys.canopy,
+            keys.commercial,
+            keys.relief,
+        ]);
+        every.extend(keys.shade);
+        every
+    }
+
+    #[test]
+    fn an_edit_to_one_city_s_entry_moves_none_of_the_other_city_s_stamps() {
+        let plan = stamping_plan("stamps-other-city");
+        let mut edited = manifest();
+        edited.cities[1].streets.sidewalk_inset_meters += 1.0;
+
+        assert_eq!(
+            every_stamp(&plan, &edited, 0),
+            every_stamp(&plan, &manifest(), 0),
+            "New York's passes stand"
+        );
+        assert_ne!(
+            every_stamp(&plan, &edited, 1)[0],
+            every_stamp(&plan, &manifest(), 1)[0],
+            "San Francisco's chunks rerun"
+        );
+    }
+
+    #[test]
+    fn the_graph_s_commercial_key_moves_with_its_own_city_s_commercial_stamp_alone() {
+        let plan = stamping_plan("stamps-commercial-key");
+        let commercial_key = |plan: &Plan| {
+            let manifest = manifest();
+            let cities = plan.pair(&manifest).expect("a pairing");
+            let mut stamps = Stamps::new(plan).expect("the stamps");
+            cities
+                .iter()
+                .map(|(city, planned)| {
+                    let chunks = stamps.chunks(city).expect("the chunks stamp");
+                    let commercial = stamps
+                        .commercial(city, &chunks)
+                        .expect("the commercial stamp");
+                    stamps
+                        .graph_keys(city, planned, &commercial, false)
+                        .expect("the graph keys")
+                        .commercial
+                })
+                .collect::<Vec<String>>()
+        };
+        let before = commercial_key(&plan);
+
+        fs::write(plan.data.join("landuse").join("nyc.bin"), b"re-ingested").expect("a source");
+        let after = commercial_key(&plan);
+
+        assert_ne!(after[0], before[0], "New York's commercial column");
+        assert_eq!(after[1], before[1], "San Francisco's");
     }
 
     #[test]
@@ -3291,27 +3948,21 @@ mod tests {
         let manifest = manifest();
         let cities = plan.pair(&manifest).expect("a pairing");
         let mut stamps = Stamps::new(&plan).expect("the stamps");
-        let chunks = stamps.chunks(&cities).expect("the chunks stamp");
-        let mut islands = chunks::Stranded::default();
-        islands.insert("nyc", vec![30, 31]);
+        let city = cities[0].0;
+        let chunks = stamps.chunks(city).expect("the chunks stamp");
         let before = stamps
-            .stranded_chunks(&cities, &chunks, &islands)
+            .stranded_chunks(city, &chunks, &[30, 31])
             .expect("a stamp");
 
-        let mut same = chunks::Stranded::default();
-        same.insert("nyc", vec![30, 31]);
         assert_eq!(
             stamps
-                .stranded_chunks(&cities, &chunks, &same)
+                .stranded_chunks(city, &chunks, &[30, 31])
                 .expect("a stamp"),
             before
         );
-
-        let mut moved = chunks::Stranded::default();
-        moved.insert("nyc", vec![30]);
         assert_ne!(
             stamps
-                .stranded_chunks(&cities, &chunks, &moved)
+                .stranded_chunks(city, &chunks, &[30])
                 .expect("a stamp"),
             before
         );

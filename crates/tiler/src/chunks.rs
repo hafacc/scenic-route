@@ -8,7 +8,7 @@ use std::time::Instant;
 use crate::Fallible;
 use crate::binfmt::{self, CHUNK_FORMAT, SIDES, Streets, write_varint, zigzag};
 use crate::geometry::round_half_up;
-use crate::manifest::Manifest;
+use crate::manifest::City;
 use crate::raster::{
     TILE_SIZE, lat_to_pixel_y, lng_to_pixel_x, pixel_x_to_lng, pixel_y_to_lat, tile_index,
 };
@@ -20,7 +20,6 @@ const CHUNK_ZOOM: u32 = 12;
 const DECIMETERS_PER_METER: f64 = 10.0; // the chunk's unit for the sidewalk offset
 
 pub struct Args {
-    pub manifest: PathBuf,
     pub data: PathBuf,
     pub chunks: PathBuf,
 }
@@ -190,40 +189,34 @@ fn write_chunks(
     Ok((buckets.len(), bytes))
 }
 
-pub fn run(args: &Args, stranded: &Stranded) -> Fallible<Chunks> {
+/// Cuts one city's streets and paths into its chunks, with `stranded` as the stranded bitmap.
+pub fn run(args: &Args, city: &City, stranded: &[u32]) -> Fallible<Chunks> {
     let started = Instant::now();
-    let manifest: Manifest = serde_json::from_slice(&fs::read(&args.manifest)?)?;
-
-    let mut chunks = 0;
-    let mut chunk_bytes = 0;
-    for city in &manifest.cities {
-        let streets = binfmt::read_streets(&args.data.join("streets").join(&city.streets.file))?;
-        // Each city's own paths, from its own manifest entry.
-        let paths = match &city.paths {
-            Some(layer) => Some(binfmt::read_paths(
-                &args.data.join("paths").join(&layer.file),
-            )?),
-            None => None,
-        };
-        eprintln!(
-            "{}: {} segments, {} path segments",
-            city.id,
-            streets.segments(),
-            paths.as_ref().map_or(0, Streets::segments),
-        );
-        let (city_chunks, city_bytes) = write_chunks(
-            &streets,
-            paths.as_ref(),
-            stranded.ways(&city.id),
-            city.streets.sidewalk_inset_meters,
-            &args.chunks,
-        )?;
-        chunks += city_chunks;
-        chunk_bytes += city_bytes;
-    }
+    let streets = binfmt::read_streets(&args.data.join("streets").join(&city.streets.file))?;
+    // Each city's own paths, from its own manifest entry.
+    let paths = match &city.paths {
+        Some(layer) => Some(binfmt::read_paths(
+            &args.data.join("paths").join(&layer.file),
+        )?),
+        None => None,
+    };
+    eprintln!(
+        "{}: {} segments, {} path segments",
+        city.id,
+        streets.segments(),
+        paths.as_ref().map_or(0, Streets::segments),
+    );
+    let (chunks, chunk_bytes) = write_chunks(
+        &streets,
+        paths.as_ref(),
+        stranded,
+        city.streets.sidewalk_inset_meters,
+        &args.chunks,
+    )?;
 
     eprintln!(
-        "wrote {chunks} street chunks (z{CHUNK_ZOOM}, {:.1} MiB) in {:.1}s",
+        "{}: wrote {chunks} street chunks (z{CHUNK_ZOOM}, {:.1} MiB) in {:.1}s",
+        city.id,
         chunk_bytes as f64 / 1024.0 / 1024.0,
         started.elapsed().as_secs_f64()
     );

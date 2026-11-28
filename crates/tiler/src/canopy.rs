@@ -9,10 +9,10 @@ use rayon::prelude::*;
 use crate::Fallible;
 use crate::binfmt::{self, LAND_FORMAT};
 use crate::geometry::{self, PolygonGrid, PolygonSet, Projection, round_half_up};
-use crate::manifest::{Bounds, City, Manifest};
+use crate::manifest::{Bounds, City};
 use crate::raster::{
     EQUATOR_METERS_PER_PIXEL, LandMask, MAX_ZOOM, MIN_FEATHER_PIXELS, MIN_ZOOM, TILE_SIZE, Tile,
-    encode_webp, lat_to_pixel_y, lng_to_pixel_x, pixel_x_to_lng, pixel_y_to_lat, plan_tiles,
+    encode_webp, lat_to_pixel_y, lng_to_pixel_x, pixel_x_to_lng, pixel_y_to_lat, plan_bounds,
     rasterize_land,
 };
 
@@ -22,7 +22,6 @@ const SUPERSAMPLE: usize = 4;
 const FILL_SIGMA_METERS: f64 = 15.0;
 
 pub struct Args {
-    pub manifest: PathBuf,
     pub data: PathBuf,
     pub tiles: PathBuf,
 }
@@ -285,25 +284,15 @@ fn render(
     })
 }
 
-pub fn run(args: &Args) -> Fallible<()> {
+/// Renders one city's tiles; a city without a canopy layer gets blank ones over its bounds.
+pub fn run(args: &Args, city: &City) -> Fallible<()> {
     let started = Instant::now();
-    let manifest: Manifest = serde_json::from_slice(&fs::read(&args.manifest)?)?;
-    let canopies: Vec<Option<Canopy>> = manifest
-        .cities
-        .iter()
-        .map(|city| read_canopy(city, &args.data))
-        .collect::<Fallible<Vec<Option<Canopy>>>>()?;
-    if canopies.iter().all(Option::is_none) {
-        eprintln!("no city has a canopy layer; nothing to render");
-        return Ok(());
-    }
-    for (city, canopy) in manifest.cities.iter().zip(&canopies) {
-        if let Some(canopy) = canopy {
-            eprintln!("{}: {} canopy polygons", city.id, canopy.polygons);
-        }
+    let canopies = [read_canopy(city, &args.data)?];
+    if let [Some(canopy)] = &canopies {
+        eprintln!("{}: {} canopy polygons", city.id, canopy.polygons);
     }
 
-    let plan = plan_tiles(&manifest.cities, MAX_ZOOM);
+    let plan = plan_bounds(&[city.bounds], MAX_ZOOM);
     for tile in &plan {
         fs::create_dir_all(
             args.tiles
@@ -314,7 +303,8 @@ pub fn run(args: &Args) -> Fallible<()> {
     let blank = encode_webp(&vec![0u8; TILE_SIZE * TILE_SIZE * 4])?;
 
     eprintln!(
-        "rendering {} canopy tiles across {} threads",
+        "{}: rendering {} canopy tiles across {} threads",
+        city.id,
         plan.len(),
         rayon::current_num_threads()
     );
@@ -329,12 +319,16 @@ pub fn run(args: &Args) -> Fallible<()> {
         0.0
     };
     eprintln!(
-        "wrote {} canopy tiles (z{MIN_ZOOM}-z{MAX_ZOOM}, {} painted, {:.1} MiB) in {:.1}s",
+        "{}: wrote {} canopy tiles (z{MIN_ZOOM}-z{MAX_ZOOM}, {} painted, {:.1} MiB) in {:.1}s",
+        city.id,
         stats.tiles,
         stats.painted,
         stats.bytes as f64 / 1024.0 / 1024.0,
         started.elapsed().as_secs_f64()
     );
-    eprintln!("mean canopy fraction over land (z{MAX_ZOOM}): {mean:.3}");
+    eprintln!(
+        "{}: mean canopy fraction over land (z{MAX_ZOOM}): {mean:.3}",
+        city.id
+    );
     Ok(())
 }
