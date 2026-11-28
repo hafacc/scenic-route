@@ -12,22 +12,22 @@ pub struct Bounds {
     pub east: f64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct SourceFile {
     pub file: String,
 }
 
 /// The measured LiDAR canopy polygons, when a city has them; the tiler rasterizes them itself.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct CanopyLayer {
     pub file: String,
 }
 
 /// Presence marks a city the genus overlay renders.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct GenusLayer {}
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FieldLayer {
     pub trees: SourceFile,
@@ -36,14 +36,14 @@ pub struct FieldLayer {
     pub genus: Option<GenusLayer>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StreetLayer {
     pub file: String,
     pub sidewalk_inset_meters: f64, // curb to the center of the sidewalk, either side
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct City {
     pub id: String,
     pub bounds: Bounds,
@@ -53,7 +53,7 @@ pub struct City {
     pub paths: Option<PathLayer>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct PathLayer {
     pub file: String,
 }

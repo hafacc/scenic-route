@@ -9,7 +9,7 @@ use std::time::Instant;
 use crate::Fallible;
 use crate::binfmt::{self, COMMERCIAL_FORMAT, Coord, write_varint, zigzag};
 use crate::geometry::{METERS_PER_DEGREE_LAT, round_half_up};
-use crate::manifest::{Bounds, Manifest};
+use crate::manifest::{Bounds, City, Manifest};
 use crate::raster::{lat_to_pixel_y, lng_to_pixel_x, tile_index};
 
 const CHUNK_ZOOM: u32 = 12;
@@ -47,7 +47,6 @@ const SEGMENT_CELL_DEG: f64 = 0.003;
 const COPY_TOLERANCE_DEG: f64 = 2e-6;
 
 pub struct Args {
-    pub manifest: PathBuf,
     /// The committed sources the signals are snapped from: data/{landuse,buildings,openstreets,dining}.
     pub data: PathBuf,
     /// public/commercial, the per-chunk signal files.
@@ -493,48 +492,36 @@ fn encode_qualifying_lines(
     (bytes, lines.len())
 }
 
-pub fn run(args: &Args, chunks: &crate::chunks::Chunks) -> Fallible<Lines> {
-    let manifest: Manifest = serde_json::from_slice(&fs::read(&args.manifest)?)?;
-    for directory in [&args.signals, &args.lines] {
-        if directory.exists() {
-            fs::remove_dir_all(directory)?;
-        }
-        fs::create_dir_all(directory)?;
+/// Writes one city's signals over its served chunks and its qualifying-block lines.
+pub fn run(args: &Args, city: &City, chunks: &crate::chunks::Chunks) -> Fallible<()> {
+    let started = Instant::now();
+    let (chunks, segments) = load_city_chunks(&city.bounds, &chunks.dir)?;
+    if segments.is_empty() {
+        eprintln!("{}: no served street chunks, skipped", city.id);
+        return Ok(());
+    }
+    let (signals, first_copy) = compute_signals(&args.data, &city.id, &segments)?;
+
+    for chunk in &chunks {
+        let row = args.signals.join(chunk.tile_x.to_string());
+        fs::create_dir_all(&row)?;
+        fs::write(
+            row.join(format!("{}.bin", chunk.tile_y)),
+            encode_signals(chunk, &signals),
+        )?;
     }
 
-    let mut written = Lines::default();
-    for city in &manifest.cities {
-        let started = Instant::now();
-        let (chunks, segments) = load_city_chunks(&city.bounds, &chunks.dir)?;
-        if segments.is_empty() {
-            eprintln!("{}: no served street chunks, skipped", city.id);
-            continue;
-        }
-        let (signals, first_copy) = compute_signals(&args.data, &city.id, &segments)?;
+    let (lines, passing) = encode_qualifying_lines(&segments, &signals, &first_copy);
+    fs::write(args.lines.join(format!("{}.bin", city.id)), lines)?;
 
-        for chunk in &chunks {
-            let row = args.signals.join(chunk.tile_x.to_string());
-            fs::create_dir_all(&row)?;
-            fs::write(
-                row.join(format!("{}.bin", chunk.tile_y)),
-                encode_signals(chunk, &signals),
-            )?;
-        }
-
-        let (lines, passing) = encode_qualifying_lines(&segments, &signals, &first_copy);
-        let line_file = args.lines.join(format!("{}.bin", city.id));
-        fs::write(&line_file, lines)?;
-        written.by_city.insert(city.id.clone(), line_file);
-
-        eprintln!(
-            "{}: {} segments in {} chunks, {passing} pass the default gate (>={GATE_COMMERCIAL_FRACTION} commercial, <={GATE_LOW_RISE_METERS} m, open-street|seating), {:.1}s",
-            city.id,
-            segments.len(),
-            chunks.len(),
-            started.elapsed().as_secs_f64()
-        );
-    }
-    Ok(written)
+    eprintln!(
+        "{}: {} segments in {} chunks, {passing} pass the default gate (>={GATE_COMMERCIAL_FRACTION} commercial, <={GATE_LOW_RISE_METERS} m, open-street|seating), {:.1}s",
+        city.id,
+        segments.len(),
+        chunks.len(),
+        started.elapsed().as_secs_f64()
+    );
+    Ok(())
 }
 
 #[cfg(test)]

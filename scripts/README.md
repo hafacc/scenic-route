@@ -1365,9 +1365,9 @@ which rides in their manifest. Between that and the two per-bin keys, adding a b
 schedule now costs one bucket rendered, one bin baked and some renames — where it used to cost the
 262 s caster pass and the whole per-edge bake besides.
 
-Each stamp is written **inside that pass's own output** — `public/streets/.stamp` and
-`.stamp-stranded`, `public/commercial/.stamp`, `public/casters/.stamp`,
-`public/tiles/canopy/.stamp`, `public/tiles/genus-field/.stamp`,
+Each stamp is written **inside that pass's own output** — `public/streets/.stamp-<city>` and
+`.stamp-stranded-<city>`, `public/commercial/.stamp-<city>`, `public/casters/.stamp-<city>`,
+`public/tiles/canopy/.stamp-<city>`, `public/tiles/genus-field/.stamp-<city>`,
 `public/tiles/shade/<city>/<bin>/.stamp`, `public/tiles/elevation/<city>/.stamp`,
 `public/routing/.stamp-<city>` — and only once that pass (or, for shade, that bin) succeeds, so a
 run killed halfway keeps every pass that finished and claims nothing for the one that did not. A
@@ -1375,6 +1375,20 @@ pass is skipped when its stamp matches **and** its own output is still there: th
 stamp says the inputs have not moved, not that the output is on disk, and a hand-deleted directory
 or a CI cache that restored only part of the tree has to rebuild. Existence, not completeness — an
 empty directory still passes.
+
+**Every pass is stamped and run one city at a time**, including the five whose cities share one
+directory: chunks, commercial signals, caster chunks, canopy and genus field. The served paths
+cannot change, so each city's files in such a directory are listed in a ledger beside its stamp,
+`<dir>/.files-<city>`: every file it wrote, relative to the directory, sorted, one per line. A city
+that reruns deletes only what no *other* city's ledger claims, and records as its own whatever is
+left unclaimed afterwards; a full build deletes anything no ledger claims at all, which is how a
+killed run's leftovers and a dropped city's files go. So a St. Louis edit reruns St. Louis alone,
+and the graph's commercial column folds its own city's commercial stamp, not every city's.
+`public/casters/manifest.json` stays one file listing every city's chunks; it is rebuilt from the
+ledgers, in manifest order, on every build that selects the caster pass. This rests on no two
+cities sharing a tile, which a build checks at z9, the coarsest zoom, before any pass runs: two
+regions whose bounds meet in one z9 tile are an error and must be one manifest entry, as the East
+Bay is inside `sf`.
 
 `scripts/*.ts` is no longer hashed at all: everything the scripts contribute reaches the stamps as
 plan values (the sun grid, the resolved DEM) or as `data/**` bytes, so an
@@ -1457,9 +1471,10 @@ A kind no pass reads is rejected.
 
 **Each pass owns the lifecycle of its own output.** Nothing is emptied before the first pass any
 more: a pass clears its own directories immediately before it reruns, so a fresh pass's output
-survives a neighbor rebuilding — which is the whole point. `public/{streets,casters,tiles/canopy,
-tiles/genus-field}` are emptied and recreated by the pass that owns them, and
-`public/commercial{,-lines}` by the commercial pass, which has always cleared its own two.
+survives a neighbor rebuilding — which is the whole point. In `public/{streets,commercial,casters,
+tiles/canopy,tiles/genus-field}` a city's rerun deletes the files no other city's ledger claims and
+leaves the directory standing, and the commercial pass also removes that city's
+`public/commercial-lines/<city>.bin`.
 `public/tiles/elevation/<city>`, `public/tiles/tree-cover/<city>`,
 `public/routing/<city>.{bin,stranded.bin,canopy.bin,version.json}` and `public/routing/shade/<city>` are
 removed and left for their pass to remake, since a city that renders nothing must leave no directory
@@ -1468,7 +1483,7 @@ pyramids are the same rule one level down: `public/tiles/{shade,tree-shade}/<cit
 city that stops casting a shadow, and for a city that goes on casting, every bin directory the
 schedule no longer claims goes instead — as does anything else under the pyramid, a staging name a
 killed run left or a stamp an older build wrote at the top of it. A pass that renders nothing this
-build clears its root and records no stamp, which is how
+build clears its share and records no stamp, which is how
 a layer that stops being produced stops being served and costs nothing to decide again. Before the
 passes, the driver sweeps what no city claims: a pyramid or a routing artifact for a city the
 manifest dropped. `public/trees` is nobody's here — `serve-sources.ts` owns it. The
@@ -1490,11 +1505,10 @@ bun run build-tiles:half -- --only graph:nyc --force
 
 `--only` names the passes this build may run, comma-separated, each optionally narrowed to one city
 as `<pass>:<city>`. The nine names are `chunks`, `commercial`, `caster-chunks`, `shade`,
-`elevation`, `canopy`, `genus-field`, `graph` and `chunks-stranded`; the three that are stamped one
-city at a time — `shade`, `elevation`, `graph` — are the three a city can be named for, and a city
-on any of the others is rejected rather than quietly ignored, as is a pass name or a city id nothing
-answers to. `--force` runs the selected passes whether or not their stamps hold. With no `--only`
-that is all nine, which is a build from scratch.
+`elevation`, `canopy`, `genus-field`, `graph` and `chunks-stranded`; every one is stamped one city at
+a time, so any of them can be narrowed to a city, and a pass name or a city id nothing answers to is
+rejected rather than quietly ignored. `--force` runs the selected passes whether or not their stamps
+hold. With no `--only` that is all nine, which is a build from scratch.
 
 What it is for is the one thing the stamps are deliberately coarse about: a code scope is a whole
 module closure, so an edit to a helper as shared as `geometry.rs` invalidates every pass, and
@@ -1515,9 +1529,9 @@ freshness that way, because it restricts which passes may run **and nothing else
   claim that pass already held stands, stale if it was stale, and the next full build reruns it;
 - no stamp is ever written that a full build would not have written the same;
 - a selected pass whose upstream output is **missing** is an error naming the pass to run first —
-  `--only graph` with no `public/commercial-lines` says so before the first pass rather than baking
-  a graph with no commercial discount and stamping it as though it had one. Output that is merely
-  *stale* is fine and is the point;
+  `--only graph:nyc` with no `public/commercial/.files-nyc` says so before the first pass rather
+  than baking a graph with no commercial discount and stamping it as though it had one. Output that
+  is merely *stale* is fine and is the point;
 - a selected pass whose upstream is not running folds the stamp that upstream **actually recorded**,
   not the one it would record if it ran. So `--only graph` over stale commercial lines records a
   graph stamp describing the lines it really read, and the next full build — which reruns the

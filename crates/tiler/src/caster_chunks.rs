@@ -12,7 +12,7 @@ use crate::Fallible;
 use crate::binfmt::{self, Coord, DECIMETERS_PER_METER, Polygon, Ring, write_varint, zigzag};
 use crate::crown;
 use crate::geometry::round_half_up;
-use crate::manifest::{City, Manifest};
+use crate::manifest::City;
 use crate::raster::{
     TILE_SIZE, lat_to_pixel_y, lng_to_pixel_x, pixel_x_to_lng, pixel_y_to_lat, tile_index,
 };
@@ -35,12 +35,12 @@ const MAX_DBH_CM: f64 = 152.4;
 const CENTIMETERS_PER_METER: f64 = 100.0;
 
 pub struct Args {
-    pub manifest: PathBuf,
     pub data: PathBuf,
     pub chunks: PathBuf,
-    // Only max_shadow_meters is read, so any city's grid does.
-    pub params: shade::Params,
 }
+
+/// The index of every city's chunks, beside them in the chunk directory.
+pub const INDEX: &str = "manifest.json";
 
 /// One shadow caster as shipped: ring groups in degrees and a height in decimeters.
 /// A building is one group (outer, then holes); a crown has a group per slice, setting its sweep.
@@ -723,76 +723,93 @@ fn write_chunks(
     Ok(entries)
 }
 
-pub fn run(args: &Args) -> Fallible<()> {
+/// Writes one city's caster chunks; a city with neither footprints nor crowns writes none.
+pub fn run(args: &Args, city: &City) -> Fallible<()> {
     let started = Instant::now();
-    let manifest: Manifest = serde_json::from_slice(&fs::read(&args.manifest)?)?;
-    let params = &args.params;
-
-    let mut entries: Vec<ChunkEntry> = Vec::new();
-    for city in &manifest.cities {
-        // Either source alone makes chunks worth having; a city with neither is skipped.
-        let footprints = args.data.join("buildings").join(format!("{}.bin", city.id));
-        let (polygons, heights) = if footprints.exists() {
-            binfmt::read_buildings(&footprints)?
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        let (sliced, crown_heights) = shade::city_crowns(city, &args.data)?;
-        let buildings = casters(&polygons, &heights, true);
-        let histogram = crown::radius_histogram(&sliced);
-        let crowns = crown_casters(sliced, &crown_heights);
-        if buildings.is_empty() && crowns.is_empty() {
-            continue;
-        }
-        let census = city_trunks(city, &args.data)?;
-        let standing = census.len();
-        let trunks = stand_trunks(census, &crowns);
-        let vertices: usize = crowns
-            .iter()
-            .flat_map(|caster| caster.groups.iter().flatten())
-            .map(Ring::len)
-            .sum();
-        eprintln!(
-            "{}: {} footprints, {} crowns with a measured height cut into {} slice vertices, {} of \
-             {standing} census trunks standing under one",
-            city.id,
-            buildings.len(),
-            crowns.len(),
-            vertices,
-            trunks.len(),
-        );
-        eprintln!(
-            "  crown radius (m) {}: {}",
-            crown::RADIUS_BUCKETS
-                .iter()
-                .map(|edge| format!("<{edge}"))
-                .collect::<Vec<String>>()
-                .join(" "),
-            histogram
-                .iter()
-                .map(usize::to_string)
-                .collect::<Vec<String>>()
-                .join(" ")
-        );
-        entries.extend(write_chunks(&buildings, &crowns, &trunks, &args.chunks)?);
+    let footprints = args.data.join("buildings").join(format!("{}.bin", city.id));
+    let (polygons, heights) = if footprints.exists() {
+        binfmt::read_buildings(&footprints)?
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let (sliced, crown_heights) = shade::city_crowns(city, &args.data)?;
+    let buildings = casters(&polygons, &heights, true);
+    let histogram = crown::radius_histogram(&sliced);
+    let crowns = crown_casters(sliced, &crown_heights);
+    if buildings.is_empty() && crowns.is_empty() {
+        return Ok(());
     }
-
-    let bytes: usize = entries.iter().map(|entry| entry.bytes).sum();
-    let chunks = entries.len();
-    fs::write(
-        args.chunks.join("manifest.json"),
-        serde_json::to_vec(&ChunkManifest {
-            chunk_zoom: CHUNK_ZOOM,
-            coord_scale: CASTER_COORD_SCALE,
-            max_shadow_meters: params.max_shadow_meters,
-            chunks: entries,
-        })?,
-    )?;
+    let census = city_trunks(city, &args.data)?;
+    let standing = census.len();
+    let trunks = stand_trunks(census, &crowns);
+    let vertices: usize = crowns
+        .iter()
+        .flat_map(|caster| caster.groups.iter().flatten())
+        .map(Ring::len)
+        .sum();
     eprintln!(
-        "wrote {chunks} caster chunks (z{CHUNK_ZOOM}, {:.1} MiB) in {:.1}s",
+        "{}: {} footprints, {} crowns with a measured height cut into {} slice vertices, {} of \
+         {standing} census trunks standing under one",
+        city.id,
+        buildings.len(),
+        crowns.len(),
+        vertices,
+        trunks.len(),
+    );
+    eprintln!(
+        "  crown radius (m) {}: {}",
+        crown::RADIUS_BUCKETS
+            .iter()
+            .map(|edge| format!("<{edge}"))
+            .collect::<Vec<String>>()
+            .join(" "),
+        histogram
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<String>>()
+            .join(" ")
+    );
+    let entries = write_chunks(&buildings, &crowns, &trunks, &args.chunks)?;
+    let bytes: usize = entries.iter().map(|entry| entry.bytes).sum();
+    eprintln!(
+        "{}: wrote {} caster chunks (z{CHUNK_ZOOM}, {:.1} MiB) in {:.1}s",
+        city.id,
+        entries.len(),
         bytes as f64 / 1024.0 / 1024.0,
         started.elapsed().as_secs_f64()
     );
+    Ok(())
+}
+
+/// Writes the index over each city's chunks, `cities` being their ledgers in manifest order.
+pub fn write_index(root: &Path, max_shadow_meters: f64, cities: &[Vec<String>]) -> Fallible<()> {
+    let mut entries: Vec<ChunkEntry> = Vec::new();
+    for ledger in cities {
+        let mut city_entries = ledger
+            .iter()
+            .map(|path| {
+                let malformed = || format!("{path}: not a caster chunk path");
+                let (x, file) = path.split_once('/').ok_or_else(malformed)?;
+                let y = file.strip_suffix(".bin").ok_or_else(malformed)?;
+                Ok(ChunkEntry {
+                    x: x.parse().map_err(|_| malformed())?,
+                    y: y.parse().map_err(|_| malformed())?,
+                    bytes: usize::try_from(fs::metadata(root.join(path))?.len())?,
+                })
+            })
+            .collect::<Fallible<Vec<ChunkEntry>>>()?;
+        city_entries.sort_by_key(|entry| (entry.x, entry.y));
+        entries.extend(city_entries);
+    }
+    fs::write(
+        root.join(INDEX),
+        serde_json::to_vec(&ChunkManifest {
+            chunk_zoom: CHUNK_ZOOM,
+            coord_scale: CASTER_COORD_SCALE,
+            max_shadow_meters,
+            chunks: entries,
+        })?,
+    )?;
     Ok(())
 }
 
@@ -1224,5 +1241,45 @@ mod tests {
                     && *decoded_height == height_dm
             }));
         }
+    }
+
+    #[test]
+    fn the_index_lists_each_city_s_ledger_in_manifest_order_then_by_numeric_tile() {
+        let root = std::env::temp_dir().join(format!("tiler-caster-index-{}", std::process::id()));
+        for (path, bytes) in [
+            ("9/20.bin", 3),
+            ("10/2.bin", 5),
+            ("9/3.bin", 7),
+            ("2/1.bin", 11),
+        ] {
+            let file = root.join(path);
+            fs::create_dir_all(file.parent().expect("a row")).expect("a row directory");
+            fs::write(file, vec![0u8; bytes]).expect("a chunk");
+        }
+        let ledgers = [
+            vec![
+                "10/2.bin".to_owned(),
+                "9/20.bin".to_owned(),
+                "9/3.bin".to_owned(),
+            ],
+            vec!["2/1.bin".to_owned()],
+        ];
+
+        write_index(&root, 500.0, &ledgers).expect("the index");
+
+        let index: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join(INDEX)).expect("the index")).expect("json");
+        let listed: Vec<(u64, u64, u64)> = index["chunks"]
+            .as_array()
+            .expect("the chunks")
+            .iter()
+            .map(|chunk| {
+                let field = |name: &str| chunk[name].as_u64().expect("a number");
+                (field("x"), field("y"), field("bytes"))
+            })
+            .collect();
+        assert_eq!(listed, [(9, 3, 7), (9, 20, 3), (10, 2, 5), (2, 1, 11)]);
+        assert_eq!(index["maxShadowMeters"], 500.0);
+        fs::remove_dir_all(&root).expect("a clearing");
     }
 }
