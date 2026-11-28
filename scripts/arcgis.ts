@@ -6,6 +6,9 @@ const REQUEST_TIMEOUT_MS = 120_000;
 
 interface QueryResponse<Feature> {
   features?: Feature[];
+  // JSON sets it at the top level; GeoJSON from some servers only under `properties`.
+  exceededTransferLimit?: boolean;
+  properties?: { exceededTransferLimit?: boolean };
 }
 
 // No retry by default: a single-request layer fails the build either way.
@@ -30,20 +33,37 @@ export async function fetchArcgis<Value>(
   });
 }
 
-export async function fetchFeatures<Feature>(
+async function readFeatures<Feature>(
   url: string,
-  options: QueryOptions = {},
+  options: QueryOptions,
+  paged: boolean,
 ): Promise<Feature[]> {
   const answer = await fetchArcgis<QueryResponse<Feature>>(
     url,
     options,
-    ({ features }) => {
+    ({ features, exceededTransferLimit, properties }) => {
       if (!Array.isArray(features)) {
         throw new Error("no features in the response");
+      }
+      if (
+        !paged &&
+        (exceededTransferLimit || properties?.exceededTransferLimit)
+      ) {
+        throw new Error(
+          `${url}: the server cut the answer at ${features.length} rows; page it instead`,
+        );
       }
     },
   );
   return answer.features as Feature[];
+}
+
+// One request that must hold the whole answer: a response the server cut short throws.
+export async function fetchFeatures<Feature>(
+  url: string,
+  options: QueryOptions = {},
+): Promise<Feature[]> {
+  return await readFeatures<Feature>(url, options, false);
 }
 
 export function envelopeQuery(url: URL, box: Bounds): void {
@@ -79,7 +99,8 @@ export async function* featurePages<Feature>({
 }: PagedQuery): AsyncGenerator<Feature[]> {
   for (let offset = 0; ; offset += pageSize) {
     const url = pageUrl(offset);
-    const read = (): Promise<Feature[]> => fetchFeatures<Feature>(url, options);
+    const read = (): Promise<Feature[]> =>
+      readFeatures<Feature>(url, options, true);
     const page =
       cacheName === null
         ? await read()
